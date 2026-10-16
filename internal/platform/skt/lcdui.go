@@ -163,6 +163,9 @@ type gameCanvasData struct {
 	graphics     *jvm.Object
 	suppressKeys bool
 	keyStates    int32
+	// latchedKeys are the keys pressed since the title last called
+	// getKeyStates, which MIDP reports even when they are up again by then.
+	latchedKeys int32
 }
 
 // lcduiState maps Displayables to the state above. Displayable's constructor
@@ -702,10 +705,11 @@ func (runtime *Runtime) notifyItemStateChanged(_ *jvm.VM, arguments []jvm.Value)
 
 // reportItemStateChange calls the owning Form's ItemStateListener.
 func (runtime *Runtime) reportItemStateChange(item *jvm.Object, data *itemData) error {
-	if data.owner == nil {
+	owner := runtime.itemOwner(data)
+	if owner == nil {
 		return nil
 	}
-	form := runtime.screenState(data.owner, screenForm)
+	form := runtime.screenState(owner, screenForm)
 	state := runtime.lcdui()
 	state.mu.Lock()
 	listener := form.itemListener
@@ -724,10 +728,29 @@ func (runtime *Runtime) reportItemStateChange(item *jvm.Object, data *itemData) 
 
 // refreshItemOwner repaints the Form an item belongs to, if it is on screen.
 func (runtime *Runtime) refreshItemOwner(_ *jvm.Object, data *itemData) error {
-	if data.owner == nil {
+	owner := runtime.itemOwner(data)
+	if owner == nil {
 		return nil
 	}
-	return runtime.refreshCurrentScreen(data.owner)
+	return runtime.refreshCurrentScreen(owner)
+}
+
+// itemOwner and setItemOwner guard the Form an item is on. The Form natives
+// set it under textMu, while an item's refresh reads it both with and without
+// textMu held, so the two sides meet on the state lock, which nests inside
+// textMu.
+func (runtime *Runtime) itemOwner(data *itemData) *jvm.Object {
+	state := runtime.lcdui()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return data.owner
+}
+
+func (runtime *Runtime) setItemOwner(data *itemData, owner *jvm.Object) {
+	state := runtime.lcdui()
+	state.mu.Lock()
+	data.owner = owner
+	state.mu.Unlock()
 }
 
 // --- StringItem / ImageItem ---
@@ -1377,6 +1400,8 @@ func (runtime *Runtime) choiceAppend(kind screenKind) jvm.NativeMethod {
 		if choice.kind != choiceMultiple && choice.selectedIndex() < 0 {
 			choice.selectExclusive(0)
 		}
+		runtime.keepListFocus(object, kind, choice)
+		runtime.keepGroupFocus(object, kind)
 		return jvm.IntValue(int32(len(choice.elements) - 1)), runtime.refreshChoiceOwner(object, kind)
 	}
 }
@@ -1409,6 +1434,8 @@ func (runtime *Runtime) choiceInsert(kind screenKind) jvm.NativeMethod {
 		if choice.kind != choiceMultiple && choice.selectedIndex() < 0 {
 			choice.selectExclusive(0)
 		}
+		runtime.keepListFocus(object, kind, choice)
+		runtime.keepGroupFocus(object, kind)
 		return jvm.VoidValue(), runtime.refreshChoiceOwner(object, kind)
 	}
 }
@@ -1432,6 +1459,7 @@ func (runtime *Runtime) choiceDelete(kind screenKind) jvm.NativeMethod {
 		if wasSelected && choice.kind != choiceMultiple && len(choice.elements) > 0 {
 			choice.selectExclusive(min(position, len(choice.elements)-1))
 		}
+		runtime.keepListFocus(object, kind, choice)
 		return jvm.VoidValue(), runtime.refreshChoiceOwner(object, kind)
 	}
 }
@@ -1443,8 +1471,43 @@ func (runtime *Runtime) choiceDeleteAll(kind screenKind) jvm.NativeMethod {
 			return jvm.VoidValue(), err
 		}
 		choice.elements = nil
+		runtime.keepListFocus(object, kind, choice)
 		return jvm.VoidValue(), runtime.refreshChoiceOwner(object, kind)
 	}
+}
+
+// keepGroupFocus does for a Form's focused ChoiceGroup what keepListFocus
+// does for a List: the element focus of -1 that a checkpoint taken while the
+// group was empty restores becomes 0 once the group has an element, so a
+// later quicksave holds a focus its restore accepts.
+func (runtime *Runtime) keepGroupFocus(object *jvm.Object, kind screenKind) {
+	if kind == screenList {
+		return
+	}
+	data, err := itemOf(object)
+	if err != nil {
+		return
+	}
+	owner := runtime.itemOwner(data)
+	if owner == nil {
+		return
+	}
+	form := runtime.screenState(owner, screenForm)
+	if form.subSelection < 0 && form.selection < len(form.items) && form.items[form.selection] == object {
+		form.subSelection = 0
+	}
+}
+
+// keepListFocus keeps a List's focus on a row it has. The focus follows the
+// rows the way a Form's follows its items, so FIRE never names a row that is
+// gone, and a quicksave never holds a focus its restore refuses — including
+// the -1 an older one restores for a List that was empty then.
+func (runtime *Runtime) keepListFocus(object *jvm.Object, kind screenKind, choice *choiceData) {
+	if kind != screenList {
+		return
+	}
+	screen := runtime.screenState(object, screenList)
+	screen.selection = clamp(screen.selection, 0, max(len(choice.elements)-1, 0))
 }
 
 func (runtime *Runtime) choiceSet(kind screenKind) jvm.NativeMethod {
@@ -1564,6 +1627,7 @@ func (runtime *Runtime) choiceSetSelectedIndex(kind screenKind) jvm.NativeMethod
 			choice.elements[position].selected = selected
 		} else if selected {
 			choice.selectExclusive(position)
+			runtime.focusImplicitSelection(object, kind, choice)
 		}
 		return jvm.VoidValue(), runtime.refreshChoiceOwner(object, kind)
 	}
@@ -1603,9 +1667,23 @@ func (runtime *Runtime) choiceSetSelectedFlags(kind screenKind) jvm.NativeMethod
 			}
 			if first >= 0 {
 				choice.selectExclusive(first)
+				runtime.focusImplicitSelection(object, kind, choice)
 			}
 		}
 		return jvm.VoidValue(), runtime.refreshChoiceOwner(object, kind)
+	}
+}
+
+// focusImplicitSelection moves an IMPLICIT List's focus to the row the title
+// selected. A command on an IMPLICIT List selects the focused row (see
+// fireScreenCommand), so a row the title selects itself has to be the one
+// highlighted, or the player's next command would undo it.
+func (runtime *Runtime) focusImplicitSelection(object *jvm.Object, kind screenKind, choice *choiceData) {
+	if kind != screenList || choice.kind != choiceImplicit {
+		return
+	}
+	if index := choice.selectedIndex(); index >= 0 {
+		runtime.screenState(object, screenList).selection = int(index)
 	}
 }
 
@@ -1667,10 +1745,10 @@ func (runtime *Runtime) formAppend(_ *jvm.VM, arguments []jvm.Value) (jvm.Value,
 
 // claimItem enforces the MIDP rule that an Item belongs to at most one Form.
 func (runtime *Runtime) claimItem(item *jvm.Object, data *itemData, form *jvm.Object) error {
-	if data.owner != nil && data.owner != form {
+	if owner := runtime.itemOwner(data); owner != nil && owner != form {
 		return newGuestException("java/lang/IllegalStateException", "Item is already owned by a Form")
 	}
-	data.owner = form
+	runtime.setItemOwner(data, form)
 	_ = item
 	return nil
 }
@@ -1718,7 +1796,7 @@ func (runtime *Runtime) formDelete(_ *jvm.VM, arguments []jvm.Value) (jvm.Value,
 			fmt.Sprintf("item %d of %d", index, len(form.items)))
 	}
 	if data, itemErr := itemOf(form.items[index]); itemErr == nil {
-		data.owner = nil
+		runtime.setItemOwner(data, nil)
 	}
 	form.textRevision++
 	form.items = append(form.items[:index], form.items[index+1:]...)
@@ -1736,7 +1814,7 @@ func (runtime *Runtime) formDeleteAll(_ *jvm.VM, arguments []jvm.Value) (jvm.Val
 	form := runtime.screenState(receiver, screenForm)
 	for _, item := range form.items {
 		if data, itemErr := itemOf(item); itemErr == nil {
-			data.owner = nil
+			runtime.setItemOwner(data, nil)
 		}
 	}
 	form.textRevision++
@@ -1767,7 +1845,7 @@ func (runtime *Runtime) formSet(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, er
 		return jvm.VoidValue(), err
 	}
 	if previous, itemErr := itemOf(form.items[index]); itemErr == nil {
-		previous.owner = nil
+		runtime.setItemOwner(previous, nil)
 	}
 	form.textRevision++
 	form.items[index] = item
@@ -1810,7 +1888,11 @@ func (runtime *Runtime) setFormItemStateListener(_ *jvm.VM, arguments []jvm.Valu
 		return jvm.VoidValue(), err
 	}
 	form := runtime.screenState(receiver, screenForm)
+	// reportItemStateChange reads the listener under the state lock.
+	state := runtime.lcdui()
+	state.mu.Lock()
 	form.itemListener = listener
+	state.mu.Unlock()
 	return jvm.VoidValue(), nil
 }
 
@@ -2009,13 +2091,23 @@ func trimToWidth(font *fontData, text string, width int) string {
 	if font.textWidth(runes) <= width {
 		return text
 	}
-	ellipsis := []rune("…")
-	for length := len(runes) - 1; length > 0; length-- {
-		if font.textWidth(append(append([]rune(nil), runes[:length]...), ellipsis...)) <= width {
-			return string(runes[:length]) + "…"
+	// A width is the sum of its characters' advances, none negative, so the
+	// longest prefix that fits beside the ellipsis is found in one pass
+	// rather than by re-measuring every shorter prefix.
+	room := width - font.textWidth([]rune("…"))
+	length, used := 0, 0
+	for length < len(runes)-1 {
+		advance := font.charAdvance(runes[length])
+		if used+advance > room {
+			break
 		}
+		used += advance
+		length++
 	}
-	return ""
+	if length == 0 {
+		return ""
+	}
+	return string(runes[:length]) + "…"
 }
 
 // wrapText breaks a paragraph into lines that fit a pixel width, splitting on
@@ -2048,13 +2140,22 @@ func wrapText(font *fontData, text string, width int) []string {
 				flush()
 			}
 			// A word wider than the line is split at the last character that
-			// still fits rather than dropped.
+			// still fits rather than dropped, and always after at least one.
+			// The advances are summed as the cut moves rather than each
+			// prefix measured again, which on a long unbroken text was a
+			// cubic stall in every paint.
 			remaining := []rune(word)
 			for len(remaining) > 0 {
-				cut := len(remaining)
-				for cut > 1 && font.textWidth(remaining[:cut]) > width {
-					cut--
+				cut, used := 0, 0
+				for cut < len(remaining) {
+					advance := font.charAdvance(remaining[cut])
+					if used+advance > width {
+						break
+					}
+					used += advance
+					cut++
 				}
+				cut = max(cut, 1)
 				lines = append(lines, string(remaining[:cut]))
 				remaining = remaining[cut:]
 			}

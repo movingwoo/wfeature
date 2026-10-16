@@ -30,7 +30,8 @@ import (
 // 26 as an allocator where the kernel table here has its allocator at 20 — so
 // rather than guess a mapping, every slot is filled with a distinct trap. The
 // module then names the slots it wants, in the order it wants them, and the
-// list it produces is the specification for what to implement. See docs/ktf.md.
+// list it produces is the specification for what to implement. See
+// docs/history/ktf.md, "The platform table is planted below the module".
 const (
 	// nativeTableSlots bounds the trap table. The module indexes it with a
 	// byte offset, so this is four times the largest reachable offset.
@@ -845,7 +846,8 @@ func (client *NativeClient) InterfaceObject(identifier uint32) (uint32, error) {
 // rejects a null second or fourth argument before doing anything, and returns
 // the same way it would on any other failure; and the created object arrives in
 // the out parameter, so a caller reading the result alone sees zero and calls
-// it success. Both cost a session here. See docs/ktf.md.
+// it success. Both cost a session here. See docs/history/ktf.md, "Two steps
+// that look like they succeeded when they have not".
 
 // ApplicationIdentifier is the ClassID of the applet in the package, and the
 // one CreateApplication needs.

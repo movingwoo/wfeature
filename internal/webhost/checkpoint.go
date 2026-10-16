@@ -100,6 +100,7 @@ func (s *Server) quickLoadRefusal(game string) error {
 		return nil
 	}
 	identity := backend.SaveIdentity(archive)
+	s.migrateSaveOwner(archive, summary.Platform)
 	data, err := loadCheckpointSlot(s.saveDirectory(summary.Platform, summary.SaveOwner), identity)
 	if err != nil {
 		return err

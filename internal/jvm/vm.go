@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -198,6 +199,10 @@ type VM struct {
 	statics             map[fieldKey]Value
 	internedStrings     map[string]*Object
 	internedStringBytes int
+	// classObjects holds the one java/lang/Class object each class name has.
+	// getClass, a class literal and Class.forName all answer from it, because
+	// a title compares classes with == and locks on a class literal.
+	classObjects map[string]*Object
 	// declaringFields caches field resolution: which class in a reference's
 	// chain actually declares the field it names. It is cleared whenever a
 	// class is defined, because a class that arrives later can be the answer.
@@ -294,6 +299,7 @@ func New(source ClassSource, options Options) *VM {
 		builtinNatives:  make(map[methodKey]bool),
 		statics:         make(map[fieldKey]Value),
 		internedStrings: make(map[string]*Object),
+		classObjects:    make(map[string]*Object),
 		declaringFields: make(map[fieldKey]fieldResolution),
 		classMonitors:   make(map[string]*monitor),
 		threads:         make(map[*Object]*guestThread),
@@ -682,7 +688,10 @@ func (vm *VM) invokeInstanceReceived(
 
 func (vm *VM) resolveStaticMethod(className, name, descriptor string) (*classfile.Class, *classfile.Member, error) {
 	referenced := className
-	for className != "" {
+	for depth := 0; className != ""; depth++ {
+		if depth >= maxSuperclassDepth {
+			return nil, nil, superclassChainTooDeep(referenced)
+		}
 		class, err := vm.loader.Load(className)
 		if err != nil {
 			return nil, nil, unresolvedMethod(referenced, className, name, descriptor, err)
@@ -715,7 +724,10 @@ func unresolvedMethod(referenced, missing, name, descriptor string, err error) e
 
 func (vm *VM) resolveInstanceMethod(className, name, descriptor string) (*classfile.Class, *classfile.Member, error) {
 	referenced := className
-	for className != "" {
+	for depth := 0; className != ""; depth++ {
+		if depth >= maxSuperclassDepth {
+			return nil, nil, superclassChainTooDeep(referenced)
+		}
 		class, err := vm.loader.Load(className)
 		if err != nil {
 			return nil, nil, unresolvedMethod(referenced, className, name, descriptor, err)
@@ -729,6 +741,18 @@ func (vm *VM) resolveInstanceMethod(className, name, descriptor string) (*classf
 		className = class.SuperName
 	}
 	return nil, nil, fmt.Errorf("instance method not found: %s%s", name, descriptor)
+}
+
+// maxSuperclassDepth bounds every walk up a superclass chain a class file
+// supplies. The loader does not look at the chain, so a class that names
+// itself, or two that name each other, would otherwise be followed for ever
+// by a loop that spends no instruction and never checks Close. No class
+// library or title comes near this depth; the deepest chains are a handful of
+// classes below Object.
+const maxSuperclassDepth = 64
+
+func superclassChainTooDeep(className string) error {
+	return fmt.Errorf("superclass chain of %s exceeds %d classes or is cyclic", className, maxSuperclassDepth)
 }
 
 func validateArguments(arguments []Value, parameters []Type) error {
@@ -777,7 +801,7 @@ func (vm *VM) classMonitor(className string) *monitor {
 // resolveNativeEntry walks a class chain for a registered body. It was two
 // walks, one per kind, which asked the same chain the same question twice.
 func (vm *VM) resolveNativeEntry(className, name, descriptor string) nativeEntry {
-	for className != "" {
+	for depth := 0; className != "" && depth < maxSuperclassDepth; depth++ {
 		key := methodKey{class: className, name: name, descriptor: descriptor}
 		vm.mu.RLock()
 		entry := vm.natives[key]
@@ -829,15 +853,22 @@ func (vm *VM) SetStaticField(class, name, descriptor string, value Value) error 
 	}, value)
 }
 
+// staticValue and setStaticValue initialize the class or interface that
+// declares the field, which is what getstatic and putstatic do (JVMS 5.5). The
+// reference names the type the source expression had: an interface constant
+// read inside an implementing class names the class, and an inherited static
+// read through a subclass names the subclass. Initializing the named class
+// instead left an interface's initializer unrun, so its arrays read as null,
+// and ran a subclass's initializer the program had not reached.
 func (vm *VM) staticValue(state *execution, reference classfile.Reference) (Value, error) {
-	if err := vm.ensureInitialized(state, reference.Class); err != nil {
+	resolved := vm.resolveFieldReference(reference)
+	if err := vm.ensureInitialized(state, resolved.Class); err != nil {
 		return VoidValue(), err
 	}
 	typeInfo, err := ParseFieldDescriptor(reference.Descriptor)
 	if err != nil {
 		return VoidValue(), err
 	}
-	resolved := vm.resolveFieldReference(reference)
 	key := fieldKey{class: resolved.Class, name: resolved.Name, descriptor: resolved.Descriptor}
 	vm.mu.RLock()
 	value, ok := vm.statics[key]
@@ -849,7 +880,8 @@ func (vm *VM) staticValue(state *execution, reference classfile.Reference) (Valu
 }
 
 func (vm *VM) setStaticValue(state *execution, reference classfile.Reference, value Value) error {
-	if err := vm.ensureInitialized(state, reference.Class); err != nil {
+	resolved := vm.resolveFieldReference(reference)
+	if err := vm.ensureInitialized(state, resolved.Class); err != nil {
 		return err
 	}
 	typeInfo, err := ParseFieldDescriptor(reference.Descriptor)
@@ -859,7 +891,6 @@ func (vm *VM) setStaticValue(state *execution, reference classfile.Reference, va
 	if err := validateValue(value, typeInfo); err != nil {
 		return err
 	}
-	resolved := vm.resolveFieldReference(reference)
 	key := fieldKey{class: resolved.Class, name: resolved.Name, descriptor: resolved.Descriptor}
 	vm.mu.Lock()
 	vm.statics[key] = value
@@ -1009,8 +1040,8 @@ func (vm *VM) resolveField(className, name, descriptor string) fieldResolution {
 		return cached
 	}
 	declaring := className
-	// The chain is bounded by the loader, which refuses a cycle; the counter
-	// bounds it again because this runs on every field access.
+	// The loader does not check the chain for a cycle, so the counter is what
+	// bounds it.
 	for current, depth := className, 0; current != "" && depth < maxFieldResolutionDepth; depth++ {
 		class, err := vm.loader.Load(current)
 		if err != nil {
@@ -1088,10 +1119,49 @@ func (vm *VM) newArray(component Type, length int32) (*Object, error) {
 	return object, nil
 }
 
+// newMultiArray is multianewarray. Each array it makes is held to
+// MaxArrayLength as any array is, and the whole instruction is held to what one
+// array of that length costs, because dimensions that each pass alone — new
+// int[16384][16384] — would otherwise commit gigabytes in one instruction. The
+// arrays count as well as their elements, an array object at about the cost of
+// multiArrayObjectCost elements, so a wide first dimension of empty rows is
+// bounded too. Real titles allocate grids of thousands of cells against a
+// budget of millions, and the same cells allocated a row at a time are not
+// limited here.
 func (vm *VM) newMultiArray(arrayType Type, lengths []int32) (*Object, error) {
 	if arrayType.Kind != TypeArray || arrayType.Component == nil || len(lengths) == 0 {
 		return nil, fmt.Errorf("invalid multianewarray type or dimensions")
 	}
+	// Every count is checked before anything is allocated, including the
+	// counts behind a zero one that no array is made for (JVMS multianewarray).
+	for _, length := range lengths {
+		if length < 0 {
+			return nil, guestException("java/lang/NegativeArraySizeException", fmt.Sprintf("length %d", length))
+		}
+	}
+	// An array length is an int32, so no limit above that means anything here,
+	// and holding the budget to it keeps every product below in range: the
+	// arrays at a level never outnumber the cost already counted.
+	budget := min(int64(vm.config.MaxArrayLength), math.MaxInt32)
+	arrays, cost := int64(1), int64(0)
+	for _, length := range lengths {
+		cost += arrays * multiArrayObjectCost
+		if cost > budget || int64(length) > (budget-cost)/arrays {
+			return nil, fmt.Errorf("multianewarray of %v exceeds limit %d", lengths, vm.config.MaxArrayLength)
+		}
+		cost += arrays * int64(length)
+		if arrays *= int64(length); arrays == 0 {
+			break
+		}
+	}
+	return vm.newMultiArrayLevel(arrayType, lengths)
+}
+
+// multiArrayObjectCost is what one array object costs, in elements: its
+// header, lock and storage descriptor come to about sixteen 24-byte values.
+const multiArrayObjectCost = 16
+
+func (vm *VM) newMultiArrayLevel(arrayType Type, lengths []int32) (*Object, error) {
 	array, err := vm.newArray(*arrayType.Component, lengths[0])
 	if err != nil {
 		return nil, err
@@ -1104,7 +1174,7 @@ func (vm *VM) newMultiArray(arrayType Type, lengths []int32) (*Object, error) {
 	}
 	storage := array.Native.(*Array)
 	for index := 0; index < storage.Length(); index++ {
-		child, err := vm.newMultiArray(*arrayType.Component, lengths[1:])
+		child, err := vm.newMultiArrayLevel(*arrayType.Component, lengths[1:])
 		if err != nil {
 			return nil, err
 		}

@@ -76,7 +76,9 @@ func (client *Client) wipicFormatFrom(format []byte, next func(int) (uint64, err
 			// one: the bytes it names need not be terminated at all.
 			return client.readBoundedString(address, uint32(limit)), nil
 		}
-		text, err := client.readCString(address)
+		// A %s argument is text the title built, not a name: see
+		// readCStringBuffer.
+		text, err := client.readCStringBuffer(address)
 		if err != nil {
 			return nil, err
 		}

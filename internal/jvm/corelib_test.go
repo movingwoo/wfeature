@@ -446,12 +446,12 @@ func TestInheritedRangedReadStoresSignedBytes(t *testing.T) {
 // third boxed number has to be there and has to truncate like its own width.
 func TestShortParsesAndTruncatesToItsOwnWidth(t *testing.T) {
 	vm := New(nil, Options{})
-	value, err := vm.InvokeStatic(ShortClass, "parseShort", "(Ljava/lang/String;)S", ReferenceValue(vm.NewString(" -32768 ")))
+	value, err := vm.InvokeStatic(ShortClass, "parseShort", "(Ljava/lang/String;)S", ReferenceValue(vm.NewString("-32768")))
 	if err != nil {
 		t.Fatalf("Short.parseShort error = %v", err)
 	}
 	if number, err := value.Int32(); err != nil || number != -32768 {
-		t.Fatalf("Short.parseShort(\" -32768 \") = %v/%v, want -32768", number, err)
+		t.Fatalf("Short.parseShort(\"-32768\") = %v/%v, want -32768", number, err)
 	}
 	if _, err := vm.InvokeStatic(ShortClass, "parseShort", "(Ljava/lang/String;)S", ReferenceValue(vm.NewString("32768"))); err == nil {
 		t.Fatal("Short.parseShort(\"32768\") accepted a value one past the width")

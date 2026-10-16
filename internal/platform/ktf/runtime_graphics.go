@@ -650,6 +650,7 @@ func (runtime *initializationRuntime) imageFramebufferHandle(image *jvm.Object) 
 	}
 	runtime.setFramebufferOpacity(handle, imageOpacityOf(decoded))
 	image.Fields["guestFramebuffer:I"] = jvm.IntValue(int32(handle))
+	runtime.trackImageSurface(image, handle)
 	return handle, nil
 }
 
@@ -1294,7 +1295,13 @@ func runtimeGraphicsDrawPolygon(fill bool) runtimeJavaImplementation {
 				bottom = y
 			}
 		}
-		for y := top; y <= bottom; y++ {
+		// Only the rows that can reach the target are scanned. The vertices
+		// are the guest's, and a span that ends at Integer.MAX_VALUE never
+		// let the counter pass it.
+		first := max(int64(top), -int64(state.translateY))
+		last := min(int64(bottom), int64(state.target.height)-1-int64(state.translateY))
+		for row := first; row <= last; row++ {
+			y := int32(row)
 			var crossings []int32
 			for index := 0; index < count; index++ {
 				next := (index + 1) % count
@@ -1339,40 +1346,14 @@ func runtimeIntArrayArgument(value jvm.Value) ([]int32, error) {
 	return result, nil
 }
 
-// graphicsDrawSegment draws one Bresenham line in the current color.
+// graphicsDrawSegment draws one Bresenham line in the current color, walked
+// only across the target in the caller's translated space; see clippedLine.
 func (runtime *initializationRuntime) graphicsDrawSegment(state *runtimeGraphicsState, x0, y0, x1, y1 int32) error {
-	deltaX, deltaY := x1-x0, y1-y0
-	if deltaX < 0 {
-		deltaX = -deltaX
-	}
-	if deltaY < 0 {
-		deltaY = -deltaY
-	}
-	stepX, stepY := int32(1), int32(1)
-	if x0 > x1 {
-		stepX = -1
-	}
-	if y0 > y1 {
-		stepY = -1
-	}
-	difference := deltaX - deltaY
-	for {
-		if err := runtime.graphicsFillRect(state, x0, y0, 1, 1, state.color); err != nil {
-			return err
-		}
-		if x0 == x1 && y0 == y1 {
-			return nil
-		}
-		doubled := 2 * difference
-		if doubled > -deltaY {
-			difference -= deltaY
-			x0 += stepX
-		}
-		if doubled < deltaX {
-			difference += deltaX
-			y0 += stepY
-		}
-	}
+	left, top := -int64(state.translateX), -int64(state.translateY)
+	return clippedLine(x0, y0, x1, y1, left, top, left+int64(state.target.width), top+int64(state.target.height),
+		func(x, y int32) error {
+			return runtime.graphicsFillRect(state, x, y, 1, 1, state.color)
+		})
 }
 
 // runtimeImageSetTransparentColor records the color the image draws as
@@ -1479,7 +1460,9 @@ func (runtime *initializationRuntime) copyImageRegion(_ *jvm.VM, source *jvm.Obj
 	if value, ok := source.Fields["transparentColor:I"]; ok {
 		fields["transparentColor:I"] = value
 	}
-	return jvm.ReferenceValue(&jvm.Object{ClassName: "org/kwis/msp/lcdui/Image", Fields: fields}), nil
+	image := &jvm.Object{ClassName: "org/kwis/msp/lcdui/Image", Fields: fields}
+	runtime.trackImageSurface(image, handle)
+	return jvm.ReferenceValue(image), nil
 }
 
 const maxImageDimension = 2048

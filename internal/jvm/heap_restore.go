@@ -392,6 +392,18 @@ func (vm *VM) restoreHeapState(saved HeapState, codec HeapCodec, threadsAllowed 
 		}
 		bindings[record.Address] = binding
 	}
+	// The table of class objects is not saved: it is every Class object the
+	// heap reaches, one per name, rebuilt so getClass and a class literal go on
+	// answering the object the restored references hold. An object a platform
+	// bound to its own class record stays that platform's.
+	classObjects := make(map[string]*Object)
+	for _, object := range objects[1:] {
+		name, ok := object.Native.(string)
+		if !ok || object.ClassName != ClassClass || object.aotAddress.Load() != 0 || classObjects[name] != nil {
+			continue
+		}
+		classObjects[name] = object
+	}
 	initialized := make(map[string]bool, len(saved.Initialized))
 	for _, name := range saved.Initialized {
 		initialized[name] = true
@@ -404,6 +416,7 @@ func (vm *VM) restoreHeapState(saved HeapState, codec HeapCodec, threadsAllowed 
 	vm.aotMu.Lock()
 	vm.statics, vm.classMonitors, vm.declaringFields = statics, monitors, make(map[fieldKey]fieldResolution)
 	vm.internedStrings, vm.internedStringBytes = interned, internedBytes
+	vm.classObjects = classObjects
 	vm.aotClasses, vm.aotAddresses, vm.aotObjects = classes, aliases, bindings
 	vm.threads, vm.mainThread = threads, objects[saved.MainThread]
 	vm.initialized, vm.initErrors = initialized, make(map[string]error)

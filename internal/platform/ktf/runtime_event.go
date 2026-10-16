@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -371,7 +372,10 @@ func (runtime *initializationRuntime) dispatchGuestEvent(vm *jvm.VM, event guest
 }
 
 func (runtime *initializationRuntime) dispatchNotifyEvent(vm *jvm.VM, event guestEvent) error {
-	for _, listener := range runtime.jletListeners {
+	// A listener may add or remove listeners while it is notified, and a
+	// removal shifts the list in place, so the event goes to the listeners
+	// registered when it was dispatched.
+	for _, listener := range slices.Clone(runtime.jletListeners) {
 		if listener == nil {
 			continue
 		}
@@ -470,8 +474,15 @@ func (runtime *initializationRuntime) dispatchKeyToCards(eventType, key int32) e
 	if handled, err := runtime.dispatchKeyToVendorForm(eventType, key); err != nil || handled {
 		return err
 	}
-	for index := len(runtime.displayCards) - 1; index >= 0; index-- {
-		card := runtime.displayCards[index]
+	// A handler can pop, remove or push cards before it asks for the event to
+	// go on, so the walk is over the stack as the event found it, and a card
+	// already taken off it is passed over.
+	cards := slices.Clone(runtime.displayCards)
+	for index := len(cards) - 1; index >= 0; index-- {
+		card := cards[index]
+		if !slices.Contains(runtime.displayCards, card) {
+			continue
+		}
 		result, err := runtime.client.vm.InvokeVirtual(card, "keyNotify", "(II)Z", jvm.IntValue(eventType), jvm.IntValue(key))
 		if err != nil {
 			return fmt.Errorf("notify KTF card %s key: %w", card.ClassName, err)
@@ -491,8 +502,13 @@ func (runtime *initializationRuntime) dispatchKeyToCards(eventType, key int32) e
 // same traversal keys take. The guest method takes the event type first, then
 // the coordinates.
 func (runtime *initializationRuntime) dispatchPointerToCards(eventType, x, y int32) error {
-	for index := len(runtime.displayCards) - 1; index >= 0; index-- {
-		card := runtime.displayCards[index]
+	// The walk keys take; see dispatchKeyToCards.
+	cards := slices.Clone(runtime.displayCards)
+	for index := len(cards) - 1; index >= 0; index-- {
+		card := cards[index]
+		if !slices.Contains(runtime.displayCards, card) {
+			continue
+		}
 		result, err := runtime.client.vm.InvokeVirtual(card, "pointerNotify", "(III)Z",
 			jvm.IntValue(eventType), jvm.IntValue(x), jvm.IntValue(y))
 		if err != nil {

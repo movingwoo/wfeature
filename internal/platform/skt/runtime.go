@@ -180,9 +180,14 @@ type Runtime struct {
 	saveStore     backend.SaveStore
 	savePendingMu sync.Mutex
 	pendingSaves  map[string][]byte
-	saveVersions  map[string]uint64
 	rmsOnce       sync.Once
 	rmsState      *rmsState
+	// fileMu guards the session's files: the one state each path has, which
+	// every handle on it shares, the removal list as the store holds it, and
+	// each handle's position and open state. See skvm_file.go.
+	fileMu       sync.Mutex
+	files        map[string]*xFileNode
+	removedFiles map[string]bool
 	// now reads the wall clock RecordStore.getLastModified reports. It is a
 	// field so a test can pin it; nothing else in this runtime depends on
 	// real time.
@@ -800,10 +805,10 @@ func (runtime *Runtime) registerMIDletNatives() error {
 		// The curve pairs. A MIDlet reaching one of these used to fail to
 		// resolve the method at all, which ends the title rather than drawing
 		// the wrong shape.
-		{midp.GraphicsClass, "fillRoundRect", "(IIIIII)V", runtime.graphicsCurve(curve.FillRoundRect)},
-		{midp.GraphicsClass, "drawRoundRect", "(IIIIII)V", runtime.graphicsCurve(curve.DrawRoundRect)},
-		{midp.GraphicsClass, "fillArc", "(IIIIII)V", runtime.graphicsCurve(curve.FillArc)},
-		{midp.GraphicsClass, "drawArc", "(IIIIII)V", runtime.graphicsCurve(curve.DrawArc)},
+		{midp.GraphicsClass, "fillRoundRect", "(IIIIII)V", runtime.graphicsCurve(curve.FillRoundRectWithin)},
+		{midp.GraphicsClass, "drawRoundRect", "(IIIIII)V", runtime.graphicsCurve(curve.DrawRoundRectWithin)},
+		{midp.GraphicsClass, "fillArc", "(IIIIII)V", runtime.graphicsCurve(curve.FillArcWithin)},
+		{midp.GraphicsClass, "drawArc", "(IIIIII)V", runtime.graphicsCurve(curve.DrawArcWithin)},
 		{midp.GraphicsClass, "drawImage", "(Ljavax/microedition/lcdui/Image;III)V", runtime.drawGraphicsImage},
 		{midp.GraphicsClass, "drawRegion", "(Ljavax/microedition/lcdui/Image;IIIIIIII)V", runtime.drawGraphicsRegion},
 		{midp.GraphicsClass, "drawRGB", "([IIIIIIIZ)V", runtime.drawGraphicsRGB},
@@ -1308,6 +1313,7 @@ func (runtime *Runtime) transition(event string, next LifecycleState) {
 	if next == StateDestroyed || next == StateError {
 		runtime.endAudioWaits()
 		runtime.VM.Close()
+		runtime.storeAtSessionEnd()
 	}
 }
 
@@ -1330,6 +1336,7 @@ func (runtime *Runtime) recordFailure(action string, cause, failure error, next 
 	if next == StateDestroyed || next == StateError {
 		runtime.endAudioWaits()
 		runtime.VM.Close()
+		runtime.storeAtSessionEnd()
 	}
 	if runtime.logger != nil {
 		runtime.logger.Error("MIDlet lifecycle failed", "action", action, "from", previous, "to", next, "error", cause)

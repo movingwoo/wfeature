@@ -37,6 +37,19 @@ func threadJoin(vm *VM, execution *execution, arguments []Value) (Value, error) 
 	return VoidValue(), vm.waitCheckpointJoin(execution, thread)
 }
 
+// interruptThread sets a thread's interrupt status and posts the wake token a
+// blocked sleep, wait or join takes it from.
+func (vm *VM) interruptThread(thread *Object) {
+	state := vm.threadState(thread)
+	state.mu.Lock()
+	state.interrupted = true
+	select {
+	case state.wake <- struct{}{}:
+	default:
+	}
+	state.mu.Unlock()
+}
+
 func (vm *VM) consumeThreadInterrupt(thread *Object) bool {
 	state := vm.threadState(thread)
 	state.mu.Lock()

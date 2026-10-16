@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 )
 
 // Target is what the stub debugs. It is an interface rather than the ARM core
@@ -46,34 +47,165 @@ const (
 	fpaRegisterHex = 24 // 96 bits
 )
 
-// Serve runs the protocol on one connection until the client detaches or the
-// target is killed.
+// liveTarget is a Target running a real guest, which its client can reach
+// while it runs: resume takes the client's Ctrl-C through interrupt, and
+// endClient undoes what the client set up and lets the guest go when the
+// client leaves, by detaching or by dropping the connection. CoreTarget is
+// one. A target that is not — the protocol tests' stand-in, which never runs —
+// is resumed in line, because nothing the client sends could reach it while it
+// runs.
+type liveTarget interface {
+	Target
+	resume(single bool, interrupt <-chan struct{}) (Signal, error)
+	endClient()
+}
+
+// request is one thing read from the client: a packet, the interrupt byte,
+// or the error that ended the connection.
+type request struct {
+	payload   string
+	interrupt bool
+	err       error
+}
+
+// Serve runs the protocol on one connection until the client detaches, the
+// connection ends or the target is killed. However it ends, a live target is
+// told its client has gone, so a guest the client stopped is let go.
+//
+// The connection is read on a goroutine of its own, because a client has
+// something to say while the target runs — a Ctrl-C, or a hang-up — and the
+// wait for the next stop has to hear it.
 func Serve(connection io.ReadWriter, target Target) error {
-	reader := bufio.NewReader(connection)
+	live, isLive := target.(liveTarget)
+	if isLive {
+		defer live.endClient()
+	}
+	writer := &serialWriter{writer: connection}
+	defer writer.close()
+	requests := make(chan request)
+	quit := make(chan struct{})
+	defer close(quit)
+	go readRequests(bufio.NewReader(connection), writer, requests, quit)
+
 	// The target is stopped when a client attaches; gdb expects to be told so
 	// as soon as it asks.
+	var backlog []request
 	for {
-		payload, interrupt, err := readPacket(reader, connection)
-		if err != nil {
-			return err
+		var next request
+		if len(backlog) > 0 {
+			next, backlog = backlog[0], backlog[1:]
+		} else {
+			next = <-requests
 		}
-		if interrupt {
-			if err := writePacket(connection, stopReply(SignalTrap)); err != nil {
+		if next.err != nil {
+			return next.err
+		}
+		if next.interrupt {
+			if err := writePacket(writer, stopReply(SignalTrap)); err != nil {
 				return err
 			}
 			continue
 		}
-		reply, done, err := handle(payload, target)
+		var reply string
+		var done bool
+		var err error
+		if isLive && resumes(next.payload) {
+			reply, backlog, err = run(next.payload, live, requests, backlog)
+		} else {
+			reply, done, err = handle(next.payload, target)
+		}
 		if err != nil {
 			return err
 		}
-		if err := writePacket(connection, reply); err != nil {
+		if err := writePacket(writer, reply); err != nil {
 			return err
 		}
 		if done {
 			return nil
 		}
 	}
+}
+
+// readRequests reads the connection until it ends, handing Serve each request
+// and finally the error that ended it. It stops early once Serve has returned.
+func readRequests(reader *bufio.Reader, writer io.Writer, requests chan<- request, quit <-chan struct{}) {
+	for {
+		payload, interrupt, err := readPacket(reader, writer)
+		select {
+		case requests <- request{payload: payload, interrupt: interrupt, err: err}:
+		case <-quit:
+			return
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// resumes reports whether a request runs the target.
+func resumes(payload string) bool {
+	return payload != "" && (payload[0] == 'c' || payload[0] == 's')
+}
+
+// run resumes a live target and waits for its stop while still listening to
+// the client. A Ctrl-C interrupts the target, and a request that arrives
+// meanwhile waits its turn in the backlog. A connection that ends abandons
+// the wait: the client is told its target has gone, which lets the guest go
+// and returns the resume that was waiting.
+func run(payload string, target liveTarget, requests <-chan request, backlog []request) (string, []request, error) {
+	interrupt := make(chan struct{}, 1)
+	result := make(chan string, 1)
+	go func() {
+		signal, err := target.resume(payload[0] == 's', interrupt)
+		if err != nil {
+			result <- "E03"
+			return
+		}
+		result <- stopReply(signal)
+	}()
+	for {
+		select {
+		case reply := <-result:
+			return reply, backlog, nil
+		case next := <-requests:
+			switch {
+			case next.err != nil:
+				target.endClient()
+				return "", backlog, next.err
+			case next.interrupt:
+				select {
+				case interrupt <- struct{}{}:
+				default:
+				}
+			default:
+				backlog = append(backlog, next)
+			}
+		}
+	}
+}
+
+// serialWriter lets the reading goroutine's acknowledgements and Serve's
+// replies share the connection: one write at a time, and none once Serve has
+// returned and the connection is no longer its to write.
+type serialWriter struct {
+	mu     sync.Mutex
+	writer io.Writer
+	closed bool
+}
+
+func (writer *serialWriter) Write(data []byte) (int, error) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	if writer.closed {
+		return 0, io.ErrClosedPipe
+	}
+	return writer.writer.Write(data)
+}
+
+func (writer *serialWriter) close() {
+	writer.mu.Lock()
+	writer.closed = true
+	writer.mu.Unlock()
 }
 
 func stopReply(signal Signal) string {
@@ -188,11 +320,17 @@ func writeAllRegisters(text string, target Target) (string, bool, error) {
 	if len(text) < 16*8 {
 		return "E01", false, nil
 	}
-	for index := 0; index < 16; index++ {
+	// Parsed whole before any of it is written, so a malformed packet is
+	// refused rather than half-applied.
+	var values [16]uint32
+	for index := range values {
 		value, err := parseHexWord(text[index*8 : index*8+8])
 		if err != nil {
 			return "E01", false, nil
 		}
+		values[index] = value
+	}
+	for index, value := range values {
 		if err := target.SetRegister(index, value); err != nil {
 			return "E01", false, nil
 		}

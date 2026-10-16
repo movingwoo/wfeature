@@ -218,6 +218,8 @@ try {
   await page.screenshot({ path: join(output, "text-unavailable.png") });
   await page.locator("#text-input-cancel").click(); await closeSettings(); await stopGame();
   await page.locator("#save-import-file").setInputFiles(backup);
+  // The page's own question, which the auto-accepted browser dialog no longer answers.
+  await page.locator("#confirm-accept").click();
   await page.waitForFunction(() => document.querySelector("#status-text").textContent.includes("복원"));
   await startGame("persistence.zip"); await color([0, 255, 0]);
   await page.screenshot({ path: join(output, "restored-progress.png") });

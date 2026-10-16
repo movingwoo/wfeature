@@ -82,8 +82,20 @@ func (memory *Memory) runWordModulate(context *Context, loop *wordModulate) (uin
 		// The fault the next iteration would have taken, where it would have.
 		return 0, err
 	}
-	maskFirst := context.Registers[loop.maskFirst]
-	maskSecond := context.Registers[loop.maskSecond]
+	// The masks as the guest has them in every step: reloaded from their
+	// literals at the top of it. Their registers are not read, because once a
+	// step is past the masks' last use the body may reuse them — for the minus
+	// one the counter comes down by, say — and at the loop head they then hold
+	// that instead. A literal that cannot be read is a fault the interpreter
+	// takes where the guest would.
+	maskFirst, err := memory.readData32(loop.literals[0])
+	if err != nil {
+		return 0, nil
+	}
+	maskSecond, err := memory.readData32(loop.literals[1])
+	if err != nil {
+		return 0, nil
+	}
 
 	span := uint64(iterations) * 4
 	if err := memory.validateLocked(first, span, PermissionReadWrite, "write"); err != nil {
@@ -271,6 +283,19 @@ func (memory *Memory) analyseWordModulate(head, branchPC uint32) *wordModulate {
 	}
 	for _, register := range [...]uint32{word, pointer, step.alpha, step.temp, step.out, maskFirst, maskSecond, advance, test} {
 		if seen&(1<<register) != 0 {
+			return nil
+		}
+	}
+	// The masks have to hold their literals wherever a step uses them, so
+	// neither may share a register with the other or with anything written
+	// while they are still in use: the word, the factor pointer and the
+	// step's own three. What the tail writes after their last use may reuse
+	// them, because the stand-in reads the literals rather than the registers.
+	if maskFirst == maskSecond {
+		return nil
+	}
+	for _, register := range [...]uint32{word, pointer, step.alpha, step.temp, step.out} {
+		if register == maskFirst || register == maskSecond {
 			return nil
 		}
 	}

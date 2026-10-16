@@ -248,18 +248,22 @@ func (platform *NativePlatform) drawImage(source *nativeImage, blit NativeBlit) 
 	// the copy can land rather than by what it was told. Skipping the rows and
 	// columns one at a time is the same picture, but a width the title computed
 	// wrongly would be counted to instead of drawn — and at the top of the
-	// range that is thousands of millions of turns doing nothing.
+	// range that is thousands of millions of turns doing nothing. The same
+	// holds at the near end: positions far to the left or above both the image
+	// and the frame start the loop where the first pixel can land.
 	rows := blit.Height
 	columns := blit.Width
 	rows = min(rows, min(bounds.Max.Y-blit.SourceY, frame.Bounds().Max.Y-blit.Y))
 	columns = min(columns, min(bounds.Max.X-blit.SourceX, frame.Bounds().Max.X-blit.X))
-	for row := 0; row < rows; row++ {
+	firstRow := max(0, bounds.Min.Y-blit.SourceY, -blit.Y)
+	firstColumn := max(0, bounds.Min.X-blit.SourceX, -blit.X)
+	for row := firstRow; row < rows; row++ {
 		sourceY := blit.SourceY + row
 		targetY := blit.Y + row
 		if sourceY < bounds.Min.Y || targetY < 0 {
 			continue
 		}
-		for column := 0; column < columns; column++ {
+		for column := firstColumn; column < columns; column++ {
 			sourceX := blit.SourceX + column
 			targetX := blit.X + column
 			if sourceX < bounds.Min.X || targetX < 0 {

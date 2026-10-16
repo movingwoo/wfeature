@@ -317,17 +317,17 @@ func TestKTFSaveFixtureHoldKeepsAFileAndFinishCompletesIt(t *testing.T) {
 	}
 }
 
-// A File opened for truncation stores nothing until its first write, so the
-// save on disk is whole until then. The finish writes part B alone into a copy
-// that began empty, which is the whole of the new save.
-func TestKTFSaveFixtureTruncateLeavesTheSaveUntilItIsFinished(t *testing.T) {
+// A File opened for truncation empties the save in the store at the open, as
+// the common save rule has it. The finish writes part B alone into the empty
+// file, which is the whole of the new save.
+func TestKTFSaveFixtureTruncateEmptiesTheSaveAtTheOpen(t *testing.T) {
 	for _, variant := range saveFixtureVariants() {
 		t.Run(variant.name, func(t *testing.T) {
 			fixture := startSaveFixture(t, variant)
 			fixture.press(testfixture.KTFSaveActionSave, 0x33333333)
 
 			fixture.press(testfixture.KTFSaveActionTruncate, 0)
-			fixture.expectStored("after a truncating open", testfixture.KTFSaveContent(0x33333333))
+			fixture.expectStored("after a truncating open", []byte{})
 			if fixture.word(variant.kept) == 0 {
 				t.Fatal("a truncating open kept no File")
 			}

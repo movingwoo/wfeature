@@ -379,7 +379,13 @@ func (core *Core) Run(ctx context.Context, thread *Thread, end uint32, handler S
 		if err := ctx.Err(); err != nil {
 			return fail(err)
 		}
-		if window >= budget {
+		// A loop, because a stand-in can retire several windows in one quantum
+		// (see Engine.Run): the hook is asked once for each window used up,
+		// and what the last quantum ran past the budget is carried into the
+		// next window rather than dropped. Hosts pace their threads by these
+		// renewals, so a dropped overrun would schedule a stood-in run
+		// differently from an interpreted one.
+		for window >= budget {
 			if thread.limitHook == nil {
 				return fail(fmt.Errorf("%w (limit %d)", ErrStepLimit, budget))
 			}
@@ -390,7 +396,7 @@ func (core *Core) Run(ctx context.Context, thread *Thread, end uint32, handler S
 				return fail(err)
 			}
 			thread.clearCallStop()
-			window = 0
+			window -= budget
 		}
 		count := uint64(core.quantum)
 		if remaining := budget - window; count > remaining {

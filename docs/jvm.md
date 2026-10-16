@@ -15,20 +15,31 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
 ### Class files, linking and dispatch
 
 - class-file versions 45–70 (`classfile.MaxSupportedMajorVersion`) and modified
-  UTF-8 constant pools
+  UTF-8 constant pools. A constant may hold half a surrogate pair, which the
+  format allows and javac writes for a literal such as `"\uD800"`; the class
+  loads and the half reads as U+FFFD, because strings here are Go text (see
+  [Deliberately incomplete](#deliberately-incomplete))
 - JAR-backed lazy class loading and class-name validation, through composite
   class sources that search the runtime class library before the JAR
 - field/method descriptors and category 1/2 local and operand stacks
 - class initialization, `ConstantValue`, and static and instance fields. Field
   access resolves the declaring class; see "A field belongs to the class that
-  declares it" below
+  declares it" below. `getstatic` and `putstatic` initialize that declaring
+  class or interface and nothing else (JVMS 5.5): an interface's array constant
+  read inside an implementing class runs the interface's initializer, and an
+  inherited static read through a subclass does not run the subclass's.
+  Initializing a class initializes its superclasses and not its
+  superinterfaces, which is the rule for class files without default methods
 - static, virtual, special and interface dispatch, and explicit `InvokeSpecial`
   for runtime-owned superclass methods invoked with an AOT subclass receiver
 - object creation and primitive, reference and multidimensional arrays
 - integer/long/float/double arithmetic, conversions, comparisons, branches and
   both switch formats
 - legacy `jsr`/`ret` and wide local instructions
-- superclass traversal with depth limits and cycle detection
+- superclass traversal with depth limits and cycle detection. The loader does
+  not check a chain, so method resolution, the native lookup behind it and a
+  `catch` clause's class test stop after 64 classes (`maxSuperclassDepth`): a
+  class file whose superclass names itself fails resolution instead of spinning
 - `checkcast` and `instanceof`. Class and interface checks follow transitive
   superinterfaces and interfaces inherited through a superclass, including
   diamonds, per the
@@ -72,7 +83,7 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
 |---|---|---|
 | `MaxSteps` | 1,000,000 | instructions one execution may spend; `ErrStepLimit` when exhausted and not renewed |
 | `MaxFrames` | 1,024 | frame depth across nested calls (`ErrFrameLimit`); also bounds type loads per assignability query |
-| `MaxArrayLength` | 16,777,216 elements | largest array a guest can allocate; a larger request fails with the limit rather than `OutOfMemoryError` |
+| `MaxArrayLength` | 16,777,216 elements | largest array a guest can allocate; a larger request fails with the limit rather than `OutOfMemoryError`. One `multianewarray` is held to the same total, each array it creates counting as 16 elements beside its own, and `StringBuffer.setLength` to the same length |
 | `RenewSteps` | unset | makes `MaxSteps` a window; see [below](#the-step-limit-is-a-ceiling-or-a-window) |
 | `Clock` | wall clock | the guest clock every date-shaped builtin reads |
 | `Speed` | game speed | scales `Thread.sleep` and timed `Object.wait`; a platform scales `Clock` by the same factor |
@@ -95,7 +106,12 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
   rather than block the one guest core (KTF parks the calling worker; see
   [the KTF history](history/ktf.md#implementation-publishing-the-rest-of-the-core-library)).
   Finished and failed-start threads leave the root set; their objects keep the
-  restart prohibition (`IllegalThreadStateException`).
+  restart prohibition (`IllegalThreadStateException`). An interrupt is consumed
+  by the one sleep, wait or join that throws for it. A sleep or wait longer
+  than a Go duration can hold (`Long.MAX_VALUE` is how a title says "for
+  ever") is held at about 292 years rather than wrapping to a wait that
+  returns at once, and `VM.Close` releases a sleep on the Host's own pass with
+  `ErrClosed`.
 - `Thread.currentThread` answers the running execution's thread. An execution
   that is not a guest thread gets one object of its own and keeps it.
 - **Priority is kept and not honoured.** Guest threads are driven in turn by the
@@ -110,9 +126,12 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
   `Object.wait` requires ownership
   (`IllegalMonitorStateException` otherwise), releases the whole recursion
   depth and restores it on re-entry. `notify` wakes waiters in FIFO order. A
-  timed wait honours `Speed`, an interrupted wait raises
-  `InterruptedException`, and `VM.Close` releases blocked entries and waits with
-  `ErrClosed`.
+  timed wait honours `Speed`, and `wait(long, int)` rounds its nanoseconds as
+  the specification's body does, so `wait(0, n)` is a 1 ms wait rather than an
+  untimed one. An interrupted wait raises `InterruptedException`, except one a
+  `notify` had already chosen: that one returns normally with the interrupt
+  still pending, because a notification may not be lost to an interrupt (JLS
+  17.2.4). `VM.Close` releases blocked entries and waits with `ErrClosed`.
 
 ### Core library
 
@@ -144,15 +163,35 @@ Behaviour a title depends on:
 - `String` and `StringBuffer` operations are UTF-16-aware. `String.compareTo`
   orders by UTF-16 unit, which is what the language defines and what a title's
   own sort depends on. `Integer` boxes an int through its constructor and reads
-  it back at any width.
+  it back at any width. A null where a `String` method takes a `String` is a
+  `NullPointerException` the title can catch, and `equalsIgnoreCase(null)` is
+  false. Every `StringBuffer` read and write takes the buffer's lock.
+- **One class is one `Class` object**: `getClass`, a class literal and
+  `Class.forName` answer the same object, so `getClass() != o.getClass()` in an
+  `equals` and `synchronized (Foo.class)` mean what they say. The table is
+  rebuilt from the heap on restore. A platform's `NewClassObject`, which KTF
+  binds to its own class records, is separate.
+- `Throwable` keeps an empty message: `new Exception("").getMessage()` is `""`,
+  and only an exception built without one answers null.
 - Byte and data streams read and write modified UTF-8. `writeUTF` is written
   against `readUTF` rather than against Go's encoder, because a title stores a
-  name with one and reads it back with the other.
+  name with one and reads it back with the other. Every `DataInput` read that
+  runs out of input raises `EOFException`, which a title reading records until
+  the end catches by name.
+- A library method that calls back into the guest (`toString` for
+  `String.valueOf` and an `append`, the stream reads behind `readUTF`, a key's
+  `equals`) runs the callback on the caller's execution, so a synchronized
+  caller's monitor and a class initializer the caller is running are the
+  callback's too.
 - `Reader` and `InputStreamReader` decode a byte stream **without knowing the
   charset**: the reader feeds the platform's decoder one more byte at a time
   until it answers with a character rather than a replacement, which is correct
   for single-byte and two-byte encodings alike. Reading the whole stream first
-  would make a reader over a connection wait for the far end to close.
+  would make a reader over a connection wait for the far end to close. When the
+  decoder answers a replacement followed by more text, the bytes before were an
+  unreadable sequence and the last byte starts the next character, so the read
+  answers one U+FFFD and keeps that byte for the next read; a character outside
+  the basic plane is answered as its two surrogate units, one per read.
 - `Calendar.set` moves the component `get` reads back and normalizes an
   out-of-range value the way the lenient mode a title relies on does.
 - **`TimeZone` knows two zones**: GMT, and the one the guest clock runs in.
@@ -310,6 +349,8 @@ A class belongs to the profile it came from, not to its package.
 so they are declared in `internal/api/midp` and only a VM that installs that
 profile answers them; see
 [a timer runs on a thread](history/skt.md#implementation-a-timer-runs-on-a-thread-because-the-title-keeps-drawing).
+Scheduling a `TimerTask` that is already scheduled throws
+`IllegalStateException`, as MIDP specifies, rather than starting a second worker.
 
 A definition carries what a class file carried: the name, the superclass and
 interfaces a game's `instanceof` reads, the fields and methods it links
@@ -367,7 +408,13 @@ the whole throwable hierarchy were declared. Three rules came with them:
   `Vector` of boxed numbers asks for.
 
 **A parse of a null string is `NumberFormatException`**, not a failed native: a
-title parsing a system property the platform does not answer catches it.
+title parsing a system property the platform does not answer catches it. **The
+parses accept what CLDC's accept and nothing more**: an optional minus sign and
+digits of the radix. A leading `+` and surrounding spaces are a
+`NumberFormatException` in every `parseInt`, `parseLong`, `parseByte`,
+`parseShort` and `valueOf`, radix forms included, and a radix outside
+`Character.MIN_RADIX..MAX_RADIX` is refused the same way. The byte, short and
+long parses used to trim their text first, and every parse took a plus sign.
 **A charset name is UTF-8, the handset's, or refused.** `String(byte[], String)`
 and `getBytes(String)` recognize the EUC-KR spellings a Korean title uses and
 route them through the platform's encoder, because every handset this runtime
@@ -521,6 +568,11 @@ identity form.
   platforms implement several of the missing calls on their own
   `org.kwis.msp.lcdui.Graphics`, because titles there call them; no MIDlet here
   has.
+- half a surrogate pair inside a string. Strings are held as Go text, which
+  cannot carry one, so a lone surrogate from a class constant, `String(char[])`,
+  `valueOf(char)` or `append(char)` reads back as U+FFFD; a proper pair is kept
+- a heap budget. `MaxArrayLength` bounds one array and one `multianewarray`;
+  a guest allocating in a loop is bounded only by the host
 - `Float` and `Double`, and with them `StringBuffer.append(float)`. Java's
   shortest-representation float printing is not Go's, so a title formatting a
   number would draw text subtly different from the handset's, and nothing local

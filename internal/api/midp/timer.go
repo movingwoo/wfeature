@@ -1,6 +1,10 @@
 package midp
 
-import "github.com/movingwoo/wfeature/internal/jvm"
+import (
+	"sync"
+
+	"github.com/movingwoo/wfeature/internal/jvm"
+)
 
 // java.util.Timer and java.util.TimerTask, which are the profile's rather than
 // the configuration's: CLDC has neither, and a MIDlet that wants work later
@@ -61,6 +65,9 @@ func timerDefinitions() []jvm.ClassDefinition {
 			Fields: []jvm.FieldDefinition{
 				{Name: "cancelled", Descriptor: "Z", Access: jvm.AccessPrivate},
 				{Name: "scheduled", Descriptor: "J", Access: jvm.AccessPrivate},
+				// queued is set by the first schedule the task is given and
+				// never cleared: a task is scheduled once in its life.
+				{Name: "queued", Descriptor: "Z", Access: jvm.AccessPrivate},
 			},
 			Methods: []jvm.MethodDefinition{
 				{Name: "<init>", Descriptor: "()V", Access: jvm.AccessProtected, Body: emptyInit},
@@ -170,6 +177,10 @@ func scheduleReceivers(arguments []jvm.Value) (*jvm.Object, *jvm.Object, error) 
 	return timer, task, nil
 }
 
+// timerQueueMu makes reading and setting a task's queued flag one step, so two
+// threads scheduling one task cannot both see it unscheduled.
+var timerQueueMu sync.Mutex
+
 // startTimerThread validates the schedule and puts one worker behind it. Each
 // schedule gets its own thread, which is what makes a Timer with two repeating
 // tasks behave as two: the specification's single timer thread would serialise
@@ -192,6 +203,21 @@ func startTimerThread(call *jvm.Invocation, timer, task *jvm.Object, delay, peri
 	}
 	if cancelled {
 		return jvm.Throw("java/lang/IllegalStateException", "TimerTask already cancelled")
+	}
+	// A task already scheduled, on this Timer or another, is refused as
+	// java.util.Timer refuses it. A second worker ran the task twice as often,
+	// and ran it beside itself.
+	timerQueueMu.Lock()
+	queued, err := booleanField(call, task, TimerTaskClass, "queued")
+	if err == nil && !queued {
+		err = setBooleanField(call, task, TimerTaskClass, "queued", true)
+	}
+	timerQueueMu.Unlock()
+	if err != nil {
+		return err
+	}
+	if queued {
+		return jvm.Throw("java/lang/IllegalStateException", "TimerTask already scheduled")
 	}
 	worker, err := call.NewObject(TimerThreadClass, "()V")
 	if err != nil {

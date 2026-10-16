@@ -166,7 +166,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 	if !storableName(recordDatabaseScope, name) || len(name) > maxRecordDatabaseName {
 		return wipicErrorInvalid, nil
 	}
-	if runtime.nextRecordDatabaseHandle >= maxRecordDatabaseHandles {
+	if runtime.nextRecordDatabaseHandle >= maxRecordDatabaseHandles && len(runtime.recordDatabaseHandles) >= maxRecordDatabaseHandles {
 		return wipicErrorInvalid, nil
 	}
 	store, exists := runtime.recordDatabases[name]
@@ -206,11 +206,15 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 	if runtime.recordDatabaseHandles == nil {
 		runtime.recordDatabaseHandles = make(map[uint32]*runtimeRecordDatabaseHandle)
 	}
-	if runtime.nextRecordDatabaseHandle >= maxRecordDatabaseHandles {
+	// See nextTableHandle: closed numbers are reused once the counter runs
+	// out.
+	handle, ok := nextTableHandle(&runtime.nextRecordDatabaseHandle, maxRecordDatabaseHandles, recordDatabaseHandleBit, func(handle uint32) bool {
+		_, open := runtime.recordDatabaseHandles[handle]
+		return open
+	})
+	if !ok {
 		return wipicErrorInvalid, nil
 	}
-	runtime.nextRecordDatabaseHandle++
-	handle := recordDatabaseHandleBit | runtime.nextRecordDatabaseHandle
 	runtime.recordDatabaseHandles[handle] = &runtimeRecordDatabaseHandle{store: store}
 	return handle, nil
 }

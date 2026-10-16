@@ -119,7 +119,7 @@ func (runtime *Runtime) CaptureCheckpointWithSession(ctx context.Context, captur
 	defer release()
 	instant := runtime.pace.Now()
 	defer runtime.pace.Rebase(instant)
-	saved, heap, err := runtime.captureJavaState(parked)
+	saved, _, err := runtime.captureJavaState(parked)
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
@@ -133,7 +133,7 @@ func (runtime *Runtime) CaptureCheckpointWithSession(ctx context.Context, captur
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
-	if _, err = runtime.flushCheckpointSaves(ctx, heap.files); err != nil {
+	if _, err = runtime.flushCheckpointSaves(ctx); err != nil {
 		return backend.Checkpoint{}, err
 	}
 	if err = ctx.Err(); err != nil {
@@ -281,7 +281,6 @@ func (p *PreparedJavaSession) Commit(ctx context.Context, previous *Runtime, liv
 	if w != runtime.frameWidth || h != runtime.frameHeight {
 		return nil, fmt.Errorf("SKT checkpoint framebuffer dimensions disagree")
 	}
-	var oldHeap *checkpointHeap
 	if previous != nil {
 		if previous.Archive == nil || previous.Archive.identity != runtime.Archive.identity {
 			return nil, backend.ErrCheckpointIdentity
@@ -293,8 +292,9 @@ func (p *PreparedJavaSession) Commit(ctx context.Context, previous *Runtime, liv
 		defer release()
 		instant := previous.pace.Now()
 		defer previous.pace.Rebase(instant)
-		_, oldHeap, err = previous.captureJavaState(parked)
-		if err != nil {
+		// The old session is captured only to prove it is at a boundary a
+		// checkpoint can be taken at; its writes are stored below.
+		if _, _, err = previous.captureJavaState(parked); err != nil {
 			return nil, err
 		}
 	}
@@ -302,7 +302,7 @@ func (p *PreparedJavaSession) Commit(ctx context.Context, previous *Runtime, liv
 		return nil, err
 	}
 	if previous != nil {
-		wrote, err := previous.flushCheckpointSaves(ctx, oldHeap.files)
+		wrote, err := previous.flushCheckpointSaves(ctx)
 		if err != nil {
 			return nil, err
 		}

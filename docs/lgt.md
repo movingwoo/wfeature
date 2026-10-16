@@ -31,7 +31,10 @@ override and deletion rules. See [supplemental-data QA](lgt-qa-2026-09-21.md#sup
 The module parser accepts ELF32 little-endian ARM executables. Addressed
 sections share a bounded mapping that must end below the platform heap, and
 `SHT_NOBITS` reserves zero-filled bytes. Import dispatch validates the
-supported tables and reports unsupported calls.
+supported tables and reports unsupported calls. Loaded sections are bounded: at
+most 64 sections with an address, and no two non-empty ones may overlap in
+memory or share file bytes, because every recognition scan walks each section
+once per probed address.
 
 Saves belong to the PID, or to the AID when the PID is absent. Colliding
 identifiers are not rewritten without evidence for a different identity rule;
@@ -44,7 +47,14 @@ The platform executes native Clets and its supported AOT Java surface. Java
 metadata, objects, arrays, exceptions, monitors, workers, resource streams,
 and supported library methods belong to the LGT implementation. Collection
 traces guest references and platform roots, including shown/focused widgets,
-and releases unreachable resources.
+and releases unreachable resources. A wrapper over a title's own `InputStream`
+holds that stream object and the buffer its `read([BII)` is handed. A finished
+guest thread's 1 MiB stack goes to the next thread started (only committed
+pages are cleared), and the 16-thread bound counts threads that have not
+finished. Byte sinks and Vectors stop with an error at `maxJavaArrayLength`
+(4 Mi bytes or references), the largest array the platform builds, and Java
+`putData` fills a clip to at most 4 MiB, answering the bytes taken. Checkpoint
+class records must carry an element width of 0, 1, 2, 4 or 8.
 The long-array store interface takes high then low words; long results and
 array storage are low-first. [ABI evidence](lgt-qa-2026-09-21.md#long-array-store-word-order)
 records the restored timed logo transition.
@@ -123,6 +133,14 @@ field without changing the shared framebuffer origin.
 [Compatibility rules and evidence](platform-compatibility.md) describe selection,
 mutation checks, and validation.
 
+Fill, line, polygon, arc, rounded-rectangle, copyArea, copyFramebuffer and
+drawImage walk only the part of their range that the clip and the surface can
+reach, so a guest box at the integer extremes returns at once; the pixels are
+those an unclipped walk draws. Image decoding reads the header first and
+refuses a picture of more than 16,777,216 pixels (`backend.MaxFramebufferPixels`,
+the rule SKT already applied) before allocating, and the checksum repair for a
+picture with a wrong zlib trailer stops at the size its header implies.
+
 Keys use the platform's lifecycle and clock boundaries. Clet events are a press
 and a release: the platform generates no `MV_KEY_REPEAT_EVENT`, and a Host key
 repeat is dropped rather than sent as a second press, because two local titles
@@ -138,9 +156,87 @@ File/record services use the common save boundary. Storage read errors remain
 visible at native boundaries, and a retained read failure prevents subsequent
 writes. Java File modes (1 read-only, 2 append, 3 truncate, 4 read-write)
 are translated to the C file flags before opening the shared store; in
-particular, Java mode 4 preserves existing contents. Existing save formats and
-canonical paths remain unchanged. Of the WIPI-C database block, only
+particular, Java mode 4 preserves existing contents. A save key keeps the case
+the title gave its path, and the save formats are unchanged except for the
+marker line described below. Of the WIPI-C database block, only
 `MC_dbListDataBases` is served, and it answers that the program has none.
+
+Every file surface (the C file table, Java `File`, a stream opened on a `File`,
+and `DataBase`) keeps the save rule the other platforms keep. A file's writes
+wait in a buffer until the title closes it; these rules keep that buffer from
+hiding or losing them:
+
+- **Visibility.** A write or a truncation is what every later read of the path
+  in the session sees: through any handle, a second open, a stat, an existence
+  check, a resource read, a rename and a stream. The handles open on one path
+  share one buffer, as handles on one file of a handset do, so a handle opened
+  before a write reads it and one closed last does not put an older copy back.
+  A write into a stream opened on a `File`, directly or through a
+  `DataOutputStream` over it, is a write to the `File` at once, and a stream
+  opened for reading reads the buffer as it is now. A rename takes the open
+  handles with it, so a later close stores under the new name.
+- **Durability.** What waits in a buffer reaches the store no later than the
+  close of a handle on the path (`MC_fsClose`, `File.close`, or the collector
+  closing a `File` nothing holds) or the flush or close of a stream on it, and
+  in any case at the ending: `MC_knlExit`, `Jlet.notifyDestroyed` and closing
+  the session (before `destroyClet` and again after it). The ending also gives
+  the store again a database or a path list it refused earlier. A quick load
+  stores the waiting writes of the session it displaces, as a quick save does
+  (below).
+- **Creation.** Opening a missing file for writing (`MC_fsOpen` flags 2, 4 and
+  8, `File` modes 2, 3 and 4) creates it: an empty file that every later read
+  sees at once, stored at the open. Opening a missing file only to read fails:
+  `MC_fsOpen` answers -12 and `File` mode 1 throws `IOException`, and nothing
+  is made.
+- **Truncation.** A truncating open (`MC_fsOpen` flag 4, `File` mode 3) empties
+  the file in the store at the open, whether or not a write follows, and every
+  handle on the path reads it empty from there.
+- If the store refuses a close, a flush, or the emptying or creation an open
+  makes, the write stays waiting in the buffer, which every read in the
+  session sees. `MC_fsClose` answers an error, `File.close` and a stream's
+  flush return normally, and the next close, the ending and quick steps try
+  again. A rename whose new name the store refuses answers an error and keeps
+  the old name.
+- A write or seek that would take a file past 16 MiB fails like any bad file
+  call: `MC_fsWrite` and `MC_fsSeek` answer an error, `File.write` answers -1,
+  and a stream write past it stops the run. That is sixteen times the 1 MiB the
+  space slots report. A packaged file already larger is still read and written
+  within its own length.
+- **Removal.** A removal hides a file under every spelling that shares its save
+  key (`save.dat`, `/save.dat`, `./save.dat`, `//save.dat`) and keeps it hidden
+  in later sessions, through the removal list, until the path is written again.
+  What waits in a buffer open on the path goes with the file, so neither a
+  close of that handle nor the ending brings it back; a write through the
+  handle afterwards is a write of the path. A removal comes off the stored list
+  only once the store has taken the write that brings the file back. Deleting
+  a database takes a write the store refused with it.
+- **Case.** Names that differ only by case are two files on every Host: the
+  save key, the path lists, the buffers the handles share and a listing all
+  keep the title's case. A packaged file is still found without regard to
+  case, as the archive lookup finds it. The builds before this one folded the
+  path lists to lower case; an entry they wrote keeps its meaning. It hides
+  the file under any case, a write under any case clears it, and a listing
+  shows the lower-case name unless this build has recorded or removed the file
+  since. A plain entry hides every spelling, and an entry under another
+  spelling (`./save.dat`) still hides only that spelling, because the file may
+  have been saved under the plain name since. This build writes its own
+  entries after a marker line, `#Case-sensitive paths follow`, which no entry of
+  those builds can be (it holds capitals); a list with none of its own entries
+  is written as those builds wrote it.
+- The file scope itself and the names `.removed` and `.created` at its root
+  (any case, and anything beneath them) hold the platform's own path lists and
+  are not guest files. A title can open and write them, but nothing reaches the
+  store, like a path with `..`. The on-disk layout is unchanged.
+- `DataBase` objects opened on one database share one set of records, so a
+  change one makes is what another reads, a change the store refused included.
+  The records are read again when something else changed the container (a
+  deletion, a file written under its name); a deleted container reads as empty.
+  Every change is stored when it is made, so `closeDataBase` stores only a
+  change the store refused, as the ending and quick steps do.
+- Nothing else writes a save: no background, timer or lifecycle store. A quick
+  save and a quick load store the title's waiting writes first, below.
+- A session with no save store, or whose writes are held back by a failed
+  read, keeps a write visible only while a buffer holds it waiting.
 
 `File.openDataInputStream` returns a typed stream using the existing file
 binding and primitive readers. Closing a file input stream releases its binding
@@ -172,6 +268,12 @@ to a service boundary; no external connection or carrier credential is created.
 Unknown exchanges still fail, and the authentication diagnostic opt-out disables
 this behavior. See the [protocol evidence](lgt-qa-2026-09-21.md#certificate-message-compatibility).
 
+MC_mdaClipFree returns a C clip's record to the platform arena. A clip keeps at
+most 64 undelivered callback transitions; a full queue drops the oldest. The C
+string functions (`strchr` through `strcat`, `atoi`) and `%s` read with
+`strlen`'s 1 MiB bound rather than the 4 KiB name bound, and a counted draw or
+width string over 1 MiB is refused before allocation.
+
 ## Quick save and quick load
 
 A session can be recorded between two ticks and restored later, in the same
@@ -189,27 +291,39 @@ accepted limits are in
 Three properties of this platform's storage shape how it gets there:
 
 - A write waits in the buffer of its open file until the title closes the
-  file. Recording and restoring both store such a buffer first, with the file
-  left open at its cursor, and are refused when the store refuses it. They are
-  also refused, naming the file, when that file has been stored or removed
-  through another handle since the buffer was filled, under any spelling of
-  its name, because storing it would put the older part of the buffer over
-  newer content. The refusal lasts until the title closes that handle, which
-  stores the buffer as the title's own act. Two `DataBase` objects of one
-  database that both hold a write the store refused are refused the same way.
-  Bytes written into a stream and not flushed are not yet a write to the file
-  and stay in the stream.
+  file. Recording and restoring both store such a buffer first, once for the
+  handles that share it, with the file left open at its cursor, and are
+  refused when the store refuses it. The handles on a path share the buffer
+  and a removal or a rename of the path brings it level, so a buffer is behind
+  its file only when a `DataBase` stored a container under the same name
+  since; that is refused, naming the file, because storing it would put the
+  older part of the buffer over newer content. So are a buffer and a
+  `DataBase` on one save that both hold a write, and a buffer whose name has no
+  save key. The refusal lasts until the title closes that handle, which stores
+  the buffer as the title's own act. A write into a stream opened on a `File`
+  is in the `File`'s buffer and is stored with it, and a truncating open has
+  emptied the store at the open.
 - An open file, a stream opened on a file and an open `DataBase` are recorded
   by name, cursor and record size, and filled from the store when a load
-  commits. A handle opened with the truncating flag takes at most what it had
-  written; a handle whose open made a file that was not there takes the whole
-  file, like any other. A `DataBase` object filled that way stores its
-  container at close only if it changed after the load; one that a load did
-  not fill closes as before, by storing its container.
+  commits: the handles on one path share one buffer again, and the objects on
+  one database one set of records. A handle opened with the truncating flag
+  takes at most what the file held at the quick save, which is what the title
+  had written since the open emptied it; a handle whose open made a file that
+  was not there takes the whole file, like any other. Like any `DataBase`
+  object, one filled that way stores its container at close only if its last
+  change was refused. A record an earlier build took while a truncating open
+  had not emptied the store yet loads the same way: the handle holds what it
+  had written, and the load leaves the store as it is. Such a record can also
+  hold bytes a stream had not handed its `File` yet, because that build kept a
+  stream's writes until a flush. The load puts them in the `File` at its
+  cursor, as if they were written then, where they wait for the flush, the
+  close, the ending or a quick save; the record's layout is unchanged.
 - `File.write(int)` past the end of the buffer fills the gap with zeros, as the
   array write already did. A restored cursor can stand past the end of a file
   that is shorter now, which is how the single-byte write came to be reached
-  there.
+  there. The record's cursor is still accepted up to 2^31-1, so older slots
+  load. A write that would take the file past the 16 MiB cap fails instead of
+  filling the gap.
 
 A guest thread is restored from wherever a title parks one: inside
 `Thread.sleep` or `Thread.yield`, inside `Object.wait`, behind a lock another

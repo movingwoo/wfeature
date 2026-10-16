@@ -40,9 +40,9 @@ func ReadSave(store SaveStore, name string) ([]byte, bool, error) {
 }
 
 // DirectorySaveStore persists save entries as files under one root
-// directory, one file per key with key slashes as subdirectories. It backs
-// the native CLI Host; the browser Host supplies its own store over the same
-// layout so both address the same entries.
+// directory, one file per key with key slashes as subdirectories and the case
+// of each name spelled out (see save_names.go). Every Host opens one over the
+// same layout, so the CLI and a browser session address the same entries.
 type DirectorySaveStore struct {
 	root string
 }
@@ -83,18 +83,6 @@ func NormalizeSaveKey(name string) (string, error) {
 	return strings.Join(parts, "/"), nil
 }
 
-// savePath resolves a save key inside the store root.
-func (store *DirectorySaveStore) savePath(name string) (string, error) {
-	if store == nil || store.root == "" {
-		return "", fmt.Errorf("save store has no root")
-	}
-	key, err := NormalizeSaveKey(name)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(append([]string{store.root}, strings.Split(key, "/")...)...), nil
-}
-
 // LoadSave reads one persisted entry; a missing or unreadable file reports
 // absence.
 func (store *DirectorySaveStore) LoadSave(name string) ([]byte, bool) {
@@ -108,6 +96,9 @@ func (store *DirectorySaveStore) ReadSave(name string) ([]byte, bool, error) {
 	if store == nil {
 		return nil, false, fmt.Errorf("save store has no root")
 	}
+	if _, err := NormalizeSaveKey(name); err != nil {
+		return nil, false, err
+	}
 	unlock, err := lockSaveTree(store.root)
 	if err != nil {
 		return nil, false, err
@@ -116,12 +107,16 @@ func (store *DirectorySaveStore) ReadSave(name string) ([]byte, bool, error) {
 	if err := store.recoverSaveReplacement(); err != nil {
 		return nil, false, err
 	}
-	return store.readSave(name)
+	names, err := store.settleSaveNames()
+	if err != nil {
+		return nil, false, err
+	}
+	return store.readSave(name, names)
 }
 
-func (store *DirectorySaveStore) readSave(name string) ([]byte, bool, error) {
-	path, err := store.savePath(name)
-	if err != nil {
+func (store *DirectorySaveStore) readSave(name string, names saveNames) ([]byte, bool, error) {
+	path, located, err := store.locateSave(name, names, false)
+	if err != nil || !located {
 		return nil, false, err
 	}
 	data, err := os.ReadFile(path)
@@ -172,6 +167,9 @@ func (store *DirectorySaveStore) StoreSave(name string, data []byte) error {
 	if store == nil {
 		return fmt.Errorf("save store has no root")
 	}
+	if _, err := NormalizeSaveKey(name); err != nil {
+		return err
+	}
 	unlock, err := lockSaveTree(store.root)
 	if err != nil {
 		return err
@@ -180,14 +178,50 @@ func (store *DirectorySaveStore) StoreSave(name string, data []byte) error {
 	if err := store.recoverSaveReplacement(); err != nil {
 		return err
 	}
-	return store.storeSave(name, data)
-}
-
-func (store *DirectorySaveStore) storeSave(name string, data []byte) error {
-	path, err := store.savePath(name)
+	names, err := store.settleSaveNames()
 	if err != nil {
 		return err
 	}
+	return store.storeSave(name, data, &names)
+}
+
+func (store *DirectorySaveStore) storeSave(name string, data []byte, names *saveNames) error {
+	path, err := store.prepareSaveWrite(name, names)
+	if err != nil {
+		return err
+	}
+	return writeSaveFile(path, data)
+}
+
+// prepareSaveWrite answers the path a key's entry is written at. A directory
+// without the record becomes an encoded one before the first name with a '#'
+// in it is written, and nothing is written to one that still holds an
+// earlier build's names it could not convert.
+func (store *DirectorySaveStore) prepareSaveWrite(name string, names *saveNames) (string, error) {
+	if store == nil || store.root == "" {
+		return "", fmt.Errorf("save store has no root")
+	}
+	key, err := NormalizeSaveKey(name)
+	if err != nil {
+		return "", err
+	}
+	if names.naming == namingEarlier {
+		return "", refuseEarlierSaveNames(store.root, *names)
+	}
+	if names.naming == namingPlain && encodeSaveKey(key) != key {
+		if err := encodeSaveNames(store.root); err != nil {
+			return "", fmt.Errorf("prepare save directory %s for the name %q: %w", store.root, key, err)
+		}
+		names.naming = namingEncoded
+	}
+	path, _, err := store.locateSave(key, *names, true)
+	return path, err
+}
+
+// writeSaveFile replaces one file through a flushed temporary file beside it,
+// creating its directory as needed. It is the write under every save, the
+// record of how a directory's names read, and a checkpoint slot.
+func writeSaveFile(path string, data []byte) error {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return err

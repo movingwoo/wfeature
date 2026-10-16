@@ -100,7 +100,14 @@ func (s *Server) savePackTarget(request *http.Request) (identity [32]byte, direc
 		// here.
 		return identity, "", "", errors.New("이 게임 파일을 읽을 수 없어 세이브 위치를 알 수 없습니다.")
 	}
+	s.migrateSaveOwner(archive, summary.Platform)
 	directory = s.saveDirectory(summary.Platform, summary.SaveOwner)
+	// An owner the save tree cannot name is a different answer from a game
+	// with no saves: the game has them and this server will not start it
+	// for that reason, so saying it keeps none would be untrue.
+	if directory == "" && summary.SaveOwner != "" {
+		return identity, "", "", fmt.Errorf("이 게임의 세이브 이름(%q)은 폴더 이름으로 쓸 수 없습니다.", summary.SaveOwner)
+	}
 	if directory == "" {
 		return identity, "", "", errors.New("이 게임은 세이브를 따로 두지 않습니다.")
 	}
@@ -206,6 +213,16 @@ func (s *Server) importSavePack(writer http.ResponseWriter, request *http.Reques
 		writeError(writer, http.StatusConflict, fmt.Sprintf(
 			"이 백업은 다른 게임의 것입니다. 백업 %s, 지금 게임 %s.",
 			shortIdentity(pack.Identity), shortIdentity(identity)))
+		return
+	}
+	// An export never writes an empty backup — a game that has not saved is
+	// told so instead — so an empty one is not a backup this build made, and
+	// restoring it would remove every save the game has and call that a
+	// success.
+	if len(pack.Entries) == 0 {
+		s.logger.Warn("refused an empty save import", "game", label)
+		writeError(writer, http.StatusUnprocessableEntity,
+			"백업 파일에 세이브가 하나도 없습니다. 내보내기로 만든 백업 파일을 고르세요.")
 		return
 	}
 

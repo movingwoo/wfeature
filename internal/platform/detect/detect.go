@@ -190,11 +190,7 @@ func Classify(data []byte) (Platform, Reason, error) {
 	// says what a class file actually links against. The order costs nothing
 	// on a real package of the earlier generation, which has no classes to
 	// scan at all.
-	skvm, err := referencesSKVM(reader)
-	if err != nil {
-		return "", ReasonNoMarker, err
-	}
-	if skvm {
+	if referencesSKVM(reader) {
 		return claim(reader, SKT)
 	}
 	if isKTFNativePackage(names, wrapper) {
@@ -348,7 +344,7 @@ func entryName(name string) string {
 	return path.Clean(strings.ReplaceAll(name, "\\", "/"))
 }
 
-func referencesSKVM(reader *zip.Reader) (bool, error) {
+func referencesSKVM(reader *zip.Reader) bool {
 	scanned := 0
 	for _, file := range reader.File {
 		if !strings.HasSuffix(strings.ToLower(entryName(file.Name)), ".class") {
@@ -357,25 +353,27 @@ func referencesSKVM(reader *zip.Reader) (bool, error) {
 		if file.UncompressedSize64 > maxScannedEntry || scanned >= maxScannedTotal {
 			continue
 		}
+		// A corrupt entry says nothing about the platform; another class in
+		// the same JAR still can. That holds for one that cannot be opened at
+		// all — an unregistered compression method, a damaged local header —
+		// as much as for one that fails partway through its read.
 		opened, err := file.Open()
 		if err != nil {
-			return false, fmt.Errorf("read archive entry %q: %w", file.Name, err)
+			continue
 		}
 		contents, err := io.ReadAll(io.LimitReader(opened, maxScannedEntry))
 		opened.Close()
 		if err != nil {
-			// A corrupt entry says nothing about the platform; another class
-			// in the same JAR still can.
 			continue
 		}
 		scanned += len(contents)
 		for _, prefix := range skvmPrefixes {
 			if bytes.Contains(contents, prefix) {
-				return true, nil
+				return true
 			}
 		}
 	}
-	return false, nil
+	return false
 }
 
 // containerFormats are the archive formats a person plausibly has a game in

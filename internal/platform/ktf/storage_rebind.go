@@ -130,6 +130,7 @@ func (runtime *initializationRuntime) rebindRestoredStorage() error {
 	runtime.saveReadError = nil
 	runtime.removedFiles, runtime.removedCDatabases, runtime.madeDirectories, runtime.removedDatabaseLists = nil, nil, nil, nil
 	runtime.guestFiles = nil
+	runtime.guestFileWrites = nil
 	runtime.cFiles, runtime.detachedCFiles = make(map[string]*runtimeCFile), nil
 	runtime.recordDatabases, runtime.detachedRecordDatabases = make(map[string]*runtimeRecordDatabase), nil
 	runtime.databases, runtime.detachedDatabases = make(map[string]*runtimeDataBaseStore), nil
@@ -178,10 +179,7 @@ func (runtime *initializationRuntime) rebindRestoredStorage() error {
 		if err := keep(uint64(len(data))); err != nil {
 			return failed(err)
 		}
-		if runtime.guestFiles == nil {
-			runtime.guestFiles = make(map[string][]byte)
-		}
-		runtime.guestFiles[name] = bytes.Clone(data)
+		runtime.restoreGuestFile(name, bytes.Clone(data))
 	}
 
 	held := make(map[*runtimeCFile]bool, len(runtime.cFileHandles))

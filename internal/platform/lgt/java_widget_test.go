@@ -157,8 +157,8 @@ func TestAWrittenFileSurvivesAnEndingWithoutAClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.files = map[uint32]*openFile{
-		1: {name: "startup.dat", data: []byte{1}, writable: true, dirty: true},
-		2: {name: "clean.dat", data: []byte{2}, writable: true},
+		1: {name: "startup.dat", fileContent: &fileContent{data: []byte{1}, dirty: true}, writable: true},
+		2: {name: "clean.dat", fileContent: &fileContent{data: []byte{2}}, writable: true},
 	}
 	client.flushOpenFiles()
 

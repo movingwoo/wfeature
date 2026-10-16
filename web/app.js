@@ -16,6 +16,7 @@ import { initCheckpoints, isCheckpointKey } from "./checkpoint.js";
 import { createTextInputDialog } from "./text-input.js";
 import { askToConfirm } from "./confirm.js";
 import { initSaveBackup } from "./save-backup.js";
+import { reach } from "./reach.js";
 import { createVibration, initVibrationSetting } from "./vibrate.js";
 import { FULLSCREEN, createFullscreen } from "./fullscreen.js";
 import {
@@ -593,7 +594,10 @@ const initInput = () => {
     // The pad being edited is the pad not being played, whichever way a key
     // arrives. What the keyboard sends is a different panel's setting and is
     // not what this editor moves, so nothing here is a way to change it.
-    if (keypadArranging) return;
+    // A question on screen takes the keys the way it takes a controller's:
+    // Space is OK by default, and taking it here sent OK to the game behind
+    // the question instead of pressing the 취소 that holds the focus.
+    if (keypadArranging || dialogOpen()) return;
     // Local controls use native Space/Enter activation without a handset press.
     if (localControl(event.target?.closest?.("button[data-key]")?.dataset.key) &&
         (event.code === "Space" || event.code === "Enter")) return;
@@ -888,7 +892,7 @@ const initGameSelect = async () => {
   try {
     // Always asked for, never trusted from a cache: an unchanged list costs a
     // revalidation and an added game shows at once.
-    const response = await fetch("games.json", { cache: "no-cache" });
+    const response = await reach(fetch, "games.json", { cache: "no-cache" });
     if (!response.ok) throw new Error(`게임 목록을 불러오지 못했습니다 (${response.status})`);
     const games = await response.json();
     select.replaceChildren();
@@ -916,6 +920,10 @@ const initGameSelect = async () => {
     if (previous && [...select.options].some(option => option.value === previous)) {
       select.value = previous;
     }
+    // Setting the value fires no change event, and the speed and screen menus
+    // follow that event: without it they kept showing the game selected before
+    // the rebuild while a start would use the one selected now.
+    select.dispatchEvent(new Event("change"));
 
     select.disabled = false;
     startButton.disabled = sessionLink?.state() !== "ready";

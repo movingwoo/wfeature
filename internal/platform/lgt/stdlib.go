@@ -163,7 +163,7 @@ func (client *Client) handleStdlibSVC(ctx context.Context, thread *armcore.Threa
 		if err != nil {
 			return err
 		}
-		text, err := client.readCString(pointer)
+		text, err := client.readCStringBuffer(pointer)
 		if err != nil {
 			return err
 		}
@@ -195,11 +195,11 @@ func (client *Client) handleStdlibSVC(ctx context.Context, thread *armcore.Threa
 		if err != nil {
 			return err
 		}
-		text, err := client.readCString(pointer)
+		text, err := client.readCStringBuffer(pointer)
 		if err != nil {
 			return err
 		}
-		listed, err := client.readCString(set)
+		listed, err := client.readCStringBuffer(set)
 		if err != nil {
 			return err
 		}
@@ -247,11 +247,11 @@ func (client *Client) handleStdlibSVC(ctx context.Context, thread *armcore.Threa
 			rightText := string(client.readBoundedString(right, length))
 			return answer(uint32(int32(strings.Compare(leftText, rightText))))
 		}
-		leftText, err := client.readCString(left)
+		leftText, err := client.readCStringBuffer(left)
 		if err != nil {
 			return err
 		}
-		rightText, err := client.readCString(right)
+		rightText, err := client.readCStringBuffer(right)
 		if err != nil {
 			return err
 		}
@@ -266,11 +266,11 @@ func (client *Client) handleStdlibSVC(ctx context.Context, thread *armcore.Threa
 		if err != nil {
 			return err
 		}
-		haystackText, err := client.readCString(haystack)
+		haystackText, err := client.readCStringBuffer(haystack)
 		if err != nil {
 			return err
 		}
-		needleText, err := client.readCString(needle)
+		needleText, err := client.readCStringBuffer(needle)
 		if err != nil {
 			return err
 		}
@@ -285,7 +285,7 @@ func (client *Client) handleStdlibSVC(ctx context.Context, thread *armcore.Threa
 		if err != nil {
 			return err
 		}
-		text, err := client.readCString(pointer)
+		text, err := client.readCStringBuffer(pointer)
 		if err != nil {
 			return err
 		}
@@ -660,7 +660,7 @@ func (client *Client) stringWrite(thread *armcore.Thread, slot uint32) error {
 		// but unlike strncpy it always terminates and never pads.
 		text = string(client.readBoundedString(source, length))
 	} else {
-		copied, readErr := client.readCString(source)
+		copied, readErr := client.readCStringBuffer(source)
 		if readErr != nil {
 			return readErr
 		}
@@ -668,11 +668,11 @@ func (client *Client) stringWrite(thread *armcore.Thread, slot uint32) error {
 	}
 	offset := uint32(0)
 	if slot == stdlibStrcat || slot == stdlibStrncat {
-		existing, existingErr := client.readCString(destination)
+		existing, existingErr := client.cStringLength(destination)
 		if existingErr != nil {
 			return existingErr
 		}
-		offset = uint32(len(existing))
+		offset = existing
 	}
 	if err := client.core.Memory().Write(destination+offset, append([]byte(text), 0)); err != nil {
 		return err

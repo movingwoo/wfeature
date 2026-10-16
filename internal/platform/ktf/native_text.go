@@ -145,7 +145,7 @@ func (platform *NativePlatform) drawText(thread *armcore.Thread) (uint32, error)
 	// The messages a run reports are what they always were. They are the same
 	// text, and a report that lists what the title said is worth keeping now
 	// that the screen shows it too.
-	platform.messages = append(platform.messages, text)
+	platform.messages = keepFirst(platform.messages, text)
 
 	ink := nativeDefaultTextColour
 	if packed, ok := platform.colours[nativeTextColourItem]; ok {

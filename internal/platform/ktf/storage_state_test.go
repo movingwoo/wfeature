@@ -115,7 +115,7 @@ func TestRuntimeStorageRestoresNamesAndReadsContentFromTheStore(t *testing.T) {
 	}
 	// The written-file table holds the names that are still there, with the
 	// store's bytes, and every list is the store's own.
-	if !reflect.DeepEqual(fresh.guestFiles, map[string][]byte{"/guest": []byte("retained"), "empty": {}}) {
+	if !reflect.DeepEqual(fresh.guestFiles, map[string][]byte{"guest": []byte("retained"), "empty": {}}) {
 		t.Fatalf("the written-file table holds %q", fresh.guestFiles)
 	}
 	if !reflect.DeepEqual(fresh.removedFiles, map[string]bool{"deleted": true}) || !reflect.DeepEqual(fresh.madeDirectories, map[string]bool{"made": true}) ||

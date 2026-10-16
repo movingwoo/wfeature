@@ -193,10 +193,10 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 	// client is what holds the trace — which is exactly the run worth reading.
 	// So the trace travels on the error.
 	if err := client.Start(ctx); err != nil {
-		return nil, &StartFailure{Err: err, Trace: client.SVCTrace()}
+		return nil, startFailure(client, err)
 	}
 	if err := client.StartClet(ctx); err != nil && !errors.Is(err, ErrGuestExited) {
-		return nil, &StartFailure{Err: err, Trace: client.SVCTrace()}
+		return nil, startFailure(client, err)
 	}
 	if embeddedCertificate != nil && embeddedCertificate.activate(client) {
 		authentication = backend.AuthenticationLGTCertificate100
@@ -261,6 +261,17 @@ type StartFailure struct {
 
 func (failure *StartFailure) Error() string { return failure.Err.Error() }
 func (failure *StartFailure) Unwrap() error { return failure.Err }
+
+// startFailure ends what a failed start leaves running and reports it. A Java
+// title's startApp can start threads before it fails, and each is a goroutine
+// parked on its first slice that holds the client, guest memory and all. The
+// session is never returned, so nothing would close it and they would stay
+// parked for the life of the process.
+func startFailure(client *Client, err error) *StartFailure {
+	trace := client.SVCTrace()
+	client.StopJavaThreads()
+	return &StartFailure{Err: err, Trace: trace}
+}
 
 // Archive is the loaded game.
 func (session *Session) Archive() *Archive { return session.archive }
@@ -687,9 +698,14 @@ func (session *Session) Close(ctx context.Context) error {
 	session.client.StopJavaThreads()
 	// A session can end without the guest ending — a page that went away, a
 	// run that reached its tick count — and a file the title wrote and did not
-	// close is still only in a buffer. See flushOpenFiles.
+	// close is still only in a buffer. See flushOpenFiles. It is flushed before
+	// destroyClet, which may fail, and again after it, because the title's
+	// destroy entry is where it writes its last state into a file it still
+	// has open.
 	session.client.flushOpenFiles()
-	if err := session.client.DestroyClet(ctx); err != nil && !errors.Is(err, ErrGuestExited) {
+	err := session.client.DestroyClet(ctx)
+	session.client.flushOpenFiles()
+	if err != nil && !errors.Is(err, ErrGuestExited) {
 		return err
 	}
 	return nil

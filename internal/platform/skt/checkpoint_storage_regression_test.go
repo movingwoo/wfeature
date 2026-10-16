@@ -13,6 +13,9 @@ import (
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
+// A write through a second handle on the fixture's file lands in the one file
+// both handles share, so its close stores both writes, and a quick save or a
+// quick load after it has no older buffer to put over them.
 func TestJavaCheckpointFlushPreservesLaterWrite(t *testing.T) {
 	for _, load := range []bool{false, true} {
 		t.Run(map[bool]string{false: "save", true: "load"}[load], func(t *testing.T) {
@@ -40,8 +43,8 @@ func TestJavaCheckpointFlushPreservesLaterWrite(t *testing.T) {
 				t.Fatal(err)
 			}
 			before, _ := store.LoadSave("fs/checkpoint")
-			if !bytes.Equal(before, []byte{1, 9, 3}) {
-				t.Fatalf("unexpected later save: %v", before)
+			if !bytes.Equal(before, []byte{4, 9, 3}) {
+				t.Fatalf("the second handle's close stored %v, want both handles' writes", before)
 			}
 			if load {
 				prepared, prepErr := PrepareJavaCheckpoint(javaCheckpointJAR, slot, Options{})
@@ -50,35 +53,33 @@ func TestJavaCheckpointFlushPreservesLaterWrite(t *testing.T) {
 				}
 				defer prepared.Discard()
 				restored, loadErr := prepared.Commit(t.Context(), source, store, newTestFramebuffer(t, 32, 24), nil)
-				err = loadErr
-				if restored != nil {
-					defer restored.transition("test cleanup", StateDestroyed)
+				if loadErr != nil {
+					t.Fatal(loadErr)
 				}
-			} else {
-				_, err = source.CaptureCheckpointWithSession(t.Context(), nil)
-			}
-			if !errors.Is(err, backend.ErrCheckpointSaveWrite) || source.State() != StateActive {
-				t.Fatalf("conflicting checkpoint did not preserve the source: state=%v error=%v", source.State(), err)
+				defer restored.transition("test cleanup", StateDestroyed)
+				if _, err = restored.VM.InvokeStatic("CheckpointMIDlet", "readCurrent", "()V"); err != nil {
+					t.Fatal(err)
+				}
+				if got := checkpointJavaInt(t, restored, "readValue"); got != 404 {
+					t.Fatalf("restored session read %d, want the later record and file 404", got)
+				}
+			} else if _, err = source.CaptureCheckpointWithSession(t.Context(), nil); err != nil {
+				t.Fatal(err)
 			}
 			after, _ := store.LoadSave("fs/checkpoint")
 			if !bytes.Equal(before, after) {
-				t.Fatalf("checkpoint overwrote later issued save: before=%v after=%v error=%v", before, after, err)
-			}
-			// An explicit guest flush resolves its own ordering decision. A
-			// later checkpoint must accept that newly current buffer.
-			value, _ := source.VM.StaticField("CheckpointMIDlet", "file", "Lcom/xce/io/XFile;")
-			if _, err = source.xFileFlush(source.VM, []jvm.Value{value}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err = source.CaptureCheckpointWithSession(t.Context(), nil); err != nil {
-				t.Fatalf("guest flush did not resolve the conflict: %v", err)
+				t.Fatalf("checkpoint changed the later save: before=%v after=%v", before, after)
 			}
 		})
 	}
 }
 
-func TestCheckpointFileConflictsRefuseBeforeAnyWrite(t *testing.T) {
-	for _, scenario := range []string{"dirty aliases", "later deletion", "failed later write", "open after failed write", "failed stream flush"} {
+// Handles on one path share its file, so the step before a checkpoint stores
+// one current file per path — never an older handle's bytes over a newer
+// write, a removal or a write a refused store left dirty — and a store that
+// refuses it refuses the step with the file still dirty in the session.
+func TestCheckpointFlushStoresTheCurrentFileOfEveryPath(t *testing.T) {
+	for _, scenario := range []string{"aliases", "later removal", "failed later write", "open after failed write", "failed stream flush", "refused"} {
 		t.Run(scenario, func(t *testing.T) {
 			memory, _ := backend.NewMemorySaveStore(nil)
 			store := &javaCheckpointFailStore{MemorySaveStore: memory}
@@ -86,48 +87,80 @@ func TestCheckpointFileConflictsRefuseBeforeAnyWrite(t *testing.T) {
 			if _, err := runtime.CaptureCheckpointWithSession(t.Context(), nil); err != nil {
 				t.Fatal(err)
 			}
-			open := func(name string) *xFileData {
+			open := func(name string) jvm.Value {
 				t.Helper()
-				object := &jvm.Object{ClassName: skvm.XFileClass}
-				if _, err := runtime.initXFileName(runtime.VM, []jvm.Value{jvm.ReferenceValue(object), jvm.ReferenceValue(runtime.VM.NewString(name)), jvm.IntValue(3)}); err != nil {
+				object := jvm.ReferenceValue(&jvm.Object{ClassName: skvm.XFileClass})
+				if _, err := runtime.initXFileName(runtime.VM, []jvm.Value{object, jvm.ReferenceValue(runtime.VM.NewString(name)), jvm.IntValue(3)}); err != nil {
 					t.Fatal(err)
 				}
-				return object.Native.(*xFileData)
+				return object
+			}
+			write := func(file jvm.Value, at int32, value byte) {
+				t.Helper()
+				if _, err := runtime.xFileSeek(runtime.VM, []jvm.Value{file, jvm.IntValue(at), jvm.IntValue(0)}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := runtime.xFileWrite(runtime.VM, []jvm.Value{file, jvm.ReferenceValue(jvm.NewByteArray([]byte{value})), jvm.IntValue(0), jvm.IntValue(1)}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			first, second := open("/checkpoint"), open("checkpoint")
-			first.data[0], first.dirty = 4, true
-			second.data[1], second.dirty = 9, true
+			write(first, 0, 4)
+			write(second, 1, 9)
+			want := []byte{4, 9, 3}
 			switch scenario {
-			case "later deletion":
+			case "later removal":
 				if _, err := runtime.xFileUnlink(runtime.VM, []jvm.Value{jvm.ReferenceValue(runtime.VM.NewString("checkpoint"))}); err != nil {
 					t.Fatal(err)
 				}
+				want = nil
 			case "failed later write", "open after failed write", "failed stream flush":
 				store.failWrite = true
 				if scenario == "failed stream flush" {
-					if err := runtime.persistWIPIFileStream(second); err == nil {
+					handle, _ := xFileArgument([]jvm.Value{second})
+					if err := runtime.persistWIPIFileStream(handle); err == nil {
 						t.Fatal("stream flush unexpectedly succeeded")
 					}
-				} else {
-					runtime.persistXFile(second)
+				} else if _, err := runtime.xFileFlush(runtime.VM, []jvm.Value{second}); err != nil {
+					t.Fatal(err)
 				}
 				store.failWrite = false
 				if scenario == "open after failed write" {
-					first = open("/checkpoint")
-					first.data[0], first.dirty = 4, true
+					write(open("/checkpoint"), 2, 7)
+					want = []byte{4, 9, 7}
 				}
 			}
-			unrelated := open("another")
-			unrelated.data, unrelated.dirty = []byte{7}, true
-			before, _ := memory.SnapshotSaves()
-			writes := store.writes
-			wrote, err := runtime.flushCheckpointSaves(t.Context(), []*xFileData{unrelated, first, second})
-			if !errors.Is(err, backend.ErrCheckpointSaveWrite) || wrote || store.writes != writes || !first.dirty || !unrelated.dirty {
-				t.Fatalf("conflict partially flushed: wrote=%v writes=%d error=%v", wrote, store.writes-writes, err)
+			write(open("another"), 0, 7)
+			if scenario == "refused" {
+				store.failWrite = true
+				before, _ := memory.SnapshotSaves()
+				if _, err := runtime.flushCheckpointSaves(t.Context()); !errors.Is(err, backend.ErrCheckpointSaveWrite) {
+					t.Fatalf("refused flush: %v", err)
+				}
+				after, _ := memory.SnapshotSaves()
+				handle, _ := xFileArgument([]jvm.Value{first})
+				if !reflect.DeepEqual(before, after) || !handle.node.dirty {
+					t.Fatal("a refused flush changed the saves or dropped the dirty file")
+				}
+				store.failWrite = false
 			}
-			after, _ := memory.SnapshotSaves()
-			if !reflect.DeepEqual(before, after) {
-				t.Fatal("refused checkpoint changed ordinary saves")
+			if _, err := runtime.flushCheckpointSaves(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if data, _ := memory.LoadSave("fs/checkpoint"); !bytes.Equal(data, want) {
+				t.Fatalf("flush stored %v for the shared path, want %v", data, want)
+			}
+			if data, _ := memory.LoadSave("fs/another"); !bytes.Equal(data, []byte{7}) {
+				t.Fatalf("flush stored %v for the unrelated path", data)
+			}
+			if list, _ := memory.LoadSave(xFileRemovedKey); (scenario == "later removal") != bytes.Equal(list, []byte("checkpoint")) {
+				t.Fatalf("removal list after the flush = %q", list)
+			}
+			runtime.fileMu.Lock()
+			dirty := runtime.dirtyFileKeysLocked()
+			runtime.fileMu.Unlock()
+			if len(dirty) != 0 {
+				t.Fatalf("a successful flush left %v dirty", dirty)
 			}
 		})
 	}

@@ -855,7 +855,9 @@ func (s *Session) repeatDue(ctx context.Context) (Progress, bool, error) {
 	case err == nil:
 		return Progress{}, false, nil
 	case errors.Is(err, ErrExited):
-		return Progress{Flushes: flushes, Exited: true}, true, nil
+		// endedOrFailed recorded the reason on its way to ErrExited, and an
+		// ending is reported with it wherever it came from.
+		return Progress{Flushes: flushes, Exited: true, ExitReason: s.exitReason}, true, nil
 	default:
 		return Progress{Flushes: flushes}, true, err
 	}

@@ -19,6 +19,9 @@
 // and "this backup is damaged" are different things for a person to do next,
 // and rewording them here would flatten them back into one.
 
+import { askToConfirm } from "./confirm.js";
+import { reach } from "./reach.js";
+
 // The extension the server writes and the input accepts. It is not `.zip`
 // because the file is not one, and a name that says so keeps somebody from
 // unpacking it, editing it, and finding the checksum refuses it.
@@ -50,7 +53,7 @@ export const backupFileName = game => {
 // exportSave asks for one game's saves and answers the bytes, or throws with
 // what the server said.
 export const exportSave = async (game, fetcher = fetch) => {
-  const response = await fetcher(endpoint(game), { cache: "no-store" });
+  const response = await reach(fetcher, endpoint(game), { cache: "no-store" });
   if (!response.ok) throw new Error(await said(response, "세이브를 내보내지 못했습니다"));
   return response.blob();
 };
@@ -58,7 +61,7 @@ export const exportSave = async (game, fetcher = fetch) => {
 // importSave sends one container back and answers what the restore did, or
 // throws with what the server said.
 export const importSave = async (game, file, fetcher = fetch) => {
-  const response = await fetcher(endpoint(game), { method: "POST", body: file });
+  const response = await reach(fetcher, endpoint(game), { method: "POST", body: file });
   if (!response.ok) throw new Error(await said(response, "세이브를 가져오지 못했습니다"));
   return response.json();
 };
@@ -137,13 +140,16 @@ const toBase64 = async blob => {
 // confirmation is the page's job rather than the server's: the server cannot
 // tell a restore the player asked for from one they reached by picking the
 // wrong file, and it is the only step at which the answer is still theirs.
+// It is the page's own dialog rather than window.confirm, for the reason in
+// confirm.js: the iOS app's web view answers a JavaScript confirm "no" with
+// nothing on screen, so the import never ran there and never said why.
 export const initSaveBackup = ({
   document: doc,
   window: win = globalThis,
   fetcher = fetch,
   chosenGame,
   onStatus,
-  confirm: ask = globalThis.confirm?.bind(globalThis),
+  confirm: ask = message => askToConfirm({ document: doc, message, confirmLabel: "가져오기" }),
 } = {}) => {
   const exportButton = doc.getElementById("save-export");
   const importButton = doc.getElementById("save-import");
@@ -199,7 +205,7 @@ export const initSaveBackup = ({
     input.click();
   });
 
-  input.addEventListener("change", () => {
+  input.addEventListener("change", async () => {
     const file = input.files?.[0];
     // Picking the same file twice in a row has to be two changes rather than
     // one: re-importing after fixing something is a thing people do.
@@ -210,7 +216,9 @@ export const initSaveBackup = ({
       onStatus?.("먼저 게임을 고르세요.");
       return;
     }
-    if (ask && !ask("이 게임의 저장 데이터를 백업 파일로 되돌립니다. 지금 저장된 진행은 사라집니다. 계속할까요?")) return;
+    // Awaited, and only a yes goes on: a page that could not ask has not been
+    // answered.
+    if (!(await ask?.("이 게임의 저장 데이터를 백업 파일로 되돌립니다. 지금 저장된 진행은 사라집니다. 계속할까요?"))) return;
     busy(importButton, "가져오는 중...", async () => {
       onStatus?.(describeImport(await importSave(game, file, fetcher)));
     });

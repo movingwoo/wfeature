@@ -732,6 +732,7 @@ func (runtime *initializationRuntime) invokeModuleMethod(ctx context.Context, th
 		if allocationErr != nil {
 			return 0, fmt.Errorf("allocate KTF module native argument container: %w", allocationErr)
 		}
+		defer runtime.releaseArgumentContainer(container, len(arguments))
 		call = []uint32{0, container}
 	}
 	if body == 0 {

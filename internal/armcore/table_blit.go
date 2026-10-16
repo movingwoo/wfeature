@@ -261,7 +261,11 @@ func (memory *Memory) analyseTableBlit(head, branchPC uint32) *tableBlit {
 			haveDecrement, loop.counter = true, source
 
 		case thumbImmediate:
-			// The two pointers advancing.
+			// The two pointers advancing, each after the access it walks:
+			// runTableBlit starts from the pointers as the loop head holds
+			// them, which is only where the first access goes when nothing
+			// has moved them before it. The access also binds the register,
+			// which is unset — r0 — until then.
 			opcode := instruction >> 11 & 3
 			register := instruction >> 8 & 7
 			step := instruction & 0xff
@@ -270,12 +274,12 @@ func (memory *Memory) analyseTableBlit(head, branchPC uint32) *tableBlit {
 			}
 			switch {
 			case step == 1 && !haveSource:
-				if register != loop.source {
+				if !haveIndex || register != loop.source {
 					return nil
 				}
 				haveSource = true
 			case step == 2 && !haveDest:
-				if register != loop.destination {
+				if !haveStore || register != loop.destination {
 					return nil
 				}
 				haveDest = true

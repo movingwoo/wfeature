@@ -502,6 +502,13 @@ func (client *Client) walkJavaPayload(object uint32, mark func(uint32)) {
 	// A stream or a sink bound to the File it drains into or was opened on.
 	mark(runtime.sinkFiles[object])
 	mark(runtime.streamFiles[object])
+	// A wrapper over a title's own stream reads through that stream's object
+	// and hands its `read` the buffer this platform allocated for it. The
+	// wrapper's constructor is native, so no guest word links the three.
+	if stream := runtime.streams[object]; stream != nil && stream.Source != nil {
+		mark(stream.Source.Object)
+		mark(stream.Source.Buffer)
+	}
 	// A thread object names what it was given to run.
 	if thread := runtime.threads[object]; thread != nil {
 		mark(thread.runnable)
@@ -532,15 +539,23 @@ func (client *Client) sweepJavaObjects(marked map[uint32]bool, stats *Collection
 	// Address order, so a run of neighbouring objects coalesces back into one
 	// arena block rather than depending on map iteration order for it.
 	slices.Sort(dead)
+	// The blocks go back to the arena in one batch: see arena.releaseAll.
+	released := make([]uint32, 0, 2*len(dead))
 	for _, object := range dead {
 		record := runtime.objects[object]
-		if err := client.releaseJavaObjectMemory(object, record); err != nil {
+		if err := client.clearJavaObjectMemory(object, record); err != nil {
+			client.arena.releaseAll(released)
 			return err
 		}
+		if record.blockSize > 0 {
+			released = append(released, record.block)
+		}
+		released = append(released, object)
 		delete(runtime.objects, object)
 		stats.Freed++
 		stats.Bytes += uint64(javaObjectBytes) + uint64(record.blockSize)
 	}
+	client.arena.releaseAll(released)
 	// The payloads go after the objects, so the aliasing question — is anything
 	// still holding this surface, this file — is asked once, against what
 	// survived, rather than once per object against a set still being emptied.
@@ -556,22 +571,20 @@ func (client *Client) sweepJavaObjects(marked map[uint32]bool, stats *Collection
 	return nil
 }
 
-// releaseJavaObjectMemory zeroes a dead object's bytes and returns both of its
-// blocks to the arena. The zeroing matters: a stale word left behind would look
-// like a live reference to the next cycle's scan and keep another dead object
-// alive.
-func (client *Client) releaseJavaObjectMemory(object uint32, record javaObjectRecord) error {
+// clearJavaObjectMemory zeroes a dead object's bytes before both of its blocks
+// go back to the arena. The zeroing matters: a stale word left behind would
+// look like a live reference to the next cycle's scan and keep another dead
+// object alive.
+func (client *Client) clearJavaObjectMemory(object uint32, record javaObjectRecord) error {
 	memory := client.core.Memory()
 	if record.blockSize > 0 {
 		if err := memory.Write(record.block, make([]byte, record.blockSize)); err != nil {
 			return fmt.Errorf("clear LGT java object block at %#x: %w", record.block, err)
 		}
-		client.arena.release(record.block)
 	}
 	if err := memory.Write(object, make([]byte, javaObjectBytes)); err != nil {
 		return fmt.Errorf("clear LGT java object at %#x: %w", object, err)
 	}
-	client.arena.release(object)
 	return nil
 }
 

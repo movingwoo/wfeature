@@ -253,3 +253,4 @@ JAR's `META-INF/MANIFEST.MF`.
 | `recordstore.jar` | `src/RecordStoreMIDlet.java` | `RECORDSTORE.MF` | `rms_test.go`; recipe in [`rms.md`](../../../../docs/rms.md) |
 | `ui.jar` | `src/UIMIDlet.java` | `UI.MF` | `lcdui_test.go`; recipe in [`lcdui.md`](../../../../docs/lcdui.md) |
 | `skvm.jar` | `src/SKVMMIDlet.java` | `SKVM.MF` | `skt_test.go`; recipe in [SKT history](../../../../docs/history/skt.md#implementation-validation) |
+| `jvm-contracts.jar` | `src/JVMContractsMIDlet.java` | `JVM_CONTRACTS.MF` | `jvm_contracts_review_test.go` (interpreter and core-library contracts through a MIDlet JAR) |

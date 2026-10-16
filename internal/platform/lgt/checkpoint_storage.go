@@ -43,17 +43,23 @@ import (
 //     that is shorter now.
 //   - A path the store has nothing for leaves its object empty, and the host
 //     makes nothing: the title's next write does.
-//   - A handle whose open asked for an empty file takes at most what it had
-//     written, from the front of the file as it is now. A handle whose open
-//     made a file that was not there is given the whole file, like any other.
-//     See openFile.truncated.
+//   - The handles open on one path share one buffer again, as the objects on
+//     one database share one set of records.
+//   - A handle whose open asked for an empty file takes at most what the file
+//     held at the quick save, from the front of the file as it is now: the
+//     open emptied the store, so that is what the title had written since. A
+//     handle whose open made a file that was not there is given the whole
+//     file, like any other. See openFile.truncated.
 //   - A save that cannot be read, or a container that does not decode,
 //     refuses the load, and what is read is bounded: the names come from a
 //     slot.
 //
 // What stays in a record, because it was never in a file: the bytes a title
-// has written into a stream and not yet flushed, and what an authentication
-// adapter made for the run.
+// has written into a byte sink of its own, and what an authentication adapter
+// made for the run. A stream opened on a File writes the File as it is
+// written to, so its bytes are in the File's buffer and stored with it. A
+// record an earlier build took can still hold bytes such a stream had not
+// handed its File; the load puts them in the File (rebuildRestoredStorage).
 
 // restoredStorage is what a record says about open storage that a rebuild
 // needs and the objects themselves cannot keep, because a rebuild overwrites
@@ -67,6 +73,15 @@ type restoredStorage struct {
 	recordSizes map[uint32]uint32
 	// cursors is where each stream on a file had read to, and its mark.
 	cursors map[uint32][2]int
+	// fileCursors is where each open file's cursor was when the checkpoint
+	// was taken. Putting a stream's bytes into a File moves its cursor on,
+	// and every attempt at a rebuild starts from the record's own.
+	fileCursors map[uint32]int
+	// sinkBytes holds, for a stream opened on a File, the bytes a record an
+	// earlier build took kept in the stream. That build held a stream's
+	// writes until a flush; this one writes the File as the stream is written
+	// to, so a load puts them in the File, as if they were written then.
+	sinkBytes map[uint32][]byte
 	// budget is how many bytes the rebuilt objects may take from the store
 	// between them, and how many may be read to fill them. Zero is
 	// maxStateBytes.
@@ -92,16 +107,15 @@ func (restored *restoredStorage) limit() uint64 {
 // quick save can take a load over the limit whatever was counted here.
 func (client *Client) storageBytes() uint64 {
 	var total uint64
-	for _, file := range client.files {
-		if file != nil {
-			total += uint64(len(file.data))
-		}
+	for _, file := range client.openContents() {
+		total += uint64(len(file.data))
 	}
 	if client.javaRun == nil {
 		return total
 	}
-	for _, database := range client.javaRun.databases {
-		if database == nil || database.closed {
+	databases, open := client.databaseContents()
+	for _, database := range databases {
+		if !open[database.databaseContent] {
 			continue
 		}
 		for _, record := range database.records {
@@ -119,42 +133,36 @@ func (client *Client) storageBytes() uint64 {
 // issuedWritesBlocked names what keeps the title's unstored writes from being
 // stored by the host. It changes nothing.
 //
-// A dirty handle's buffer is the file as it was when the handle was opened
-// plus what the title wrote through it, and storing it stores all of it. When
-// the file has changed since — through another handle, a rename, a removal —
-// that would put the older part of the buffer over newer content, and the
-// host would be the one doing it. The title's own close does exactly that and
-// is the title's to do; a quick step is not.
+// A dirty buffer is the file as it was when the buffer was filled plus what
+// the title wrote into it, and storing it stores all of it. The handles on a
+// path share the buffer, and a rename or a removal of the path brings it
+// level, so only a store that is not the buffer's moves the file past it: a
+// DataBase written under the same name. Storing the buffer then would put the
+// older part of it over newer content, and the host would be the one doing
+// it. The title's own close does exactly that and is the title's to do; a
+// quick step is not.
 func (client *Client) issuedWritesBlocked() error {
 	dirty := make(map[string]string)
-	for _, handle := range slices.Sorted(maps.Keys(client.files)) {
-		file := client.files[handle]
-		if file == nil || !file.dirty {
+	for _, file := range client.openContents() {
+		if !file.dirty {
 			continue
 		}
 		if _, err := fileSaveKey(file.name); err != nil {
 			return fmt.Errorf("the open file %s has unstored writes and no save to store them in", strconv.Quote(file.name))
 		}
-		key := fileEpochKey(file.name)
-		if other, shared := dirty[key]; shared {
-			return fmt.Errorf("the open files %s and %s are one file and both have unstored writes", strconv.Quote(other), strconv.Quote(file.name))
-		}
-		dirty[key] = file.name
+		dirty[fileListKey(file.name)] = file.name
 		if file.synced != client.fileEpoch(file.name) {
 			return fmt.Errorf("the open file %s has unstored writes and its save has changed since it was opened", strconv.Quote(file.name))
 		}
 	}
-	if client.javaRun == nil {
-		return nil
-	}
+	databases, open := client.databaseContents()
 	unsaved := make(map[string]bool)
-	for _, object := range slices.Sorted(maps.Keys(client.javaRun.databases)) {
-		database := client.javaRun.databases[object]
-		if database == nil || !database.unsaved {
+	for _, database := range databases {
+		if !database.unsaved {
 			continue
 		}
 		behind := database.synced != client.fileEpoch(databaseFileName(database.name))
-		if behind && database.closed {
+		if behind && !open[database.databaseContent] {
 			// Its last store was refused at the close, and the container has
 			// been written since. Nothing can store this one any more, and
 			// storeIssuedWrites lets it go.
@@ -163,10 +171,10 @@ func (client *Client) issuedWritesBlocked() error {
 		if behind {
 			return fmt.Errorf("the database %s has an unstored write and its container has changed since", strconv.Quote(database.name))
 		}
-		// Two objects of one database that both hold an unstored write would
-		// be stored one over the other, and the host would be choosing which
+		// A File holding the same container with its own unstored write would
+		// be stored over it or under it, and the host would be choosing which
 		// of the title's writes is lost.
-		key := fileEpochKey(databaseFileName(database.name))
+		key := fileListKey(databaseFileName(database.name))
 		if file, shared := dirty[key]; shared {
 			return fmt.Errorf("the open file %s and database %s share one save and both have unstored writes", strconv.Quote(file), strconv.Quote(database.name))
 		}
@@ -191,22 +199,21 @@ func (client *Client) prepareIssuedWriteLists() error {
 			needCreated = true
 		}
 	}
-	for _, file := range client.files {
-		if file != nil && file.dirty {
+	for _, file := range client.openContents() {
+		if file.dirty {
 			needsFile(file.name)
 		}
 	}
-	if client.javaRun != nil {
-		for _, database := range client.javaRun.databases {
-			if database == nil || !database.unsaved {
-				continue
-			}
-			name := databaseFileName(database.name)
-			if database.closed && database.synced != client.fileEpoch(name) {
-				continue
-			}
-			needsFile(name)
+	databases, open := client.databaseContents()
+	for _, database := range databases {
+		if !database.unsaved {
+			continue
 		}
+		name := databaseFileName(database.name)
+		if !open[database.databaseContent] && database.synced != client.fileEpoch(name) {
+			continue
+		}
+		needsFile(name)
 	}
 	if !pending {
 		return nil
@@ -214,7 +221,8 @@ func (client *Client) prepareIssuedWriteLists() error {
 	if client.saveReadError != nil {
 		return client.saveReadError
 	}
-	view := &Client{saveStore: client.saveStore, removed: client.removed, created: client.created}
+	view := &Client{saveStore: client.saveStore, removed: client.removed, removedLegacy: client.removedLegacy,
+		created: client.created, createdLegacy: client.createdLegacy}
 	if needRemoved {
 		view.removedFiles()
 	}
@@ -224,7 +232,8 @@ func (client *Client) prepareIssuedWriteLists() error {
 	if view.saveReadError != nil {
 		return view.saveReadError
 	}
-	client.removed, client.created = view.removed, view.created
+	client.removed, client.removedLegacy = view.removed, view.removedLegacy
+	client.created, client.createdLegacy = view.created, view.createdLegacy
 	return nil
 }
 
@@ -234,9 +243,9 @@ func (client *Client) prepareIssuedWriteLists() error {
 // many things it stored, and an error that says the saves could not be
 // written when the store refuses one or when issuedWritesBlocked names one.
 //
-// A file stays open, at its cursor; only its buffer becomes clean. What a
-// title has written into a stream and not flushed is not a write to the file
-// yet by this platform's own contract, and is left where it is.
+// A file stays open, at its cursor; only its buffer becomes clean. A stream
+// opened on a File writes the File as it is written to, so what a title wrote
+// through one is in that buffer and is stored with it.
 //
 // A session whose writes are held back by a failed save read stores nothing,
 // here as anywhere. Pending writes refuse the step rather than being lost on
@@ -267,36 +276,26 @@ func (client *Client) storeIssuedWrites() (int, error) {
 		}
 		stored++
 	}
-	if client.javaRun != nil {
-		for _, object := range slices.Sorted(maps.Keys(client.javaRun.databases)) {
-			database := client.javaRun.databases[object]
-			if database == nil || !database.unsaved {
-				continue
-			}
-			if database.closed && database.synced != client.fileEpoch(databaseFileName(database.name)) {
-				// A closed database whose container moved on after its close
-				// was refused: newer records are in the store and no call of
-				// the title's can reach this object again. The write its close
-				// lost stays lost, as it does without a quick step.
-				database.unsaved = false
-				continue
-			}
-			if err := client.storeFile(databaseFileName(database.name), database.encode()); err != nil {
-				return stored, refused(fmt.Errorf("the database %s: %v", strconv.Quote(database.name), err))
-			}
-			database.unsaved, database.synced = false, client.fileEpoch(databaseFileName(database.name))
+	databases, open := client.databaseContents()
+	for _, database := range databases {
+		if !database.unsaved {
+			continue
+		}
+		stale, err := client.storeRefusedDatabase(database, open[database.databaseContent])
+		if err != nil {
+			return stored, refused(fmt.Errorf("the database %s: %v", strconv.Quote(database.name), err))
+		}
+		if !stale {
 			stored++
 		}
 	}
-	for _, handle := range slices.Sorted(maps.Keys(client.files)) {
-		file := client.files[handle]
-		if file == nil || !file.dirty {
+	for _, file := range client.openContents() {
+		if !file.dirty {
 			continue
 		}
-		if err := client.storeFile(file.name, file.data); err != nil {
+		if err := client.storeContent(file.name, file.fileContent); err != nil {
 			return stored, refused(fmt.Errorf("the open file %s: %v", strconv.Quote(file.name), err))
 		}
-		file.dirty, file.synced = false, client.fileEpoch(file.name)
 		stored++
 	}
 	// A list the stores above changed and the store then refused is as
@@ -305,6 +304,40 @@ func (client *Client) storeIssuedWrites() (int, error) {
 		return stored, refused(fmt.Errorf("the list of removed or created paths"))
 	}
 	return stored, nil
+}
+
+// storeRefusedDatabase gives the store a database's records whose last store
+// it refused, and reports whether they were let go instead. Records no open
+// object has, behind a container that moved on after their close was refused,
+// are older than what the store holds and no call of the title's can reach
+// them again: the write their close lost stays lost, as it does without a
+// quick step or an ending, and the records stop waiting.
+func (client *Client) storeRefusedDatabase(database *javaDatabase, open bool) (bool, error) {
+	name := databaseFileName(database.name)
+	if !open && database.synced != client.fileEpoch(name) {
+		database.unsaved = false
+		return true, nil
+	}
+	if err := client.storeFile(name, database.encode()); err != nil {
+		return false, err
+	}
+	database.unsaved, database.synced = false, client.fileEpoch(name)
+	return false, nil
+}
+
+// storeRefusedDatabases is the ending's part for databases: every record set
+// whose last store was refused is given to the store again. One it refuses
+// again stays waiting, for a quick step or a later ending.
+func (client *Client) storeRefusedDatabases() {
+	databases, open := client.databaseContents()
+	for _, database := range databases {
+		if !database.unsaved {
+			continue
+		}
+		if _, err := client.storeRefusedDatabase(database, open[database.databaseContent]); err != nil && client.logger != nil {
+			client.logger.Debug("LGT java database store failed at the ending", "name", database.name, "error", err)
+		}
+	}
 }
 
 // bindRestoredStorage connects a restored client to the store it will run
@@ -350,8 +383,13 @@ func (client *Client) rebuildRestoredStorage() error {
 	// every write after it, which is the rule for a session that is running;
 	// this one is not yet.
 	client.saveReadError = nil
-	client.removed, client.created = nil, nil
+	client.removed, client.created, client.removedLegacy, client.createdLegacy = nil, nil, nil, nil
 	client.removedUnsaved, client.createdUnsaved, client.fileEpochs = false, false, nil
+	for handle, cursor := range restored.fileCursors {
+		if file := client.files[handle]; file != nil {
+			file.cursor = cursor
+		}
+	}
 	kept, limit := uint64(0), restored.limit()
 	keep := func(size int) error {
 		if uint64(size) > limit-kept {
@@ -368,32 +406,85 @@ func (client *Client) rebuildRestoredStorage() error {
 	if client.saveReadError != nil {
 		return client.saveReadError
 	}
+	// The handles on one path, in the order of the lowest of them, share the
+	// buffer filled for that path. Every handle is given a buffer of its own
+	// first, so that one a refused attempt left shared is not read as
+	// holding a write.
+	paths := make(map[string][]uint32)
+	order := make([]string, 0, len(client.files))
 	for _, handle := range slices.Sorted(maps.Keys(client.files)) {
-		file := client.files[handle]
-		data, _ := client.readFile(file.name)
+		client.files[handle].fileContent = &fileContent{}
+		key := fileListKey(client.files[handle].name)
+		if _, seen := paths[key]; !seen {
+			order = append(order, key)
+		}
+		paths[key] = append(paths[key], handle)
+	}
+	for _, key := range order {
+		handles := paths[key]
+		data, _ := client.readFile(client.files[handles[0]].name)
 		if client.saveReadError != nil {
 			return client.saveReadError
 		}
-		if file.truncated && len(data) > restored.lengths[handle] {
-			data = data[:restored.lengths[handle]]
+		// A record an earlier build took can hold two handles on one path
+		// opened to rewrite it, which had a buffer each; the longer length
+		// is the more of the file the title had written.
+		cut := -1
+		for _, handle := range handles {
+			if client.files[handle].truncated {
+				cut = max(cut, restored.lengths[handle])
+			}
+		}
+		if cut >= 0 && len(data) > cut {
+			data = data[:cut]
 		}
 		if err := keep(len(data)); err != nil {
 			return err
 		}
-		file.data, file.dirty, file.synced = bytes.Clone(data), false, 0
+		content := &fileContent{data: bytes.Clone(data)}
+		for _, handle := range handles {
+			client.files[handle].fileContent = content
+		}
 	}
 	runtime := client.javaRun
 	if runtime == nil {
 		return nil
 	}
+	// Bytes a stream held in a record an earlier build took go into its File
+	// at the File's cursor, as the write that put them in the stream does
+	// now; the File's buffer then holds them waiting, and nothing is stored.
+	// What the File cannot take stays in the stream, as that build held it.
+	for _, sink := range slices.Sorted(maps.Keys(restored.sinkBytes)) {
+		held := restored.sinkBytes[sink]
+		runtime.sinks[sink] = []byte{}
+		handle, bound := runtime.files[runtime.sinkFiles[sink]]
+		file := client.files[handle]
+		if !bound || file == nil || !file.writable || !file.extend(file.cursor+len(held)) {
+			runtime.sinks[sink] = bytes.Clone(held)
+			continue
+		}
+		copy(file.data[file.cursor:], held)
+		file.cursor += len(held)
+		file.dirty = true
+	}
+	// The open objects on one database share the records read for it; a
+	// closed object, which no call of the title's reads, is left empty.
+	contents := make(map[string]*databaseContent)
 	for _, object := range slices.Sorted(maps.Keys(runtime.databases)) {
 		database := runtime.databases[object]
-		database.records, database.deleted = nil, nil
-		database.recordSize = restored.recordSizes[object]
-		database.rebuilt, database.changed, database.unsaved, database.synced = true, false, false, 0
+		modified := database.modified
+		if !database.closed {
+			if content, filled := contents[database.name]; filled {
+				content.modified = max(content.modified, modified)
+				database.databaseContent = content
+				continue
+			}
+		}
+		database.databaseContent = &databaseContent{recordSize: restored.recordSizes[object], modified: modified}
 		if database.closed {
 			continue
 		}
+		contents[database.name] = database.databaseContent
 		stored, exists := client.readFile(databaseFileName(database.name))
 		if client.saveReadError != nil {
 			return client.saveReadError

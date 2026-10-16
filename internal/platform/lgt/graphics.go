@@ -3,6 +3,7 @@ package lgt
 import (
 	"context"
 	"fmt"
+	"math/bits"
 	"sort"
 	"sync"
 	"time"
@@ -539,40 +540,98 @@ func (context *graphicsContext) put(x, y int, color uint16) {
 	context.target.pixels[index] = color
 }
 
+// drawable is the box put can draw into, in the coordinates put is handed —
+// before the context's offset — with the right and bottom edges excluded: the
+// clip and the surface together. ok is false when nothing can be drawn.
+//
+// **A draw loop is clipped to this before it iterates.** Its extents are the
+// guest's and nothing bounds them: `fillRect(0, 0, MaxInt32, MaxInt32)` is one
+// call, and walking it a pixel at a time and rejecting each in put is a loop
+// of 2^62 steps in host code, where no instruction budget reaches. Clipping
+// first skips only pixels put would have rejected, so what is drawn, and the
+// order a pixel operation sees it drawn in, are the same.
+func (context *graphicsContext) drawable() (left, top, right, bottom int64, ok bool) {
+	if context.target == nil {
+		return 0, 0, 0, 0, false
+	}
+	left = max(0, int64(context.clipX)) - int64(context.offsetX)
+	top = max(0, int64(context.clipY)) - int64(context.offsetY)
+	right = min(int64(context.target.width), int64(context.clipX)+int64(context.clipWidth)) - int64(context.offsetX)
+	bottom = min(int64(context.target.height), int64(context.clipY)+int64(context.clipHeight)) - int64(context.offsetY)
+	return left, top, right, bottom, left < right && top < bottom
+}
+
+// runSteps answers the steps [first, last) of a run of count positions from
+// start, one apart in direction, whose position lands in [low, high). The run
+// is empty when last is not past first.
+func runSteps(start, direction, count, low, high int64) (first, last int64) {
+	if direction < 0 {
+		return max(0, start-high+1), min(count, start-low+1)
+	}
+	return max(0, low-start), min(count, high-start)
+}
+
 func (context *graphicsContext) fill(x, y, width, height int, color uint16) {
-	for row := y; row < y+height; row++ {
-		for column := x; column < x+width; column++ {
-			context.put(column, row, color)
+	left, top, right, bottom, ok := context.drawable()
+	if !ok {
+		return
+	}
+	firstRow, lastRow := runSteps(int64(y), 1, int64(height), top, bottom)
+	firstColumn, lastColumn := runSteps(int64(x), 1, int64(width), left, right)
+	for row := firstRow; row < lastRow; row++ {
+		for column := firstColumn; column < lastColumn; column++ {
+			context.put(x+int(column), y+int(row), color)
 		}
 	}
 }
 
-// line draws with the integer Bresenham the rest of this runtime uses.
+// line draws with the integer Bresenham the rest of this runtime uses, which
+// moves one pixel along the longer axis on every step and puts the shorter
+// axis on the row nearest the line, a tie going away from the start. That is a
+// closed form (lineMinor), so only the steps whose long-axis coordinate is
+// drawable are computed, rather than walked to from an endpoint the guest may
+// have put two billion pixels away.
 func (context *graphicsContext) line(x1, y1, x2, y2 int, color uint16) {
-	deltaX, deltaY := abs(x2-x1), -abs(y2-y1)
-	stepX, stepY := 1, 1
-	if x1 > x2 {
-		stepX = -1
+	left, top, right, bottom, ok := context.drawable()
+	if !ok {
+		return
 	}
-	if y1 > y2 {
-		stepY = -1
+	deltaX, deltaY := int64(x2)-int64(x1), int64(y2)-int64(y1)
+	stepX, stepY := int64(1), int64(1)
+	if deltaX < 0 {
+		deltaX, stepX = -deltaX, -1
 	}
-	err := deltaX + deltaY
-	for step := 0; step <= deltaX-deltaY+1; step++ {
-		context.put(x1, y1, color)
-		if x1 == x2 && y1 == y2 {
-			return
-		}
-		doubled := 2 * err
-		if doubled >= deltaY {
-			err += deltaY
-			x1 += stepX
-		}
-		if doubled <= deltaX {
-			err += deltaX
-			y1 += stepY
-		}
+	if deltaY < 0 {
+		deltaY, stepY = -deltaY, -1
 	}
+	if deltaX >= deltaY {
+		first, last := runSteps(int64(x1), stepX, deltaX+1, left, right)
+		for step := first; step < last; step++ {
+			context.put(int(int64(x1)+stepX*step), int(int64(y1)+stepY*lineMinor(step, deltaX, deltaY)), color)
+		}
+		return
+	}
+	first, last := runSteps(int64(y1), stepY, deltaY+1, top, bottom)
+	for step := first; step < last; step++ {
+		context.put(int(int64(x1)+stepX*lineMinor(step, deltaY, deltaX)), int(int64(y1)+stepY*step), color)
+	}
+}
+
+// lineMinor is how far along its shorter axis a line has moved after step
+// steps along its longer one: floor((2*minor*step + major) / (2*major)), which
+// is the position whose distance from the line is in (-1/2, 1/2]. The product
+// is formed in 128 bits, because both factors can be as wide as the int32
+// range.
+func lineMinor(step, major, minor int64) int64 {
+	if major == 0 {
+		return 0
+	}
+	high, low := bits.Mul64(uint64(2*minor), uint64(step))
+	low, carry := bits.Add64(low, uint64(major), 0)
+	// step is at most major and minor at most major, so the quotient is at
+	// most major and high is below the divisor, which Div64 requires.
+	quotient, _ := bits.Div64(high+carry, low, uint64(2*major))
+	return int64(quotient)
 }
 
 func (context *graphicsContext) rect(x, y, width, height int, color uint16) {
@@ -605,6 +664,13 @@ func (context *graphicsContext) polygon(xs, ys []int, color uint16, fill bool) {
 	for _, y := range ys[:count] {
 		top, bottom = min(top, y), max(bottom, y)
 	}
+	// A row outside the drawable band fills nothing, so the rows are clipped
+	// to it before they are walked. See drawable.
+	_, drawTop, _, drawBottom, ok := context.drawable()
+	if !ok {
+		return
+	}
+	top, bottom = int(max(int64(top), drawTop)), int(min(int64(bottom), drawBottom-1))
 	crossings := make([]int, 0, count)
 	for y := top; y <= bottom; y++ {
 		crossings = crossings[:0]
@@ -665,13 +731,6 @@ func textWidth(value string) int {
 		total += face.Render(symbol).Advance
 	}
 	return total
-}
-
-func abs(value int) int {
-	if value < 0 {
-		return -value
-	}
-	return value
 }
 
 // rgb565 packs an 8-bit-per-channel colour the way the LCD stores it.

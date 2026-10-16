@@ -14,6 +14,22 @@ type nativeRegistration struct {
 	method     jvm.NativeMethod
 }
 
+// screenContent runs a native that reads or changes what a runtime-drawn
+// screen shows — a List's or ChoiceGroup's elements, a Form's items, an
+// Item's or an Alert's fields — under textMu. The Host paints that content
+// and moves through it on a key under the same lock, and a title calls these
+// from its own threads as freely as from a callback, so without it a List
+// rebuilt during a key press is indexed through a stale length. None of these
+// natives calls back into the guest, which is what makes holding the lock
+// for the whole call safe; the text natives take it themselves.
+func (runtime *Runtime) screenContent(method jvm.NativeMethod) jvm.NativeMethod {
+	return func(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		runtime.textMu.Lock()
+		defer runtime.textMu.Unlock()
+		return method(vm, arguments)
+	}
+}
+
 // registerHighLevelNatives connects the high-level lcdui surface, the
 // GameCanvas buffer, and the media package to this runtime.
 func (runtime *Runtime) registerHighLevelNatives() error {
@@ -47,54 +63,54 @@ func (runtime *Runtime) registerHighLevelNatives() error {
 		{midp.TickerClass, "getString", "()" + text, runtime.tickerString},
 		{midp.TickerClass, "setString", "(" + text + ")V", runtime.setTickerString},
 
-		{midp.ItemClass, "initItem", "()V", runtime.initItem},
-		{midp.ItemClass, "getLabel", "()" + text, runtime.itemLabel},
-		{midp.ItemClass, "setLabel", "(" + text + ")V", runtime.setItemLabel},
-		{midp.ItemClass, "getLayout", "()I", runtime.itemLayout},
-		{midp.ItemClass, "setLayout", "(I)V", runtime.setItemLayout},
-		{midp.ItemClass, "addCommand", "(" + command + ")V", runtime.addItemCommand},
-		{midp.ItemClass, "removeCommand", "(" + command + ")V", runtime.removeItemCommand},
-		{midp.ItemClass, "setDefaultCommand", "(" + command + ")V", runtime.setItemDefaultCommand},
-		{midp.ItemClass, "setItemCommandListener", "(Ljavax/microedition/lcdui/ItemCommandListener;)V", runtime.setItemCommandListener},
+		{midp.ItemClass, "initItem", "()V", runtime.screenContent(runtime.initItem)},
+		{midp.ItemClass, "getLabel", "()" + text, runtime.screenContent(runtime.itemLabel)},
+		{midp.ItemClass, "setLabel", "(" + text + ")V", runtime.screenContent(runtime.setItemLabel)},
+		{midp.ItemClass, "getLayout", "()I", runtime.screenContent(runtime.itemLayout)},
+		{midp.ItemClass, "setLayout", "(I)V", runtime.screenContent(runtime.setItemLayout)},
+		{midp.ItemClass, "addCommand", "(" + command + ")V", runtime.screenContent(runtime.addItemCommand)},
+		{midp.ItemClass, "removeCommand", "(" + command + ")V", runtime.screenContent(runtime.removeItemCommand)},
+		{midp.ItemClass, "setDefaultCommand", "(" + command + ")V", runtime.screenContent(runtime.setItemDefaultCommand)},
+		{midp.ItemClass, "setItemCommandListener", "(Ljavax/microedition/lcdui/ItemCommandListener;)V", runtime.screenContent(runtime.setItemCommandListener)},
 		{midp.ItemClass, "getPreferredWidth", "()I", runtime.itemPreferredWidth},
 		{midp.ItemClass, "getPreferredHeight", "()I", runtime.itemPreferredHeight},
 		{midp.ItemClass, "getMinimumWidth", "()I", runtime.itemPreferredWidth},
 		{midp.ItemClass, "getMinimumHeight", "()I", runtime.itemPreferredHeight},
 		{midp.ItemClass, "notifyStateChanged", "()V", runtime.notifyItemStateChanged},
 
-		{midp.StringItemClass, "initText", "(" + text + "I)V", runtime.initStringItem},
-		{midp.StringItemClass, "getText", "()" + text, runtime.stringItemText},
-		{midp.StringItemClass, "setText", "(" + text + ")V", runtime.setStringItemText},
-		{midp.StringItemClass, "getAppearanceMode", "()I", runtime.stringItemAppearance},
-		{midp.StringItemClass, "setFont", "(" + font + ")V", runtime.setItemFont},
-		{midp.StringItemClass, "getFont", "()" + font, runtime.itemFont},
+		{midp.StringItemClass, "initText", "(" + text + "I)V", runtime.screenContent(runtime.initStringItem)},
+		{midp.StringItemClass, "getText", "()" + text, runtime.screenContent(runtime.stringItemText)},
+		{midp.StringItemClass, "setText", "(" + text + ")V", runtime.screenContent(runtime.setStringItemText)},
+		{midp.StringItemClass, "getAppearanceMode", "()I", runtime.screenContent(runtime.stringItemAppearance)},
+		{midp.StringItemClass, "setFont", "(" + font + ")V", runtime.screenContent(runtime.setItemFont)},
+		{midp.StringItemClass, "getFont", "()" + font, runtime.screenContent(runtime.itemFont)},
 
-		{midp.ImageItemClass, "initImage", "(" + image + text + ")V", runtime.initImageItem},
-		{midp.ImageItemClass, "getImage", "()" + image, runtime.imageItemImage},
-		{midp.ImageItemClass, "setImage", "(" + image + ")V", runtime.setImageItemImage},
-		{midp.ImageItemClass, "getAltText", "()" + text, runtime.imageItemAltText},
-		{midp.ImageItemClass, "setAltText", "(" + text + ")V", runtime.setImageItemAltText},
+		{midp.ImageItemClass, "initImage", "(" + image + text + ")V", runtime.screenContent(runtime.initImageItem)},
+		{midp.ImageItemClass, "getImage", "()" + image, runtime.screenContent(runtime.imageItemImage)},
+		{midp.ImageItemClass, "setImage", "(" + image + ")V", runtime.screenContent(runtime.setImageItemImage)},
+		{midp.ImageItemClass, "getAltText", "()" + text, runtime.screenContent(runtime.imageItemAltText)},
+		{midp.ImageItemClass, "setAltText", "(" + text + ")V", runtime.screenContent(runtime.setImageItemAltText)},
 
-		{midp.FormClass, "append", "(" + item + ")I", runtime.formAppend},
-		{midp.FormClass, "insert", "(I" + item + ")V", runtime.formInsert},
-		{midp.FormClass, "delete", "(I)V", runtime.formDelete},
-		{midp.FormClass, "deleteAll", "()V", runtime.formDeleteAll},
-		{midp.FormClass, "set", "(I" + item + ")V", runtime.formSet},
-		{midp.FormClass, "get", "(I)" + item, runtime.formGet},
-		{midp.FormClass, "size", "()I", runtime.formSize},
+		{midp.FormClass, "append", "(" + item + ")I", runtime.screenContent(runtime.formAppend)},
+		{midp.FormClass, "insert", "(I" + item + ")V", runtime.screenContent(runtime.formInsert)},
+		{midp.FormClass, "delete", "(I)V", runtime.screenContent(runtime.formDelete)},
+		{midp.FormClass, "deleteAll", "()V", runtime.screenContent(runtime.formDeleteAll)},
+		{midp.FormClass, "set", "(I" + item + ")V", runtime.screenContent(runtime.formSet)},
+		{midp.FormClass, "get", "(I)" + item, runtime.screenContent(runtime.formGet)},
+		{midp.FormClass, "size", "()I", runtime.screenContent(runtime.formSize)},
 		{midp.FormClass, "setItemStateListener", "(Ljavax/microedition/lcdui/ItemStateListener;)V", runtime.setFormItemStateListener},
 
-		{midp.ListClass, "setSelectCommand", "(" + command + ")V", runtime.setListSelectCommand},
+		{midp.ListClass, "setSelectCommand", "(" + command + ")V", runtime.screenContent(runtime.setListSelectCommand)},
 
-		{midp.AlertClass, "initAlert", "(" + text + image + "Ljavax/microedition/lcdui/AlertType;)V", runtime.initAlert},
-		{midp.AlertClass, "getString", "()" + text, runtime.alertString},
-		{midp.AlertClass, "setString", "(" + text + ")V", runtime.setAlertString},
-		{midp.AlertClass, "getImage", "()" + image, runtime.alertImage},
-		{midp.AlertClass, "setImage", "(" + image + ")V", runtime.setAlertImage},
-		{midp.AlertClass, "getType", "()Ljavax/microedition/lcdui/AlertType;", runtime.alertType},
-		{midp.AlertClass, "setType", "(Ljavax/microedition/lcdui/AlertType;)V", runtime.setAlertType},
-		{midp.AlertClass, "getTimeout", "()I", runtime.alertTimeout},
-		{midp.AlertClass, "setTimeout", "(I)V", runtime.setAlertTimeout},
+		{midp.AlertClass, "initAlert", "(" + text + image + "Ljavax/microedition/lcdui/AlertType;)V", runtime.screenContent(runtime.initAlert)},
+		{midp.AlertClass, "getString", "()" + text, runtime.screenContent(runtime.alertString)},
+		{midp.AlertClass, "setString", "(" + text + ")V", runtime.screenContent(runtime.setAlertString)},
+		{midp.AlertClass, "getImage", "()" + image, runtime.screenContent(runtime.alertImage)},
+		{midp.AlertClass, "setImage", "(" + image + ")V", runtime.screenContent(runtime.setAlertImage)},
+		{midp.AlertClass, "getType", "()Ljavax/microedition/lcdui/AlertType;", runtime.screenContent(runtime.alertType)},
+		{midp.AlertClass, "setType", "(Ljavax/microedition/lcdui/AlertType;)V", runtime.screenContent(runtime.setAlertType)},
+		{midp.AlertClass, "getTimeout", "()I", runtime.screenContent(runtime.alertTimeout)},
+		{midp.AlertClass, "setTimeout", "(I)V", runtime.screenContent(runtime.setAlertTimeout)},
 		{midp.AlertClass, "getDefaultTimeout", "()I", runtime.alertDefaultTimeout},
 		{midp.AlertTypeClass, "playSound", "(Ljavax/microedition/lcdui/Display;)Z", runtime.playAlertSound},
 
@@ -175,22 +191,22 @@ func (runtime *Runtime) choiceRegistrations(class string, kind screenKind) []nat
 		font  = "Ljavax/microedition/lcdui/Font;"
 	)
 	return []nativeRegistration{
-		{class, "initChoice", "(I)V", runtime.initChoice(kind)},
-		{class, "size", "()I", runtime.choiceSize(kind)},
-		{class, "getString", "(I)" + text, runtime.choiceString(kind)},
-		{class, "getImage", "(I)" + image, runtime.choiceImage(kind)},
-		{class, "append", "(" + text + image + ")I", runtime.choiceAppend(kind)},
-		{class, "insert", "(I" + text + image + ")V", runtime.choiceInsert(kind)},
-		{class, "delete", "(I)V", runtime.choiceDelete(kind)},
-		{class, "deleteAll", "()V", runtime.choiceDeleteAll(kind)},
-		{class, "set", "(I" + text + image + ")V", runtime.choiceSet(kind)},
-		{class, "isSelected", "(I)Z", runtime.choiceIsSelected(kind)},
-		{class, "getSelectedIndex", "()I", runtime.choiceSelectedIndex(kind)},
-		{class, "getSelectedFlags", "([Z)I", runtime.choiceSelectedFlags(kind)},
-		{class, "setSelectedIndex", "(IZ)V", runtime.choiceSetSelectedIndex(kind)},
-		{class, "setSelectedFlags", "([Z)V", runtime.choiceSetSelectedFlags(kind)},
-		{class, "setFitPolicy", "(I)V", runtime.choiceSetFitPolicy(kind)},
-		{class, "getFitPolicy", "()I", runtime.choiceFitPolicy(kind)},
+		{class, "initChoice", "(I)V", runtime.screenContent(runtime.initChoice(kind))},
+		{class, "size", "()I", runtime.screenContent(runtime.choiceSize(kind))},
+		{class, "getString", "(I)" + text, runtime.screenContent(runtime.choiceString(kind))},
+		{class, "getImage", "(I)" + image, runtime.screenContent(runtime.choiceImage(kind))},
+		{class, "append", "(" + text + image + ")I", runtime.screenContent(runtime.choiceAppend(kind))},
+		{class, "insert", "(I" + text + image + ")V", runtime.screenContent(runtime.choiceInsert(kind))},
+		{class, "delete", "(I)V", runtime.screenContent(runtime.choiceDelete(kind))},
+		{class, "deleteAll", "()V", runtime.screenContent(runtime.choiceDeleteAll(kind))},
+		{class, "set", "(I" + text + image + ")V", runtime.screenContent(runtime.choiceSet(kind))},
+		{class, "isSelected", "(I)Z", runtime.screenContent(runtime.choiceIsSelected(kind))},
+		{class, "getSelectedIndex", "()I", runtime.screenContent(runtime.choiceSelectedIndex(kind))},
+		{class, "getSelectedFlags", "([Z)I", runtime.screenContent(runtime.choiceSelectedFlags(kind))},
+		{class, "setSelectedIndex", "(IZ)V", runtime.screenContent(runtime.choiceSetSelectedIndex(kind))},
+		{class, "setSelectedFlags", "([Z)V", runtime.screenContent(runtime.choiceSetSelectedFlags(kind))},
+		{class, "setFitPolicy", "(I)V", runtime.screenContent(runtime.choiceSetFitPolicy(kind))},
+		{class, "getFitPolicy", "()I", runtime.screenContent(runtime.choiceFitPolicy(kind))},
 		{class, "setFont", "(I" + font + ")V", runtime.ignoreChoiceElementFont},
 		{class, "getFont", "(I)" + font, runtime.choiceElementFont},
 	}

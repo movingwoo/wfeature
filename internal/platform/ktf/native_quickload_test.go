@@ -164,7 +164,7 @@ func TestNativeQuickSaveStoresAnEmptyingOpen(t *testing.T) {
 			fixture.progress(first)
 			fixture.press(testfixture.KTFNativeSaveKeySave)
 			fixture.press(testfixture.KTFNativeSaveKeyTruncate)
-			fixture.wantStored("after TRUNCATE", testfixture.KTFNativeSaveFile(first, first))
+			fixture.wantStored("after TRUNCATE", []byte{})
 			checkpoint := fixture.quickSave()
 			fixture.wantStored("after the quick save", []byte{})
 			var record nativeState

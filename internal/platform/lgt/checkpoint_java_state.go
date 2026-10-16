@@ -812,19 +812,24 @@ func (client *Client) captureJavaState(budget *stateBudget) (*javaState, error) 
 	for _, object := range slices.Sorted(maps.Keys(runtime.dates)) {
 		saved.Dates = append(saved.Dates, javaDateState{object, runtime.dates[object]})
 	}
+	charged := make(map[*databaseContent]bool, len(runtime.databases))
 	for _, object := range slices.Sorted(maps.Keys(runtime.databases)) {
 		database := runtime.databases[object]
-		if database == nil || len(database.deleted) != len(database.records) {
+		if database == nil || database.databaseContent == nil || len(database.deleted) != len(database.records) {
 			return nil, fmt.Errorf("LGT checkpoint has a malformed database")
 		}
 		if database.unsaved {
 			return nil, fmt.Errorf("LGT checkpoint has a database with a write the store has not been given")
 		}
 		// The records are charged and not recorded: a load reads the
-		// container back, on the same budget.
-		for _, data := range database.records {
-			if err := budget.charge(len(data)); err != nil {
-				return nil, err
+		// container back, on the same budget, once for the objects that share
+		// them.
+		if !charged[database.databaseContent] {
+			charged[database.databaseContent] = true
+			for _, data := range database.records {
+				if err := budget.charge(len(data)); err != nil {
+					return nil, err
+				}
 			}
 		}
 		saved.Databases = append(saved.Databases, javaDatabaseState{
@@ -900,6 +905,14 @@ func (saved *javaState) validate() error {
 			return invalid("a class with a superclass outside the table")
 		}
 		if class.Slots > maxJavaVTableSlots || class.Instance > maxJavaInstanceSize {
+			return invalid("a class with an impossible size")
+		}
+		// The element width an array copy sizes its buffer by: zero for a
+		// class that is not an array, and otherwise one of the widths
+		// javaArrayElement lays out, which are all a running title can set.
+		switch class.ElementBytes {
+		case 0, 1, 2, 4, 8:
+		default:
 			return invalid("a class with an impossible size")
 		}
 	}
@@ -1270,6 +1283,18 @@ func (client *Client) restoreJavaState(saved *javaState) error {
 		}
 		runtime.sinks[record.Object] = append([]byte{}, record.Data...)
 	}
+	// A stream opened on a File writes the File as it is written to. A record
+	// an earlier build took can hold bytes such a stream had not handed its
+	// File yet: the load puts them in the File when it fills it, and until
+	// then the stream holds nothing. See rebuildRestoredStorage.
+	if client.restoredStorage != nil {
+		for sink := range runtime.sinkFiles {
+			if held := runtime.sinks[sink]; len(held) != 0 {
+				client.restoredStorage.sinkBytes[sink] = held
+				runtime.sinks[sink] = []byte{}
+			}
+		}
+	}
 	if len(saved.DecodedImages) != 0 {
 		runtime.decodedImages = make(map[string]uint32, len(saved.DecodedImages))
 		for _, record := range saved.DecodedImages {
@@ -1291,9 +1316,11 @@ func (client *Client) restoreJavaState(saved *javaState) error {
 		runtime.dates[record.Object] = record.Millis
 	}
 	for _, record := range saved.Databases {
-		// The records are read when the load commits.
+		// The records are read when the load commits, which also gives the
+		// objects on one database the one set of records they share.
 		runtime.databases[record.Object] = &javaDatabase{
-			name: string(record.Name), recordSize: record.RecordSize, modified: record.Modified, closed: record.Closed,
+			name: string(record.Name), closed: record.Closed,
+			databaseContent: &databaseContent{recordSize: record.RecordSize, modified: record.Modified},
 		}
 		client.restoredStorage.recordSizes[record.Object] = record.RecordSize
 	}

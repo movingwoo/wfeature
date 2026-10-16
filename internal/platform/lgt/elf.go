@@ -23,6 +23,12 @@ const (
 	sectionFlagExec   = 0x4
 	sectionFlagAlloc  = 0x2
 
+	// maxModuleSections bounds the sections a module loads. A module here
+	// has three — code, data and zero-filled data — and every recognition
+	// scan walks the list once per address it probes, so the list's length
+	// multiplies the cost of every scan.
+	maxModuleSections = 64
+
 	// raptorSectionName is the toolchain's own record of what it built, and
 	// raptorMagic opens it. It is not loaded — its section address is zero —
 	// so nothing here would read it if the entry in the ELF header could be
@@ -105,6 +111,9 @@ func ParseModule(data []byte) (*Module, error) {
 		}
 	}
 
+	// files is where each loaded section's bytes sit in the file, empty for a
+	// section that has none.
+	var files [][2]uint64
 	for index := 0; index < int(count); index++ {
 		entry, err := header(index)
 		if err != nil {
@@ -115,6 +124,9 @@ func ParseModule(data []byte) (*Module, error) {
 			// A section with no address is not loaded: symbol tables,
 			// debug info, the section name table itself.
 			continue
+		}
+		if len(module.Sections) == maxModuleSections {
+			return nil, fmt.Errorf("LGT module has more than %d loaded sections", maxModuleSections)
 		}
 		kind := binary.LittleEndian.Uint32(entry[4:])
 		flags := binary.LittleEndian.Uint32(entry[8:])
@@ -127,6 +139,7 @@ func ParseModule(data []byte) (*Module, error) {
 			Size:       size,
 			Executable: flags&sectionFlagExec != 0,
 		}
+		file := [2]uint64{}
 		if kind != sectionTypeNoBits {
 			// SHT_NOBITS is .bss: it occupies memory but has no file bytes,
 			// which is why only the others are read.
@@ -134,11 +147,31 @@ func ParseModule(data []byte) (*Module, error) {
 				return nil, fmt.Errorf("LGT module section %q is outside the file", section.Name)
 			}
 			section.Data = data[offset : uint64(offset)+uint64(size)]
+			file = [2]uint64{uint64(offset), uint64(offset) + uint64(size)}
 		}
 		if uint64(address)+uint64(size) > 1<<32 {
 			return nil, fmt.Errorf("LGT module section %q wraps the address space", section.Name)
 		}
 		module.Sections = append(module.Sections, section)
+		files = append(files, file)
+	}
+	// **No two sections hold the same addresses or the same file bytes.** A
+	// linker lays sections end to end in both, and headers that alias one
+	// another are how a small file stands for tens of thousands of copies of
+	// one blob — each loaded, and each scanned by every recognition pass at
+	// every session start and checkpoint load. Empty sections overlap
+	// nothing, so one that shares an address with a neighbour is still taken.
+	for index, section := range module.Sections {
+		for earlier, other := range module.Sections[:index] {
+			if section.Size > 0 && other.Size > 0 &&
+				uint64(section.Address) < uint64(other.Address)+uint64(other.Size) &&
+				uint64(other.Address) < uint64(section.Address)+uint64(section.Size) {
+				return nil, fmt.Errorf("LGT module section %q overlaps %q in memory", section.Name, other.Name)
+			}
+			if files[index][0] < files[earlier][1] && files[earlier][0] < files[index][1] {
+				return nil, fmt.Errorf("LGT module section %q overlaps %q in the file", section.Name, other.Name)
+			}
+		}
 	}
 	if len(module.Sections) == 0 {
 		return nil, fmt.Errorf("LGT module has no loadable sections")

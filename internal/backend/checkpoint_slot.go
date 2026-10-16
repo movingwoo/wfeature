@@ -222,8 +222,8 @@ func (store *DirectorySaveStore) StoreCheckpoint(identity [32]byte, data []byte)
 	if err == nil && !info.Mode().IsRegular() {
 		return fmt.Errorf("checkpoint slot is not a regular file")
 	}
-	private := &DirectorySaveStore{root: path}
-	if err := private.storeSave(checkpointSlotName(identity), data); err != nil {
+	// A slot is a Host file, not a save key, so its name is written as it is.
+	if err := writeSaveFile(filepath.Join(path, checkpointSlotName(identity)), data); err != nil {
 		return err
 	}
 	syncDirectory(filepath.Dir(path))

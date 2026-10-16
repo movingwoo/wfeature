@@ -832,6 +832,7 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"uncaughtCallbacks": diagnostic, "uncaughtFirst": diagnostic,
 			"audio": recorded, "clips": recorded, "volume": recorded, "sourceVolume": recorded, "sourceMuted": recorded,
 			"vibrator": recorded, "files": recorded, "removed": store, "created": store,
+			"removedLegacy": store, "createdLegacy": store,
 			// The two lists are stored before a checkpoint is taken, and one
 			// the store will not take refuses it.
 			"removedUnsaved": boundary, "createdUnsaved": boundary,
@@ -890,12 +891,10 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 		},
 		// A database travels as its name. A store the store refused is
 		// retried before a checkpoint is taken, and the rest of its
-		// bookkeeping starts again with the records a load reads.
-		"javaDatabase": {
-			"name": recorded, "recordSize": recorded, "records": store, "deleted": store,
-			"modified": recorded, "closed": recorded, "unsaved": boundary, "synced": rebuilt,
-			"rebuilt": rebuilt, "changed": rebuilt,
-		},
+		// bookkeeping starts again with the records a load reads, which the
+		// objects on one database share again.
+		"javaDatabase":    {"name": recorded, "closed": recorded, "databaseContent": rebuilt},
+		"databaseContent": {"recordSize": recorded, "records": store, "deleted": store, "modified": recorded, "unsaved": boundary, "synced": rebuilt},
 		"javaGraphics": {
 			"surface": recorded, "color": recorded, "translateX": recorded, "translateY": recorded,
 			"clipX": recorded, "clipY": recorded, "clipWidth": recorded, "clipHeight": recorded, "clipSet": recorded,
@@ -915,11 +914,11 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"drawnHere": recorded,
 		},
 		"timer": {"structure": recorded, "callback": recorded, "param": recorded, "dueAt": recorded, "armed": recorded},
-		// A buffer with unstored writes is stored before a checkpoint is taken.
-		"openFile": {
-			"name": recorded, "data": store, "cursor": recorded, "writable": recorded, "dirty": boundary,
-			"truncated": recorded, "synced": rebuilt,
-		},
+		// A buffer with unstored writes is stored before a checkpoint is taken,
+		// and a load gives the handles on one path one buffer again, filled
+		// from the store with nothing pending.
+		"openFile":    {"name": recorded, "fileContent": rebuilt, "cursor": recorded, "writable": recorded, "truncated": recorded},
+		"fileContent": {"data": store, "dirty": boundary, "synced": rebuilt},
 		"mediaClip": {
 			"callback": recorded, "status": recorded, "pending": recorded, "mediaType": recorded, "data": recorded,
 			"volume": recorded, "handle": recorded, "loaded": recorded, "javaPaused": recorded,
@@ -972,8 +971,8 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 	}
 	for _, value := range []any{
 		Client{}, javaRuntime{}, javaWorker{}, javaThread{}, javaMonitor{}, javaRuntimeClass{}, javaTryFrame{},
-		javaStream{}, javaWidget{}, javaDatabase{}, javaGraphics{}, javaCalendar{}, javaObjectRecord{}, javaLink{},
-		javaLayoutClass{}, framebuffer{}, timer{}, openFile{}, mediaClip{}, javaMediaEvent{}, pendingNetConnect{}, pendingEvent{},
+		javaStream{}, javaWidget{}, javaDatabase{}, databaseContent{}, javaGraphics{}, javaCalendar{}, javaObjectRecord{}, javaLink{},
+		javaLayoutClass{}, framebuffer{}, timer{}, openFile{}, fileContent{}, mediaClip{}, javaMediaEvent{}, pendingNetConnect{}, pendingEvent{},
 		cTextInputState{}, pixelOpCache{}, guestClock{}, arena{}, notificationNetwork{}, notificationSocketState{},
 		authenticationOptionStore{}, authenticationCertificate58Store{}, authenticationCertificate100Store{},
 		Session{},

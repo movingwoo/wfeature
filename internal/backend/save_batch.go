@@ -45,6 +45,8 @@ func (store *DirectorySaveStore) StoreSaves(entries map[string][]byte) error {
 	return store.storeSaves(entries, os.Rename)
 }
 
+// storeSaves runs under the directory lock, after an interrupted replacement
+// was settled.
 func (store *DirectorySaveStore) storeSaves(entries map[string][]byte, rename func(string, string) error) error {
 	if len(entries) == 0 {
 		return nil
@@ -63,8 +65,26 @@ func (store *DirectorySaveStore) storeSaves(entries map[string][]byte, rename fu
 		keys = append(keys, name)
 	}
 	sort.Strings(keys)
+	names, err := store.settleSaveNames()
+	if err != nil {
+		return err
+	}
+	if names.naming == namingEarlier {
+		return refuseEarlierSaveNames(store.root, names)
+	}
 	if err := os.MkdirAll(store.root, 0755); err != nil {
 		return err
+	}
+	// Every target is resolved before anything is staged. The first name that
+	// needs a '#' writes the record that says the names are encoded, so no
+	// such name reaches the disk ahead of it.
+	targets := make([]string, len(keys))
+	for i, name := range keys {
+		target, err := store.prepareSaveWrite(name, &names)
+		if err != nil {
+			return err
+		}
+		targets[i] = target
 	}
 	directory, err := os.MkdirTemp(store.root, ".batch-")
 	if err != nil {
@@ -76,28 +96,21 @@ func (store *DirectorySaveStore) storeSaves(entries map[string][]byte, rename fu
 			_ = os.RemoveAll(directory)
 		}
 	}()
-	staged := &DirectorySaveStore{root: directory}
-	targets := make([]string, len(keys))
 	existed := make([]bool, len(keys))
 	for i, name := range keys {
-		target, err := store.savePath(name)
-		if err != nil {
-			return err
-		}
-		targets[i] = target
-		old, present, err := store.readSave(name)
+		old, present, err := store.readSave(name, names)
 		if err != nil {
 			return err
 		}
 		existed[i] = present
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(targets[i]), 0755); err != nil {
 			return err
 		}
-		if err := staged.storeSave(fmt.Sprintf("new-%d", i), entries[name]); err != nil {
+		if err := writeSaveFile(filepath.Join(directory, fmt.Sprintf("new-%d", i)), entries[name]); err != nil {
 			return err
 		}
 		if present {
-			if err := staged.storeSave(fmt.Sprintf("old-%d", i), old); err != nil {
+			if err := writeSaveFile(filepath.Join(directory, fmt.Sprintf("old-%d", i)), old); err != nil {
 				return err
 			}
 		}

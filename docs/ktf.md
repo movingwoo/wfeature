@@ -14,7 +14,9 @@ package (`internal/platform/detect`).
 The descriptor package contains `__adf__`, an AID-selected JAR, and a
 `client.bin<decimal BSS size>` image. The loader validates descriptor fields,
 ZIP paths, duplicate names, entry counts, expansion bounds, and image/BSS size;
-the combined image and BSS are limited to 256 MiB. It maps the image at
+the combined image and BSS are limited to 256 MiB. A duplicate entry is
+inflated to be compared with the first and counts against the 512 MiB
+expansion bound like any other. It maps the image at
 `0x00100000`, enters Thumb code at `0x00100001`, and validates the returned
 initialization and class metadata before using it. Saves belong to the
 descriptor's PID, or to its AID when the PID is absent.
@@ -55,8 +57,11 @@ offset 36 (`native_return.go`). The tag is cleared on entry, a nested scope
 restores its caller's tag and value, and older modules, absent tags and other
 tags keep the register return. Other tags and a wide environment return remain
 unconfirmed ([evidence](ktf-qa-2026-09-21.md#native-environment-return-and-the-slow-case)).
-Existing helper stacks and argument containers retain their arena lifetime;
-regression coverage proves no premature reuse, not a new reclamation policy.
+Existing helper stacks retain their arena lifetime. The argument container of
+a native-form call — the Host's call into a native body and an older module's
+native invoke — is cleared and returned to the arena when that call returns,
+so a nested call never reuses its live caller's container and repeated platform
+calls do not grow the arena.
 
 ## Lifecycle and input
 
@@ -117,14 +122,28 @@ They are owned copies, sampled at most once per 1/60 wall-clock second and
 sent without waiting for a consumer. The browser uses its existing PNG queue.
 See [session presentation](session.md#presentation-and-audio).
 
-Mutable Image surfaces and Clip state use weak object ownership. Graphics keeps
-its Image reachable. Collection releases orphan surfaces and stopped audio;
-playing orphans remain until playback finishes, including repeating playback.
+Image surfaces — a mutable image's, the one a decoded image is rasterized into
+on its first masked, XOR or `Image.drawImage` draw, and the copy
+`createImage(Image)` and `createSubImage` make — and Clip state use weak object
+ownership. Graphics keeps its Image reachable. Collection releases orphan
+surfaces and stopped audio; playing orphans remain until playback finishes,
+including repeating playback. A quick save prunes the orphans a round would
+prune before it records the surfaces.
 Shared audio timing and borrowed-buffer rules are in
 [architecture.md](architecture.md#shared-runtime-services). Java and WIPI-C clip
 pause/resume, device and clip volume, and Java `PlayListener` events are applied
 (see [audio](audio.md)); a per-source mute is remembered and read back but
 silences no clip, and the Java `Volume` mute extensions remain stubs.
+
+Line, polygon and rectangle-copy calls walk only the part of their range that
+lands on the target surface, so guest coordinates or sizes at the integer
+extremes draw what lands and return. A framebuffer record whose width does not
+fit its bytes per line is refused.
+Arc and rounded-rectangle calls, Java and WIPI-C, walk the same way. Image
+decoding reads the header first and refuses a picture of more than 16,777,216
+pixels (`backend.MaxFramebufferPixels`, the rule SKT already applied) before
+allocating, and the checksum repair for a picture with a wrong zlib trailer
+stops at the size its header implies.
 
 ## Files and records
 
@@ -132,6 +151,16 @@ File input/output streams and direct File operations share one cursor. Stream
 close does not close the underlying File. Reads report storage I/O failures.
 Java and WIPI-C file/record mutations stage bytes, cursors, handles, and deletion
 ledgers before publishing changes. Multi-key changes use `SaveBatchStore`.
+A guest `DataOutputStream` call over a `File` stores what it wrote once, as the
+call returns, rather than once per byte; a store it cannot make throws
+`IOException` from that call and leaves the file as it was. Every write is still
+stored before the guest's own call returns. WIPI C file and record-database
+handles are reused once a session has issued 4095 of either; an open is refused
+only while 4095 handles of its table are held at once. The WIPI C file table refuses a name that is
+not a save key of its own (`/`, `.`, a `..` component) in every slot, and a
+name with a line break where it would be written into a list (remove, rename,
+mkdir); `MC_fsGetFileStat` reads through the removal list like
+`MC_fsIsExist`.
 The earlier native package retains its existing buffered write/flush policy.
 See [save integrity](session.md#save-integrity) for failure recovery and limits.
 
@@ -222,6 +251,10 @@ The checked inventories in `internal/platform/ktf/testdata/` are authoritative
 for registered Java surface gaps and fixed-value stubs:
 `wipi_java_surface.txt`, `wipi_java_gaps.txt`, and `wipi_java_stubs.txt`.
 A registration or static reference is not proof that a real caller executes it.
+The earlier native package's reports of the text a title drew, the files it
+opened and the resource requests nobody answered keep their first 4096 entries,
+as its ordered call log keeps its first calls. A second listener registration on
+one of its event sources replaces the first, since only one is ever called.
 
 Known limits include animated image playback, unapplied graphics alpha and
 WIPI-C context transparency and origin fields, unpainted LWC components

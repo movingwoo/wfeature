@@ -1,0 +1,3 @@
+Manifest-Version: 1.0
+MIDlet-Name: JVM Contracts Fixture
+MIDlet-1: JVM Contracts Fixture, , JVMContractsMIDlet

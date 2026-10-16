@@ -26,6 +26,18 @@ func (runtime *initializationRuntime) curveEmit(state *runtimeGraphicsState) cur
 	}
 }
 
+// curveBounds is the part of the shape's plane that fill can reach: the clip
+// met with the target, as state.clip computes it, moved back by the
+// translation the fill adds. The box comes from the guest and can be far
+// larger than any surface, so the geometry walks only this part of it.
+func curveBounds(state *runtimeGraphicsState) curve.Bounds {
+	left, top := max(int64(state.clipX), 0), max(int64(state.clipY), 0)
+	right := min(int64(state.clipX)+int64(state.clipWidth), int64(state.target.width))
+	bottom := min(int64(state.clipY)+int64(state.clipHeight), int64(state.target.height))
+	translateX, translateY := int64(state.translateX), int64(state.translateY)
+	return curve.Bounds{Left: left - translateX, Top: top - translateY, Right: right - translateX, Bottom: bottom - translateY}
+}
+
 // graphicsFillRoundRect fills a rectangle whose corners are quarter ellipses.
 func (runtime *initializationRuntime) graphicsFillRoundRect(state *runtimeGraphicsState, x, y, width, height, arcWidth, arcHeight int32) error {
 	if width <= 0 || height <= 0 {
@@ -36,7 +48,7 @@ func (runtime *initializationRuntime) graphicsFillRoundRect(state *runtimeGraphi
 	if radiusX, radiusY := curve.RoundRectRadii(width, height, arcWidth, arcHeight); radiusX == 0 || radiusY == 0 {
 		return runtime.graphicsFillRect(state, x, y, width, height, state.color)
 	}
-	return curve.FillRoundRect(x, y, width, height, arcWidth, arcHeight, runtime.curveEmit(state))
+	return curve.FillRoundRectWithin(curveBounds(state), x, y, width, height, arcWidth, arcHeight, runtime.curveEmit(state))
 }
 
 // graphicsDrawRoundRect outlines the same shape.
@@ -47,15 +59,15 @@ func (runtime *initializationRuntime) graphicsDrawRoundRect(state *runtimeGraphi
 	if radiusX, radiusY := curve.RoundRectRadii(width, height, arcWidth, arcHeight); radiusX == 0 || radiusY == 0 {
 		return runtime.graphicsDrawRectOutline(state, x, y, width, height)
 	}
-	return curve.DrawRoundRect(x, y, width, height, arcWidth, arcHeight, runtime.curveEmit(state))
+	return curve.DrawRoundRectWithin(curveBounds(state), x, y, width, height, arcWidth, arcHeight, runtime.curveEmit(state))
 }
 
 // graphicsFillArc fills the pie slice an arc cuts out of its bounding ellipse.
 func (runtime *initializationRuntime) graphicsFillArc(state *runtimeGraphicsState, x, y, width, height, start, extent int32) error {
-	return curve.FillArc(x, y, width, height, start, extent, runtime.curveEmit(state))
+	return curve.FillArcWithin(curveBounds(state), x, y, width, height, start, extent, runtime.curveEmit(state))
 }
 
 // graphicsDrawArc plots the arc's curve itself.
 func (runtime *initializationRuntime) graphicsDrawArc(state *runtimeGraphicsState, x, y, width, height, start, extent int32) error {
-	return curve.DrawArc(x, y, width, height, start, extent, runtime.curveEmit(state))
+	return curve.DrawArcWithin(curveBounds(state), x, y, width, height, start, extent, runtime.curveEmit(state))
 }

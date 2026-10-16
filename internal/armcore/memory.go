@@ -284,7 +284,9 @@ type Memory struct {
 	// the quantum. It lives here rather than on Engine because Engine has to
 	// stay a zero-size struct: giving it one field made the interpreter's own
 	// loop 3% to 13% slower on the local titles, which is more than the
-	// boundary it was there to remove. See FastSupervisorCall, and armcore.md.
+	// boundary it was there to remove. See FastSupervisorCall, and
+	// docs/history/armcore.md, "The hook cannot live on Engine, and the reason
+	// is worth keeping".
 	fastSupervisor FastSupervisorCall
 }
 
@@ -405,9 +407,13 @@ func (memory *Memory) Load(address uint32, data []byte) error {
 	return memory.write(address, data, 0, "load", true)
 }
 
+// Read copies guest memory out for the Host. The lock is exclusive although
+// nothing is written to the guest: validation and the page lookup refresh the
+// last-mapping and page caches, and two readers doing that at once — a
+// debugger's connection beside the session — would tear them.
 func (memory *Memory) Read(address uint32, destination []byte) error {
-	memory.mu.RLock()
-	defer memory.mu.RUnlock()
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
 	return memory.readLocked(address, destination, PermissionRead, "read")
 }
 

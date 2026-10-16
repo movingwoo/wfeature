@@ -97,6 +97,13 @@ func TestNativeArgumentContainerSurvivesNestedNativeCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	inner := jvm.AOTMethodMetadata{Name: "inner", Descriptor: "(I)I", AccessFlags: 0x109, NativeBody: innerBody | 1}
+	readBody := uint32(runtime.codeCursor)
+	runtime.codeCursor += 4
+	// ldr r0,[r1]; bx lr: return the argument the container carried.
+	if err := client.core.Memory().Load(readBody, []byte{0x08, 0x68, 0x70, 0x47}); err != nil {
+		t.Fatal(err)
+	}
+	read := jvm.AOTMethodMetadata{Name: "read", Descriptor: "(I)I", AccessFlags: 0x109, NativeBody: readBody | 1}
 	typeInfo, err := jvm.ParseMethodDescriptor("(I)I")
 	if err != nil {
 		t.Fatal(err)
@@ -117,8 +124,21 @@ func TestNativeArgumentContainerSurvivesNestedNativeCall(t *testing.T) {
 		if got, _ := runtime.readWord(outer); got != 55 {
 			t.Fatal("nested call changed its caller's argument")
 		}
-		if got, _ := runtime.readWord(uint32(innerAddress)); got != 99 {
-			t.Fatal("inner argument container was lost")
+		// The container lives as long as the call it carries arguments for:
+		// the inner body read its argument from it, and it was cleared and
+		// given back when that call returned.
+		if got, _ := runtime.readWord(uint32(innerAddress)); got != 0 {
+			t.Fatal("inner argument container outlived its call")
+		}
+		value, _, err = runtime.runAOTMethod(runtime.currentContext, runtime.currentThread, "", read, typeInfo, []uint32{99})
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		if got, _ := value.Int32(); got != 99 {
+			t.Fatalf("inner body read %d from its argument container, want 99", got)
+		}
+		if got, _ := runtime.readWord(outer); got != 55 {
+			t.Fatal("a released inner container was handed out over its caller's")
 		}
 		return args[0], nil
 	}); err != nil {

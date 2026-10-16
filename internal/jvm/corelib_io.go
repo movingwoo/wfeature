@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // The java/io half of the core library. The streams are the surface a game
@@ -821,7 +822,7 @@ func dataInputReadFully(call *Invocation, arguments []Value, offset, length int3
 			return VoidValue(), countErr
 		}
 		if count <= 0 {
-			return VoidValue(), guestException("java/io/EOFException",
+			return VoidValue(), guestException(eofExceptionClass,
 				fmt.Sprintf("readFully wanted %d bytes and reached the end after %d", length, filled))
 		}
 		filled += count
@@ -898,6 +899,11 @@ func dataInputSkipBytes(call *Invocation, arguments []Value) (Value, error) {
 	return IntValue(int32(value)), nil
 }
 
+// eofExceptionClass is what every DataInput read raises at the end of its
+// input. A title that reads records until the stream runs out catches it by
+// name, and a plain IOException would go past that handler.
+const eofExceptionClass = "java/io/EOFException"
+
 // dataInputRequired reads one byte and refuses to answer a short stream with a
 // value, because every fixed-width read below is decoding a record whose
 // length the caller already committed to.
@@ -915,7 +921,7 @@ func dataInputRequired(call *Invocation, stream *Object) (int32, error) {
 		return 0, err
 	}
 	if value < 0 {
-		return 0, guestException(IOExceptionClass, "unexpected end of stream")
+		return 0, guestException(eofExceptionClass, "unexpected end of stream")
 	}
 	return value & 0xff, nil
 }
@@ -1664,6 +1670,11 @@ func inputStreamReaderDefinition() ClassDefinition {
 		Access:    AccessPublic,
 		Fields: []FieldDefinition{
 			{Name: "in", Descriptor: "Ljava/io/InputStream;", Access: AccessPrivate},
+			// What one read took from the stream past the character it
+			// answered, for the next read to start from: a byte plus one, and
+			// the low half of a surrogate pair. Zero is nothing held.
+			{Name: "pendingByte", Descriptor: "I", Access: AccessPrivate},
+			{Name: "pendingChar", Descriptor: "C", Access: AccessPrivate},
 		},
 		Methods: []MethodDefinition{
 			{Name: "<init>", Descriptor: "(Ljava/io/InputStream;)V", Access: AccessPublic, Body: inputStreamReaderInit},
@@ -1729,8 +1740,9 @@ func returnFalse(_ *Invocation, _ []Value) (Value, error) {
 }
 
 // maxDecodedSequence is how many bytes one character may be built from before
-// the decoder is taken at its word and a replacement is emitted. Three covers
-// every sequence the charsets this runtime installs produce.
+// the decoder is taken at its word and a replacement is emitted. Four covers
+// every sequence the charsets this runtime installs produce, the longest being
+// UTF-8's for a character outside the basic plane.
 const maxDecodedSequence = 4
 
 func inputStreamReaderInit(call *Invocation, arguments []Value) (Value, error) {
@@ -1775,6 +1787,14 @@ func inputStreamReaderSource(vm *VM, reader *Object) (*Object, error) {
 }
 
 // inputStreamReaderRead answers one character, or -1 at the end of the stream.
+//
+// A byte that does not finish a character leaves the decoder answering one of
+// two ways: a lone replacement while it still waits for more, or a replacement
+// followed by more text when the bytes before were a sequence it cannot read
+// and this byte begins the next character. The second answers the replacement
+// and keeps the byte for the next read, instead of reading on and swallowing
+// the text after a stray byte. A character outside the basic plane is two
+// units, and the second one waits for the next read the same way.
 func inputStreamReaderRead(call *Invocation, arguments []Value) (Value, error) {
 	reader, err := requireObject(arguments, 0)
 	if err != nil {
@@ -1784,8 +1804,40 @@ func inputStreamReaderRead(call *Invocation, arguments []Value) (Value, error) {
 	if err != nil {
 		return VoidValue(), err
 	}
+	if unit, err := takeReaderPending(call.vm, reader, "pendingChar", "C"); err != nil || unit != 0 {
+		return IntValue(unit), err
+	}
 	pending := make([]byte, 0, maxDecodedSequence)
-	for len(pending) < maxDecodedSequence {
+	held, err := takeReaderPending(call.vm, reader, "pendingByte", "I")
+	if err != nil {
+		return VoidValue(), err
+	}
+	if held != 0 {
+		pending = append(pending, byte(held-1))
+	}
+	for {
+		if len(pending) > 0 {
+			decoded := []rune(call.vm.decodePlatformBytes(pending))
+			if len(decoded) == 1 && decoded[0] != utf8.RuneError {
+				units := utf16.Encode(decoded)
+				if len(units) == 2 {
+					if err := call.vm.SetField(reader, InputStreamReaderClass, "pendingChar", "C", IntValue(int32(units[1]))); err != nil {
+						return VoidValue(), err
+					}
+				}
+				return IntValue(int32(units[0])), nil
+			}
+			if len(decoded) > 1 {
+				next := int32(pending[len(pending)-1]) + 1
+				if err := call.vm.SetField(reader, InputStreamReaderClass, "pendingByte", "I", IntValue(next)); err != nil {
+					return VoidValue(), err
+				}
+				return IntValue(0xfffd), nil
+			}
+			if len(pending) >= maxDecodedSequence {
+				return IntValue(0xfffd), nil
+			}
+		}
 		result, readErr := call.InvokeVirtual(source, "read", "()I")
 		if readErr != nil {
 			return VoidValue(), readErr
@@ -1803,12 +1855,21 @@ func inputStreamReaderRead(call *Invocation, arguments []Value) (Value, error) {
 			return IntValue(0xfffd), nil
 		}
 		pending = append(pending, byte(value))
-		units := utf16.Encode([]rune(call.vm.decodePlatformBytes(pending)))
-		if len(units) == 1 && units[0] != 0xfffd {
-			return IntValue(int32(units[0])), nil
-		}
 	}
-	return IntValue(0xfffd), nil
+}
+
+// takeReaderPending answers what a reader held over from its last read in one
+// of its pending fields, and empties the field.
+func takeReaderPending(vm *VM, reader *Object, name, descriptor string) (int32, error) {
+	value, err := vm.Field(reader, InputStreamReaderClass, name, descriptor)
+	if err != nil {
+		return 0, err
+	}
+	held, err := value.Int32()
+	if err != nil || held == 0 {
+		return 0, err
+	}
+	return held, vm.SetField(reader, InputStreamReaderClass, name, descriptor, IntValue(0))
 }
 
 func inputStreamReaderReadRange(call *Invocation, arguments []Value) (Value, error) {

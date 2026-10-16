@@ -406,6 +406,9 @@ func (runtime *initializationRuntime) allocateAOTObject(metadata jvm.AOTClassMet
 			if err != nil {
 				return 0, fmt.Errorf("allocate KTF string content: %w", err)
 			}
+			// Only this payload names the array until the String is written,
+			// and allocating the String can run a collection.
+			defer runtime.holdAllocationRoot(arrayAddress)()
 			binary.LittleEndian.PutUint32(payload[0:], arrayAddress)
 			binary.LittleEndian.PutUint32(payload[4:], 0)
 			binary.LittleEndian.PutUint32(payload[8:], uint32(len(units)))

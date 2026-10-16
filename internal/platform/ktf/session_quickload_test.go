@@ -107,7 +107,7 @@ func TestSessionQuickLoadGivesAKeptFileTheSaveAsItIs(t *testing.T) {
 // A File opened to be rewritten holds only what the title wrote through it. A
 // load gives it back at most that much, so what the restored title writes is
 // never followed by the tail of a save it did not write; and the load itself
-// does not carry out the emptying, which is the title's to do or not.
+// changes no save. The emptying was stored by the truncating open itself.
 func TestSessionQuickLoadNeverHandsAnEmptiedFileANewerTail(t *testing.T) {
 	const first, second, third, fourth = 0x11111111, 0x22222222, 0x33333333, 0x44444444
 	partB := func(progress uint32) []byte {
@@ -118,9 +118,10 @@ func TestSessionQuickLoadNeverHandsAnEmptiedFileANewerTail(t *testing.T) {
 			fixture := startSaveFixture(t, variant)
 			fixture.press(testfixture.KTFSaveActionSave, first)
 			fixture.press(testfixture.KTFSaveActionTruncate, 0)
-			// Opening to rewrite stores nothing, and neither does the quick save.
+			// Opening to rewrite stores the empty file at the open, and the quick
+			// save stores nothing more.
 			checkpoint := fixture.quickSave()
-			fixture.expectStored("after the quick save", testfixture.KTFSaveContent(first))
+			fixture.expectStored("after the quick save", []byte{})
 
 			fixture.press(testfixture.KTFSaveActionFinish, second)
 			fixture.expectStored("after the running title finished", partB(second))

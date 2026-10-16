@@ -335,7 +335,8 @@ func (heap *checkpointHeap) restoreNative(p jvm.HeapExternalPayload) (any, error
 		if err := decodeNativeCheckpoint(p, &s, 2); err != nil {
 			return nil, err
 		}
-		n := &gameCanvasData{graphics: refs[1], suppressKeys: s.SuppressKeys, keyStates: s.KeyStates}
+		held, latched := splitGameCanvasKeyRecord(s.KeyStates)
+		n := &gameCanvasData{graphics: refs[1], suppressKeys: s.SuppressKeys, keyStates: held, latchedKeys: latched}
 		heap.fixups = append(heap.fixups, func() error {
 			var err error
 			n.buffer, err = checkpointNative[imageData](refs[0])

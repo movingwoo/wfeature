@@ -359,6 +359,8 @@ func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *
 		if allocationErr != nil {
 			return jvm.VoidValue(), runs, fmt.Errorf("allocate KTF AOT native argument container: %w", allocationErr)
 		}
+		// After the body and any handler it resumes into have returned.
+		defer runtime.releaseArgumentContainer(container, len(rawArguments))
 		arguments = []uint32{0, container}
 	} else if body == 0 {
 		return jvm.VoidValue(), runs, fmt.Errorf("KTF AOT method body is null")
@@ -366,6 +368,23 @@ func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *
 
 	run, callErr := runtime.client.core.Call(ctx, thread, body, ReturnAddress, arguments, runtime.handleSupervisorCall)
 	return runtime.completeAOTMethod(ctx, thread, methodType, entryHandler, run, callErr)
+}
+
+// releaseArgumentContainer gives back the container a native-form call's
+// arguments travelled in, once that call has returned. Every runtime class
+// method is native-form, so a container that kept its arena lifetime was a
+// leak on every platform call that took this path. The body reads its
+// arguments while it runs, which is the lifetime an argument has on the
+// caller's stack. The words are cleared first, as a collected object's are: a
+// stale one would read as a live reference to the next scan.
+func (runtime *initializationRuntime) releaseArgumentContainer(container uint32, words int) {
+	size := alignArenaSize(uint64(words) * 4)
+	if err := runtime.client.core.Memory().Write(container, make([]byte, size)); err != nil {
+		// Left allocated rather than handed out with whatever it held.
+		runtime.client.log("KTF argument container not released", "address", fmt.Sprintf("%#x", container), "error", err)
+		return
+	}
+	runtime.arena.release(container, size)
 }
 
 func (runtime *initializationRuntime) completeAOTMethod(ctx context.Context, thread *armcore.Thread, methodType jvm.MethodDescriptor, entryHandler uint32, run armcore.RunSummary, callErr error) (jvm.Value, []armcore.RunSummary, error) {

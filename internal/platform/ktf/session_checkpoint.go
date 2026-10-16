@@ -78,6 +78,12 @@ func (session *Session) CaptureCheckpointWithSession(ctx context.Context, captur
 			return backend.Checkpoint{}, err
 		}
 	}
+	// An Image or Clip the title dropped keeps its entry until a round prunes
+	// it, and an owner Go has collected cannot be named in the record. The
+	// capture prunes what the next round would, rather than refusing.
+	if client.runtime != nil {
+		client.runtime.collectHostResources()
+	}
 	saved, err := client.captureClientStateAt(now)
 	if err != nil {
 		return backend.Checkpoint{}, err

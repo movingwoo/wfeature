@@ -1607,7 +1607,8 @@ func runtimeDisplayCallSerially(runtime *initializationRuntime, _ *jvm.VM, argum
 // then indexes its own table by the answer is handed the key code straight
 // back for every pair only the reverse knew, and a key code here is negative.
 // Deriving both directions from one list is what stops the two disagreeing
-// again; see docs/ktf.md on what a title did with the answer.
+// again; see docs/history/ktf.md, "A game action is a subscript, and only one
+// direction of the table knew it", on what a title did with the answer.
 var runtimeDisplayActions = []struct{ action, key int32 }{
 	{1, KeyUp},
 	{2, KeyLeft},
@@ -2119,11 +2120,21 @@ func runtimeImageCreateSized(runtime *initializationRuntime, _ *jvm.VM, argument
 		"mutable:Z":          jvm.IntValue(1),
 		"guestFramebuffer:I": jvm.IntValue(int32(handle)),
 	}}
+	runtime.trackImageSurface(image, handle)
+	return jvm.ReferenceValue(image), nil
+}
+
+// trackImageSurface ties a framebuffer this platform made for an Image to that
+// Image, so collectHostResources gives it back to the arena when the Image
+// dies. Every framebuffer that ends up in an Image's guestFramebuffer field
+// comes through here: one made by createImage(int, int), one a decoded image
+// is rasterized into on first use, and the copy createImage(Image) and
+// createSubImage make.
+func (runtime *initializationRuntime) trackImageSurface(image *jvm.Object, handle uint32) {
 	if runtime.imageSurfaces == nil {
 		runtime.imageSurfaces = make(map[weak.Pointer[jvm.Object]]uint32)
 	}
 	runtime.imageSurfaces[weak.Make(image)] = handle
-	return jvm.ReferenceValue(image), nil
 }
 
 // runtimeImageFromEncoded decodes encoded image bytes into an Image object

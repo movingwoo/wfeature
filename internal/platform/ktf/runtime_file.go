@@ -15,6 +15,10 @@ type runtimeGuestFile struct {
 	name     string
 	data     []byte
 	position int
+	// seen is the count of writes under this path that data already holds;
+	// see fileState. A restored File starts at zero and so keeps what the
+	// load gave it until something is written after the load.
+	seen uint64
 	// truncated says the open itself asked for an empty file: mode 3, which
 	// opens a name to rewrite it. Everything in data was written through this
 	// object, which is what a quick load needs to know about it: it gives such
@@ -30,6 +34,107 @@ type runtimeGuestFile struct {
 }
 
 const maxGuestFileBytes = 4 << 20
+
+// guestFileBatch is one guest DataOutputStream call's File writes, held until
+// the call returns.
+//
+// A DataOutputStream writes every fixed-width value a byte at a time through
+// the stream under it, and every File write stores the whole file: a locked,
+// synced and renamed write per byte, so a save of a few hundred ints made a
+// thousand of them and stalled the title for seconds. The writes one guest
+// call makes are held in memory instead, where every reader already finds
+// them, and stored together as the call returns — still before the guest's
+// call returns, which is the point every write here is stored at. A store the
+// call cannot make throws the IOException a refused write has always thrown,
+// and leaves each file as it was before the call.
+//
+// The batch belongs to the guest thread whose call opened it. Any other
+// platform call that thread makes before the batch closes — a title's own
+// stream under the DataOutputStream can make one, and one can park the thread
+// — stores what is held first, so nothing held outlives the guest's own call
+// into the platform or is held at a boundary a checkpoint is taken at.
+type guestFileBatch struct {
+	owner   *guestWorker
+	pending []heldGuestFile
+	failure error
+}
+
+// heldGuestFile is a file a batch holds writes for, with what it was before
+// the first of them so a refused store can put it back.
+type heldGuestFile struct {
+	state        *runtimeGuestFile
+	data         []byte
+	position     int
+	shared       []byte
+	sharedExists bool
+}
+
+// enterGuestFileCall runs as a guest platform call enters. A runtime Java
+// call into DataOutputStream opens a batch, and the function it answers closes
+// it, storing what the call wrote and reporting a store that failed; any
+// other call answers a function that does nothing.
+func (runtime *initializationRuntime) enterGuestFileCall(category, id uint32) func() error {
+	if batch := runtime.fileBatch; batch != nil {
+		if batch.owner == runtime.client.activeWorker {
+			runtime.storeGuestFileBatch(batch)
+		}
+		return func() error { return nil }
+	}
+	if category != svcCategoryRuntimeJava {
+		return func() error { return nil }
+	}
+	if invocation, ok := runtime.nativeMethods[id]; !ok || invocation.method.class != "java/io/DataOutputStream" {
+		return func() error { return nil }
+	}
+	batch := &guestFileBatch{owner: runtime.client.activeWorker}
+	runtime.fileBatch = batch
+	return func() error {
+		runtime.storeGuestFileBatch(batch)
+		runtime.fileBatch = nil
+		return batch.failure
+	}
+}
+
+// holdGuestFileWrite reports whether a write to this file is held by the
+// batch the current guest thread has open, and starts holding the file if it
+// is the first write to it.
+func (runtime *initializationRuntime) holdGuestFileWrite(state *runtimeGuestFile) bool {
+	batch := runtime.fileBatch
+	if batch == nil || batch.owner != runtime.client.activeWorker {
+		return false
+	}
+	for _, held := range batch.pending {
+		if held.state == state {
+			return true
+		}
+	}
+	shared, exists := runtime.guestFiles[guestFileKey(state.name)]
+	batch.pending = append(batch.pending, heldGuestFile{state: state, data: state.data, position: state.position, shared: shared, sharedExists: exists})
+	return true
+}
+
+// storeGuestFileBatch stores every file the batch holds writes for. After a
+// store fails, that file and every one after it is put back as it was before
+// the batch's writes, which is what a refused write leaves.
+func (runtime *initializationRuntime) storeGuestFileBatch(batch *guestFileBatch) {
+	for _, held := range batch.pending {
+		if batch.failure == nil {
+			if err := runtime.storeGuestFile(held.state.name, held.state.data); err != nil {
+				batch.failure = err
+			}
+		}
+		if batch.failure == nil {
+			continue
+		}
+		held.state.data, held.state.position = held.data, held.position
+		if held.sharedExists {
+			runtime.guestFiles[guestFileKey(held.state.name)] = held.shared
+		} else {
+			delete(runtime.guestFiles, guestFileKey(held.state.name))
+		}
+	}
+	batch.pending = batch.pending[:0]
+}
 
 func runtimeFileClassDefinition() runtimeJavaClass {
 	const class = "org/kwis/msp/io/File"
@@ -230,6 +335,54 @@ func runtimeFileSystemUnlink(runtime *initializationRuntime, _ *jvm.VM, argument
 	return jvm.VoidValue(), nil
 }
 
+// fileState answers an open File's state brought up to what the session last
+// wrote under its name, so a write through another File on the same path is
+// what every later read through this one sees (the common save rule's first
+// point). A File keeps its own copy only of a path nothing has written since
+// it was opened, and of a path removed since: an open handle keeps reading
+// what it had.
+func (runtime *initializationRuntime) fileState(arguments []jvm.Value) (*jvm.Object, *runtimeGuestFile, error) {
+	receiver, state, err := runtimeFileState(arguments)
+	if err == nil && state != nil {
+		key := guestFileKey(state.name)
+		if writes := runtime.guestFileWrites[key]; writes > state.seen {
+			if data, ok := runtime.guestFiles[key]; ok {
+				state.data = data
+			}
+			state.seen = writes
+		}
+	}
+	return receiver, state, err
+}
+
+// guestFileKey is the form guestFiles keys a path in: without its leading
+// slash, which is how the store and the removal list name it too, so "/a" and
+// "a" are one file here as they are there.
+func guestFileKey(name string) string {
+	return strings.TrimPrefix(name, "/")
+}
+
+// setGuestFile records what the session last wrote under a path. The slice is
+// never written in place afterwards, so an open File may share it.
+func (runtime *initializationRuntime) setGuestFile(name string, data []byte) {
+	runtime.restoreGuestFile(name, data)
+	if runtime.guestFileWrites == nil {
+		runtime.guestFileWrites = make(map[string]uint64)
+	}
+	runtime.guestFileWrites[guestFileKey(name)]++
+}
+
+// restoreGuestFile records a path's content without counting it as a write,
+// which is what a rebind from the store is: the Files a load restored keep
+// what the load gave them.
+func (runtime *initializationRuntime) restoreGuestFile(name string, data []byte) {
+	if runtime.guestFiles == nil {
+		runtime.guestFiles = make(map[string][]byte)
+	}
+	delete(runtime.guestFiles, name)
+	runtime.guestFiles[guestFileKey(name)] = data
+}
+
 func runtimeFileState(arguments []jvm.Value) (*jvm.Object, *runtimeGuestFile, error) {
 	if len(arguments) < 1 {
 		return nil, nil, fmt.Errorf("File method expected receiver")
@@ -297,7 +450,21 @@ func runtimeFileConstructor(runtime *initializationRuntime, _ *jvm.VM, arguments
 	if exists && mode != 3 {
 		state.data = append([]byte(nil), data...)
 	}
+	if mode == 3 || !exists {
+		// A truncating open empties the file at the open, in the store as
+		// well as for every later read, which is the common save rule (see
+		// docs/architecture.md, "One save rule"). A title that opens to
+		// rewrite and closes without writing therefore has an empty file, as
+		// on a handset, and a store that refuses the emptying fails the open.
+		// Opening a missing file for writing creates it the same way: an
+		// empty file, there for the next open whatever the title writes.
+		if err := runtime.storeGuestFile(name, []byte{}); err != nil {
+			return jvm.VoidValue(), newGuestIOException(err.Error())
+		}
+		runtime.setGuestFile(name, []byte{})
+	}
 	state.truncated = mode == 3
+	state.seen = runtime.guestFileWrites[guestFileKey(name)]
 	receiver.Native = state
 	return jvm.VoidValue(), nil
 }
@@ -309,8 +476,8 @@ func newGuestIOException(message string) error {
 	}
 }
 
-func runtimeFileRead(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, state, err := runtimeFileState(arguments)
+func runtimeFileRead(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	_, state, err := runtime.fileState(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -365,7 +532,7 @@ func runtimeFileRead(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value)
 }
 
 func runtimeFileWrite(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, state, err := runtimeFileState(arguments)
+	_, state, err := runtime.fileState(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -405,19 +572,21 @@ func runtimeFileWrite(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm
 	staged := make([]byte, max(end, len(state.data)))
 	copy(staged, state.data)
 	copy(staged[state.position:], data)
-	if err := runtime.storeGuestFile(state.name, staged); err != nil {
-		return jvm.VoidValue(), newGuestIOException(err.Error())
+	// Inside a guest DataOutputStream call the store waits for the call to
+	// return; see guestFileBatch.
+	if !runtime.holdGuestFileWrite(state) {
+		if err := runtime.storeGuestFile(state.name, staged); err != nil {
+			return jvm.VoidValue(), newGuestIOException(err.Error())
+		}
 	}
 	state.data, state.position = staged, end
-	if runtime.guestFiles == nil {
-		runtime.guestFiles = make(map[string][]byte)
-	}
-	runtime.guestFiles[state.name] = append([]byte(nil), staged...)
+	runtime.setGuestFile(state.name, staged)
+	state.seen = runtime.guestFileWrites[guestFileKey(state.name)]
 	return jvm.IntValue(int32(len(data))), nil
 }
 
-func runtimeFileSeek(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, state, err := runtimeFileState(arguments)
+func runtimeFileSeek(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	_, state, err := runtime.fileState(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -438,23 +607,23 @@ func runtimeFileSeek(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value)
 	return jvm.VoidValue(), nil
 }
 
-func runtimeFileTell(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, state, err := runtimeFileState(arguments)
+func runtimeFileTell(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	_, state, err := runtime.fileState(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
 	return jvm.IntValue(int32(state.position)), nil
 }
 
-func runtimeFileClose(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	if _, _, err := runtimeFileState(arguments); err != nil {
+func runtimeFileClose(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	if _, _, err := runtime.fileState(arguments); err != nil {
 		return jvm.VoidValue(), err
 	}
 	return jvm.VoidValue(), nil
 }
 
-func runtimeFileSize(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, state, err := runtimeFileState(arguments)
+func runtimeFileSize(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	_, state, err := runtime.fileState(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -462,8 +631,8 @@ func runtimeFileSize(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value)
 }
 
 func runtimeFileOpenStream(_ string) runtimeJavaImplementation {
-	return func(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-		_, state, err := runtimeFileState(arguments)
+	return func(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		_, state, err := runtime.fileState(arguments)
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
@@ -485,8 +654,8 @@ func runtimeFileInputStreamClassDefinition() runtimeJavaClass {
 		}}
 }
 
-func runtimeFileStreamAvailable(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, state, err := runtimeFileState(arguments)
+func runtimeFileStreamAvailable(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	_, state, err := runtime.fileState(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -525,8 +694,8 @@ func runtimeFileStreamWrite(write runtimeJavaImplementation) runtimeJavaImplemen
 	}
 }
 
-func runtimeFileOpenOutputStream(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, state, err := runtimeFileState(arguments)
+func runtimeFileOpenOutputStream(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	_, state, err := runtime.fileState(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -559,8 +728,8 @@ func runtimeFileOpenDataStream(runtime *initializationRuntime, vm *jvm.VM, argum
 
 // runtimeFileReadByte reads one byte at the file position, answering -1 at the
 // end of the file like the stream API it mirrors.
-func runtimeFileReadByte(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	_, state, err := runtimeFileState(arguments)
+func runtimeFileReadByte(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	_, state, err := runtime.fileState(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -628,10 +797,7 @@ func runtimeFileSystemRename(runtime *initializationRuntime, _ *jvm.VM, argument
 	if err := runtime.saveChanges(map[string][]byte{"fs/" + strings.TrimPrefix(to, "/"): data}, guestFileRemovedKey, runtime.removedGuestFiles(), map[string]bool{strings.TrimPrefix(from, "/"): true, strings.TrimPrefix(to, "/"): false}); err != nil {
 		return jvm.VoidValue(), newGuestIOException(err.Error())
 	}
-	if runtime.guestFiles == nil {
-		runtime.guestFiles = make(map[string][]byte)
-	}
-	runtime.guestFiles[strings.TrimPrefix(to, "/")] = append([]byte(nil), data...)
+	runtime.setGuestFile(to, append([]byte(nil), data...))
 	// The old name is deleted, which is the same problem unlink has: the save
 	// underneath it outlives the rename unless the removal is written down.
 	delete(runtime.guestFiles, from)

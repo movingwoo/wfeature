@@ -67,8 +67,10 @@ func throwableGetMessage(_ *Invocation, arguments []Value) (Value, error) {
 	if err != nil {
 		return VoidValue(), err
 	}
-	message, _ := object.Native.(string)
-	if message == "" {
+	// A throwable built without a message holds none and answers null; one
+	// built with "" holds that, and answers it.
+	message, ok := object.Native.(string)
+	if !ok {
 		return ReferenceValue(nil), nil
 	}
 	return ReferenceValue(nativeStringValue(message)), nil
@@ -83,7 +85,7 @@ func throwableToString(_ *Invocation, arguments []Value) (Value, error) {
 		return VoidValue(), err
 	}
 	text := javaClassName(object.ClassName)
-	if message, _ := object.Native.(string); message != "" {
+	if message, ok := object.Native.(string); ok {
 		text += ": " + message
 	}
 	return ReferenceValue(nativeStringValue(text)), nil

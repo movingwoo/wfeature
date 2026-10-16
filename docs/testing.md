@@ -256,6 +256,8 @@ engines, and pass a debug server where a route asks for the other profile.
 | `gamepad.mjs` | `SERVER` | [Game controllers](#game-controllers) |
 | `android-gamepad.mjs` | `REGISTER.json` | [The Android app on an emulator](#the-android-app-on-an-emulator) |
 | `ios-gamepad.mjs` (no Playwright) | none; `IOS_RUNTIME` | [The iOS app on a simulator](#the-ios-app-on-a-simulator) |
+| `android-lifecycle.mjs` (no Playwright) | none; `ANDROID_SERIAL`, `ADB` | [The Android app's lifecycle on an emulator](#the-android-apps-lifecycle-on-an-emulator) |
+| `ios-lifecycle.mjs` (no Playwright) | none; `IOS_RUNTIME`, `IOS_APP_SWIFT` | [The iOS app on a simulator](#the-ios-app-on-a-simulator) |
 | `fullscreen.mjs` | `SERVER` | [Full-screen layout](#full-screen-layout) |
 | `frame-delivery.mjs` | `SERVER`; `WFEATURE_FRAME_ARCHIVE` | [Frame delivery](#frame-delivery) |
 | `checkpoint-skt.mjs` | `SERVER` | [SKT execution checkpoints](#skt-execution-checkpoints) |
@@ -433,6 +435,57 @@ to the view), on the phone's motor, because the app had no `VIBRATE`
 permission. In both builds the first press after a page load or a connection
 never showed the controller to the page, so the script presses Home first.
 
+### The Android app's lifecycle on an emulator
+
+The activity's half of [leaving the screen](mobile.md#when-the-app-leaves-the-screen)
+is checked on the same emulator. The script changes the rotation, the display's
+handling of the orientation request, the density, the display size, the night
+mode and the font scale, one at a time and back, and puts every setting back as
+it found it even when a check fails. It then finishes the activity with BACK:
+
+```sh
+make mobile-android && adb install -r mobile/android/build/wfeature.apk
+node web/acceptance/android-lifecycle.mjs
+```
+
+Uninstall the image's own copy of the app only once the device has settled
+after boot (no package installs for a minute and a half), and confirm that
+`/sdcard/Android/data/com.movingwoo.wfeature` is gone before installing. An
+uninstall right after boot can leave that directory owned by the old copy's
+uid; the new install then can neither read its game list nor write a save, and
+the drain checks fail with nothing wrong in the app.
+
+It needs Node 22 for its WebSocket and does not use Playwright.
+`connectOverCDP` attaches to every page and turns on focus emulation in each,
+which makes the hidden page of a destroyed activity's web view visible again,
+and that page then takes the game back from the new one. The script attaches
+only to the page on the window, and to none while a change is made.
+
+It checks three things:
+
+- each change `configChanges` declares leaves the activity instance, the
+  page's document, its session socket and the server's pid as they were;
+- the font scale, which the manifest does not declare, rebuilds the activity
+  while the server keeps its pid and the new page resumes the game
+  (`session parked`, then `session resumed`);
+- BACK, which finishes a task started with `am start`, ends the server within
+  five seconds of `onDestroy`, and the server's drain closes the game on the
+  way: a record the destroy-save MIDlet's `destroyApp` writes is there after
+  every finish, as after the control, `POST /api/shutdown`.
+
+On 2026-10-16, on the Pixel 10 Pro image of Android 17 (SDK 37) with web view
+155, the app built from this tree passed all fifteen checks in two runs. Every
+BACK finish ended the server 0.1–0.6 s after `onDestroy` with the `destroyApp`
+record written, 6 of 6, as in both controls. Before the server ignored
+SIGPIPE, the record was written in only 5 of 9 finishes: `Process.destroy()`
+closes the pipe the server logs to right after its SIGTERM, and the drain's
+first log line then ended the server. The app from the commit before the
+lifecycle fixes failed the density change and the font scale both ways: a new
+server started each time and the game was gone. It passed the size changes,
+because Android rebuilds an activity for a size change only when the change
+crosses a width or height its resources are qualified by, and the app has none.
+A plain rotation never reached the portrait-only activity.
+
 ### The iOS app on a simulator
 
 The iOS app's half is checked in the simulator with Xcode alone. The script
@@ -466,6 +519,49 @@ starts only with the scene life cycle; without it the script stops with that
 message, and with it the script passed there too. One manual build without
 `takeControllers` showed no controller to the page at all. A simulator does
 not cover a physical controller's pairing.
+
+`ios-lifecycle.mjs` checks [what the app does when it leaves the
+screen](mobile.md#when-the-app-leaves-the-screen) the same way, with its own
+driver (`LifecycleDriver.swift`, `lifecycle-load.c`) beside the unchanged
+`App.swift`. The driver adds `canvas-skt.zip` and `checkpoint-skt.zip` through
+the page's own add-game request and runs a cycle for each: it starts the game
+from inside the page and sets a marker in the page; the script opens Settings,
+waits 25 seconds and opens the app again. The simulator shares the Mac's
+network, so the script reads with `lsof` which process holds `127.0.0.1:11541`,
+asks `/api/status` only while that is the app, and lists the save tree in the
+app's container; RunningBoard's record of the app is kept beside the report.
+`IOS_APP_SWIFT` builds another `App.swift`, for a control run:
+
+```sh
+node web/acceptance/ios-lifecycle.mjs
+IOS_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-26-5 node web/acceptance/ios-lifecycle.mjs
+```
+
+A cycle passes when:
+
+- the page was not loaded again: its marker, time origin and load count are the
+  ones from before;
+- the app's process held the port throughout and answered `/api/status` before
+  and after; while away it answered or, suspended, did not, and the port never
+  closed;
+- the game that came back is the one that was running: the page parked it on
+  `hidden` and resumed it on `visible` over the socket it had, its picture was
+  kept, and the canvas fixture still took a key;
+- nothing in the save tree appeared or changed. The checkpoint fixture writes
+  an `XFile` at its start and keeps it open, which only closing the game
+  stores, so its cycle is the one that would see a save made by leaving.
+
+On 2026-10-16 it passed on iOS 27.0 and 26.5. iOS suspended the app within six
+seconds of leaving, except in a cycle where WebKit's own background task kept it
+running until the return; either way it came back as the same process with its
+port open. A control build that drained the server 15 seconds after leaving and
+started it again on the return failed it on both runtimes: the page was loaded
+again and the game was gone, and in the checkpoint cycle the port closed about
+15 seconds after leaving and `skt/Checkpoint Fixture/fs/checkpoint`, the three
+bytes the game had not closed, appeared in the save tree. While the app runs,
+`127.0.0.1:11541` on the Mac is the app's: a desktop server on that port keeps
+its connections, but new IPv4 loopback ones reach the app. A simulator does not
+cover iOS ending a suspended app on a phone.
 
 ## Full-screen layout
 
@@ -1015,9 +1111,10 @@ bundled in these tests.
 The [2026-10-07 review](quicksave-review-2026-10-07.md) records eight reproduced
 defects and their fixes. Regressions cover:
 
-- SKT stale or independently dirty file aliases, deletion, failed writes and
-  opens before pending writes reach disk; refusal preserves every buffer and
-  occurs before any checkpoint flush.
+- SKT files shared per path: a quick step stores every dirty path's current
+  content, a refused write refuses the step and keeps the file dirty, deletion
+  and failed writes, and handles restored from a checkpoint taken when each
+  handle kept its own buffer bind onto one file per path.
 - LGT File/DataBase collisions and unreadable path lists; refusal preserves
   issued writes and the live Clet stays usable after a checkpoint read fault.
 - SKT RMS close after a later deletion, subsequent record mutations and
@@ -1099,7 +1196,7 @@ reserved directory included.
 | --- | --- |
 | `TestQuickLoadKeepsTheGamesSaves` | Quick save, a save in the game, load. The later save is byte-identical and the load made no store write; the guest's progress word is the quick save's; the game reads the later save; a patch lands on it and keeps its other part. Run over the running game, where the displaced runtime must be cut off, and into a session that never ran the title. |
 | `TestQuickLoadTwiceLeavesTheSameSaves` | Two loads in a row write nothing and change nothing. |
-| `TestQuickSaveStoresOnlyWhatTheGameIssued` | With a part written through a file still open, a quick save makes exactly one store write where that part was pending (LGT files, the native package) and none where the platform had stored it or it is still in an unflushed stream. A second quick save writes nothing. |
+| `TestQuickSaveStoresOnlyWhatTheGameIssued` | With a part written through a file still open, a quick save makes exactly one store write where that part was pending (LGT files and streams on a `File`, the native package) and none where the platform had stored it. A second quick save writes nothing. |
 | `TestQuickLoadStoresTheRunningGamesIssuedWritesFirst` | The same pending part is on disk after a load, and the restored game reads it. |
 | `TestRefusedQuickStepsKeepTheRunningGamesWrites` | A store that refuses writes refuses the quick save or the load with `ErrCheckpointSaveWrite`; nothing on disk changed; the same session is running; its pending write is finished by the game's next key; the step succeeds once the store takes writes. |
 | `TestRefusedQuickLoadRevertsNothing` | A save the load has to read and cannot refuses it with `ErrCheckpointSaveRead`, with no store write; the running game saves again and the same load is then accepted. |
@@ -1124,10 +1221,12 @@ it), `session_quickload_test.go` and `storage_rebind_test.go` in
 and undecodable saves, the budget and one read per key, a field-accounting test
 for the storage tables, the running client's lock given back when a store
 panics), and `checkpoint_storage_test.go` in `internal/platform/lgt` (the
-buffer stored at a quick step, the refusal of a buffer behind its save under
-any spelling of its name, two objects of one database with refused stores,
-path lists read again, file streams and `DataBase` objects filled from the
-store, the adapter deriving its disk state again). `TestRebuildReader*` in
+buffer the handles on one path share, stored once at a quick step; the refusal
+of a buffer a `DataBase` stored behind or that has no save key; two objects of
+one database storing one set of records; path lists read again; file streams
+and `DataBase` objects filled from the store, with the bytes a stream held in
+an earlier build's record put into its `File`; the adapter deriving its disk
+state again). `TestRebuildReader*` in
 `internal/backend` cover the reader a load reads through: one read per key, a
 shared budget, and a refused and remembered write.
 
@@ -1342,7 +1441,7 @@ finish through what was kept.
 | `KTFNativeSaveArchive` | KTF native, with a frame callback | file interface | in the written table until the frame ends |
 | `KTFNativeSaveArchiveWithoutFrame` | KTF native, no frame callback | file interface | in the written table until a file or the session is closed |
 | `LGTSaveArchive` | LGT Clet | WIPI-C files | in the handle buffer until the handle is closed |
-| `LGTJavaSaveArchive` | LGT AOT Java | `File`, a stream on a `File`, or `DataBase`, chosen by a guest word | in the handle buffer; in the stream until a flush; nowhere for `DataBase` |
+| `LGTJavaSaveArchive` | LGT AOT Java | `File`, a stream on a `File`, or `DataBase`, chosen by a guest word | in the `File`'s buffer, written there through a stream too, until a close or a stream's flush; nowhere for `DataBase` |
 
 The native interface has no delete, and a record store has no truncating open;
 those actions are absent where the surface has none. Each fixture has tests of

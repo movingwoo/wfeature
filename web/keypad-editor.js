@@ -404,8 +404,12 @@ export const initKeypadEditor = ({
       pick(button.dataset.cell, true);
     }
   });
+  // A resize moves the buttons and changes nothing about which key is where,
+  // so what is held stays held: a finger's next move is measured against the
+  // new places, and its release still arrives. Releasing here also reset rapid
+  // fire, and 전체화면 resizes the board to nothing by hiding the keypad that
+  // shows the 연사 label, so the switch went off where nobody could see it.
   new window.ResizeObserver(() => {
-    releaseInput();
     gesture = null;
     measure();
   }).observe(board);

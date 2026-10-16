@@ -73,11 +73,13 @@ func TestPlayingAndStoppingAGameLeavesNoGoroutinesBehind(t *testing.T) {
 		if err := connection.WriteText(`{"kind":"stop"}`); err != nil {
 			t.Fatalf("stop: %v", err)
 		}
-		// A stop is not acknowledged, so the acknowledgement is the next
-		// request: commands are handled in the order they arrive, so an answer
-		// to this one is the session saying it is past the stop.
-		if err := connection.WriteText(`{"kind":"report","id":1}`); err != nil {
-			t.Fatalf("report: %v", err)
+		// A stop without an id is not acknowledged, so the acknowledgement is
+		// the next request: commands are handled in the order they arrive, so
+		// an answer to this one is the session saying it is past the stop. It
+		// is a second stop rather than a report because a release build
+		// refuses a report, and the answer has to be the same in both.
+		if err := connection.WriteText(`{"kind":"stop","id":1}`); err != nil {
+			t.Fatalf("acknowledged stop: %v", err)
 		}
 		expectMessage(t, connection, serverResult)
 	}

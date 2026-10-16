@@ -281,6 +281,10 @@ type initializationRuntime struct {
 	// It releases guest memory, and a release is not an allocation, so this only
 	// ever fires if a future edit makes one. See collect.go.
 	collecting bool
+	// allocationRoots are objects the Host has just made and holds only as an
+	// address while it allocates the object that will name them; see
+	// holdAllocationRoot in collect.go.
+	allocationRoots []uint32
 	// inputModeTableAddress is the `M_Char **` the input-method table answers
 	// with; see wipic_im.go. It is built once and kept.
 	inputModeTableAddress uint32
@@ -330,6 +334,11 @@ type initializationRuntime struct {
 	pendingTimers         []wipicTimer
 	cameraBoundsStore     uint32
 	menuTextCompatibility bool
+	// roundTimers is the part of a timer service round's batch it has not
+	// reached yet. Those entries are out of pendingTimers while the round
+	// runs, so a cancel or a re-arm made from a callback has to find them
+	// here; a cancelled entry is zeroed, which the round skips.
+	roundTimers []wipicTimer
 	// pendingNetCallbacks are the MC_netConnect failures owed to callers that
 	// registered one; see wipic_net.go.
 	relayOnline         bool
@@ -380,10 +389,17 @@ type initializationRuntime struct {
 	// never repeated by a second Host close.
 	destroyCallbackStarted bool
 	guestFiles             map[string][]byte
+	// guestFileWrites counts the writes this session made under each path,
+	// so an open File knows whether another File has written since it last
+	// looked (see fileState). A rebind from the store is not a write.
+	guestFileWrites map[string]uint64
 	// removedFiles is the set of paths unlink has deleted, loaded from the
 	// store on first use. See guestFileRemovedKey for why a delete needs a
 	// list of its own.
 	removedFiles map[string]bool
+	// fileBatch holds the File writes one guest DataOutputStream call makes
+	// until that call returns; see guestFileBatch in runtime_file.go.
+	fileBatch *guestFileBatch
 	// removedDatabaseLists holds the deletion lists the two storage tables
 	// keep, by save key. See recordDatabaseRemovals in wipic_record_database.go.
 	removedDatabaseLists map[string]map[string]bool
@@ -946,6 +962,9 @@ func (runtime *initializationRuntime) handleSupervisorCall(ctx context.Context, 
 	defer func() {
 		runtime.currentThread, runtime.currentContext = previousThread, previousContext
 	}()
+	// A guest DataOutputStream call holds its File writes until it returns;
+	// see guestFileBatch.
+	finishFileBatch := runtime.enterGuestFileCall(call.Immediate, id)
 	var result uint32
 	switch call.Immediate {
 	case svcCategoryCameraBounds:
@@ -982,6 +1001,12 @@ func (runtime *initializationRuntime) handleSupervisorCall(ctx context.Context, 
 		}
 	case svcCategoryRuntimeJava:
 		result, err = runtime.handleRuntimeJavaCall(thread, id)
+		if storeErr := finishFileBatch(); storeErr != nil && err == nil {
+			// The call's writes were not stored, so it throws what a write
+			// the store refused has always thrown.
+			guest, _ := newGuestIOException(storeErr.Error()).(*jvm.GuestException)
+			result, err = 0, runtime.raiseGuestException(thread, guest)
+		}
 		var unwind *aotExceptionUnwind
 		if errors.As(err, &unwind) {
 			return runtime.resumeAOTException(thread, unwind)
@@ -2050,7 +2075,10 @@ func (runtime *initializationRuntime) wipicSetTimer(thread *armcore.Thread) (uin
 	// handed to a service round is not in the queue at all -- ServiceTimers
 	// takes the whole slice and re-queues what it did not run -- so a callback
 	// that re-arms itself while it is running still queues one entry, which is
-	// the timer it just asked for.
+	// the timer it just asked for. A record later in that round's batch is
+	// the same timer as well: its stale entry is cancelled there, and the
+	// re-arm is queued like any other.
+	runtime.cancelRoundTimers(func(timer wipicTimer) bool { return timer.task == nil && timer.pointer == pointer })
 	for index, timer := range runtime.pendingTimers {
 		if timer.task == nil && timer.pointer == pointer {
 			runtime.pendingTimers[index] = armed
@@ -2076,7 +2104,32 @@ func (runtime *initializationRuntime) wipicUnsetTimer(thread *armcore.Thread) (u
 		}
 	}
 	runtime.pendingTimers = remaining
+	runtime.cancelRoundTimers(func(timer wipicTimer) bool { return timer.pointer == pointer })
 	return 0, nil
+}
+
+// cancelRoundTimers zeroes the entries a running timer round has still to
+// reach that a predicate selects, and reports how many it cancelled. The
+// round skips a zeroed entry and does not queue it again.
+func (runtime *initializationRuntime) cancelRoundTimers(match func(wipicTimer) bool) int {
+	cancelled := 0
+	for index, timer := range runtime.roundTimers {
+		if (timer.callback != 0 || timer.task != nil) && match(timer) {
+			runtime.roundTimers[index] = wipicTimer{}
+			cancelled++
+		}
+	}
+	return cancelled
+}
+
+// requeueTimers puts the entries a round did not reach back on the queue,
+// leaving out the ones a callback cancelled meanwhile.
+func (runtime *initializationRuntime) requeueTimers(rest []wipicTimer) {
+	for _, timer := range rest {
+		if timer.callback != 0 || timer.task != nil {
+			runtime.pendingTimers = append(runtime.pendingTimers, timer)
+		}
+	}
 }
 
 // wipicZeroFill is the run of zero bytes an allocation is cleared with. It is

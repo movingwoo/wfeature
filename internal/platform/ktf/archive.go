@@ -398,6 +398,16 @@ func readZIP(data []byte, label string) (map[string][]byte, error) {
 			return nil, fmt.Errorf("%s contains unsafe entry: %w", label, err)
 		}
 		folded := strings.ToLower(name)
+		if file.UncompressedSize64 > maxEntrySize {
+			return nil, fmt.Errorf("%s entry %q is too large (%d bytes)", label, name, file.UncompressedSize64)
+		}
+		// A duplicate is inflated to be compared, so it is charged like any
+		// other entry: without that, copies of one name, which can all point
+		// at the same compressed data, asked for unbounded decompression.
+		if file.UncompressedSize64 > maxExpandedSize-expanded {
+			return nil, fmt.Errorf("%s expands beyond %d bytes", label, maxExpandedSize)
+		}
+		expanded += file.UncompressedSize64
 		if previous, duplicate := names[folded]; duplicate {
 			// **What a duplicate entry is dangerous for is the ambiguity**:
 			// two entries under one name, and which one a reader takes decides
@@ -414,13 +424,6 @@ func readZIP(data []byte, label string) (map[string][]byte, error) {
 			continue
 		}
 		names[folded] = name
-		if file.UncompressedSize64 > maxEntrySize {
-			return nil, fmt.Errorf("%s entry %q is too large (%d bytes)", label, name, file.UncompressedSize64)
-		}
-		if file.UncompressedSize64 > maxExpandedSize-expanded {
-			return nil, fmt.Errorf("%s expands beyond %d bytes", label, maxExpandedSize)
-		}
-		expanded += file.UncompressedSize64
 		contents, err := readEntry(file)
 		if err != nil {
 			return nil, fmt.Errorf("read %s entry %q: %w", label, name, err)

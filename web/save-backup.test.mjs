@@ -237,3 +237,115 @@ test("a browser still gets the download it knows what to do with", async () => {
   assert.equal(page.created[0].download, `게임${SAVE_BACKUP_EXTENSION}`);
   assert.equal(page.created[0].clicked, 1);
 });
+
+// The iOS app's web view answers window.confirm with "no" and shows nothing,
+// so an import that asked through it never ran there and said nothing. The
+// question is the page's own dialog, and it still has to be answered before
+// anything is sent.
+const dialogPage = () => {
+  const page = pageOf();
+  const listeners = {};
+  const classes = new Set();
+  const button = name => ({
+    textContent: "",
+    focus() {},
+    addEventListener: (kind, handler) => { listeners[`${name}:${kind}`] = handler; },
+    removeEventListener: kind => { delete listeners[`${name}:${kind}`]; },
+  });
+  const dialog = new Map([
+    ["confirm-dialog", { classList: { add: name => classes.add(name), remove: name => classes.delete(name) } }],
+    ["confirm-text", { textContent: "" }],
+    ["confirm-accept", button("accept")],
+    ["confirm-cancel", button("cancel")],
+  ]);
+  const own = page.document.getElementById;
+  Object.assign(page.document, {
+    getElementById: id => dialog.get(id) ?? own(id),
+    querySelector: () => null,
+    addEventListener() {},
+    removeEventListener() {},
+  });
+  return { ...page, listeners, classes, text: dialog.get("confirm-text"), accept: dialog.get("confirm-accept") };
+};
+
+test("an import asks in the page's own dialog rather than through window.confirm", async () => {
+  const original = globalThis.confirm;
+  let browserAsked = 0;
+  globalThis.confirm = () => {
+    browserAsked += 1;
+    return false;
+  };
+  try {
+    for (const accepted of [false, true]) {
+      const page = dialogPage();
+      let posts = 0;
+      const messages = [];
+      initSaveBackup({
+        document: page.document,
+        fetcher: async () => {
+          posts += 1;
+          return ok({ written: 2, removed: 0 });
+        },
+        chosenGame: () => GAME,
+        onStatus: message => messages.push(message),
+      });
+      page.elements.get("save-import-file").files = [new Uint8Array([1])];
+      page.fire("save-import-file", "change");
+      await settle();
+      assert.ok(page.classes.has("visible"), "the page's own question is on screen");
+      assert.match(page.text.textContent, /백업 파일로 되돌립니다/);
+      assert.equal(page.accept.textContent, "가져오기");
+      assert.equal(posts, 0, "nothing is sent before the answer");
+      page.listeners[accepted ? "accept:click" : "cancel:click"]();
+      await settle();
+      assert.equal(posts, accepted ? 1 : 0, accepted ? "a yes restores" : "a no sends nothing");
+      if (accepted) assert.match(messages.at(-1), /세이브 2개를 복원/);
+    }
+  } finally {
+    globalThis.confirm = original;
+  }
+  assert.equal(browserAsked, 0, "window.confirm is never asked");
+});
+
+test("an import with no way to ask sends nothing", async () => {
+  const page = pageOf();
+  let posts = 0;
+  initSaveBackup({
+    document: page.document,
+    fetcher: async () => {
+      posts += 1;
+      return ok({ written: 1, removed: 0 });
+    },
+    chosenGame: () => GAME,
+    onStatus: () => {},
+  });
+  page.elements.get("save-import-file").files = [new Uint8Array([1])];
+  page.fire("save-import-file", "change");
+  await settle();
+  assert.equal(posts, 0, "a page that cannot ask has not been answered");
+});
+
+// A request that never reached the server rejects with the browser's own
+// sentence — "Failed to fetch", "Load failed" — which is English and says
+// nothing a player can act on.
+test("a server that cannot be reached is said in Korean, not in the browser's words", async () => {
+  const unreachable = async () => {
+    throw new TypeError("Failed to fetch");
+  };
+  await assert.rejects(() => exportSave(GAME, unreachable), { message: /^서버에 연결하지 못했습니다/ });
+  await assert.rejects(() => importSave(GAME, new Uint8Array(), unreachable), { message: /^서버에 연결하지 못했습니다/ });
+  const page = pageOf();
+  const messages = [];
+  initSaveBackup({
+    document: page.document,
+    window: {},
+    fetcher: unreachable,
+    chosenGame: () => GAME,
+    onStatus: message => messages.push(message),
+  });
+  page.fire("save-export", "click");
+  await settle();
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /^서버에 연결하지 못했습니다/);
+  assert.doesNotMatch(messages[0], /fetch/i);
+});

@@ -1,6 +1,10 @@
 package lgt
 
-import "errors"
+import (
+	"cmp"
+	"errors"
+	"slices"
+)
 
 // ErrGuestExited reports that the game called MC_knlExit. It is not a failure:
 // a Host stops the session on it the same way it would on a window close.
@@ -92,6 +96,48 @@ func (a *arena) release(address uint32) bool {
 	a.outstanding -= size
 	a.insert(arenaBlock{start: uint64(address), end: uint64(address) + size})
 	return true
+}
+
+// releaseAll returns many blocks at once, ignoring the ones release would. The
+// free list comes out exactly as releasing them one at a time leaves it — the
+// same spans, sorted and joined, whatever order they came in — but from one
+// pass over it rather than one per block. A collection releases two blocks per
+// dead object, and per-block insertion into a fragmented list cost the product
+// of the two counts.
+func (a *arena) releaseAll(addresses []uint32) {
+	blocks := make([]arenaBlock, 0, len(addresses))
+	for _, address := range addresses {
+		size, ok := a.sizes[address]
+		if !ok {
+			continue
+		}
+		delete(a.sizes, address)
+		a.outstanding -= size
+		blocks = append(blocks, arenaBlock{start: uint64(address), end: uint64(address) + size})
+	}
+	if len(blocks) == 0 {
+		return
+	}
+	slices.SortFunc(blocks, func(x, y arenaBlock) int { return cmp.Compare(x.start, y.start) })
+	merged := make([]arenaBlock, 0, len(a.free)+len(blocks))
+	join := func(block arenaBlock) {
+		if last := len(merged) - 1; last >= 0 && merged[last].end == block.start {
+			merged[last].end = block.end
+			return
+		}
+		merged = append(merged, block)
+	}
+	free := a.free
+	for len(free) > 0 || len(blocks) > 0 {
+		if len(blocks) == 0 || len(free) > 0 && free[0].start < blocks[0].start {
+			join(free[0])
+			free = free[1:]
+			continue
+		}
+		join(blocks[0])
+		blocks = blocks[1:]
+	}
+	a.free = merged
 }
 
 // insert adds a block and coalesces it with its neighbours, so repeated

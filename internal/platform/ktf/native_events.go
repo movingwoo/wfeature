@@ -346,18 +346,27 @@ func (platform *NativePlatform) Listeners() []NativeListener { return platform.l
 
 // addListener records a registration against the source it was made on. The
 // module registers before anything is delivered, so recording is all this has
-// to do to be correct.
+// to do to be correct. One listener per source is ever called, so a second
+// registration on a source replaces the first: queued behind it, it would
+// never be the one called, and the list grew with every registration.
 func (platform *NativePlatform) addListener(source uint32) NativeSlotHandler {
 	return func(thread *armcore.Thread) (uint32, error) {
 		arguments, err := nativeArguments(thread, 3)
 		if err != nil {
 			return 0, err
 		}
-		platform.listeners = append(platform.listeners, NativeListener{
+		listener := NativeListener{
 			Source:   source,
 			Function: arguments[1],
 			Context:  arguments[2],
-		})
+		}
+		for index := range platform.listeners {
+			if platform.listeners[index].Source == source {
+				platform.listeners[index] = listener
+				return 1, nil
+			}
+		}
+		platform.listeners = append(platform.listeners, listener)
 		return 1, nil
 	}
 }

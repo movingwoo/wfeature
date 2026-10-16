@@ -42,7 +42,7 @@ func Entries(root string) []Entry {
 	}
 	entries := []Entry{}
 	for _, item := range top {
-		if !item.IsDir() {
+		if !isDirectory(root, item) {
 			continue
 		}
 		group := item.Name()
@@ -51,7 +51,7 @@ func Entries(root string) []Entry {
 			continue
 		}
 		for _, file := range inside {
-			if file.IsDir() {
+			if isDirectory(filepath.Join(root, group), file) {
 				continue
 			}
 			entries = append(entries, Entry{
@@ -65,12 +65,28 @@ func Entries(root string) []Entry {
 	// rather than a mistake to hide. It comes last: an ungrouped archive is
 	// the exception.
 	for _, item := range top {
-		if item.IsDir() {
+		if isDirectory(root, item) {
 			continue
 		}
 		entries = append(entries, Entry{Name: item.Name(), Path: filepath.Join(root, item.Name())})
 	}
 	return entries
+}
+
+// isDirectory reports whether an entry of directory is one, following a
+// symbolic link. A group kept on another disk and linked in is a group like
+// any other — the Host opens the archives inside it through the same link —
+// while ReadDir reports the link itself, which is never a directory. A link
+// that leads nowhere is left as the file it looks like.
+func isDirectory(directory string, entry os.DirEntry) bool {
+	if entry.IsDir() {
+		return true
+	}
+	if entry.Type()&os.ModeSymlink == 0 {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(directory, entry.Name()))
+	return err == nil && info.IsDir()
 }
 
 // Paths is Entries reduced to the paths of the files whose extension is one

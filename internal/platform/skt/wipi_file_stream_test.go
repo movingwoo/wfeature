@@ -56,17 +56,19 @@ func wipiOpenStream(t *testing.T, runtime *Runtime, file *jvm.Object, method, cl
 func TestWIPIFileOutputStreamsPersistAndShareFileCursor(t *testing.T) {
 	store := backend.NewDirectorySaveStore(t.TempDir())
 	runtime := wipiStreamRuntime(t, store)
-	file := wipiStreamFile(t, runtime, "progress", xFileRead|xFileWrite)
+	file := wipiStreamFile(t, runtime, "progress", wipiFileReadWrite)
 	output := wipiOpenStream(t, runtime, file, "openDataOutputStream", "java/io/DataOutputStream")
+	// The open made the file; a flush stores it, empty, and leaves it clean.
+	wipiStreamCall(t, runtime, output, "flush", "()V")
 	wipiStreamCall(t, runtime, output, "write", "([B)V", jvm.ReferenceValue(jvm.NewByteArray(nil)))
-	if file.Native.(*xFileData).dirty {
+	if file.Native.(*xFileData).node.dirty {
 		t.Fatal("empty stream write marked the file dirty")
 	}
 	wipiStreamCall(t, runtime, output, "writeInt", "(I)V", jvm.IntValue(0x12345678))
 	if cursor, _ := wipiStreamCall(t, runtime, file, "tell", "()I").Int32(); cursor != 4 {
 		t.Fatalf("stream did not advance File cursor: %d", cursor)
 	}
-	if _, exists := store.LoadSave("fs/progress"); exists {
+	if data, _ := store.LoadSave("fs/progress"); len(data) != 0 {
 		t.Fatal("unflushed stream write reached persistent storage")
 	}
 	wipiStreamCall(t, runtime, output, "flush", "()V")
@@ -96,7 +98,7 @@ func TestWIPIFileInputStreamRetainsIndependentPositionAndMark(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := wipiStreamRuntime(t, store)
-	file := wipiStreamFile(t, runtime, "input", xFileRead)
+	file := wipiStreamFile(t, runtime, "input", wipiFileReadOnly)
 	wipiStreamCall(t, runtime, file, "seek", "(I)V", jvm.IntValue(2))
 	input := wipiOpenStream(t, runtime, file, "openInputStream", jvm.InputStreamClass)
 	if value, _ := wipiStreamCall(t, runtime, input, "read", "()I").Int32(); value != 0x80 {
@@ -132,7 +134,7 @@ func TestWIPIFileInputStreamRetainsIndependentPositionAndMark(t *testing.T) {
 
 func TestWIPIFileStreamChecksOpenModesAndDuplicateDirections(t *testing.T) {
 	runtime := wipiStreamRuntime(t, nil)
-	file := wipiStreamFile(t, runtime, "modes", xFileRead|xFileWrite)
+	file := wipiStreamFile(t, runtime, "modes", wipiFileReadWrite)
 	input := wipiOpenStream(t, runtime, file, "openInputStream", jvm.InputStreamClass)
 	output := wipiOpenStream(t, runtime, file, "openOutputStream", jvm.OutputStreamClass)
 	for _, call := range []struct{ method, descriptor string }{
@@ -163,7 +165,7 @@ func TestWIPIFileStreamChecksOpenModesAndDuplicateDirections(t *testing.T) {
 	if _, err := runtime.VM.InvokeVirtual(output, "write", "(I)V", jvm.IntValue(1)); !runtime.VM.IsGuestException(err, jvm.IOExceptionClass) {
 		t.Fatalf("closed File output error=%v", err)
 	}
-	writeOnly := wipiStreamFile(t, runtime, "output-only", xFileWrite)
+	writeOnly := wipiStreamFile(t, runtime, "output-only", wipiFileWrite)
 	if _, err := runtime.VM.InvokeVirtual(writeOnly, "openInputStream", "()Ljava/io/InputStream;"); !runtime.VM.IsGuestException(err, jvm.IOExceptionClass) {
 		t.Fatalf("write-only File input error=%v", err)
 	}
@@ -184,14 +186,14 @@ func (store *refusingWIPIStreamStore) StoreSave(name string, data []byte) error 
 func TestWIPIFileStreamRetriesFailedFlush(t *testing.T) {
 	store := &refusingWIPIStreamStore{SaveStore: backend.NewDirectorySaveStore(t.TempDir()), refuse: true}
 	runtime := wipiStreamRuntime(t, store)
-	file := wipiStreamFile(t, runtime, "retry", xFileWrite)
+	file := wipiStreamFile(t, runtime, "retry", wipiFileWrite)
 	output := wipiOpenStream(t, runtime, file, "openOutputStream", jvm.OutputStreamClass)
 	wipiStreamCall(t, runtime, output, "write", "([B)V", jvm.ReferenceValue(jvm.NewByteArray([]byte{3, 5, 7})))
 	for _, method := range []string{"flush", "close"} {
 		if _, err := runtime.VM.InvokeVirtual(output, method, "()V"); !runtime.VM.IsGuestException(err, jvm.IOExceptionClass) {
 			t.Fatalf("refused %s error=%v", method, err)
 		}
-		if !file.Native.(*xFileData).dirty || output.Native.(*wipiFileStreamData).closed {
+		if !file.Native.(*xFileData).node.dirty || output.Native.(*wipiFileStreamData).closed {
 			t.Fatalf("refused %s lost dirty data or closed the stream", method)
 		}
 	}
@@ -200,7 +202,7 @@ func TestWIPIFileStreamRetriesFailedFlush(t *testing.T) {
 	if data, exists := store.LoadSave("fs/retry"); !exists || !bytes.Equal(data, []byte{3, 5, 7}) {
 		t.Fatalf("retry data=%v, exists=%v", data, exists)
 	}
-	if file.Native.(*xFileData).dirty || len(runtime.pendingSaves) != 0 {
+	if file.Native.(*xFileData).node.dirty || len(runtime.pendingSaves) != 0 {
 		t.Fatal("successful stream retry retained an issued write")
 	}
 }
@@ -218,7 +220,7 @@ func TestWIPIFileInputStreamRetainsArchiveEntryProvenance(t *testing.T) {
 	}
 	input, _ := value.Reference()
 	stream := input.Native.(*wipiFileStreamData)
-	if stream.file.archiveName != "data.jar" || stream.file.archiveEntry != "entry" || !bytes.Equal(stream.file.data, []byte{17, 19}) {
+	if stream.file.archiveName != "data.jar" || stream.file.archiveEntry != "entry" || !bytes.Equal(stream.file.node.data, []byte{17, 19}) {
 		t.Fatal("input stream lost its archive entry provenance")
 	}
 }

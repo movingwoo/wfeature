@@ -1348,14 +1348,27 @@ func (client *Client) serviceTimers(ctx context.Context) error {
 		}
 		return cmp.Compare(a.structure, b.structure)
 	})
-	for _, entry := range due {
-		entry.armed = false
-	}
 	client.mu.Unlock()
 
 	// The callback is `void (*)(MCTimer *tm, void *parm)`, so it is handed the
 	// structure it was defined against and the parameter the arming call set.
+	//
+	// **Each timer is disarmed as its turn comes, not all of them first.** An
+	// earlier callback in the same batch may cancel a later timer, define it
+	// again, or arm it for a new deadline, and the later timer then fires the
+	// way that says: not at all, or at the new deadline with the new
+	// parameter. Disarming the batch up front made a cancel invisible and let a
+	// re-armed timer fire now as well as later.
 	for _, entry := range due {
+		client.mu.Lock()
+		fire := entry.armed && entry.dueAt <= now
+		if fire {
+			entry.armed = false
+		}
+		client.mu.Unlock()
+		if !fire {
+			continue
+		}
 		if _, err := client.call(ctx, entry.callback, []uint32{entry.structure, entry.param}); err != nil {
 			return fmt.Errorf("run LGT timer callback at %#x: %w", entry.callback, err)
 		}

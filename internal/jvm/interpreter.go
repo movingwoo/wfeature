@@ -736,7 +736,7 @@ func (vm *VM) constantValue(pool classfile.ConstantPool, index uint16, wide bool
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(&Object{ClassName: "java/lang/Class", Native: name}), nil
+		return ReferenceValue(vm.classObject(name)), nil
 	default:
 		return VoidValue(), fmt.Errorf("ldc constant %d has unsupported tag %d", index, constant.Tag)
 	}

@@ -39,8 +39,10 @@ const askTimeout = 2 * time.Second
 
 // drainWait is how long a stop waits for the server to finish what it was
 // doing — a save being written is the case that matters — before it stops
-// asking politely.
-const drainWait = 10 * time.Second
+// asking politely. The server bounds its own drain at ten seconds, so this is
+// a margin past that rather than the same number: a wait that ran out as the
+// drain did would signal a server that was about to exit on its own.
+const drainWait = 15 * time.Second
 
 // State is what was found on a port.
 type State int
@@ -317,7 +319,17 @@ func terminate(process *os.Process) error {
 }
 
 // waitUntilStopped polls until the server that was on the port is gone: the
-// port went quiet, or whatever holds it now is not that process.
+// port went quiet and its process has exited, or whatever holds the port now
+// is not that process.
+//
+// **A quiet port is not a finished stop.** The server's drain closes its
+// listener first and then closes its games, writing their saves, for as long
+// as its own deadline allows; the process holds their save directories until
+// it exits. A stop that answered at the port let a start that followed run
+// beside it, refused every game the old one still held — and on Windows let
+// an upgrade try to replace an executable that was still running. A pid this
+// may not signal is not one it can watch either, so for those the port is
+// the answer, as it was.
 //
 // The second half matters more than it looks. A machine that keeps a server
 // running usually has something ready to take the port back — the other
@@ -330,7 +342,9 @@ func waitUntilStopped(ctx context.Context, port, pid int, within time.Duration) 
 	for {
 		switch report := Query(ctx, port); {
 		case report.State == Free:
-			return true
+			if !signallable(pid) || processExited(pid) {
+				return true
+			}
 		case report.State == Ours && pid > 0 && report.PID != pid:
 			return true
 		}

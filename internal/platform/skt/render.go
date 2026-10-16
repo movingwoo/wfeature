@@ -606,9 +606,10 @@ func (runtime *Runtime) fillGraphicsRect(_ *jvm.VM, arguments []jvm.Value) (jvm.
 //
 // The destination write wraps the whole shape rather than each span, because a
 // curve is one drawing operation and a reader watching the destination should
-// see it as one.
+// see it as one. The walk is bounded by what the fill can reach, because the
+// box comes from the guest and can be far larger than any surface.
 func (runtime *Runtime) graphicsCurve(
-	walk func(x, y, width, height, first, second int32, emit curve.Emit) error,
+	walk func(bounds curve.Bounds, x, y, width, height, first, second int32, emit curve.Emit) error,
 ) func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
 	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		context, err := graphicsReceiver(arguments)
@@ -629,7 +630,7 @@ func (runtime *Runtime) graphicsCurve(
 		}
 		var walkErr error
 		context.withDestinationWrite(func() {
-			walkErr = walk(x, y, width, height, first, second, func(span curve.Span) error {
+			walkErr = walk(context.curveBounds(), x, y, width, height, first, second, func(span curve.Span) error {
 				rect := context.translatedRect(span.X, span.Y, span.Width, 1).intersect(context.clip)
 				if !rect.empty() {
 					context.fillRect(rect)
@@ -688,6 +689,16 @@ func (runtime *Runtime) drawGraphicsRect(_ *jvm.VM, arguments []jvm.Value) (jvm.
 		}
 	})
 	return jvm.VoidValue(), nil
+}
+
+// curveBounds is the part of the shape's plane the curve fill can reach: the
+// clip met with the surface, moved back by the translation translatedRect adds.
+func (context *graphicsContext) curveBounds() curve.Bounds {
+	left, top := max(int64(context.clip.minX), 0), max(int64(context.clip.minY), 0)
+	right := min(int64(context.clip.maxX), int64(context.width))
+	bottom := min(int64(context.clip.maxY), int64(context.height))
+	translateX, translateY := int64(context.translateX), int64(context.translateY)
+	return curve.Bounds{Left: left - translateX, Top: top - translateY, Right: right - translateX, Bottom: bottom - translateY}
 }
 
 func (context *graphicsContext) translatedRect(x, y, width, height int32) paintRect {

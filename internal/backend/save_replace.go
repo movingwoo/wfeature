@@ -168,5 +168,9 @@ func (store *DirectorySaveStore) SnapshotSaves() ([]SaveEntry, error) {
 	if err := store.recoverSaveReplacement(); err != nil {
 		return nil, err
 	}
-	return readSnapshotSaves(store.root)
+	names, err := store.settleSaveNames()
+	if err != nil {
+		return nil, err
+	}
+	return readSnapshotSaves(store.root, names.naming)
 }

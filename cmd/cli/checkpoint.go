@@ -180,6 +180,9 @@ func claimArchiveSaves(archive []byte, root string, logger *slog.Logger) (string
 	if root == "" || summary.SaveOwner == "" {
 		return "", func() {}, nil
 	}
+	if err := session.MigrateSaveOwner(archive, root); err != nil {
+		logger.Warn("saves kept under an earlier owner name were not moved", "error", err)
+	}
 	owner := summary.SaveOwner
 	if !filepath.IsLocal(owner) || filepath.Base(owner) != owner || strings.ContainsAny(owner, `/\`) || owner == "." || owner == ".wfeature-quicksave" {
 		return "", nil, fmt.Errorf("archive has an invalid save owner")
@@ -193,6 +196,20 @@ func claimArchiveSaves(archive []byte, root string, logger *slog.Logger) (string
 		backend.WarnSaveLockFallback(logger, directory)
 	}
 	return directory, release, err
+}
+
+// claimSaveDirectory takes the claim the server takes on a save directory for
+// as long as a game holds it, for the commands that open their store on a
+// directory they already named. A run and a browser session of one title are
+// then refused rather than both writing the same files, the last one silently
+// winning. See internal/webhost/saveclaim.go.
+func claimSaveDirectory(directory string, logger *slog.Logger) (func(), error) {
+	release, err := backend.ClaimSaveDirectory(directory)
+	if err != nil {
+		return nil, err
+	}
+	backend.WarnSaveLockFallback(logger, directory)
+	return release, nil
 }
 
 func sharedServeDriver(game *session.Session, play bool) *serve.Driver {
@@ -235,7 +252,7 @@ func sharedServeDriver(game *session.Session, play bool) *serve.Driver {
 			digest := sha256.Sum256(pixels)
 			return binary.LittleEndian.Uint64(digest[:8])
 		},
-		LookupKey: sharedKeyCode,
+		LookupKey: sharedKeyLookup(game.Platform()),
 		SendKey: func(ctx context.Context, pressed bool, code int32) error {
 			action := session.KeyRelease
 			if pressed {
@@ -256,11 +273,31 @@ func sharedServeDriver(game *session.Session, play bool) *serve.Driver {
 	}
 }
 
+// sharedKeyCode answers a key name with the code the page sends for it. The
+// soft keys are the page's -6 and -7, which every platform takes unchanged:
+// MH_KEY_SOFT1 and MH_KEY_SOFT2 are the MIDP soft keys' values too.
 func sharedKeyCode(name string) (int32, bool) {
 	if len(name) == 1 && (name[0] >= '0' && name[0] <= '9' || name == "*" || name == "#") {
 		return int32(name[0]), true
 	}
 	code, ok := map[string]int32{"up": 141, "down": 146, "left": 142, "right": 145, "fire": 148, "ok": 148,
-		"soft1": 6, "soft2": 7, "soft3": 9, "ez": 9, "clear": 8, "call": 10, "hangup": -1}[strings.ToLower(name)]
+		"soft1": -6, "soft2": -7, "soft3": 9, "ez": 9, "clear": 8, "call": 10, "hangup": -1}[strings.ToLower(name)]
 	return code, ok
+}
+
+// sharedKeyLookup is sharedKeyCode for one platform. The third soft key and
+// the hang-up key exist only in the WIPI translation; a MIDlet would be handed
+// 9 and -1 as they are, and an SGS script reads -1 as up. On that platform the
+// two names are refused, as runskt refuses them.
+func sharedKeyLookup(platform string) func(string) (int32, bool) {
+	if platform != "skt" {
+		return sharedKeyCode
+	}
+	return func(name string) (int32, bool) {
+		switch strings.ToLower(name) {
+		case "soft3", "ez", "hangup":
+			return 0, false
+		}
+		return sharedKeyCode(name)
+	}
 }

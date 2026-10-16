@@ -278,8 +278,12 @@ func (client *Client) drawImage(context *graphicsContext, values []int32) error 
 	if err := client.syncRowsFromGuest(source, rowsAt(sourceY, height)); err != nil {
 		return err
 	}
-	for row := 0; row < height; row++ {
-		for column := 0; column < width; column++ {
+	firstRow, lastRow, firstColumn, lastColumn, ok := context.blitSteps(source, values[0:4], values[5:7])
+	if !ok {
+		return nil
+	}
+	for row := firstRow; row < lastRow; row++ {
+		for column := firstColumn; column < lastColumn; column++ {
 			sx, sy := sourceX+column, sourceY+row
 			if sx < 0 || sy < 0 || sx >= source.width || sy >= source.height {
 				continue

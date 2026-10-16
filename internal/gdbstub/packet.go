@@ -14,11 +14,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 )
 
 // ErrDetached reports that the client closed the connection.
 var ErrDetached = errors.New("gdb client detached")
+
+// maxPacketBody bounds one request's payload. The stub advertises a packet
+// size of 0x1000 bytes and a client sends nothing larger, so sixteen times
+// that is room no client needs. A peer that opens a packet and never closes
+// it is cut off there rather than growing a buffer until the process runs out
+// of memory.
+const maxPacketBody = 0x10000
+
+// errPacketTooLong reports a request body past maxPacketBody. There is no
+// resynchronising after one, so the connection ends.
+var errPacketTooLong = errors.New("gdb packet exceeds the size limit")
 
 // checksum is the protocol's modulo-256 sum of the payload.
 func checksum(payload string) byte {
@@ -57,14 +67,13 @@ func readPacket(reader *bufio.Reader, writer io.Writer) (payload string, interru
 			continue
 		}
 
-		body, err := reader.ReadString('#')
+		body, err := readBody(reader)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return "", false, ErrDetached
 			}
 			return "", false, err
 		}
-		body = strings.TrimSuffix(body, "#")
 		var digits [2]byte
 		if _, err := io.ReadFull(reader, digits[:]); err != nil {
 			if errors.Is(err, io.EOF) {
@@ -85,6 +94,25 @@ func readPacket(reader *bufio.Reader, writer io.Writer) (payload string, interru
 			return "", false, err
 		}
 		return body, false, nil
+	}
+}
+
+// readBody reads a packet's payload up to the '#' that ends it, and no
+// further than maxPacketBody.
+func readBody(reader *bufio.Reader) (string, error) {
+	var body []byte
+	for {
+		chunk, err := reader.ReadSlice('#')
+		if len(body)+len(chunk) > maxPacketBody+1 {
+			return "", errPacketTooLong
+		}
+		body = append(body, chunk...)
+		if err == nil {
+			return string(body[:len(body)-1]), nil
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return "", err
+		}
 	}
 }
 

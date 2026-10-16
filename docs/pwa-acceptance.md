@@ -46,8 +46,9 @@ The route's ten checks are made over six steps:
    the old shell cache is retired and that the manifest declares standalone
    mode and icons.
 4. Start a fresh guest and read the saved counter through the canvas. Advance
-   again, import the previous `.wfs`, and start another fresh guest. Require the
-   old counter and identical exported backup bytes.
+   again, import the previous `.wfs` and accept the page's own **가져오기**
+   question, and start another fresh guest. Require the old counter and
+   identical exported backup bytes.
 5. Check that touch release reaches the guest. Observe the AudioContext, suspend
    it, and require a game-key gesture to resume it; this does not prove audible
    output. Open text input over an unsupported canvas and over a supported
@@ -113,15 +114,17 @@ observed results, without naming individual games in tracked documents.
 | Audio | Start a known audible route through a user gesture; change both volumes, lock the phone, return, and press a game key. | Music/effects heard as expected and recover without duplicate playback. |
 | Text | Select a supported guest editor, open 🔤 text input, compose Korean, cancel once and submit once; try a screen without an editor. | Correct availability guidance, no leaked keypad input, complete text delivered once. |
 | Retention | Leave the app for more than five minutes, lock/unlock, interrupt the network, and return; test takeover in another tab separately. | Same retained session resumes while the server remains running; no stuck keys. |
-| Progress | On each available platform, reach a reproducible scene, save in-game, stop the server, update it, restart and load; export, change progress, import and load again. | The recorded scene/progress returns from a fresh runtime. |
+| Progress | On each available platform, reach a reproducible scene, save in-game, stop the server, update it, restart and load; export, change progress, import (cancel the page's question once, then accept it) and load again. | Cancel sends nothing; the recorded scene/progress returns from a fresh runtime. |
 
 A missing original archive, inaudible output or absent device is a recorded skip
 with its reason, never a pass. The previously requested Jlet original is still
 needed. Native APK/IPA upgrade signing, storage and document pickers need
 separate app installation checks; desktop WebKit does not prove WKWebView
-behavior. Do not clear site data, change origin, uninstall the app or delete
-saves as part of the preservation route; those operations have different data
-lifetimes.
+behavior. The iOS app's web view answers a JavaScript `confirm` "no" without
+showing anything, so 세이브 가져오기 there needs its own check that the page's
+question appears and a yes restores. Do not clear site data, change origin,
+uninstall the app or delete saves as part of the preservation route; those
+operations have different data lifetimes.
 
 ## CI boundary and cost
 

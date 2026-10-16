@@ -50,7 +50,9 @@ func ownerRejected(owner string) bool {
 }
 
 // saveResponse is the shape the page reads: every entry of one owner, keyed by
-// the same slash-separated names the DirectorySaveStore writes.
+// the same slash-separated save keys the DirectorySaveStore stores them under.
+// A key is not the name on disk, which spells its case out (see
+// backend/save_names.go).
 type saveResponse struct {
 	Saves map[string]string `json:"saves"`
 }

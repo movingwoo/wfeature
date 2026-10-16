@@ -43,7 +43,9 @@ const (
 	holdStored
 	// holdInStream: the write is in a stream the title has not flushed, which
 	// by the platform's own contract is not a write to the file yet. A quick
-	// step leaves it where it is.
+	// step leaves it where it is. No title here holds a write that way: on
+	// every platform a write to a stream opened on a file is a write to the
+	// file, which waits as holdPending does.
 	holdInStream
 )
 
@@ -156,8 +158,9 @@ func saveTitles() []saveTitle {
 		}
 		return title
 	}
+	// A write to a stream opened on a File is a write to the File: it waits in
+	// the File's buffer, as a write through the File itself does.
 	stream := java("lgt java stream", testfixture.LGTJavaSaveSurfaceStream)
-	stream.held = holdInStream
 	database := java("lgt java database", testfixture.LGTJavaSaveSurfaceDatabase)
 	database.key, database.content, database.held = testfixture.LGTJavaSaveDatabaseKey, saveTitleRecords, holdStored
 	database.truncate, database.cursor = 0, false

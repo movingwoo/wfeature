@@ -100,6 +100,9 @@ func (client *Client) javaStreamOf(object uint32) (*javaStream, error) {
 	if stream.Closed {
 		return nil, fmt.Errorf("the stream of %s is closed", stream.Name)
 	}
+	if stream.File {
+		client.followJavaFileStream(object, stream)
+	}
 	return stream, nil
 }
 
@@ -709,6 +712,23 @@ func javaByteSinkConstructor(
 	return 0, nil
 }
 
+// maxJavaSinkBytes bounds what one byte sink holds. Its bytes leave as one
+// byte array (`toByteArray`), and no array here is longer than
+// maxJavaArrayLength, so a sink past that holds bytes no title could read back;
+// a handset's sink is a byte array in a heap far smaller still. The bound is
+// what turns a runaway write loop into a report rather than a host that grows
+// until the process dies.
+const maxJavaSinkBytes = maxJavaArrayLength
+
+// javaSinkRoom reports a write that would take a sink past maxJavaSinkBytes.
+func javaSinkRoom(held []byte, adding int) error {
+	if len(held)+adding > maxJavaSinkBytes {
+		return fmt.Errorf("a byte sink of %d bytes cannot take %d more: %d is the most one holds",
+			len(held), adding, maxJavaSinkBytes)
+	}
+	return nil
+}
+
 // javaByteSinkOf answers what a sink holds and which object holds it, which
 // are not the same handle when the caller is writing through a wrapper.
 func (client *Client) javaByteSinkOf(object uint32) ([]byte, uint32, error) {
@@ -733,8 +753,10 @@ func javaByteSinkWrite(
 	if err != nil {
 		return 0, err
 	}
-	client.javaRuntimeState().sinks[sink] = append(held, byte(arguments[1]))
-	return 0, nil
+	if err := javaSinkRoom(held, 1); err != nil {
+		return 0, err
+	}
+	return 0, client.putJavaSink(sink, append(held, byte(arguments[1])))
 }
 
 // javaByteSinkWriteRange is `write([BII)`, slot 12: a run of an array.
@@ -753,8 +775,10 @@ func javaByteSinkWriteRange(
 	if uint64(offset)+uint64(count) > uint64(len(data)) {
 		return 0, fmt.Errorf("%d bytes at %d is past the end of an array of %d", count, offset, len(data))
 	}
-	client.javaRuntimeState().sinks[sink] = append(held, data[offset:offset+count]...)
-	return 0, nil
+	if err := javaSinkRoom(held, int(count)); err != nil {
+		return 0, err
+	}
+	return 0, client.putJavaSink(sink, append(held, data[offset:offset+count]...))
 }
 
 // javaByteSinkWriteAll is `write([B)`, slot 11: the whole of an array.
@@ -769,8 +793,10 @@ func javaByteSinkWriteAll(
 	if err != nil {
 		return 0, err
 	}
-	client.javaRuntimeState().sinks[sink] = append(held, data...)
-	return 0, nil
+	if err := javaSinkRoom(held, len(data)); err != nil {
+		return 0, err
+	}
+	return 0, client.putJavaSink(sink, append(held, data...))
 }
 
 // javaByteSinkFlush is `flush()` and `close()`, slots 13 and 14. A sink is
@@ -784,9 +810,14 @@ func javaByteSinkFlush(
 	if err != nil {
 		return 0, err
 	}
-	// A plain sink has nowhere to drain to and a flush is nothing; one opened
-	// on a File is where a title expects its bytes to have landed by now.
-	return 0, client.drainJavaSinkToFile(sink)
+	// A plain sink has nowhere to drain to and a flush is nothing. One opened
+	// on a File has handed the File every byte as it was written, and its
+	// flush and close are where those writes reach the store.
+	if err := client.drainJavaSinkToFile(sink); err != nil {
+		return 0, err
+	}
+	client.storeJavaSinkFile(sink)
+	return 0, nil
 }
 
 // javaByteSinkReset is `reset()`, slot 15: the sink emptied and used again,
@@ -855,12 +886,14 @@ func javaSinkAppend(width int) func(*Client, context.Context, *armcore.Thread, [
 		if err != nil {
 			return 0, err
 		}
+		if err := javaSinkRoom(held, width); err != nil {
+			return 0, err
+		}
 		value := arguments[1]
 		for shift := (width - 1) * 8; shift >= 0; shift -= 8 {
 			held = append(held, byte(value>>uint(shift)))
 		}
-		client.javaRuntimeState().sinks[sink] = held
-		return 0, nil
+		return 0, client.putJavaSink(sink, held)
 	}
 }
 
@@ -873,12 +906,14 @@ func javaSinkWriteLong(
 	if err != nil {
 		return 0, err
 	}
+	if err := javaSinkRoom(held, 8); err != nil {
+		return 0, err
+	}
 	value := uint64(arguments[2])<<32 | uint64(arguments[1])
 	for shift := 56; shift >= 0; shift -= 8 {
 		held = append(held, byte(value>>uint(shift)))
 	}
-	client.javaRuntimeState().sinks[sink] = held
-	return 0, nil
+	return 0, client.putJavaSink(sink, held)
 }
 
 // javaSinkWriteUTF is `writeUTF(String)`: a two-byte length and then the text
@@ -903,9 +938,11 @@ func javaSinkWriteUTF(
 	if len(encoded) > 0xffff {
 		return 0, fmt.Errorf("writeUTF of %d bytes does not fit its two-byte length", len(encoded))
 	}
+	if err := javaSinkRoom(held, 2+len(encoded)); err != nil {
+		return 0, err
+	}
 	held = append(held, byte(len(encoded)>>8), byte(len(encoded)))
-	client.javaRuntimeState().sinks[sink] = append(held, encoded...)
-	return 0, nil
+	return 0, client.putJavaSink(sink, append(held, encoded...))
 }
 
 // javaStreamReadUTF is `DataInputStream.readUTF()`, slot 32: a two-byte length

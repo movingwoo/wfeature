@@ -331,7 +331,14 @@ func (s *ScriptSession) Call(op byte, vm *sgsvm.VM) error {
 		data := make([]byte, max(64, count*2))
 		if op == 0x98 {
 			if s.options.SaveStore != nil {
-				if saved, ok := s.options.SaveStore.LoadSave("nv/data"); ok {
+				// A read that failed is not a save that is absent: answering
+				// zeros would have the title treat its progress as a first run
+				// and save the zeros over it.
+				saved, ok, err := backend.ReadSave(s.options.SaveStore, "nv/data")
+				if err != nil {
+					return fmt.Errorf("SGS save read: %w", err)
+				}
+				if ok {
 					copy(data, saved)
 				}
 			}

@@ -3,7 +3,6 @@ package gdbstub
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 )
@@ -25,13 +24,14 @@ func Listen(listener net.Listener, target Target, logger *slog.Logger) error {
 		if logger != nil {
 			logger.Debug("gdb client attached", "remote", connection.RemoteAddr())
 		}
+		// Whatever ends a connection — a detach, a hang-up, a reset, a
+		// client that broke the protocol — ends that client only; Serve has
+		// already let the guest go. The next client is accepted like the
+		// first.
 		err = Serve(connection, target)
 		connection.Close()
 		if logger != nil {
 			logger.Debug("gdb client detached", "error", err)
-		}
-		if err != nil && !errors.Is(err, ErrDetached) && !errors.Is(err, io.EOF) {
-			return err
 		}
 	}
 }

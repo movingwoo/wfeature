@@ -40,7 +40,7 @@ func TestGraphicsFillArcCutsThePieItNames(t *testing.T) {
 	runtime := &Runtime{}
 	context, receiver := curveGraphics(20, 20)
 
-	fill := runtime.graphicsCurve(curve.FillArc)
+	fill := runtime.graphicsCurve(curve.FillArcWithin)
 	if _, err := fill(nil, []jvm.Value{
 		receiver, jvm.IntValue(0), jvm.IntValue(0), jvm.IntValue(20), jvm.IntValue(20),
 		jvm.IntValue(0), jvm.IntValue(90),
@@ -65,7 +65,7 @@ func TestGraphicsFillRoundRectRoundsItsCorners(t *testing.T) {
 	runtime := &Runtime{}
 	context, receiver := curveGraphics(24, 8)
 
-	fill := runtime.graphicsCurve(curve.FillRoundRect)
+	fill := runtime.graphicsCurve(curve.FillRoundRectWithin)
 	if _, err := fill(nil, []jvm.Value{
 		receiver, jvm.IntValue(0), jvm.IntValue(0), jvm.IntValue(24), jvm.IntValue(8),
 		jvm.IntValue(24), jvm.IntValue(8),
@@ -88,7 +88,7 @@ func TestGraphicsCurveIsClipped(t *testing.T) {
 	context, receiver := curveGraphics(20, 20)
 	context.clip = paintRect{maxX: 20, maxY: 10}
 
-	fill := runtime.graphicsCurve(curve.FillArc)
+	fill := runtime.graphicsCurve(curve.FillArcWithin)
 	if _, err := fill(nil, []jvm.Value{
 		receiver, jvm.IntValue(0), jvm.IntValue(0), jvm.IntValue(20), jvm.IntValue(20),
 		jvm.IntValue(0), jvm.IntValue(360),
@@ -108,7 +108,7 @@ func TestGraphicsCurveIsClipped(t *testing.T) {
 // into, the same way every other drawing call refuses it.
 func TestGraphicsCurveRefusesAForeignReceiver(t *testing.T) {
 	runtime := &Runtime{}
-	fill := runtime.graphicsCurve(curve.FillArc)
+	fill := runtime.graphicsCurve(curve.FillArcWithin)
 	if _, err := fill(nil, []jvm.Value{
 		jvm.ReferenceValue(nil), jvm.IntValue(0), jvm.IntValue(0), jvm.IntValue(4), jvm.IntValue(4),
 		jvm.IntValue(0), jvm.IntValue(90),

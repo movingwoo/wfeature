@@ -188,7 +188,7 @@ func (tones *toneMap) realChannel(channel uint8) uint8 {
 	var used [16]bool
 	used[midiDrumChannel] = true
 	for other := 0; other < maxSMAFChannels; other++ {
-		if tones.realMapSet[other] {
+		if tones.realMapSet[other] && tones.realMap[other] < 16 {
 			used[tones.realMap[other]] = true
 		}
 	}
@@ -198,7 +198,13 @@ func (tones *toneMap) realChannel(channel uint8) uint8 {
 		}
 	}
 
+	// With every melodic channel taken, a channel within the first sixteen
+	// shares its own number. One past them has none to share; it is dropped
+	// with everything it plays rather than numbered past MIDI's sixteen.
 	real := index
+	if real >= 16 {
+		real = noMIDIChannel
+	}
 	for _, candidate := range melodyAllocationOrder {
 		if !used[candidate] {
 			real = candidate
@@ -386,7 +392,9 @@ func (tones *toneMap) noteDuration(channel uint8, duration uint64) uint64 {
 func (tones *toneMap) volumeEvents(time uint32, channel, value uint8) []Event {
 	tones.updateControl(channel, 7, value)
 	if tones.formatType != HandyPhoneStandard {
-		return []Event{{Time: time, Type: EventControlChange, Channel: tones.realChannel(channel), Control: 7, Value: value}}
+		// Clamped as the stored volume is, so the controller stays a
+		// seven-bit MIDI data byte.
+		return []Event{{Time: time, Type: EventControlChange, Channel: tones.realChannel(channel), Control: 7, Value: min(value, 0x7f)}}
 	}
 	if tones.isRhythm(channel) {
 		return []Event{{Time: time, Type: EventControlChange, Channel: midiDrumChannel, Control: 7, Value: 100}}
@@ -403,7 +411,7 @@ func (tones *toneMap) volumeEvents(time uint32, channel, value uint8) []Event {
 // velocity on the next hit rather than as a controller.
 func (tones *toneMap) expressionEvents(time uint32, channel, value uint8) []Event {
 	if tones.formatType != HandyPhoneStandard {
-		return []Event{{Time: time, Type: EventControlChange, Channel: tones.realChannel(channel), Control: 11, Value: value}}
+		return []Event{{Time: time, Type: EventControlChange, Channel: tones.realChannel(channel), Control: 11, Value: min(value, 0x7f)}}
 	}
 	folded := tones.setExpression(channel, value)
 	if tones.isRhythm(channel) {
@@ -434,7 +442,7 @@ func (tones *toneMap) atmosphereSetup(time uint32, channel, program uint8) []Eve
 		var used [16]bool
 		used[midiDrumChannel] = true
 		for other := 0; other < maxSMAFChannels; other++ {
-			if tones.realMapSet[other] {
+			if tones.realMapSet[other] && tones.realMap[other] < 16 {
 				used[tones.realMap[other]] = true
 			}
 		}

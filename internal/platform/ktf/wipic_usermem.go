@@ -179,10 +179,15 @@ func (runtime *initializationRuntime) handleUserMemoryCall(thread *armcore.Threa
 // checkGuestRange fails unless every byte of a guest range is both readable
 // and writable, by rewriting the bytes it read. A pool that is short or
 // unmapped is then reported where it was handed over rather than at whichever
-// block first crossed the end of it.
+// block first crossed the end of it. The size is the guest's own argument, so
+// the range is checked against the mappings before a buffer of that size is
+// allocated to read it through.
 func (runtime *initializationRuntime) checkGuestRange(address, size uint32) error {
 	if uint64(address)+uint64(size) > uint64(1)<<32 {
 		return fmt.Errorf("range of %d bytes overflows guest memory", size)
+	}
+	if err := runtime.client.core.Memory().ValidateRange(address, uint64(size), armcore.PermissionReadWrite); err != nil {
+		return err
 	}
 	data := make([]byte, size)
 	if err := runtime.client.core.Memory().Read(address, data); err != nil {

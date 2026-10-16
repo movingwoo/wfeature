@@ -28,7 +28,11 @@ Default quanta contain 1,000 instructions and the default run ceiling is
 1,000,000, both configurable through `CoreOptions`. Cancellation is checked
 between quanta. A thread's `SetStepBudget` and `SetLimitHook` support bounded
 execution windows and parking without discarding the suspended call stack:
-returning nil from the hook grants a fresh window, and the hook may block.
+returning nil from the hook grants the next window, and the hook may block.
+A quantum can run past the budget, because a stand-in charges every
+instruction of the loop it replaced; the hook is then called once for each
+window used up and the remainder is carried into the next window, so hosts
+that pace threads by renewals see what an interpreted run would have shown.
 Derived calls inherit the budget and hook. Without a renewing hook, exhaustion
 returns `ErrStepLimit`.
 
@@ -54,7 +58,9 @@ bounded:
 - `CaptureCalls` / `InspectParkedCalls`: the derived calls below a logical
   thread, outermost first, at most 64. Every call must be parked at a
   supervisor boundary or inside the limit hook, and the platform completes the
-  pending supervisor operation before execution resumes.
+  pending supervisor operation before execution resumes. A call parked in the
+  limit hook resumes with the window overrun the live run would have carried;
+  a record claiming more overrun than one quantum can report is refused.
 
 ## Memory and instruction boundary
 
@@ -67,10 +73,16 @@ code is coherent. Overlapping mappings are rejected when neither permission set
 contains the other.
 
 The interpreter implements the supported ARMv4T data processing, transfers,
-branches, interworking, multiply, status operations and SVC instructions.
-Observed BLX forms and selected Thumb hint encodings are also accepted. CP15 c7
-cache/write-buffer maintenance is a no-op; any other coprocessor access is an
-error. Thumb IT blocks are not treated as hints.
+branches, interworking, multiply, status operations and SVC instructions, and
+the ARMv5TE additions the handsets' cores have: BLX in both forms, CLZ,
+QADD/QSUB/QDADD/QDSUB, and the signed halfword multiplies (SMUL, SMLA, SMULW,
+SMLAW and SMLAL with their x/y halves). Saturation sets Q, which MSR can write
+with the other flags. ARM `LDR pc` and `LDM` with the PC in the list interwork
+on bit zero, as Thumb `POP {pc}` does. The rest of the miscellaneous encoding
+space (BKPT, BXJ, ARMv6T2 MOVW/MOVT), LDRD/STRD and PLD fault as undefined.
+Selected Thumb hint encodings are also accepted. CP15 c7 cache/write-buffer
+maintenance is a no-op; any other coprocessor access is an error. Thumb IT
+blocks are not treated as hints.
 
 Guest word and halfword data accesses follow the implemented ARM alignment
 rules; instruction fetch and direct Host memory helpers remain strictly aligned.
@@ -96,7 +108,11 @@ which leaf samples remain counted. `ResetProfile` starts a new observation
 window. Missing-feature lists in the history predate these interfaces.
 
 Recognized loops can use optimized implementations while charging their full
-guest instruction count. Unrecognized shapes retain interpreter execution.
+guest instruction count. A recognizer accepts a body only when the stand-in
+reproduces it exactly — accesses before the pointer advances they walk, values
+the body reloads read from where it reloads them, and no destination over a
+word the run treats as fixed — and declines everything else. Unrecognized
+shapes retain interpreter execution.
 `Backend` is the execution seam, and the interpreter is the conformance oracle.
 Only the interpreter is registered by default. A future backend must agree on
 registers, memory, stop reason and retired instruction counts at every boundary.

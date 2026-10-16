@@ -49,7 +49,7 @@ the page can match it to its request:
 | `quickSave` / `quickLoad` | — | Save the running game's execution state to the archive's slot, or bring the game back to it. Ordinary saves are not reverted. |
 | `audioResume` | — | Ask, within the current epoch, for an `allOff` followed by the reconstructed current audio output. |
 | `cheat` | `op`, `command`, `type`, `filter`, `operand`, `address`, `all`, `table` | One cheat panel operation or console line. |
-| `report` | `label` | Write the session's diagnostics report. |
+| `report` | `label` | Write the session's diagnostics report. A debug build only, and within the rate `/api/debug-log` keeps (10 a minute, shared with it); a release answers with an error and writes nothing. |
 | `ping` | — | Check connection liveness; answered from the reader without waiting for guest execution. |
 
 | Server message | Carries | Meaning |
@@ -163,6 +163,13 @@ that refused the write and, on LGT and SKT, a buffer the Host declined to store
 because its file had changed behind it; "could not be read" covers a failed read
 and saves larger than a load reads. Every other refusal passes through as the
 error's own text.
+
+One such state is audio output holding a MIDI program change, control change
+or pitch bend whose fields do not fit MIDI (a channel above 15, a 7-bit field
+of 128 or more, a bend of 16384 or more): from the first one played, every
+quick save would be refused. A sound carrying one is therefore refused when it
+is loaded, as a note with the same fault already was, so it never plays. A
+checkpoint an earlier build wrote that holds such a sound still restores.
 
 A `start` with `quick_load: true` reads and checks the slot before the game the
 connection is running is stopped, so a start that is certain to be refused (no
@@ -488,6 +495,68 @@ root, then commit under the store lock. A commit failure restores earlier entrie
 and removes newly created ones; if rollback also fails, the error names the
 retained recovery files. This is not crash-atomic across multiple renames. Save
 formats and canonical paths are the same in debug and release.
+
+### Save keys on disk
+
+A save key is the name a platform gives an entry (`rms/<store>`, `fs/<path>`,
+`db/<name>`), and keys are what everything carries: the platforms, the save API
+and `.wfs` packs. Only `DirectorySaveStore` turns a key into a path below the
+game's save folder, and it spells case out, so a name means the same file on
+every host and names that differ only by case are different files. Before,
+`Save` and `save` were two files on Linux and one shared file on the
+case-insensitive file systems of macOS, iOS and Windows.
+
+In each segment of a key, an upper-case letter that is the upper case of its own
+lower case is written `#` followed by the letter, and `#` is written `##`;
+everything else, bytes that are not UTF-8 included, is written as it is.
+`rms/Option` is stored at `rms/#Option` and `fs/save#1` at `fs/save##1`; a key
+with no upper-case letter and no `#` keeps the path it always had. Keys do not
+change. The owner folder is the Host's name for a game, not a key, and is not
+encoded, and neither are the quick-save slots and lock files in
+`.wfeature-quicksave/`. The earlier KTF native package lowercases its file
+names on purpose, so its keys never differ by case. `internal/backend/save_names.go`
+holds the encoding.
+
+A folder whose names are encoded holds the file `.wfeature-names#1`, written
+before its first name with a `#`. No key is ever stored under that name, in any
+spelling of its case, and listings, exports and imports pass over it. It decides
+the one kind of name that reads two ways: `#Top` is the key `#Top` an earlier
+build wrote, or the key `Top` this build wrote. In a folder without the file
+every name is its own key. The file belongs with the saves and moves with the
+folder: without it, the next operation would take every name with a `#` for an
+earlier build's key and convert it again.
+
+A folder an earlier build wrote is converted in place by the first operation on
+it — a game reading its saves, a listing, an export — before anything else
+happens. Every name the encoding changes moves to a temporary name and then to
+its encoded name, and `.wfeature-names#1` lists them while it runs, so a
+conversion stopped anywhere finishes on the next operation. Nothing is removed
+and nothing is written over. A folder with no upper-case letter and no `#` in
+any name, which is most of them, is left byte for byte as it is until a key that
+needs a `#` is stored. A folder that cannot be converted, because it cannot be
+written or not all of it can be listed, is read as the earlier build left it,
+each name by its exact spelling, and writing to it is refused until it can be
+converted. An earlier name whose encoded name would be longer than a file
+system stores stays as it is and still reads as its own key.
+
+On a host that ignores case, an earlier build kept one file for `Save` and
+`save`, holding whichever was written last. The file belongs to the key its
+spelling on disk matches, and the other key has no save until one is written:
+that is the only deterministic answer, and the data cannot be split.
+
+`.wfs` packs carry keys, not paths. A pack exported by an earlier build imports
+unchanged, and the export of a converted folder is byte for byte the export an
+earlier build made of the same saves.
+
+A name an earlier build writes into a converted folder afterwards — an earlier
+version run again, or files copied in by hand — reads as its own key when the
+encoding would not have written it, and moves to its encoded name when it is
+read; where the encoded file is already there, it is the save and the other one
+is left alone. A name like `#Top` written that way reads as encoded. Until it
+moves, such a leftover can also answer, on a host that ignores case, for the
+name it folds to. An earlier version run on a converted folder does not find the
+keys that have an upper-case letter or a `#`; their files stay under their
+encoded names.
 
 ## Input, compatibility, and limits
 

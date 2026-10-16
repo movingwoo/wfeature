@@ -395,11 +395,15 @@ func (memory *Memory) analyseStoreLoop(head, branchPC uint32) *storeLoop {
 			immediate := instruction & 0xff
 			switch opcode {
 			case 2: // ADD rD, #imm — the pointer advancing.
-				if haveAdvance || immediate != 2 {
+				// After the store and on the register it stored through. An
+				// advance ahead of the store is a loop whose first store lands
+				// two bytes on, and an advance of some other register is a
+				// loop that stores to one place over and over; neither is the
+				// fill runStoreLoop performs from the pointer it starts at.
+				if haveAdvance || immediate != 2 || !haveStore || register != loop.pointer {
 					return nil
 				}
 				haveAdvance = true
-				loop.pointer = register
 				written[register]++
 				holdsSP[register] = false
 			case 3: // SUB rD, #imm — the counter.

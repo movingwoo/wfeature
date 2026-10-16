@@ -9,9 +9,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Moving a save between installs.
@@ -141,6 +143,12 @@ type SavePack struct {
 func EncodeSavePack(pack SavePack) ([]byte, error) {
 	entries := append([]SaveEntry(nil), pack.Entries...)
 	sort.Slice(entries, func(left, right int) bool { return entries[left].Key < entries[right].Key })
+	// The import refuses a pack with more entries than a save tree may hold,
+	// so an export that wrote one would hand somebody a backup that cannot
+	// be restored.
+	if len(entries) > maxSnapshotSaveEntries {
+		return nil, fmt.Errorf("save backup has %d entries, over the %d a save tree may hold", len(entries), maxSnapshotSaveEntries)
+	}
 
 	payload := make([]byte, 0, savePackPayloadSize(entries))
 	previous := ""
@@ -241,8 +249,17 @@ func DecodeSavePack(container []byte) (SavePack, error) {
 // not reach the save tree.
 func decodeSavePackPayload(payload []byte) ([]SaveEntry, error) {
 	entries := []SaveEntry{}
+	files := make(map[string]bool)
 	previous := ""
 	for offset := 0; offset < len(payload); {
+		// The count is bounded the way a quick save's tree is, and checked
+		// before the entry is read so that the bound is also the allocation's.
+		// Every entry of a restore is a file written, flushed and renamed into
+		// place, and a payload of millions of empty ones would hold an import
+		// for hours; no title's save tree comes near the bound.
+		if len(entries) == maxSnapshotSaveEntries {
+			return nil, ErrSavePackDamaged
+		}
 		if offset+2 > len(payload) {
 			return nil, ErrSavePackDamaged
 		}
@@ -278,6 +295,17 @@ func decodeSavePackPayload(payload []byte) ([]SaveEntry, error) {
 			return nil, ErrSavePackDamaged
 		}
 		previous = key
+		// A name that is a file and also the directory of another entry is a
+		// shape one directory cannot hold, so no export carries it — and a
+		// restore of it fails on the second write after the first has
+		// already replaced a save. In key order a directory's own name comes
+		// before everything under it, so looking back is enough.
+		for index := 0; index < len(key); index++ {
+			if key[index] == '/' && files[key[:index]] {
+				return nil, ErrSavePackDamaged
+			}
+		}
+		files[key] = true
 		entries = append(entries, SaveEntry{Key: key, Data: data})
 	}
 	return entries, nil
@@ -296,6 +324,10 @@ func decodeSavePackPayload(payload []byte) ([]SaveEntry, error) {
 // SKT save whose stores the game then cannot find, which reads to the player
 // as a save that imported successfully and lost everything. So what is skipped
 // is the temporary shape specifically; see saveTemporaryName.
+//
+// Paths are read back to keys the way the directory's names read (see
+// saveEntryKey): an export carries keys, never the names on disk, so a backup
+// this build writes is the one an earlier build wrote of the same saves.
 func ReadSaveTree(root string) ([]SaveEntry, error) {
 	if root == "" {
 		return nil, errors.New("backend: the save tree has no root")
@@ -305,10 +337,15 @@ func ReadSaveTree(root string) ([]SaveEntry, error) {
 		return nil, err
 	}
 	defer unlock()
-	if err := NewDirectorySaveStore(root).recoverSaveReplacement(); err != nil {
+	store := NewDirectorySaveStore(root)
+	if err := store.recoverSaveReplacement(); err != nil {
 		return nil, err
 	}
-	entries := []SaveEntry{}
+	names, err := store.settleSaveNames()
+	if err != nil {
+		return nil, err
+	}
+	choice := saveEntryChoice{}
 	err = walkSaveTree(root, func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			// The root not being there is the first run, and it is the only
@@ -335,23 +372,30 @@ func ReadSaveTree(root string) ([]SaveEntry, error) {
 		if err != nil {
 			return err
 		}
-		key, err := NormalizeSaveKey(filepath.ToSlash(relative))
+		relative = filepath.ToSlash(relative)
+		if relative == saveNamesRecord {
+			return nil
+		}
+		key, encoded, err := saveEntryKey(relative, names.naming)
 		if err != nil {
 			// A file the store did not write can sit in this tree, and it is
 			// not a reason to fail an export of the saves that are here.
 			return nil
 		}
-		data, err := os.ReadFile(name)
-		if err != nil {
-			return err
-		}
-		entries = append(entries, SaveEntry{Key: key, Data: data})
+		choice.offer(key, name, encoded)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(entries, func(left, right int) bool { return entries[left].Key < entries[right].Key })
+	entries := make([]SaveEntry, 0, len(choice))
+	for _, key := range choice.keys() {
+		data, err := os.ReadFile(choice[key].path)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, SaveEntry{Key: key, Data: data})
+	}
 	return entries, nil
 }
 
@@ -432,29 +476,53 @@ func saveTemporaryName(name string) bool {
 // Each entry goes through StoreSave, so every file is replaced by a rename the
 // way a guest's own save is: a restore interrupted halfway leaves whole files,
 // some old and some new, rather than a truncated one.
+//
+// **What can be refused before the first write is.** The entries are checked
+// as a whole — their number, and names that would be a file and a directory
+// at once — and then against the live tree, which can hold a file where an
+// entry needs a directory or the other way round. Found on the second entry,
+// either of those used to leave the first one already replaced.
 func WriteSaveTree(root string, entries []SaveEntry) (written int, removed int, err error) {
 	if root == "" {
 		return 0, 0, errors.New("backend: the save tree has no root")
+	}
+	normalized := make([]SaveEntry, 0, len(entries))
+	for _, entry := range entries {
+		key, err := NormalizeSaveKey(entry.Key)
+		if err != nil {
+			return 0, 0, err
+		}
+		normalized = append(normalized, SaveEntry{Key: key, Data: entry.Data})
+	}
+	ordered, err := validateSnapshotSaves(normalized)
+	if err != nil {
+		return 0, 0, fmt.Errorf("backend: the save backup cannot be restored whole: %w", err)
 	}
 	unlock, err := lockSaveTree(root)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer unlock()
-	keep := make(map[string]bool, len(entries))
+	keep := make(map[string]bool, len(ordered))
 	store := NewDirectorySaveStore(root)
 	if err := store.recoverSaveReplacement(); err != nil {
 		return 0, 0, err
 	}
-	for _, entry := range entries {
-		key, err := NormalizeSaveKey(entry.Key)
-		if err != nil {
+	names, err := store.settleSaveNames()
+	if err != nil {
+		return 0, 0, err
+	}
+	if names.naming == namingEarlier {
+		return 0, 0, refuseEarlierSaveNames(root, names)
+	}
+	if err := saveTreeHasRoomFor(root, ordered); err != nil {
+		return 0, 0, err
+	}
+	for _, entry := range ordered {
+		if err := store.storeSave(entry.Key, entry.Data, &names); err != nil {
 			return written, 0, err
 		}
-		if err := store.storeSave(key, entry.Data); err != nil {
-			return written, 0, err
-		}
-		keep[key] = true
+		keep[entry.Key] = true
 		written++
 	}
 	// The removal runs after every write, so a restore that fails partway has
@@ -462,14 +530,92 @@ func WriteSaveTree(root string, entries []SaveEntry) (written int, removed int, 
 	// previous save is still there to be found, while the reverse — a tree
 	// emptied and then not refilled — is a player's progress gone to a failure
 	// they did not cause.
-	removed, err = pruneSaveTree(root, keep)
+	removed, err = pruneSaveTree(root, keep, names.naming)
 	return written, removed, err
 }
 
+// saveTreeHasRoomFor reports an entry the live tree has the wrong shape for: a
+// file where the entry needs a directory, or a directory where it needs a
+// file. The entries are judged at their encoded paths, and the file system
+// answers, so a name it folds to another by Unicode normalization is judged
+// the way the writes will be. One name is refused by the system rather than
+// the tree: macOS stores no name that is not UTF-8, so a backup carrying one,
+// which another system can write, would fail partway there.
+func saveTreeHasRoomFor(root string, entries []SaveEntry) error {
+	directories := make(map[string]bool)
+	for _, entry := range entries {
+		if (runtime.GOOS == "darwin" || runtime.GOOS == "ios") && !utf8.ValidString(entry.Key) {
+			return fmt.Errorf("backend: save backup entry %q is not a name this system can store", entry.Key)
+		}
+		parts := strings.Split(encodeSaveKey(entry.Key), "/")
+		path := root
+		missing := false
+		for _, part := range parts[:len(parts)-1] {
+			path = filepath.Join(path, part)
+			if directories[path] {
+				continue
+			}
+			info, err := os.Stat(path)
+			if errors.Is(err, fs.ErrNotExist) {
+				// Nothing below a missing directory exists either.
+				missing = true
+				break
+			}
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("backend: save backup entry %q needs a directory where the save tree has a file", entry.Key)
+			}
+			directories[path] = true
+		}
+		if missing {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(path, parts[len(parts)-1]))
+		if err == nil && info.IsDir() {
+			return fmt.Errorf("backend: save backup entry %q is a file where the save tree has a directory", entry.Key)
+		}
+	}
+	return nil
+}
+
 // pruneSaveTree removes the files under root whose keys the restore did not
-// name, and then the directories those files left empty.
-func pruneSaveTree(root string, keep map[string]bool) (int, error) {
+// name, and then the directories those files left empty. Paths are read back
+// to keys the way the directory's names read (see saveEntryKey), and the
+// record of how they read is not an entry.
+//
+// **A name is not the whole test.** On a file system that ignores Unicode
+// normalization — macOS by default — a rename onto an existing entry replaces
+// its contents and keeps its old spelling, so a save just restored can sit
+// under a name the restore never used. A file whose key was not named is kept
+// when it is the very file a named key opens.
+func pruneSaveTree(root string, keep map[string]bool, naming saveNaming) (int, error) {
 	removed := 0
+	// The kept files, by size, read only once a file that was not named turns
+	// up — which on a file system that keeps names apart is a removal, and
+	// on one that folds them may be a restored save.
+	var kept map[int64][]os.FileInfo
+	restored := func(entry fs.DirEntry) bool {
+		if kept == nil {
+			kept = make(map[int64][]os.FileInfo)
+			for key := range keep {
+				if info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(encodeSaveKey(key)))); err == nil {
+					kept[info.Size()] = append(kept[info.Size()], info)
+				}
+			}
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return false
+		}
+		for _, candidate := range kept[info.Size()] {
+			if os.SameFile(info, candidate) {
+				return true
+			}
+		}
+		return false
+	}
 	var directories []string
 	err := walkSaveTree(root, func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -491,7 +637,11 @@ func pruneSaveTree(root string, keep map[string]bool) (int, error) {
 		if err != nil {
 			return err
 		}
-		key, err := NormalizeSaveKey(filepath.ToSlash(relative))
+		relative = filepath.ToSlash(relative)
+		if relative == saveNamesRecord {
+			return nil
+		}
+		key, _, err := saveEntryKey(relative, naming)
 		// A leftover temporary file is removed with the rest: it is not a save
 		// and the restore it belonged to is over. A file whose name is not a
 		// key at all is left alone — this program did not write it and does
@@ -499,7 +649,7 @@ func pruneSaveTree(root string, keep map[string]bool) (int, error) {
 		if err != nil {
 			return nil
 		}
-		if keep[key] && !saveTemporaryName(entry.Name()) {
+		if !saveTemporaryName(entry.Name()) && (keep[key] || restored(entry)) {
 			return nil
 		}
 		if err := os.Remove(name); err != nil {

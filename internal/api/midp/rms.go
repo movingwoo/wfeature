@@ -96,9 +96,10 @@ func recordSetInit(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, erro
 	return jvm.VoidValue(), nil
 }
 
-// recordSetState reads the cursor: the selected ids and how many of them are
-// behind it. The cursor sits between records, so position is the number of
-// records before it.
+// recordSetState reads the cursor: the selected ids and one past the record
+// the last step returned, zero before any step. MIDP's cursor is on a record,
+// not between two: after next answered A and then B, previous answers A, and
+// a first previous with no step before it answers the last record.
 func recordSetState(machine *jvm.VM, set *jvm.Object) (ids []int32, position int32, err error) {
 	value, err := machine.Field(set, RecordSetClass, "ids", "[I")
 	if err != nil {
@@ -247,13 +248,18 @@ func recordSetPreviousRecordID(call *jvm.Invocation, arguments []jvm.Value) (jvm
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if position <= 0 {
-		return jvm.VoidValue(), jvm.Throw(InvalidRecordIDExceptionClass, "enumeration is before the first record")
+	position = min(position, int32(len(ids)))
+	if len(ids) == 0 || position == 1 {
+		return jvm.VoidValue(), jvm.Throw(InvalidRecordIDExceptionClass, "enumeration is at the first record")
 	}
-	if err := call.VM().SetField(set, RecordSetClass, "position", "I", jvm.IntValue(position-1)); err != nil {
+	target := position - 2
+	if position <= 0 {
+		target = int32(len(ids)) - 1
+	}
+	if err := call.VM().SetField(set, RecordSetClass, "position", "I", jvm.IntValue(target+1)); err != nil {
 		return jvm.VoidValue(), err
 	}
-	return jvm.IntValue(ids[position-1]), nil
+	return jvm.IntValue(ids[target]), nil
 }
 
 func recordSetHasElement(forward bool) jvm.ContextMethod {
@@ -270,7 +276,7 @@ func recordSetHasElement(forward bool) jvm.ContextMethod {
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
-		has := !destroyed && position > 0
+		has := !destroyed && len(ids) > 0 && min(position, int32(len(ids))) != 1
 		if forward {
 			has = !destroyed && int(position) < len(ids)
 		}
@@ -522,14 +528,55 @@ func recordSetDestroy(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, e
 
 // recordSetChanged is what the store calls when its records move under a
 // subscribed enumeration. Every change reselects, because a filter or a
-// comparator can make one added record change the whole selection.
+// comparator can make one added record change the whole selection. The cursor
+// stays where it was rather than going back to the start, which an explicit
+// rebuild does: a title that rewrites each record it visits otherwise met the
+// first record again after every write and never left the loop.
 func recordSetChanged(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
 	set, err := receiver(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	_, err = call.InvokeVirtual(set, "rebuild", "()V")
-	return jvm.VoidValue(), err
+	machine := call.VM()
+	destroyed, err := recordSetFlag(machine, set, "destroyed")
+	if err != nil || destroyed {
+		return jvm.VoidValue(), err
+	}
+	ids, position, err := recordSetState(machine, set)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if _, err := call.InvokeVirtual(set, "rebuild", "()V"); err != nil {
+		return jvm.VoidValue(), err
+	}
+	rebuilt, _, err := recordSetState(machine, set)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	return jvm.VoidValue(), machine.SetField(set, RecordSetClass, "position", "I", jvm.IntValue(followCursor(ids, position, rebuilt)))
+}
+
+// followCursor places a cursor in a reselection: on the record it was on, or,
+// when that record has left the selection, just before the first record that
+// followed it and is still there, so the next step answers that one.
+func followCursor(ids []int32, position int32, rebuilt []int32) int32 {
+	current := min(int(position), len(ids)) - 1
+	if current < 0 {
+		return 0
+	}
+	at := make(map[int32]int, len(rebuilt))
+	for index, id := range rebuilt {
+		at[id] = index
+	}
+	if index, ok := at[ids[current]]; ok {
+		return int32(index + 1)
+	}
+	for _, id := range ids[current+1:] {
+		if index, ok := at[id]; ok {
+			return int32(index)
+		}
+	}
+	return int32(len(rebuilt))
 }
 
 func checkRecordSetAlive(machine *jvm.VM, set *jvm.Object) error {

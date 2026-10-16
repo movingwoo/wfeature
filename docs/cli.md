@@ -177,7 +177,11 @@ lifecycle. Held input in a checkpoint is restored exactly, so scripts must
 issue releases when needed; the browser separately releases restored input
 while resetting its physical controls. The serve response's `total_ticks`
 counts Host steps since the command started, not a restored guest counter. Key
-names are the shared table below (`run` maps `clear` but not `clr` or `back`).
+names are the shared table below (`run` maps `clear` but not `clr` or `back`),
+sent as the codes the page sends: `soft1` and `soft2` are `-6` and `-7` on
+every platform. On an SKT title (a MIDlet or an SGS script) `soft3`, `ez` and
+`hangup` are refused, as `runskt` refuses them: a MIDlet would be handed the
+raw code, and an SGS script reads the hang-up code as up.
 
 The slot is tied to the full archive digest. Loading brings the game back and
 leaves its ordinary saves as they are: the restored game reads the saves on
@@ -190,11 +194,14 @@ a slot between build profiles; the default roots include the profile name.
 Restore format and runtime data are the same in both profiles.
 
 The command holds the same filesystem session claim as the server for its
-lifetime. `runktf`, `importsaves` and `provision` also take this claim;
-`runskt` and `runlgt` do not. Another cooperating writer is refused while that
-owner is live. Save listing and export remain available and wait for complete
-directory transactions. A save location that cannot hold a file lock is
-reported on stderr.
+lifetime. `runktf`, `runskt` (an SGS title included), `runlgt`, `importsaves`
+and `provision` also take this claim, on the directory their store writes:
+the owner directory under the default tree, or the `-save` directory itself
+for `runskt` and `runlgt`. Another cooperating writer is refused while that
+owner is live, so a run on a title a browser session has open exits 1 with
+`save directory is in use by another session or tool`. Save listing and export
+remain available and wait for complete directory transactions. A save location
+that cannot hold a file lock is reported on stderr.
 
 ## runktf
 
@@ -210,7 +217,7 @@ wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 
 | Flag | What it does |
 |---|---|
-| `-ticks N` | how many ticks to run, 64 by default. Without `-play` the run stops early at the first lit frame |
+| `-ticks N` | how many ticks to run, 64 by default. Without `-play` the run stops early at the first lit frame, which `-framedir` still writes |
 | `-frame out.png` | write one PNG of what the screen ended up holding |
 | `-framedir dir` | write `tick0042.png` into `dir` every time a new frame is painted |
 | `-save dir` | the save tree. Defaults to `var/savedata/<profile>/ktf` |
@@ -224,7 +231,7 @@ wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 | `-serve` | drive the run a command at a time over stdin and stdout ([below](#driving-a-run-from-outside)) |
 | `-cheat` | attach the text cheat console, paced to about real time; implies `-play`. Without `-ticks` the run continues until it is interrupted |
 | `-patch table.json` | apply a cheat table's byte patches before the first tick ([below](#-patch-for-the-runs-nobody-is-sitting-in-front-of)). Repeatable; combines with every other flag, including `-serve` and `-route` |
-| `-gdb host:port` | serve a GDB stub over the ARM core. The run does not wait for a client; attach with `target remote host:port` |
+| `-gdb host:port` | serve a GDB stub over the ARM core. The run does not wait for a client; attach with `target remote host:port`. Detaching or dropping the connection removes that client's breakpoints and lets the game run on, and the stub accepts the next client; Ctrl-C stops a running target; a request packet over 64 KiB ends the connection |
 | `-diag report.json` | write the runtime-boundary diagnostics ([below](#reading-a-diagnostics-report)) |
 | `-audio out` | write what the guest played: `out.mid` for its MIDI events, `out.wav` for its samples |
 | `-screen WxH` | the handset the game is told it runs on, 240x320 by default |
@@ -241,11 +248,14 @@ fast as the guest can be driven. Add `-play` to watch, or for a title that
 busy-waits on the clock.
 
 **Both generations of KTF package are accepted.** `-route`, `-serve`, `-cheat`
-and `-patch` work on the earlier package. `-diag`, `-gdb`, `-profile` and
-`-profile-folded` are refused for it with `<flag> is not available for the
-earlier KTF package` and exit code 2, because it has no descriptor to inspect
-and no AOT methods to profile or symbolize. `-touch`, `-park` and the
-multiplier of `-speed` are not passed to that package's loop. See
+and `-patch` work on the earlier package. `-diag`, `-gdb`, `-profile`,
+`-profile-folded` and `-profile-from` are refused for it with `<flag> is not
+available for the earlier KTF package` and exit code 2, because it has no
+descriptor to inspect and no AOT methods to profile or symbolize. `-touch`,
+`-park` and a `-speed` other than 1 are refused the same way: its loop has no
+pointer and no lifecycle to park, and its session takes no speed (`-play` is
+the clock it offers). A frame that fails exits 1 after the summary, as a failed
+tick does on the other package. See
 [`history/ktf.md`](history/ktf.md#an-earlier-ktf-package-a-module-file-with-no-descriptor-and-no-jar).
 
 **Under `-play` a tick is the server's entry, not a round.** The descriptor
@@ -365,7 +375,13 @@ mark battle            # capture, and restart the profile here
 - A script is parsed before the archive is read, so a typo exits 2 at once.
 - With `-route` there is no default tick count: the run lasts until the script
   arrives, and an explicit `-ticks` is the budget that stops one that never
-  does.
+  does, whatever count it names (`-ticks 64` included).
+- `runktf` replays a route through the route runner alone, so `-key`,
+  `-touch`, `-park`, `-cheat` and `-profile-from` are refused beside `-route`
+  with `<flag> cannot be combined with -route, which replays only the steps in
+  its script` and exit code 2. The script's own `key` and `mark` steps are what
+  a route has instead. `runlgt` and `runskt` drive their routes through their
+  tick loop and take those flags.
 
 [`history/ktf.md`](history/ktf.md#implementation-repro-routes) covers what a
 route that does not arrive reports and why `mark` is where a scene's profile
@@ -451,9 +467,11 @@ execution checkpoints`.
 
 `-cheat`, `-route`, `-key`, `-touch`, `-park`, `-framedir` and `-ticks` are
 refused alongside `-serve`: each instructs the loop `-serve` replaces, and the
-cheat console and a serve session both want stdin and stdout. The summary a run
-normally prints at the end is not printed either, because stdout is the
-protocol. `-patch` combines with `-serve`; it reads a file, not a terminal.
+cheat console and a serve session both want stdin and stdout. `runktf` refuses
+`-profile-from` there too, because only its tick loop restarts the profile. The
+summary a run normally prints at the end is not printed either, because stdout
+is the protocol. `-patch` combines with `-serve`; it reads a file, not a
+terminal.
 
 #### The screen report
 
@@ -548,6 +566,11 @@ is swept whole.
 `save <file>` writes the frozen values, the watches and the patches as JSON, and
 `load <file>` applies them — patches first, because a patch usually makes the
 rest reachable, and a refused patch stops the load before any value is written.
+`load` reads at most 4 MiB. **Only the console that `-cheat` attaches to a
+terminal reaches files.** The browser's cheat panel drives the same console
+over its session socket, where a path would be one on the server chosen by
+whoever is connected, so there `save` and `load` answer that the console has
+no file access; the panel exchanges table text instead.
 
 ```json
 {
@@ -670,6 +693,10 @@ The summary carries `ticks` and `lit` — the count of non-black pixels — besi
 the MIDlet's state, because "active with a Canvas shown" and "drawing" are
 different answers and only the second means the title is running.
 
+**The run ends by destroying the MIDlet**, after the summary, the way closing a
+server session does, so a title that saves its progress in `destroyApp` keeps
+it when the run ends on its tick count, its route, `-serve`'s `quit` or Ctrl-C.
+
 **A tick is a real frame.** The run is paced at one tick every 16 ms, the
 interval the server session drives the same runtime with, so 1,800 ticks take
 about half a minute of real time. There is no `-play` or `-speed`: the runtime
@@ -756,6 +783,11 @@ wfeature runlgt <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 scheduled rather than queued behind the press, because a game that samples the
 keypad once a frame would otherwise never see both. Key names are the
 [shared table](#key-names).
+
+**The run ends by closing the session**, after the summary, the way the server
+closes a game: a file the title wrote and left open is stored, and its destroy
+callback runs. A run that ends on its tick count, its route, `-serve`'s `quit`
+or Ctrl-C therefore leaves the save the title would have left in the browser.
 
 **Prefer `-route` to a long `-key` list.** These titles take thousands of ticks
 to reach anything, and a script in absolute tick numbers lands somewhere

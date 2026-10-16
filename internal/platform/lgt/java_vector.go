@@ -37,12 +37,28 @@ func (client *Client) javaVectorOf(object uint32) ([]uint32, error) {
 	return held, nil
 }
 
+// javaVectorRoom reports a vector that cannot take one more element. What a
+// vector holds is an Object array in the language, and no array here is longer
+// than maxJavaArrayLength, so a vector that long is a runaway loop rather than
+// a list; stopping it here is what keeps the loop from growing the host until
+// the process dies.
+func javaVectorRoom(held []uint32) error {
+	if len(held) >= maxJavaArrayLength {
+		return fmt.Errorf("a vector of %d elements cannot take another: %d is the most one holds",
+			len(held), maxJavaArrayLength)
+	}
+	return nil
+}
+
 // javaVectorAdd is `addElement(Object)`: one more reference on the end.
 func javaVectorAdd(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	held, err := client.javaVectorOf(arguments[0])
 	if err != nil {
+		return 0, err
+	}
+	if err := javaVectorRoom(held); err != nil {
 		return 0, err
 	}
 	client.javaRuntimeState().vectors[arguments[0]] = append(held, arguments[1])
@@ -171,6 +187,9 @@ func javaVectorInsertAt(
 	index := int(int32(arguments[2]))
 	if index < 0 || index > len(held) {
 		return 0, fmt.Errorf("insert at %d of a vector of %d", index, len(held))
+	}
+	if err := javaVectorRoom(held); err != nil {
+		return 0, err
 	}
 	grown := make([]uint32, 0, len(held)+1)
 	grown = append(grown, held[:index]...)

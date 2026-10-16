@@ -79,6 +79,9 @@ func openStreamFile(className, descriptor string, mode int32) jvm.ContextMethod 
 			file, err = arguments[1].Reference()
 		default:
 			file, err = call.NewObject(XFileClass, "(Ljava/lang/String;I)V", arguments[1], jvm.IntValue(mode))
+			if err == nil && mode == xfileWrite {
+				err = truncateStreamFile(call, file)
+			}
 		}
 		if err != nil {
 			return jvm.VoidValue(), err
@@ -87,10 +90,28 @@ func openStreamFile(className, descriptor string, mode int32) jvm.ContextMethod 
 	}
 }
 
+// truncateStreamFile empties the file a non-appending FileOutputStream has
+// just opened. These constructors mirror java.io's, whose (String) and
+// (String, false) forms start the file over; opening without that kept the old
+// bytes past the new end, and a shorter save then carried the tail of the
+// previous one. XFile's own modes never truncate, so the open is followed by
+// XFile's private truncate, which empties the file — stored at once, as a
+// truncating open is — and leaves it a file. Removing it and making it again
+// through unlink would put a file the stream has open on the removal list.
+func truncateStreamFile(call *jvm.Invocation, file *jvm.Object) error {
+	_, err := call.InvokeSpecial(file, XFileClass, "truncate", "()V")
+	return err
+}
+
 // fileOutputStreamAppendInit opens for writing and steps to the end, which is
-// what append means for a handset file: the existing bytes stay.
+// what append means for a handset file: the existing bytes stay. Without
+// append it is the plain constructor, which starts the file over.
 func fileOutputStreamAppendInit(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
 	stream, err := receiver(arguments)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	append, err := arguments[2].Int32()
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -98,11 +119,12 @@ func fileOutputStreamAppendInit(call *jvm.Invocation, arguments []jvm.Value) (jv
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if err := call.VM().SetField(stream, FileOutputStreamClass, "file", xfileDescriptor, jvm.ReferenceValue(file)); err != nil {
-		return jvm.VoidValue(), err
+	if append == 0 {
+		if err := truncateStreamFile(call, file); err != nil {
+			return jvm.VoidValue(), err
+		}
 	}
-	append, err := arguments[2].Int32()
-	if err != nil {
+	if err := call.VM().SetField(stream, FileOutputStreamClass, "file", xfileDescriptor, jvm.ReferenceValue(file)); err != nil {
 		return jvm.VoidValue(), err
 	}
 	if append == 0 {
@@ -216,7 +238,8 @@ func fileInputStreamReadArray(call *jvm.Invocation, arguments []jvm.Value) (jvm.
 }
 
 // fileInputStreamReadRange answers the end of a file the way java.io does,
-// with -1 rather than the zero the file layer returns.
+// with -1 rather than the zero the file layer returns. A read of no bytes is
+// 0, as java.io answers it, rather than an end that has not been reached.
 func fileInputStreamReadRange(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
 	stream, err := receiver(arguments)
 	if err != nil {
@@ -233,6 +256,11 @@ func fileInputStreamReadRange(call *jvm.Invocation, arguments []jvm.Value) (jvm.
 	count, err := result.Int32()
 	if err != nil {
 		return jvm.VoidValue(), err
+	}
+	if count == 0 {
+		if length, err := arguments[3].Int32(); err == nil && length == 0 {
+			return jvm.IntValue(0), nil
+		}
 	}
 	if count <= 0 {
 		return jvm.IntValue(-1), nil

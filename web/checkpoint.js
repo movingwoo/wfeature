@@ -10,9 +10,11 @@ export const initCheckpoints = ({ document, session, state, editing,
   let capable = false;
   let available = false;
   let busy = false;
+  let failing = false;
   let timer;
   const feedback = (message, failed = false, duration = 0) => {
     clearTimer(timer);
+    failing = failed && message !== "";
     if (!note) return;
     note.textContent = message;
     note.hidden = !message;
@@ -27,7 +29,12 @@ export const initCheckpoints = ({ document, session, state, editing,
         button.disabled = !editing() && (busy || !playing || (name === QUICK_LOAD && !available));
       }
     }
-    if (!playing || editing()) feedback("");
+    // A failure stays for its own time on the way back to the same game: a
+    // dropped connection rejects the request and leaves play in one turn, so
+    // clearing it here erased the note as it was written. The picker covers
+    // the screen, so a return to it still clears it.
+    const keep = failing && state() !== "ready";
+    if (editing() || (!playing && !keep)) feedback("");
   };
   const run = async name => {
     if (busy || editing() || document.hidden || state() !== "playing" || !capable) return;

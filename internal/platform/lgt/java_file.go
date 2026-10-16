@@ -1,6 +1,7 @@
 package lgt
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
@@ -193,9 +194,11 @@ func javaFileWriteByte(
 	value := byte(arguments[1])
 	// A cursor past the end fills the gap with zeros, as the array forms of
 	// this call do. Nothing a Java title does moves the cursor there; a file
-	// that is shorter after a quick load than it was before one does.
-	if file.cursor >= len(file.data) {
-		file.data = append(file.data, make([]byte, file.cursor+1-len(file.data))...)
+	// that is shorter after a quick load than it was before one does. A cursor
+	// past maxFileBytes is one only a record can hold, and the write answers
+	// -1 there, as the array forms do.
+	if !file.extend(file.cursor + 1) {
+		return ^uint32(0), nil
 	}
 	file.data[file.cursor] = value
 	file.cursor++
@@ -212,9 +215,11 @@ func javaFileWriteByte(
 // **What comes back is a byte sink bound to the file.** A `ByteArrayOutputStream`
 // is an `OutputStream`, so the type is right and every write, flush and close
 // slot already works; the binding is what makes the bytes land somewhere other
-// than in memory. They are drained into the file on flush and on close, which
-// is where a title expects its writes to have happened, and the file reaches
-// the store on its own close the way every other write here does.
+// than in memory. Every write goes into the File at its cursor as it is made,
+// because a write to the stream is a write to the file: the File's size, a
+// read of the path and every other open see it at once, and it waits in the
+// File's buffer like a write through the File itself. The stream's flush and
+// close store the File, as the File's own close does.
 //
 // The specification's one failure is a file that is not open or that already
 // has a stream out, and both are an IOException.
@@ -257,9 +262,9 @@ func javaFileOpenOutputStream(
 //
 // **The file's own position follows what the stream consumed**, so a title that
 // reads part of a file through the stream and the rest through `File.read` sees
-// one file rather than two views of it. The bytes are taken at open because a
-// file here is wholly in memory and nothing can change it underneath: the store
-// is written on close, not during.
+// one file rather than two views of it. The stream reads the file's buffer from
+// that position on, the buffer every handle on the path writes, so a write made
+// after the stream was opened is what it reads; see followJavaFileStream.
 //
 // The specification's failures are a file that is not open and a second stream
 // on one file, both `IOException` — the same pair `openOutputStream` refuses.
@@ -297,7 +302,7 @@ func (client *Client) openJavaFileInputStream(thread *armcore.Thread, file uint3
 	if err != nil {
 		return 0, err
 	}
-	rest := append([]byte(nil), open.data[min(open.cursor, len(open.data)):]...)
+	rest := open.data[min(open.cursor, len(open.data)):len(open.data):len(open.data)]
 	runtime.streams[object] = &javaStream{Name: open.name, Data: rest, File: true, Offset: open.cursor}
 	runtime.streamFiles[object] = file
 	if client.logger != nil {
@@ -305,6 +310,27 @@ func (client *Client) openJavaFileInputStream(thread *armcore.Thread, file uint3
 			"file", file, "stream", object, "bytes", len(rest))
 	}
 	return object, nil
+}
+
+// followJavaFileStream points a stream opened on a File at what the file holds
+// now, from where the stream's window starts. A write or a truncation through
+// any handle on the path is then what the stream reads next, as it is on the
+// handset, where the stream reads the file. What was read stays read, and a
+// file that is shorter now ends the window where it ends. A stream whose File
+// has been closed keeps the window it had then.
+func (client *Client) followJavaFileStream(object uint32, stream *javaStream) {
+	runtime := client.javaRun
+	file, bound := runtime.streamFiles[object]
+	if !bound {
+		return
+	}
+	handle, open := runtime.files[file]
+	if !open || client.files[handle] == nil {
+		return
+	}
+	data := client.files[handle].data
+	stream.Data = data[min(stream.Offset, len(data)):len(data):len(data)]
+	stream.Read, stream.Mark = min(stream.Read, len(stream.Data)), min(stream.Mark, len(stream.Data))
 }
 
 // syncJavaStreamToFile moves the file's position on by what a bound read stream
@@ -330,11 +356,42 @@ func (client *Client) syncJavaStreamToFile(stream uint32) error {
 	return nil
 }
 
+// putJavaSink keeps what a sink holds after a write. A sink opened on a File
+// hands it to the File at once: see javaFileOpenOutputStream. A write the
+// File cannot take, past the size a file may grow to or into a File opened to
+// read, stops the run, as a write through such a File itself would fail.
+func (client *Client) putJavaSink(sink uint32, held []byte) error {
+	runtime := client.javaRuntimeState()
+	runtime.sinks[sink] = held
+	if _, bound := runtime.sinkFiles[sink]; !bound {
+		return nil
+	}
+	return client.drainJavaSinkToFile(sink)
+}
+
+// storeJavaSinkFile is a flush or a close of a stream opened on a File: the
+// File is given to the store, with what was written through the stream in
+// it. A store that refuses keeps the write waiting in the File, as a refused
+// File.close does, for the File's close, the ending and a quick step to give
+// again; the title is not thrown at for a fault of the Host's storage.
+func (client *Client) storeJavaSinkFile(sink uint32) {
+	file, bound := client.javaRuntimeState().sinkFiles[sink]
+	if !bound {
+		return
+	}
+	_, open, err := client.javaFileHandle(file)
+	if err != nil || !open.dirty {
+		return
+	}
+	if err := client.storeContent(open.name, open.fileContent); err != nil && client.logger != nil {
+		client.logger.Debug("LGT java file stream flush kept a write the store refused", "name", open.name, "stream", sink)
+	}
+}
+
 // drainJavaSinkToFile moves what a bound sink holds into the file behind it.
 // It is what makes a stream opened on a File write to the File rather than to
-// memory, and it runs on flush, on close, and before the File itself closes —
-// a title that writes through a stream and closes only the File must still find
-// its bytes there.
+// memory, and it runs at every write. The flush, the close, the File's own
+// close and the ending run it as well, where it finds nothing left to move.
 func (client *Client) drainJavaSinkToFile(sink uint32) error {
 	runtime := client.javaRuntimeState()
 	file, bound := runtime.sinkFiles[sink]
@@ -356,8 +413,9 @@ func (client *Client) drainJavaSinkToFile(sink uint32) error {
 	// the File would have done, and the sink is emptied so a flush followed by
 	// a close does not write the same block twice.
 	end := open.cursor + len(held)
-	if end > len(open.data) {
-		open.data = append(open.data, make([]byte, end-len(open.data))...)
+	if !open.extend(end) {
+		return fmt.Errorf("%d bytes at %d of %s is past the %d bytes a file may grow to",
+			len(held), open.cursor, open.name, maxFileBytes)
 	}
 	copy(open.data[open.cursor:end], held)
 	open.cursor = end
@@ -376,9 +434,9 @@ func javaFileClose(
 	if err != nil {
 		return 0, err
 	}
-	// A stream opened on this file is drained before the file goes: a title
-	// that writes through the stream and closes only the File would otherwise
-	// lose everything it wrote.
+	// A stream opened on this file has nothing left to drain, since every
+	// write reached the file as it was made; the drain stays as the last
+	// place a byte left in a stream could go before the binding does.
 	runtime := client.javaRuntimeState()
 	for sink, owner := range runtime.sinkFiles {
 		if owner != arguments[0] {
@@ -397,9 +455,21 @@ func javaFileClose(
 			return 0, err
 		}
 		delete(runtime.streamFiles, stream)
+		// The window stops following the file here; it keeps its own copy of
+		// what it had rather than the buffer other handles may still write.
+		if held := runtime.streams[stream]; held != nil {
+			held.Data = bytes.Clone(held.Data)
+		}
 	}
-	if file.dirty {
-		client.writeFile(file.name, file.data)
+	// A write the store refuses keeps the File open with it, as a refused C
+	// close does (see closeFileHandle): the next close, the ending and a quick
+	// step try again. The title is not thrown at for a fault of the Host's
+	// storage, which would end a game that has nothing wrong with it.
+	if file.dirty && client.storeContent(file.name, file.fileContent) != nil {
+		if client.logger != nil {
+			client.logger.Debug("LGT java file close kept a write the store refused", "name", file.name, "file", arguments[0])
+		}
+		return 0, nil
 	}
 	delete(client.files, handle)
 	delete(runtime.files, arguments[0])

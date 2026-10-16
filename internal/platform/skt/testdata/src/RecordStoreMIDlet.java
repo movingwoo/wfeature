@@ -162,7 +162,7 @@ public final class RecordStoreMIDlet extends MIDlet implements RecordListener {
         }
         enumerationOrder = order.toString();
         check(enumerationOrder.equals("3,"), 2097152, 165);
-        check(!enumeration.hasNextElement() && enumeration.hasPreviousElement(), 4194304, 166);
+        check(!enumeration.hasNextElement() && !enumeration.hasPreviousElement(), 4194304, 166); // on the only record
         enumeration.reset();
         check(enumeration.hasNextElement(), 8388608, 168);
 

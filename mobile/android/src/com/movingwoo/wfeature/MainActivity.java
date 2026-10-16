@@ -59,7 +59,23 @@ public class MainActivity extends Activity {
     private static final int SERVER_PORT = 11541;
 
     private WebView webView;
-    private Process server;
+
+    /**
+     * The server outlives an activity that is only being recreated. A change
+     * the manifest does not take as its own — a locale, a font scale — makes
+     * Android destroy this activity and create another in the same process,
+     * and the game running in the server has to be there when the new one
+     * shows the page. So the process belongs to the class, and every read and
+     * write of it holds the class lock: the thread that starts it and the main
+     * thread that ends it are different threads.
+     */
+    private static Process server;
+
+    /**
+     * Set when this activity is gone for good rather than recreated, so a
+     * start still in flight does not leave a server nobody will end.
+     */
+    private boolean finished;
     private ValueCallback<Uri[]> pendingFiles;
     private byte[] pendingExport;
     private static final int PICK_FILE = 1;
@@ -82,19 +98,33 @@ public class MainActivity extends Activity {
         new Thread(this::startServerAndShow).start();
     }
 
-    /** Starts the server, waits for it to answer, and then shows the page. */
+    /**
+     * Starts the server, or finds the one an earlier instance of this activity
+     * started, waits for it to answer, and then shows the page.
+     */
     private void startServerAndShow() {
         try {
             int port = SERVER_PORT;
             File root = dataRoot();
-            server = launch(port, root);
-            readLog(server);
+            synchronized (MainActivity.class) {
+                if (finished) {
+                    return;
+                }
+                if (server == null || !server.isAlive()) {
+                    server = launch(port, root);
+                    readLog(server);
+                }
+            }
             if (!waitUntilServing(port)) {
                 showFailure("서버가 시작되지 않았습니다.");
                 return;
             }
             String url = "http://127.0.0.1:" + port;
-            runOnUiThread(() -> showPage(url));
+            runOnUiThread(() -> {
+                if (!isDestroyed()) {
+                    showPage(url);
+                }
+            });
         } catch (Exception failure) {
             Log.e(TAG, "the server did not start", failure);
             showFailure("서버를 시작하지 못했습니다: " + failure.getMessage());
@@ -174,7 +204,10 @@ public class MainActivity extends Activity {
     private boolean waitUntilServing(int port) {
         long deadline = System.currentTimeMillis() + 20_000;
         while (System.currentTimeMillis() < deadline) {
-            Process launched = server;
+            Process launched;
+            synchronized (MainActivity.class) {
+                launched = server;
+            }
             if (launched == null || !launched.isAlive()) {
                 return false;
             }
@@ -455,11 +488,23 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (server != null) {
-            // The session drains on its own when the process goes; what must
-            // not happen is the process outliving the app that started it.
-            server.destroy();
-            server = null;
+        // A recreation is not an ending: the next instance finds the server
+        // and the game in it still running. Ending it here closed the game the
+        // player was in whenever a split screen or an attached keyboard
+        // rebuilt the activity, and the new instance raced the old process for
+        // the port.
+        if (isChangingConfigurations()) {
+            return;
+        }
+        synchronized (MainActivity.class) {
+            finished = true;
+            if (server != null) {
+                // The session drains on its own when the process goes; what
+                // must not happen is the process outliving the app that
+                // started it.
+                server.destroy();
+                server = null;
+            }
         }
     }
 }

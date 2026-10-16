@@ -204,7 +204,8 @@ func lgtJavaSaveHeldWords(t *testing.T, s *session.Session) lgtJavaSaveHeld {
 
 // A File's write waits in the buffer of its open handle: the store has the
 // save as it was until the File is closed, by the title or by the session
-// ending.
+// ending. Another File on the path reads what is waiting in that buffer, as a
+// handset's write-through file would.
 func TestLGTJavaSaveFileHoldLeavesTheWritePending(t *testing.T) {
 	archive := lgtJavaSaveArchive(t)
 	surface := lgtJavaSaveSurfaces[0]
@@ -223,7 +224,8 @@ func TestLGTJavaSaveFileHoldLeavesTheWritePending(t *testing.T) {
 	t.Run("finish", func(t *testing.T) {
 		s, store := held(t)
 		// A second hold is ignored while a File is kept, a flush has no stream
-		// to flush, and a read through another File sees what the store has.
+		// to flush, and a read through another File sees what is waiting in the
+		// kept one.
 		kept := lgtJavaSaveHeldWords(t, s)
 		lgtSaveAct(t, s, 0x77770007, testfixture.LGTSaveKeyHold)
 		lgtSaveAct(t, s, 0x77770007, testfixture.LGTSaveKeyTruncate)
@@ -231,7 +233,7 @@ func TestLGTJavaSaveFileHoldLeavesTheWritePending(t *testing.T) {
 		if lgtJavaSaveHeldWords(t, s) != kept {
 			t.Fatal("a second hold replaced the File that was kept")
 		}
-		if seen := lgtSaveRead(t, s); seen != lgtSaveFound(0x11110001, 0x11110001) {
+		if seen := lgtSaveRead(t, s); seen != lgtSaveFound(0x22220002, 0x11110001) {
 			t.Fatalf("while a write is pending a read answered %+v", seen)
 		}
 		lgtSaveAct(t, s, 0x33330003, testfixture.LGTSaveKeyFinish)
@@ -250,11 +252,11 @@ func TestLGTJavaSaveFileHoldLeavesTheWritePending(t *testing.T) {
 	})
 }
 
-// A stream's write waits one step further back, in the stream. A flush moves
-// it into the File's buffer, which is still not the store; only the File's
-// close is. A session that ends stores what is in a handle's buffer and not
-// what is still in a stream.
-func TestLGTJavaSaveStreamHoldLeavesTheWriteInTheStream(t *testing.T) {
+// A write into a stream opened on a File is a write to the File: it waits in
+// the File's buffer as a write through the File itself does, and another File
+// on the path reads it there. The stream's flush stores it, as the File's
+// close and the session's ending do.
+func TestLGTJavaSaveStreamHoldWritesTheFile(t *testing.T) {
 	archive := lgtJavaSaveArchive(t)
 	surface := lgtJavaSaveSurfaces[1]
 	held := func(t *testing.T) (*session.Session, *backend.MemorySaveStore) {
@@ -271,6 +273,9 @@ func TestLGTJavaSaveStreamHoldLeavesTheWriteInTheStream(t *testing.T) {
 
 	t.Run("finish", func(t *testing.T) {
 		s, store := held(t)
+		if seen := lgtSaveRead(t, s); seen != lgtSaveFound(0x22220002, 0x11110001) {
+			t.Fatalf("while a stream's write is pending a read answered %+v", seen)
+		}
 		lgtSaveAct(t, s, 0x33330003, testfixture.LGTSaveKeyFinish)
 		if lgtJavaSaveHeldWords(t, s) != (lgtJavaSaveHeld{}) {
 			t.Fatal("finish kept the File or its stream")
@@ -281,7 +286,7 @@ func TestLGTJavaSaveStreamHoldLeavesTheWriteInTheStream(t *testing.T) {
 	t.Run("flush and finish", func(t *testing.T) {
 		s, store := held(t)
 		lgtSavePress(t, s, testfixture.LGTJavaSaveKeyFlush)
-		surface.wantStored(t, store, lgtSaveParts(0x11110001, 0x11110001), "flush")
+		surface.wantStored(t, store, lgtSaveParts(0x22220002, 0x11110001), "flush")
 		lgtSaveAct(t, s, 0x33330003, testfixture.LGTSaveKeyFinish)
 		surface.wantStored(t, store, lgtSaveParts(0x22220002, 0x33330003), "finish")
 		lgtJavaSaveCaughtEverything(t, s)
@@ -289,7 +294,7 @@ func TestLGTJavaSaveStreamHoldLeavesTheWriteInTheStream(t *testing.T) {
 	t.Run("session close", func(t *testing.T) {
 		s, store := held(t)
 		s.Close()
-		surface.wantStored(t, store, lgtSaveParts(0x11110001, 0x11110001), "close with the write still in the stream")
+		surface.wantStored(t, store, lgtSaveParts(0x22220002, 0x11110001), "close with the stream's write not flushed")
 	})
 	t.Run("flush and session close", func(t *testing.T) {
 		s, store := held(t)
@@ -333,10 +338,12 @@ func TestLGTJavaSaveDatabaseHoldStoresAsItWrites(t *testing.T) {
 	lgtJavaSaveCaughtEverything(t, s)
 }
 
-// A File opened with truncation holds nothing and has written nothing, so the
-// stored save is untouched until something is written through it and it is
-// closed — and then part B, the only thing written, is the whole of the file.
-func TestLGTJavaSaveTruncateLeavesTheSaveUntilItIsFinished(t *testing.T) {
+// A File opened with truncation empties the stored save at the open, before
+// anything is written through it, and at the close part B, the only thing
+// written, is the whole of the file. Another File on the path meanwhile reads
+// the empty file the truncation made, and a session that ends before the
+// title writes leaves the save empty.
+func TestLGTJavaSaveTruncateEmptiesTheSaveAtTheOpen(t *testing.T) {
 	archive := lgtJavaSaveArchive(t)
 	for _, surface := range lgtJavaSaveSurfaces[:2] {
 		t.Run(surface.name, func(t *testing.T) {
@@ -349,9 +356,9 @@ func TestLGTJavaSaveTruncateLeavesTheSaveUntilItIsFinished(t *testing.T) {
 				if kept.File == 0 || (kept.Stream != 0) != (surface.surface == testfixture.LGTJavaSaveSurfaceStream) {
 					t.Fatalf("truncate kept %+v", kept)
 				}
-				surface.wantStored(t, store, lgtSaveParts(0x11110001, 0x11110001), "truncate")
-				if seen := lgtSaveRead(t, s); seen != lgtSaveFound(0x11110001, 0x11110001) {
-					t.Fatalf("while a truncation is pending a read answered %+v", seen)
+				surface.wantStored(t, store, []byte{}, "truncate")
+				if seen := lgtSaveRead(t, s); seen != (lgtSaveSeen{Status: testfixture.LGTSaveStatusFound}) {
+					t.Fatalf("after the truncating open a read answered %+v", seen)
 				}
 				return s, store
 			}
@@ -368,7 +375,7 @@ func TestLGTJavaSaveTruncateLeavesTheSaveUntilItIsFinished(t *testing.T) {
 			t.Run("session close", func(t *testing.T) {
 				s, store := truncated(t)
 				s.Close()
-				surface.wantStored(t, store, lgtSaveParts(0x11110001, 0x11110001), "close")
+				surface.wantStored(t, store, []byte{}, "close")
 			})
 		})
 	}

@@ -18,12 +18,13 @@
 // asks; see internal/webhost/remove.go.
 
 import { askToConfirm } from "./confirm.js";
+import { reach } from "./reach.js";
 
 // uploadGame sends one archive and answers with nothing, or throws with what
 // the server said. The name travels in the query rather than a header because
 // these names are Korean and a header is Latin-1.
 export const uploadGame = async (file, fetcher = fetch) => {
-  const response = await fetcher(`api/games?name=${encodeURIComponent(file.name)}`, {
+  const response = await reach(fetcher, `api/games?name=${encodeURIComponent(file.name)}`, {
     method: "POST",
     body: file,
   });
@@ -102,7 +103,7 @@ export const syncRemoveButton = document => {
 // what the server said. The path is the picker's own, the way the save routes
 // take it: one spelling of "which game" across the API.
 export const removeGame = async (game, fetcher = fetch) => {
-  const response = await fetcher(`api/games?game=${encodeURIComponent(game)}`, {
+  const response = await reach(fetcher, `api/games?game=${encodeURIComponent(game)}`, {
     method: "DELETE",
   });
   if (!response.ok) {

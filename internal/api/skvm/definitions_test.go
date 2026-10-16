@@ -92,6 +92,36 @@ func TestStreamsOpenThroughXFile(t *testing.T) {
 		}); err != nil {
 		t.Fatalf("RegisterNative(XFile.initName) error = %v", err)
 	}
+	var unlinked string
+	if err := machine.RegisterNative(XFileClass, "unlink", "(Ljava/lang/String;)I",
+		func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+			name, err := arguments[0].Reference()
+			if err != nil {
+				return jvm.VoidValue(), err
+			}
+			unlinked, _ = jvm.StringText(name)
+			return jvm.IntValue(0), nil
+		}); err != nil {
+		t.Fatalf("RegisterNative(XFile.unlink) error = %v", err)
+	}
+	var truncated []*jvm.Object
+	if err := machine.RegisterNative(XFileClass, "truncate", "()V",
+		func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+			file, err := arguments[0].Reference()
+			truncated = append(truncated, file)
+			return jvm.VoidValue(), err
+		}); err != nil {
+		t.Fatalf("RegisterNative(XFile.truncate) error = %v", err)
+	}
+	streamFile := func(stream *jvm.Object, class string) *jvm.Object {
+		t.Helper()
+		value, err := machine.Field(stream, class, "file", xfileDescriptor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, _ := value.Reference()
+		return file
+	}
 
 	if _, err := machine.NewObject(FileInputStreamClass, "(Ljava/lang/String;)V",
 		jvm.ReferenceValue(machine.NewString("save.dat"))); err != nil {
@@ -100,13 +130,30 @@ func TestStreamsOpenThroughXFile(t *testing.T) {
 	if openedName != "save.dat" || openedMode != xfileRead {
 		t.Errorf("input stream opened %q mode %d, want %q mode %d", openedName, openedMode, "save.dat", xfileRead)
 	}
+	if unlinked != "" || len(truncated) != 0 {
+		t.Errorf("input stream emptied its file: unlinked %q, truncated %d", unlinked, len(truncated))
+	}
 
-	if _, err := machine.NewObject(FileOutputStreamClass, "(Ljava/lang/String;)V",
-		jvm.ReferenceValue(machine.NewString("save.dat"))); err != nil {
+	output, err := machine.NewObject(FileOutputStreamClass, "(Ljava/lang/String;)V",
+		jvm.ReferenceValue(machine.NewString("save.dat")))
+	if err != nil {
 		t.Fatalf("new FileOutputStream(String) error = %v", err)
 	}
 	if openedMode != xfileWrite {
 		t.Errorf("output stream opened mode %d, want %d", openedMode, xfileWrite)
+	}
+	// The non-appending forms start the file over, as java.io's do, by
+	// truncating the file they opened rather than removing it first.
+	if len(truncated) != 1 || truncated[0] != streamFile(output, FileOutputStreamClass) || unlinked != "" {
+		t.Errorf("output stream truncated %d files (its own: %v) and unlinked %q", len(truncated), len(truncated) == 1 && truncated[0] == streamFile(output, FileOutputStreamClass), unlinked)
+	}
+	output, err = machine.NewObject(FileOutputStreamClass, "(Ljava/lang/String;Z)V",
+		jvm.ReferenceValue(machine.NewString("save.dat")), jvm.IntValue(0))
+	if err != nil {
+		t.Fatalf("new FileOutputStream(String, false) error = %v", err)
+	}
+	if len(truncated) != 2 || truncated[1] != streamFile(output, FileOutputStreamClass) || unlinked != "" {
+		t.Errorf("non-appending output stream truncated %d files and unlinked %q", len(truncated), unlinked)
 	}
 
 	var archiveName, entryName string

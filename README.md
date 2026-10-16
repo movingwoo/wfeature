@@ -332,7 +332,7 @@ make serve-release      # 릴리즈
 make run ARGS="runktf var/games/ktf/game.zip -play"
 ```
 
-`runktf`, `runskt`, `runlgt`는 브라우저와 같이 인증 호환을 자동 적용하며, 비교 진단할 때만 `-no-auth`로 끕니다. 결과는 `authentication: ktf-certificate-52`, `authentication: skt-license`처럼 표시되고, `unsupported`는 지원하는 방식을 찾지 못했다는 뜻입니다. LGT는 `lgt-cached-authentication`, `lgt-certificate-58`, `lgt-offline-notification`, `lgt-offline-authentication`으로 표시됩니다. 뒤의 두 방식은 게임 화면에서 고른 동의 여부나 연결 확인 요청을 로컬에서 처리합니다. 외부로 전송하지 않으며, 게임이 안내하는 재시작은 필요할 수 있습니다.
+`runktf`, `runskt`, `runlgt`는 브라우저와 같이 인증 호환을 자동 적용하며, 비교 진단할 때만 `-no-auth`로 끕니다. 결과는 `authentication: ktf-certificate-52`, `authentication: skt-license`처럼 표시되고, `unsupported`는 지원하는 방식을 찾지 못했다는 뜻입니다. LGT는 `lgt-cached-authentication`, `lgt-certificate-58`, `lgt-certificate-100`, `lgt-offline-notification`, `lgt-offline-authentication`, `lgt-save-subscriber`, `lgt-certificate-message`로 표시됩니다. `lgt-offline-notification`과 `lgt-offline-authentication`은 게임 화면에서 고른 동의 여부나 연결 확인 요청을 로컬에서 처리합니다. 외부로 전송하지 않으며, 게임이 안내하는 재시작은 필요할 수 있습니다.
 
 `-framedir`로 남긴 프레임은 `contactsheet`로 한 장에 모으고, `framediff`로 두 빌드를 비교하며, `zoom`으로 한 프레임의 일부를 확대합니다.  
 `framestats`는 프레임에 그려진 내용을 색 수와 켜진 픽셀 수로 보고하며, 모든 프레임이 단색이면 0이 아닌 종료 코드를 반환합니다.  

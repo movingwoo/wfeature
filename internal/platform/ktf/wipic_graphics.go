@@ -7,6 +7,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"math/bits"
 
 	"unicode/utf16"
 
@@ -116,7 +117,9 @@ func (runtime *initializationRuntime) readWIPICSurface(handle uint32, depth int)
 	if framebuffer.bpp != 16 {
 		return wipicFramebuffer{}, fmt.Errorf("KTF framebuffer depth %d is not supported (%s)", framebuffer.bpp, runtime.describeWIPICSurfaceWords(handle, recordBase[0], fields))
 	}
-	if framebuffer.width == 0 || framebuffer.height == 0 || framebuffer.bpl < framebuffer.width*2 {
+	// The record is guest memory, so the line check is made wide enough that
+	// a width of 2^31 or more cannot wrap width*2 under a tiny bpl.
+	if framebuffer.width == 0 || framebuffer.height == 0 || uint64(framebuffer.bpl) < uint64(framebuffer.width)*2 {
 		return wipicFramebuffer{}, fmt.Errorf("KTF framebuffer %dx%d bpl %d is invalid (%s)", framebuffer.width, framebuffer.height, framebuffer.bpl, runtime.describeWIPICSurfaceWords(handle, recordBase[0], fields))
 	}
 	if uint64(framebuffer.bpl)*uint64(framebuffer.height) > maxWIPICFramebufferBytes {
@@ -410,7 +413,7 @@ func (runtime *initializationRuntime) wipicDrawArc(thread *armcore.Thread) (uint
 	if err != nil || !ok {
 		return 0, err
 	}
-	return 0, curve.DrawArc(bounds[0], bounds[1], bounds[2], bounds[3], angles[0], angles[1],
+	return 0, curve.DrawArcWithin(framebuffer.curveBounds(clip), bounds[0], bounds[1], bounds[2], bounds[3], angles[0], angles[1],
 		runtime.framebufferCurveEmit(framebuffer, clip, op, pixel))
 }
 
@@ -421,8 +424,21 @@ func (runtime *initializationRuntime) wipicFillArc(thread *armcore.Thread) (uint
 	if err != nil || !ok {
 		return 0, err
 	}
-	return 0, curve.FillArc(bounds[0], bounds[1], bounds[2], bounds[3], angles[0], angles[1],
+	return 0, curve.FillArcWithin(framebuffer.curveBounds(clip), bounds[0], bounds[1], bounds[2], bounds[3], angles[0], angles[1],
 		runtime.framebufferCurveEmit(framebuffer, clip, op, pixel))
+}
+
+// curveBounds is the part of the plane fillFramebufferRect can reach: the
+// framebuffer met with the context's clip, as clipRect computes it. The arc's
+// box comes from the guest and can be far larger than any surface, so the
+// curve walks only this part of it.
+func (framebuffer wipicFramebuffer) curveBounds(clip wipicClip) curve.Bounds {
+	bounds := curve.Bounds{Right: int64(framebuffer.width), Bottom: int64(framebuffer.height)}
+	if clip.active() {
+		bounds.Left, bounds.Top = max(bounds.Left, int64(clip.left)), max(bounds.Top, int64(clip.top))
+		bounds.Right, bounds.Bottom = min(bounds.Right, int64(clip.right)), min(bounds.Bottom, int64(clip.bottom))
+	}
+	return bounds
 }
 
 // framebufferCurveEmit fills each span a curve hands out through the same
@@ -475,7 +491,14 @@ func (runtime *initializationRuntime) wipicReadString(pointer uint32, length int
 	}
 	var data []byte
 	if length > 0 {
-		data = make([]byte, uint32(length)*unit)
+		// The length is the guest's, so the range has to exist before a host
+		// buffer that size does; a garbage length otherwise asks the host for
+		// up to 4 GiB just to be refused by the read.
+		size := uint64(length) * uint64(unit)
+		if err := memory.ValidateRange(pointer, size, armcore.PermissionRead); err != nil {
+			return nil, fmt.Errorf("read KTF draw string: %w", err)
+		}
+		data = make([]byte, size)
 		if err := memory.Read(pointer, data); err != nil {
 			return nil, fmt.Errorf("read KTF draw string: %w", err)
 		}
@@ -612,7 +635,8 @@ func (runtime *initializationRuntime) wipicPutPixel(thread *armcore.Thread) (uin
 	return 0, nil
 }
 
-// wipicDrawLine implements MC_grpDrawLine with Bresenham stepping.
+// wipicDrawLine implements MC_grpDrawLine with Bresenham stepping, walked only
+// across the surface; see clippedLine.
 func (runtime *initializationRuntime) wipicDrawLine(thread *armcore.Thread) (uint32, error) {
 	registers := make([]uint32, 6)
 	for index := range registers {
@@ -648,42 +672,93 @@ func (runtime *initializationRuntime) wipicDrawLine(thread *armcore.Thread) (uin
 		address := framebuffer.pixels + uint32(y)*framebuffer.bpl + uint32(x)*2
 		return runtime.blendPixel(op, address, uint16(pixel))
 	}
-	x0, y0 := int32(registers[1]), int32(registers[2])
-	x1, y1 := int32(registers[3]), int32(registers[4])
-	deltaX := x1 - x0
+	return 0, clippedLine(int32(registers[1]), int32(registers[2]), int32(registers[3]), int32(registers[4]),
+		0, 0, int64(framebuffer.width), int64(framebuffer.height), plot)
+}
+
+// clippedLine walks the Bresenham line MC_grpDrawLine and Graphics.drawLine
+// have always drawn, but only across the stretch of it whose major-axis
+// coordinate lies inside [left, right) by [top, bottom). plot still decides
+// pixel by pixel; the window only keeps the walk from counting through a span
+// the guest passed that reaches thousands of millions of pixels off the
+// surface, and the 64-bit arithmetic keeps the endpoints at Integer.MIN_VALUE
+// and MAX_VALUE from wrapping the loop into one that never ends.
+//
+// The major axis advances on every step of this loop and the minor one has
+// advanced floor((2*steps*minor + major - 1) / (2*major)) after a given number
+// of them, so the walk can start where the window does with the error term the
+// loop would have carried there.
+func clippedLine(x0, y0, x1, y1 int32, left, top, right, bottom int64, plot func(x, y int32) error) error {
+	deltaX := int64(x1) - int64(x0)
 	if deltaX < 0 {
 		deltaX = -deltaX
 	}
-	deltaY := y1 - y0
+	deltaY := int64(y1) - int64(y0)
 	if deltaY < 0 {
 		deltaY = -deltaY
 	}
-	stepX := int32(1)
+	stepX := int64(1)
 	if x0 > x1 {
 		stepX = -1
 	}
-	stepY := int32(1)
+	stepY := int64(1)
 	if y0 > y1 {
 		stepY = -1
 	}
-	difference := deltaX - deltaY
-	for {
-		if err := plot(x0, y0); err != nil {
-			return 0, err
+	yMajor := deltaY > deltaX
+	origin, low, high, direction := int64(x0), left, right, stepX
+	if yMajor {
+		origin, low, high, direction = int64(y0), top, bottom, stepY
+	}
+	first, last := int64(0), max(deltaX, deltaY)
+	if direction > 0 {
+		first, last = max(first, low-origin), min(last, high-1-origin)
+	} else {
+		first, last = max(first, origin-(high-1)), min(last, origin-low)
+	}
+	if first > last {
+		return nil
+	}
+	var stepsX, stepsY int64
+	if yMajor {
+		stepsX, stepsY = lineMinorSteps(first, deltaY, deltaX), first
+	} else {
+		stepsX, stepsY = first, lineMinorSteps(first, deltaX, deltaY)
+	}
+	x, y := int64(x0)+stepX*stepsX, int64(y0)+stepY*stepsY
+	// The products can pass 2^63 for the widest lines; the difference they
+	// make is small, so the wrapped arithmetic still lands on it exactly.
+	difference := (stepsY+1)*deltaX - (stepsX+1)*deltaY
+	for step := first; ; step++ {
+		if err := plot(int32(x), int32(y)); err != nil {
+			return err
 		}
-		if x0 == x1 && y0 == y1 {
-			return 0, nil
+		if step == last {
+			return nil
 		}
 		doubled := 2 * difference
 		if doubled > -deltaY {
 			difference -= deltaY
-			x0 += stepX
+			x += stepX
 		}
 		if doubled < deltaX {
 			difference += deltaX
-			y0 += stepY
+			y += stepY
 		}
 	}
+}
+
+// lineMinorSteps answers how far the minor axis of a line has moved after
+// steps steps along its major axis. Both spans can reach 2^32-1, so the
+// product is taken at 128 bits; the quotient is at most minor.
+func lineMinorSteps(steps, major, minor int64) int64 {
+	if major == 0 {
+		return 0
+	}
+	high, low := bits.Mul64(uint64(2*steps), uint64(minor))
+	low, carry := bits.Add64(low, uint64(major-1), 0)
+	quotient, _ := bits.Div64(high+carry, low, uint64(2*major))
+	return int64(quotient)
 }
 
 // wipicCopyFramebuffer implements MC_grpCopyFrameBuffer: copy a rectangle from
@@ -713,9 +788,11 @@ func (runtime *initializationRuntime) wipicCopyFramebuffer(thread *armcore.Threa
 	if err != nil {
 		return 0, err
 	}
-	destinationX, destinationY := int32(registers[1]), int32(registers[2])
-	width, height := int32(registers[3]), int32(registers[4])
-	sourceX, sourceY := int32(registers[6]), int32(registers[7])
+	destinationX, destinationY, width, height, sourceX, sourceY, ok := clipCopy(destination, source,
+		int32(registers[1]), int32(registers[2]), int32(registers[3]), int32(registers[4]), int32(registers[6]), int32(registers[7]))
+	if !ok {
+		return 0, nil
+	}
 	memory := runtime.client.core.Memory()
 	for line := int32(0); line < height; line++ {
 		fromY := sourceY + line
@@ -1168,6 +1245,10 @@ func (runtime *initializationRuntime) wipicBlit(destination wipicFramebuffer, de
 // Java side has a clip of its own and comes through wipicBlit, which passes an
 // empty one.
 func (runtime *initializationRuntime) wipicBlitClipped(destination wipicFramebuffer, clip wipicClip, op wipicPixelOp, destinationX, destinationY, width, height int32, source wipicFramebuffer, sourceX, sourceY int32, opacity blitOpacity) error {
+	destinationX, destinationY, width, height, sourceX, sourceY, ok := clipCopy(destination, source, destinationX, destinationY, width, height, sourceX, sourceY)
+	if !ok {
+		return nil
+	}
 	memory := runtime.client.core.Memory()
 	// A copy inside one surface reads pixels the same copy is about to write.
 	// Reading them straight from memory smears the leading edge across the
@@ -1210,6 +1291,28 @@ func (runtime *initializationRuntime) wipicBlitClipped(destination wipicFramebuf
 		}
 	}
 	return nil
+}
+
+// clipCopy narrows a copy to the rows and columns that both surfaces hold, and
+// reports whether any remain. The copy loops already skip every other pixel one
+// at a time, so the narrowed copy draws the same pixels in the same order; what
+// changes is that those loops, and the snapshot an overlapping copy takes, are
+// sized by the surfaces rather than by a width and height the guest may have
+// passed from garbage.
+func clipCopy(destination, source wipicFramebuffer, destinationX, destinationY, width, height, sourceX, sourceY int32) (int32, int32, int32, int32, int32, int32, bool) {
+	span := func(to, from, length int32, toSize, fromSize uint32) (int64, int64) {
+		first := max(0, -int64(to), -int64(from))
+		end := min(int64(length), int64(toSize)-int64(to), int64(fromSize)-int64(from))
+		return first, end
+	}
+	firstColumn, endColumn := span(destinationX, sourceX, width, destination.width, source.width)
+	firstLine, endLine := span(destinationY, sourceY, height, destination.height, source.height)
+	if firstColumn >= endColumn || firstLine >= endLine {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	return int32(int64(destinationX) + firstColumn), int32(int64(destinationY) + firstLine),
+		int32(endColumn - firstColumn), int32(endLine - firstLine),
+		int32(int64(sourceX) + firstColumn), int32(int64(sourceY) + firstLine), true
 }
 
 // blitSourceSnapshot reads the source rectangle when a copy overlaps itself

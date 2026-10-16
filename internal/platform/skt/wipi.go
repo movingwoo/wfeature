@@ -114,8 +114,8 @@ func (runtime *Runtime) wipiRegistrations() []nativeRegistration {
 		{wipi.FontClass, "getDefaultFont", "()Lorg/kwis/msp/lcdui/Font;", runtime.getDefaultFont},
 		{wipi.FontClass, "getFont", "(III)Lorg/kwis/msp/lcdui/Font;", runtime.getFontByAttributes},
 
-		{wipi.FileClass, "<init>", "(" + text + "I)V", runtime.initXFileName},
-		{wipi.FileClass, "<init>", "(" + text + "II)V", runtime.initXFileName},
+		{wipi.FileClass, "<init>", "(" + text + "I)V", runtime.initWIPIFileName},
+		{wipi.FileClass, "<init>", "(" + text + "II)V", runtime.initWIPIFileName},
 		{wipi.FileClass, "read", "([B)I", runtime.wipiFileReadWhole},
 		{wipi.FileClass, "read", "([BII)I", runtime.xFileRead},
 		{wipi.FileClass, "write", "([B)I", runtime.wipiFileWriteWhole},
@@ -308,11 +308,15 @@ func (runtime *Runtime) setCardFields(arguments []jvm.Value, first, second strin
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if card.Fields == nil {
-		card.Fields = make(map[string]jvm.Value)
+	// The fields are Card's protected ones, so they go through putfield's key
+	// and lock: a subclass reads them with getfield, often from another
+	// thread than the one that moved the card.
+	if err := runtime.VM.SetField(card, wipi.CardClass, first, "I", jvm.IntValue(one)); err != nil {
+		return jvm.VoidValue(), err
 	}
-	card.Fields[first] = jvm.IntValue(one)
-	card.Fields[second] = jvm.IntValue(two)
+	if err := runtime.VM.SetField(card, wipi.CardClass, second, "I", jvm.IntValue(two)); err != nil {
+		return jvm.VoidValue(), err
+	}
 	return jvm.VoidValue(), nil
 }
 
@@ -489,25 +493,35 @@ func (runtime *Runtime) getGraphicsRGBPixels(_ *jvm.VM, arguments []jvm.Value) (
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	pixels := make([]jvm.Value, 0, int(width)*int(height))
+	// The rows are checked against the caller's array before anything the
+	// size of the rectangle exists. A row's start moves linearly, so the
+	// first and the last row bound every one between them; the array then
+	// bounds one row, which is all that is ever held.
+	if height > 0 {
+		for _, row := range []int64{0, int64(height) - 1} {
+			start := int64(offset) + row*int64(scanLength)
+			if start < 0 || start+int64(width) > int64(len(values)) {
+				return jvm.VoidValue(), newGuestException("java/lang/ArrayIndexOutOfBoundsException", "getRGBPixels row is outside the array")
+			}
+		}
+	}
+	if width == 0 || height == 0 {
+		return jvm.VoidValue(), nil
+	}
+	pixels := make([]jvm.Value, int(width))
 	for row := int32(0); row < height; row++ {
 		for column := int32(0); column < width; column++ {
 			index, ok := contextPixelIndexUnclipped(context, x+column, y+row)
 			if !ok {
-				pixels = append(pixels, jvm.IntValue(0))
+				pixels[column] = jvm.IntValue(0)
 				continue
 			}
-			pixels = append(pixels, jvm.IntValue(int32(uint32(context.pixels[index+3])<<24|
-				uint32(context.pixels[index])<<16|uint32(context.pixels[index+1])<<8|
-				uint32(context.pixels[index+2]))))
+			pixels[column] = jvm.IntValue(int32(uint32(context.pixels[index+3])<<24 |
+				uint32(context.pixels[index])<<16 | uint32(context.pixels[index+1])<<8 |
+				uint32(context.pixels[index+2])))
 		}
-	}
-	for row := int32(0); row < height; row++ {
 		start := int(offset) + int(row)*int(scanLength)
-		if start < 0 || start+int(width) > len(values) {
-			return jvm.VoidValue(), newGuestException("java/lang/ArrayIndexOutOfBoundsException", "getRGBPixels row is outside the array")
-		}
-		if err := jvm.SetArrayRange(arrayObjectOf(arguments, 4), start, pixels[int(row)*int(width):int(row+1)*int(width)]); err != nil {
+		if err := jvm.SetArrayRange(arrayObjectOf(arguments, 5), start, pixels); err != nil {
 			return jvm.VoidValue(), err
 		}
 	}
@@ -519,9 +533,21 @@ func (runtime *Runtime) setGraphicsRGBPixels(_ *jvm.VM, arguments []jvm.Value) (
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	// Only the rows and columns that land inside the clip, and in each row
+	// only the columns the array holds, are walked; see blitSpan.
+	firstRow, lastRow := blitSpan(height, 0, int(height), int64(y)+int64(context.translateY),
+		max(context.clip.minY, 0), min(context.clip.maxY, context.height))
+	firstColumn, lastColumn := blitSpan(width, 0, int(width), int64(x)+int64(context.translateX),
+		max(context.clip.minX, 0), min(context.clip.maxX, context.width))
 	context.withDestinationWrite(func() {
-		for row := int32(0); row < height; row++ {
-			for column := int32(0); column < width; column++ {
+		for row := firstRow; row < lastRow; row++ {
+			rowStart := int64(offset) + int64(row)*int64(scanLength)
+			first := max(int64(firstColumn), -rowStart)
+			last := min(int64(lastColumn), int64(len(values))-rowStart)
+			if first >= last {
+				continue
+			}
+			for column := int32(first); int64(column) < last; column++ {
 				source := int(offset) + int(row)*int(scanLength) + int(column)
 				if source < 0 || source >= len(values) {
 					continue
@@ -640,13 +666,13 @@ func (runtime *Runtime) wipiFileSeek(_ *jvm.VM, arguments []jvm.Value) (jvm.Valu
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	file.mu.Lock()
-	defer file.mu.Unlock()
+	runtime.fileMu.Lock()
+	defer runtime.fileMu.Unlock()
 	if position < 0 {
 		position = 0
 	}
-	if int(position) > len(file.data) {
-		position = int32(len(file.data))
+	if size := len(file.contents()); int(position) > size {
+		position = int32(size)
 	}
 	file.cursor = int(position)
 	return jvm.VoidValue(), nil
@@ -657,8 +683,8 @@ func (runtime *Runtime) wipiFileTell(_ *jvm.VM, arguments []jvm.Value) (jvm.Valu
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	file.mu.Lock()
-	defer file.mu.Unlock()
+	runtime.fileMu.Lock()
+	defer runtime.fileMu.Unlock()
 	return jvm.IntValue(int32(file.cursor)), nil
 }
 
@@ -667,11 +693,15 @@ func (runtime *Runtime) wipiFileSizeOf(_ *jvm.VM, arguments []jvm.Value) (jvm.Va
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	file.mu.Lock()
-	defer file.mu.Unlock()
-	return jvm.IntValue(int32(len(file.data))), nil
+	runtime.fileMu.Lock()
+	defer runtime.fileMu.Unlock()
+	return jvm.IntValue(int32(len(file.contents()))), nil
 }
 
+// wipiFileRemove is FileSystem.remove, XFile.unlink's removal answered
+// without a value. A name that does not exist is left as it is, without the
+// IOException the specification gives it, which this platform has never
+// thrown here.
 func (runtime *Runtime) wipiFileRemove(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if _, err := runtime.xFileUnlink(vm, arguments); err != nil {
 		return jvm.VoidValue(), err

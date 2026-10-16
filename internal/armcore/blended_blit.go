@@ -1245,7 +1245,7 @@ func (memory *Memory) analyseBlendArm(loop blendArm) *blendedDraw {
 // title's shadows being wrong. Running all but one iteration and leaving the
 // loop where it stood costs nothing and makes every one of them right for free —
 // the same trade `byte_blend.go` and `word_modulate.go` make.
-func (memory *Memory) runBlendedClipped(context *Context, loop *clippedBlit, draw *blendedDraw, low, high uint32) (uint32, error) {
+func (memory *Memory) runBlendedClipped(context *Context, loop *clippedBlit, draw *blendedDraw, low, high, flagRecord uint32) (uint32, error) {
 	remaining := int64(int32(context.Registers[loop.limit])) - int64(int32(context.Registers[loop.count]))
 	if remaining < 3 || remaining > maxStoreLoopIterations {
 		return 0, nil
@@ -1310,6 +1310,13 @@ func (memory *Memory) runBlendedClipped(context *Context, loop *clippedBlit, dra
 		return 0, nil
 	}
 	if overlaps(stack+loop.lowSlot) || overlaps(stack+loop.highSlot) || overlaps(stack+loop.flagSlot) {
+		return 0, nil
+	}
+	// The flag word itself, which the run treats as set throughout. The
+	// writer's invariants cover it only when the writer happens to read the
+	// same word; a run that lands on it would have the guest's own stores
+	// send the rest of the row to the plain form.
+	if overlaps(flagRecord + loop.flagOffset) {
 		return 0, nil
 	}
 	for _, at := range draw.program.invariants {

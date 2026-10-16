@@ -161,8 +161,10 @@ func (store *MemorySaveStore) SnapshotSaves() ([]SaveEntry, error) {
 
 // readSnapshotSaves refuses unreadable, linked or noncanonical entries instead
 // of silently omitting them from a whole-generation replacement. Reads are
-// bounded before allocation; a growing file cannot evade the size limit.
-func readSnapshotSaves(root string) ([]SaveEntry, error) {
+// bounded before allocation; a growing file cannot evade the size limit. Paths
+// are read back to keys the way the directory's names read (see
+// saveEntryKey), and the record of how they read is not an entry.
+func readSnapshotSaves(root string, naming saveNaming) ([]SaveEntry, error) {
 	info, err := os.Lstat(root)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -178,10 +180,9 @@ func readSnapshotSaves(root string) ([]SaveEntry, error) {
 		return nil, err
 	}
 	defer directory.Close()
-	entries := []SaveEntry{}
-	remaining := int64(savePackLimit)
+	choice := saveEntryChoice{}
 	visited := 0
-	err = fs.WalkDir(directory.FS(), ".", func(key string, entry fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(directory.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -189,48 +190,56 @@ func readSnapshotSaves(root string) ([]SaveEntry, error) {
 		if visited > 2*maxSnapshotSaveEntries {
 			return fmt.Errorf("save snapshot tree exceeds entry limit")
 		}
-		if key == "." {
+		if path == "." || path == saveNamesRecord {
 			return nil
 		}
-		canonical, err := NormalizeSaveKey(key)
-		if err != nil || key != canonical {
+		key, encoded, err := saveEntryKey(path, naming)
+		if err != nil {
 			return fmt.Errorf("save snapshot contains a noncanonical key")
 		}
 		if entry.IsDir() {
 			return nil
 		}
-		if !entry.Type().IsRegular() || len(entries) == maxSnapshotSaveEntries {
+		if !entry.Type().IsRegular() {
 			return fmt.Errorf("save snapshot contains a nonregular file or too many files")
 		}
-		remaining -= int64(len(key) + 6)
-		info, err := entry.Info()
-		if err != nil {
-			return err
+		if choice.offer(key, path, encoded) && len(choice) > maxSnapshotSaveEntries {
+			return fmt.Errorf("save snapshot contains a nonregular file or too many files")
 		}
-		if info.Size() < 0 || info.Size() > remaining {
-			return fmt.Errorf("save snapshot data exceeds limit")
-		}
-		file, err := directory.Open(key)
-		if err != nil {
-			return err
-		}
-		data, readErr := io.ReadAll(io.LimitReader(file, remaining+1))
-		closeErr := file.Close()
-		if readErr != nil {
-			return readErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		remaining -= int64(len(data))
-		if remaining < 0 {
-			return fmt.Errorf("save snapshot data exceeds limit")
-		}
-		entries = append(entries, SaveEntry{Key: key, Data: data})
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	entries := make([]SaveEntry, 0, len(choice))
+	remaining := int64(savePackLimit)
+	for _, key := range choice.keys() {
+		path := choice[key].path
+		remaining -= int64(len(key) + 6)
+		info, err := directory.Lstat(path)
+		if err != nil {
+			return nil, err
+		}
+		if info.Size() < 0 || info.Size() > remaining {
+			return nil, fmt.Errorf("save snapshot data exceeds limit")
+		}
+		file, err := directory.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		data, readErr := io.ReadAll(io.LimitReader(file, remaining+1))
+		closeErr := file.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		remaining -= int64(len(data))
+		if remaining < 0 {
+			return nil, fmt.Errorf("save snapshot data exceeds limit")
+		}
+		entries = append(entries, SaveEntry{Key: key, Data: data})
 	}
 	return validateSnapshotSaves(entries)
 }

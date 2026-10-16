@@ -85,6 +85,7 @@ open item that is still open is carried in [maintenance](maintenance.md).
 | [Text input audit, 2026-09-23](text-input-audit-2026-09-23.md) | Five text-input defect classes, the route matrix and its outcome taxonomy. |
 | [CPU saturation, 2026-09-23](cpu-saturation-investigation-2026-09-23.md) | Skipping unchanged frames, deferring scaling, and frame-copy measurements. |
 | [Quick-save review, 2026-10-07](quicksave-review-2026-10-07.md) | Eight quick save/load findings across KTF, LGT and SKT and their repairs. |
+| [Source review, 2026-10-16](source-review-2026-10-16.md) | A full-source review: 153 code and 9 documentation findings, each with its resolution, and the limits the fixes left. |
 
 ## Paused SGS work
 

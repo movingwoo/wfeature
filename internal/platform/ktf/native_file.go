@@ -310,13 +310,16 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 	if err != nil {
 		return 0, err
 	}
-	platform.opens = append(platform.opens, NativeFileOpen{Name: name, Mode: mode, Found: ok})
+	platform.opens = keepFirst(platform.opens, NativeFileOpen{Name: name, Mode: mode, Found: ok})
 	key, truncated := nativeFileKey(name), false
 	if ok && int32(mode) == nativeModeWriteTruncate {
 		// The file is there and the mode says to empty it. Emptying it here
 		// rather than on the first write is what the mode means: a title that
 		// opens this way and then writes nothing has still emptied the file.
+		// The store takes the emptying at the open too, rather than at the
+		// next boundary, which is the common save rule's third point.
 		platform.keep(key, []byte{})
+		platform.flushSave(key)
 		data, truncated = nil, true
 	}
 	if !ok {
@@ -482,19 +485,29 @@ func (platform *NativePlatform) FlushSaves() {
 		return
 	}
 	for key := range platform.unsaved {
-		if err := platform.saves.StoreSave(nativeSaveKey(key), platform.written[key]); err != nil {
-			// A store that refuses is not the title's problem: it wrote what
-			// it wrote, and the session still reads it back. The Host's log is
-			// where a failing store belongs. The name is kept, because a quick
-			// save, a quick load and the end of the session each ask once more.
-			platform.storeFailures++
-			if platform.refused == nil {
-				platform.refused = map[string]bool{}
-			}
-			platform.refused[key] = true
-		}
-		delete(platform.unsaved, key)
+		platform.flushSave(key)
 	}
+}
+
+// flushSave writes one marked file out to the store, as FlushSaves does for
+// every one. A truncating open asks for its file alone, so the other files'
+// writes still wait for their boundary.
+func (platform *NativePlatform) flushSave(key string) {
+	if platform.saves == nil || !platform.unsaved[key] {
+		return
+	}
+	if err := platform.saves.StoreSave(nativeSaveKey(key), platform.written[key]); err != nil {
+		// A store that refuses is not the title's problem: it wrote what it
+		// wrote, and the session still reads it back. The Host's log is where
+		// a failing store belongs. The name is kept, because a quick save, a
+		// quick load and the end of the session each ask once more.
+		platform.storeFailures++
+		if platform.refused == nil {
+			platform.refused = map[string]bool{}
+		}
+		platform.refused[key] = true
+	}
+	delete(platform.unsaved, key)
 }
 
 // pendingSaves names every file the title has written and the store does not

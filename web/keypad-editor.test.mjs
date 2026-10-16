@@ -65,7 +65,7 @@ const element = (tag = "div") => {
   };
 };
 
-const fixture = ({ width = 0, height = 0 } = {}) => {
+const fixture = ({ width = 0, height = 0, releaseInput = () => {} } = {}) => {
   const nodes = new Map();
   const createElement = (tag) =>
     Object.assign(element(tag), { ownerDocument: document });
@@ -115,7 +115,7 @@ const fixture = ({ width = 0, height = 0 } = {}) => {
   node("keypad-grid").getBoundingClientRect = () => ({ width, height });
   initKeypadEditor({
     document,
-    releaseInput() {},
+    releaseInput,
     onEditing() {},
     changed() {},
     storage,
@@ -267,4 +267,24 @@ test("a dynamic label refits when its text changes without retaining an old shri
   label.textContent = "5";
   fitKeypadLabel(label);
   assert.equal(fontSize(label), 16);
+});
+
+// 전체화면 hides the keypad, which resizes the board to nothing, and a phone
+// turning or a window resizing does the same less drastically. The layout is
+// unchanged by any of them, so what is held — and the rapid fire mode the
+// release would reset — stays as the player left it.
+test("a resize keeps held input and the rapid fire mode", () => {
+  let released = 0;
+  const f = fixture({
+    width: 320,
+    height: 320,
+    releaseInput: () => {
+      released += 1;
+    },
+  });
+  const before = released;
+  f.resize(0, 0);
+  f.resize(480, 400);
+  assert.equal(released, before);
+  assert.ok(Number.parseFloat(f.cell("r2c2").style.width) > 0, "the keypad is still measured");
 });

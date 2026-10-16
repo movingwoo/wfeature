@@ -161,7 +161,19 @@ func (vm *VM) continueMonitorWait(state *execution, wait *bytecodeThreadWait) er
 	}
 	m.mu.Lock()
 	m.waiters = slices.DeleteFunc(m.waiters, func(other *bytecodeThreadWait) bool { return other == wait })
+	// A notify that chose this waiter is its notification even when an
+	// interrupt woke it first, and a notification may not be lost to an
+	// interrupt (JLS 17.2.4): the other waiters were passed over for this one.
+	// So the wait returns normally and the interrupt stays pending for the
+	// thread's next wait or sleep.
+	keepInterrupt := wait.interrupted && wait.notified
+	if keepInterrupt {
+		wait.interrupted = false
+	}
 	m.mu.Unlock()
+	if keepInterrupt {
+		vm.interruptThread(thread)
+	}
 	if err := vm.enterMonitor(state, m); err != nil {
 		return err
 	}

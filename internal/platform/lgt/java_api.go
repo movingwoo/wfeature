@@ -747,8 +747,9 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 	// the slots from 10 upward in the order the specification declares them, a
 	// method that overrides an inherited one takes the slot it inherits, and a
 	// static takes none. That rule was read off the slots settled from their
-	// call sites rather than assumed; docs/lgt.md has the anchors it rests on
-	// and why it is worth more than any one of them. Every slot here is placed
+	// call sites rather than assumed; docs/history/lgt.md, "The numbers are not
+	// arbitrary, and the rule is worth more than any one of them", has the
+	// anchors it rests on and why. Every slot here is placed
 	// by it **and** checked against what its own call site passes, because the
 	// rule alone would only be an argument.
 	"java/util/Random": {

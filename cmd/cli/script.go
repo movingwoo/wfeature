@@ -41,6 +41,14 @@ func runScript(archive *skt.Archive, run scriptCLIRun, stdout, stderr io.Writer)
 	if run.saveRoot == "" {
 		run.saveRoot = filepath.Join(platformSaveRoot("skt"), archive.ScriptSaveOwner)
 	}
+	logger := backend.NewLogger(stderr)
+	// The same claim the server holds on this directory; see claimSaveDirectory.
+	releaseSaves, err := claimSaveDirectory(run.saveRoot, logger)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer releaseSaves()
 	var elapsed time.Duration
 	var recording *backend.RecordingSink
 	var sink backend.AudioSink
@@ -48,7 +56,7 @@ func runScript(archive *skt.Archive, run scriptCLIRun, stdout, stderr io.Writer)
 		recording = backend.NewRecordingSink(func() time.Duration { return elapsed })
 		sink = recording
 	}
-	core, err := skt.StartScript(ctx, archive, skt.ScriptOptions{Framebuffer: fb, SaveStore: backend.NewDirectorySaveStore(run.saveRoot), AudioSink: sink, Logger: backend.NewLogger(stderr)})
+	core, err := skt.StartScript(ctx, archive, skt.ScriptOptions{Framebuffer: fb, SaveStore: backend.NewDirectorySaveStore(run.saveRoot), AudioSink: sink, Logger: logger})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

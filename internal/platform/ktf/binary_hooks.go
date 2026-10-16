@@ -215,6 +215,9 @@ func (runtime *initializationRuntime) handleBinaryHookCall(thread *armcore.Threa
 		if length == 0 {
 			return destination, nil
 		}
+		if err := hookRange(memory, destination, length, armcore.PermissionWrite); err != nil {
+			return 0, fmt.Errorf("KTF hooked memset(%#x, %d, %d): %w", destination, value, length, err)
+		}
 		fill := runtime.hookBuffer(length)
 		for index := range fill {
 			fill[index] = byte(value)
@@ -232,6 +235,12 @@ func (runtime *initializationRuntime) handleBinaryHookCall(thread *armcore.Threa
 		}
 		if length == 0 {
 			return destination, nil
+		}
+		if err := hookRange(memory, source, length, armcore.PermissionRead); err != nil {
+			return 0, fmt.Errorf("KTF hooked memcpy(%#x, %#x, %d): %w", destination, source, length, err)
+		}
+		if err := hookRange(memory, destination, length, armcore.PermissionWrite); err != nil {
+			return 0, fmt.Errorf("KTF hooked memcpy(%#x, %#x, %d): %w", destination, source, length, err)
 		}
 		buffer := runtime.hookBuffer(length)
 		if err := memory.Read(source, buffer); err != nil {
@@ -276,6 +285,20 @@ func (runtime *initializationRuntime) handleBinaryHookCall(thread *armcore.Threa
 	default:
 		return 0, fmt.Errorf("unknown KTF binary hook %d", id)
 	}
+}
+
+// hookRange refuses a range the guest cannot hold before a buffer is sized
+// from its length. The length is the guest's own r2, and a negative computed
+// size arrives as nearly four gigabytes: allocating and filling that much
+// first, only for the write to refuse it, can take the whole process down. A
+// length the reusable window covers costs nothing to allocate, so only a
+// longer one is checked here; the read or write after it still checks every
+// range.
+func hookRange(memory *armcore.Memory, address, length uint32, permission armcore.Permission) error {
+	if length <= hookWindowLimit {
+		return nil
+	}
+	return memory.ValidateRange(address, uint64(length), permission)
 }
 
 func hookArguments(thread *armcore.Thread) (uint32, uint32, uint32, error) {

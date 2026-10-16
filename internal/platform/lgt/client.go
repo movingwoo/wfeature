@@ -216,6 +216,11 @@ type Client struct {
 	// about keys it is asked for and cannot be enumerated, so a directory
 	// listing has nothing to find its own saves with. See fileCreatedKey.
 	created map[string]bool
+	// removedLegacy and createdLegacy are the entries of the same two lists
+	// that a build before case-sensitive names wrote, in the lower case it
+	// folded them to. They are read with the lists and keep the meaning they
+	// had. See fileListMarker.
+	removedLegacy, createdLegacy map[string]bool
 	// removedUnsaved and createdUnsaved say that the list of that name was
 	// changed here and the store did not take it: memory is ahead of the
 	// store. The next write of the list that the store takes clears the bit,
@@ -223,10 +228,10 @@ type Client struct {
 	// on. See storeIssuedWrites.
 	removedUnsaved, createdUnsaved bool
 	// fileEpochs counts, for each path, how often its save has changed under
-	// the session: a write the store took, or a removal. An open file
-	// remembers the count its buffer was last level with, which is how a
-	// quick step tells a buffer that is the file plus the title's writes from
-	// one that is behind its file. See openFile.synced.
+	// the session: a write the store took, or a removal. An open buffer
+	// remembers the count it was last level with, which is how a quick step
+	// tells a buffer that is the file plus the title's writes from one that
+	// is behind its file. See fileContent.synced.
 	fileEpochs map[string]uint64
 	// restoredStorage is what a checkpoint brought back about open storage
 	// that a store has not filled yet. It is nil in a running session. See
@@ -1102,4 +1107,21 @@ func (client *Client) cStringLength(address uint32) (uint32, error) {
 		offset += chunk
 	}
 	return 0, fmt.Errorf("LGT string at %#x is not terminated within %d bytes", address, maxCStringLength)
+}
+
+// readCStringBuffer reads a NUL-terminated string a title built in a buffer of
+// its own — what the C string functions and a format's %s are handed — with
+// strlen's bound rather than a name's. See cStringLength for why the two
+// differ: a valid string of several kilobytes is a text resource, and reading
+// it as a name ended the run on it.
+func (client *Client) readCStringBuffer(address uint32) (string, error) {
+	length, err := client.cStringLength(address)
+	if err != nil || length == 0 {
+		return "", err
+	}
+	text := make([]byte, length)
+	if err := client.core.Memory().Read(address, text); err != nil {
+		return "", err
+	}
+	return string(text), nil
 }

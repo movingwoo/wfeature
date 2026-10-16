@@ -34,6 +34,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/licenses"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
+	"github.com/movingwoo/wfeature/internal/wsproto"
 )
 
 // maxRequestBody bounds a save or a debug report. Both are written to disk, so
@@ -187,6 +188,21 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	// The handler is registered without a mux, so nothing has cleaned this
 	// path: what arrives is what the peer sent, minus percent-encoding.
 	requestPath := request.URL.Path
+	// **A browser sends a cross-site POST without asking first.** CORS keeps a
+	// page elsewhere from reading the answer, not from sending the request, so
+	// a page on any site could stop this server, add or remove a game, or
+	// overwrite a save through loopback. Every such request from a page
+	// carries that page's Origin, so a request that would change something is
+	// held to the rule the session socket keeps: no Origin — the stop command,
+	// curl — or one whose host is the host it arrived on. A GET changes
+	// nothing and is not refused here; the socket's upgrade is a GET with its
+	// own check.
+	if request.Method != http.MethodGet && request.Method != http.MethodHead && !wsproto.SameOrigin(request) {
+		s.logger.Warn("refused a request from another site", "method", request.Method,
+			"path", requestPath, "origin", request.Header.Get("Origin"), "host", request.Host)
+		writeError(writer, http.StatusForbidden, "Forbidden")
+		return
+	}
 	switch {
 	case requestPath == "/api/session":
 		s.serveSession(writer, request)
@@ -253,7 +269,9 @@ func (s *Server) serveStatus(writer http.ResponseWriter, request *http.Request) 
 // interface so a phone on the same network can play, and a stop anyone on that
 // network can send is a way to end somebody's game from the next room. Local
 // callers gain nothing they did not already have: whoever can reach loopback
-// here can signal the process anyway.
+// here can signal the process anyway. A page from another site open in a
+// browser on this machine reaches loopback too and is not such a caller; it
+// sends its Origin, and ServeHTTP refuses it before it gets here.
 //
 // The answer is sent before the drain starts, because the drain waits for
 // in-flight requests and this is one of them.
