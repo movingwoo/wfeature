@@ -584,7 +584,9 @@ func TestWIPIFileSystemRemoveRemovesTheFile(t *testing.T) {
 		}
 	}
 	store.written()
-	ruleRemove(t, runtime, "never")
+	if _, err := runtime.VM.InvokeStatic(wipi.FileSystemClass, "remove", "(Ljava/lang/String;)V", ruleText(runtime, "never")); !runtime.VM.IsGuestException(err, jvm.IOExceptionClass) {
+		t.Fatalf("FileSystem.remove of a missing name: %v, want IOException", err)
+	}
 	if written := store.written(); len(written) != 0 {
 		t.Fatalf("removing a missing name stored %v", written)
 	}
@@ -602,6 +604,36 @@ func TestWIPIFileSystemRemoveRemovesTheFile(t *testing.T) {
 	wipiStreamCall(t, next, file, "close", "()V")
 	if exists, _, size := ruleFileSystem(t, next, "pkg"); !exists || size != 1 {
 		t.Fatal("writing a removed packaged path did not bring it back")
+	}
+}
+
+// FileSystem.remove of a name with no file throws the IOException the
+// specification gives it, as does a name the removal list cannot carry, while
+// XFile.unlink keeps answering 0 and -1 for the two. Neither stores anything.
+func TestWIPIFileSystemRemoveOfAMissingNameThrows(t *testing.T) {
+	store := newFileRuleStore(t, map[string][]byte{"fs/save": {1}})
+	runtime := fileRuleRuntime(t, store, nil)
+	remove := func(name string) error {
+		_, err := runtime.VM.InvokeStatic(wipi.FileSystemClass, "remove", "(Ljava/lang/String;)V", ruleText(runtime, name))
+		return err
+	}
+	if err := remove("save"); err != nil {
+		t.Fatalf("FileSystem.remove of a present file: %v", err)
+	}
+	store.written()
+	for _, name := range []string{"save", "never", "line\nbreak"} {
+		if err := remove(name); !runtime.VM.IsGuestException(err, jvm.IOExceptionClass) {
+			t.Fatalf("FileSystem.remove(%q): %v, want IOException", name, err)
+		}
+	}
+	if answer := ruleUnlink(t, runtime, "never"); answer != 0 {
+		t.Fatalf("XFile.unlink of a missing name = %d, want 0", answer)
+	}
+	if answer := ruleUnlink(t, runtime, "line\nbreak"); answer != -1 {
+		t.Fatalf("XFile.unlink of an unremovable name = %d, want -1", answer)
+	}
+	if written := store.written(); len(written) != 0 {
+		t.Fatalf("removing missing names stored %v", written)
 	}
 }
 
@@ -841,8 +873,8 @@ func TestXFileProbesOfMissingPathsKeepNothing(t *testing.T) {
 		if ruleExists(t, runtime, name) || ruleSize(t, runtime, name) != -1 {
 			t.Fatalf("missing path %q exists", name)
 		}
-		if !runtime.removeXFile(name) {
-			t.Fatalf("removing missing path %q failed", name)
+		if removal := runtime.removeXFile(name); removal != xFileAbsent {
+			t.Fatalf("removing missing path %q = %d, want absent", name, removal)
 		}
 	}
 	if !ruleExists(t, runtime, "slot7") {

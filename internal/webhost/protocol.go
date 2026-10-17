@@ -69,8 +69,9 @@ type clientMessage struct {
 	Width  int `json:"width,omitempty"`
 	Height int `json:"height,omitempty"`
 
-	// The cheat fields, for kind "cheat". Op names the operation; Command is
-	// the line for the text console, and the rest are the panel's arguments.
+	// The cheat fields, for kind "cheat". Op names the panel's operation, and
+	// the rest are its arguments. Command is a line of the text console, which
+	// only a test server answers (see Server.textConsole).
 	Op      string `json:"op,omitempty"`
 	Command string `json:"command,omitempty"`
 	Type    string `json:"type,omitempty"`
@@ -204,7 +205,6 @@ type cheatResult struct {
 	Hits       *cheat.PanelHits       `json:"hits,omitempty"`
 	Applied    int                    `json:"applied"`
 	Table      string                 `json:"table,omitempty"`
-	Text       string                 `json:"text,omitempty"`
 	Searchable bool                   `json:"searchable"`
 }
 

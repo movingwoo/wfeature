@@ -837,6 +837,13 @@ func (client *Client) captureJavaState(budget *stateBudget) (*javaState, error) 
 			Modified: database.modified, Closed: database.closed,
 		})
 	}
+	// The records of a reclaimed object wait only while the store refuses
+	// them, and a quick save stores them first or is refused.
+	for _, database := range runtime.collectedDatabases {
+		if database.unsaved {
+			return nil, fmt.Errorf("LGT checkpoint has a database with a write the store has not been given")
+		}
+	}
 	for _, object := range slices.Sorted(maps.Keys(runtime.graphics)) {
 		state := runtime.graphics[object]
 		if state == nil {

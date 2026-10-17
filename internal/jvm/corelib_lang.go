@@ -62,7 +62,7 @@ func throwableInitMessage(_ *Invocation, arguments []Value) (Value, error) {
 	return VoidValue(), nil
 }
 
-func throwableGetMessage(_ *Invocation, arguments []Value) (Value, error) {
+func throwableGetMessage(call *Invocation, arguments []Value) (Value, error) {
 	object, err := requireObject(arguments, 0)
 	if err != nil {
 		return VoidValue(), err
@@ -73,13 +73,13 @@ func throwableGetMessage(_ *Invocation, arguments []Value) (Value, error) {
 	if !ok {
 		return ReferenceValue(nil), nil
 	}
-	return ReferenceValue(nativeStringValue(message)), nil
+	return ReferenceValue(call.vm.unrefusedString(message)), nil
 }
 
 // throwableToString answers what the standard one does — the class name, and
 // the message after a colon when there is one — because a title that prints a
 // caught exception is putting that text on the screen.
-func throwableToString(_ *Invocation, arguments []Value) (Value, error) {
+func throwableToString(call *Invocation, arguments []Value) (Value, error) {
 	object, err := requireObject(arguments, 0)
 	if err != nil {
 		return VoidValue(), err
@@ -88,7 +88,7 @@ func throwableToString(_ *Invocation, arguments []Value) (Value, error) {
 	if message, ok := object.Native.(string); ok {
 		text += ": " + message
 	}
-	return ReferenceValue(nativeStringValue(text)), nil
+	return ReferenceValue(call.vm.unrefusedString(text)), nil
 }
 
 func throwablePrintStackTrace(call *Invocation, arguments []Value) (Value, error) {

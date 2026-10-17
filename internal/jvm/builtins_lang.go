@@ -74,7 +74,7 @@ func (vm *VM) registerBoxBuiltins() {
 			if err != nil {
 				return VoidValue(), err
 			}
-			return ReferenceValue(nativeStringValue(strconv.FormatUint(uint64(uint32(value)), base))), nil
+			return vm.stringResult(strconv.FormatUint(uint64(uint32(value)), base))
 		})
 	}
 	// Two boxed ints are equal when their values are, which is what a title
@@ -156,7 +156,7 @@ func (vm *VM) registerBoxBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(booleanText(value))), nil
+		return vm.stringResult(booleanText(value))
 	})
 
 	vm.builtin(LongClass, "<init>", "(J)V", func(_ *VM, arguments []Value) (Value, error) {
@@ -190,14 +190,14 @@ func (vm *VM) registerBoxBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(strconv.FormatInt(value, 10))), nil
+		return vm.stringResult(strconv.FormatInt(value, 10))
 	})
 	vm.builtin(LongClass, "toString", "(J)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeLong(arguments, 0)
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(strconv.FormatInt(value, 10))), nil
+		return vm.stringResult(strconv.FormatInt(value, 10))
 	})
 	vm.builtin(LongClass, "parseLong", "(Ljava/lang/String;)J", func(_ *VM, arguments []Value) (Value, error) {
 		text, err := parsedText(arguments)
@@ -242,7 +242,7 @@ func (vm *VM) registerBoxBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(strconv.FormatInt(int64(value), 10))), nil
+		return vm.stringResult(strconv.FormatInt(int64(value), 10))
 	})
 	// The static form is the one a title reaches for when it has a byte and no
 	// box: three local titles render a table of numbers with it, where the
@@ -252,7 +252,7 @@ func (vm *VM) registerBoxBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(strconv.FormatInt(int64(int8(value)), 10))), nil
+		return vm.stringResult(strconv.FormatInt(int64(int8(value)), 10))
 	})
 	vm.builtin(ByteClass, "parseByte", "(Ljava/lang/String;)B", func(_ *VM, arguments []Value) (Value, error) {
 		text, err := parsedText(arguments)
@@ -297,7 +297,7 @@ func (vm *VM) registerBoxBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(strconv.FormatInt(int64(value), 10))), nil
+		return vm.stringResult(strconv.FormatInt(int64(value), 10))
 	})
 	vm.builtin(ShortClass, "parseShort", "(Ljava/lang/String;)S", func(_ *VM, arguments []Value) (Value, error) {
 		text, err := parsedText(arguments)
@@ -349,7 +349,7 @@ func (vm *VM) registerBoxBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(&Object{ClassName: IntegerClass, Native: int32(value)}), nil
+		return vm.libraryObject(IntegerClass, int32(value))
 	})
 	vm.builtin(IntegerClass, "toString", "(II)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeInt(arguments, 0)
@@ -360,7 +360,7 @@ func (vm *VM) registerBoxBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(radixText(int64(value), radix))), nil
+		return vm.stringResult(radixText(int64(value), radix))
 	})
 	vm.builtin(LongClass, "toString", "(JI)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeLong(arguments, 0)
@@ -371,7 +371,7 @@ func (vm *VM) registerBoxBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(radixText(value, radix))), nil
+		return vm.stringResult(radixText(value, radix))
 	})
 
 	// Equality is about the value on every box, so a title looking one up in a
@@ -804,7 +804,7 @@ func (vm *VM) registerStringExtraBuiltins() {
 				replaced[index] = uint16(to)
 			}
 		}
-		return ReferenceValue(nativeStringValue(string(utf16.Decode(replaced)))), nil
+		return vm.stringResult(string(utf16.Decode(replaced)))
 	})
 	vm.builtin(StringClass, "valueOf", "([C)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		array, err := nativeReference(arguments, 0)
@@ -819,7 +819,7 @@ func (vm *VM) registerStringExtraBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(text)), nil
+		return vm.stringResult(text)
 	})
 	vm.builtin(StringClass, "valueOf", "([CII)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		array, err := nativeReference(arguments, 0)
@@ -838,7 +838,7 @@ func (vm *VM) registerStringExtraBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(text)), nil
+		return vm.stringResult(text)
 	})
 	vm.builtin(StringClass, "getBytes", "(Ljava/lang/String;)[B", func(vm *VM, arguments []Value) (Value, error) {
 		value, err := nativeString(arguments, 0)
@@ -851,9 +851,9 @@ func (vm *VM) registerStringExtraBuiltins() {
 		}
 		switch charsetOf(encoding) {
 		case charsetUTF8:
-			return ReferenceValue(NewByteArray([]byte(value))), nil
+			return vm.byteArrayResult([]byte(value))
 		case charsetPlatform:
-			return ReferenceValue(NewByteArray(vm.encodePlatformString(value))), nil
+			return vm.byteArrayResult(vm.encodePlatformString(value))
 		}
 		return VoidValue(), guestException("java/io/IOException", "unsupported character encoding: "+encoding)
 	})

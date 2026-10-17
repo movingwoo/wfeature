@@ -416,12 +416,14 @@ func javaStreamClose(
 	if !ok {
 		return 0, fmt.Errorf("the object at %#x is not a stream this platform opened", arguments[0])
 	}
-	// A stream opened on a File leaves that file where the reading got to; a
+	// A stream opened on a File leaves that file where the reading got to,
+	// and one that held its file open after the File closed lets it go; a
 	// plain one is bound to nothing and this is nothing. See java_file.go.
 	if err := client.syncJavaStreamToFile(arguments[0]); err != nil {
 		return 0, err
 	}
 	delete(client.javaRun.streamFiles, arguments[0])
+	client.releaseJavaFileStream(arguments[0])
 	stream.Closed = true
 	return 0, nil
 }
@@ -799,12 +801,10 @@ func javaByteSinkWriteAll(
 	return 0, client.putJavaSink(sink, append(held, data...))
 }
 
-// javaByteSinkFlush is `flush()` and `close()`, slots 13 and 14. A sink is
-// bytes in memory: there is nothing held back for a flush to release, and
-// closing one leaves what it holds readable, which the specification says in
-// so many words.
+// javaByteSinkFlush is `flush()`, slot 13. A sink is bytes in memory: there
+// is nothing held back for a flush to release.
 func javaByteSinkFlush(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	_, sink, err := client.javaByteSinkOf(arguments[0])
 	if err != nil {
@@ -812,11 +812,35 @@ func javaByteSinkFlush(
 	}
 	// A plain sink has nowhere to drain to and a flush is nothing. One opened
 	// on a File has handed the File every byte as it was written, and its
-	// flush and close are where those writes reach the store.
+	// flush and close are where those writes reach the store. A store that
+	// refuses is the IOException the two declare; the write waits in the File.
 	if err := client.drainJavaSinkToFile(sink); err != nil {
 		return 0, err
 	}
-	client.storeJavaSinkFile(sink)
+	if err := client.storeJavaSinkFile(sink); err != nil {
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, ": "+err.Error())
+	}
+	return 0, nil
+}
+
+// javaByteSinkClose is `close()`, slot 14: a flush, and closing a sink leaves
+// what it holds readable, which the specification says in so many words. A
+// stream opened on a File is done with the file once the flush has stored it:
+// it stops being the File's stream, so the File can open another, and one
+// that held its file open after the File closed lets it go; see
+// javaFileClose.
+func javaByteSinkClose(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	if _, err := javaByteSinkFlush(client, ctx, thread, arguments); err != nil {
+		return 0, err
+	}
+	_, sink, err := client.javaByteSinkOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	delete(client.javaRuntimeState().sinkFiles, sink)
+	client.releaseJavaFileStream(sink)
 	return 0, nil
 }
 

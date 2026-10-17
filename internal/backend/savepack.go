@@ -515,7 +515,11 @@ func WriteSaveTree(root string, entries []SaveEntry) (written int, removed int, 
 	if names.naming == namingEarlier {
 		return 0, 0, refuseEarlierSaveNames(root, names)
 	}
-	if err := saveTreeHasRoomFor(root, ordered); err != nil {
+	judged, err := store.storableSaveEntries(ordered, names)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := saveTreeHasRoomFor(root, judged); err != nil {
 		return 0, 0, err
 	}
 	for _, entry := range ordered {

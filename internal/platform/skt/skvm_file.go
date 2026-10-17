@@ -777,45 +777,57 @@ func (runtime *Runtime) xFileUsed(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 
 // xFileUnlink removes a file. It answers -1 for a name that cannot be
 // removed and 0 otherwise, including for a name that does not exist, which it
-// always answered.
+// always answered: the WIPI specification does not describe XFile, and every
+// unlink in the local SKT corpus discards the answer (docs/skvm.md).
 func (runtime *Runtime) xFileUnlink(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	name, err := stringArgument(arguments, 0)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if !runtime.removeXFile(name) {
+	if runtime.removeXFile(name) == xFileUnremovable {
 		return jvm.IntValue(-1), nil
 	}
 	return jvm.IntValue(0), nil
 }
+
+// xFileRemoval is what a removal found: a file it removed, no file to remove,
+// or a name it cannot remove. XFile.unlink answers -1 for the last alone;
+// FileSystem.remove throws for both of the last two.
+type xFileRemoval uint8
+
+const (
+	xFileRemoved xFileRemoval = iota
+	xFileAbsent
+	xFileUnremovable
+)
 
 // removeXFile removes a path. From here on it is absent to every read —
 // exists, filesize, an open for reading, and the handles still open on it,
 // which read an empty file — and the removal list keeps it absent in later
 // sessions, its packaged file included, until a writable open or a write makes
 // the path again. A path nothing holds — no write, no save, no packaged file — is
-// already absent: removing it changes nothing and stores nothing. It answers
-// false for a name it cannot remove: one that is not a save key, one the
-// store could not be read for, and one the removal list cannot carry, since
-// the list is a name per line and a name with a line break in it would come
-// back as other names.
-func (runtime *Runtime) removeXFile(name string) bool {
+// already absent: removing it changes nothing, stores nothing and answers
+// xFileAbsent. It answers xFileUnremovable for a name it cannot remove: one
+// that is not a save key, one the store could not be read for, and one the
+// removal list cannot carry, since the list is a name per line and a name with
+// a line break in it would come back as other names.
+func (runtime *Runtime) removeXFile(name string) xFileRemoval {
 	key, err := xFileKey(name)
 	if err != nil || strings.ContainsAny(key, "\n\r") {
-		return false
+		return xFileUnremovable
 	}
 	runtime.fileMu.Lock()
 	defer runtime.fileMu.Unlock()
 	node, err := runtime.xFilePeekLocked(key)
 	if err != nil {
-		return false
+		return xFileUnremovable
 	}
 	if !node.present {
-		return true
+		return xFileAbsent
 	}
 	removed, err := runtime.xFileRemovalsLocked()
 	if err != nil {
-		return false
+		return xFileUnremovable
 	}
 	node.data, node.borrowed, node.present = nil, false, false
 	// Only what a later session would otherwise find needs writing down: a
@@ -825,5 +837,5 @@ func (runtime *Runtime) removeXFile(name string) bool {
 	if err := runtime.storeXFileLocked(node); err != nil && runtime.logger != nil {
 		runtime.logger.Debug("XFile removal store failed", "name", name, "error", err)
 	}
-	return true
+	return xFileRemoved
 }

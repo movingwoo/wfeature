@@ -441,7 +441,9 @@ The activity's half of [leaving the screen](mobile.md#when-the-app-leaves-the-sc
 is checked on the same emulator. The script changes the rotation, the display's
 handling of the orientation request, the density, the display size, the night
 mode and the font scale, one at a time and back, and puts every setting back as
-it found it even when a check fails. It then finishes the activity with BACK:
+it found it even when a check fails. It then finishes the activity with BACK,
+leaves a task the home screen started with BACK and comes back to it, and opens
+the app again while the server it just ended is draining:
 
 ```sh
 make mobile-android && adb install -r mobile/android/build/wfeature.apk
@@ -461,17 +463,38 @@ which makes the hidden page of a destroyed activity's web view visible again,
 and that page then takes the game back from the new one. The script attaches
 only to the page on the window, and to none while a change is made.
 
-It checks three things:
+It checks five things:
 
 - each change `configChanges` declares leaves the activity instance, the
   page's document, its session socket and the server's pid as they were;
 - the font scale, which the manifest does not declare, rebuilds the activity
   while the server keeps its pid and the new page resumes the game
-  (`session parked`, then `session resumed`);
+  (`session parked`, then `session resumed`), and the old activity's page is
+  gone from the web views' DevTools targets, its web view destroyed;
 - BACK, which finishes a task started with `am start`, ends the server within
   five seconds of `onDestroy`, and the server's drain closes the game on the
   way: a record the destroy-save MIDlet's `destroyApp` writes is there after
-  every finish, as after the control, `POST /api/shutdown`.
+  every finish, as after the control, `POST /api/shutdown`;
+- BACK on a task the home screen started only stops the activity: the server
+  keeps its pid and parks the game, and the record is not written. The script
+  starts the app with a tap on its icon (from a `uiautomator` dump of the
+  home screen, or of the app list), because Android counts a start as the home
+  screen's only when the launcher made it; `am start` with the launcher's own
+  intent still makes a task BACK finishes. It stays away until Android freezes
+  the cached app (90 s at most); the server is in the app's cgroup and freezes
+  with it. Opened again from the icon, the same activity, page document and
+  server resume the game, and its frames reach the page again;
+  `POST /api/shutdown` then writes the record, once;
+- the app opened again right after a BACK finish, while the old server is
+  still draining, says it is waiting for that server and starts the next one
+  only after the old process is gone, on the device's clock, and the old
+  game's record is written; the page on screen is the new server's, the only
+  one running. One command on the device presses BACK, waits for `onDestroy`
+  and starts the app. A drain with nothing in flight is over in well under a
+  second, before the new activity gets as far as starting a server, so the
+  script leaves a game upload in flight that never sends its whole body (and
+  is never written); the drain waits for it until its ten-second deadline.
+  Three times, as for the finish.
 
 On 2026-10-16, on the Pixel 10 Pro image of Android 17 (SDK 37) with web view
 155, the app built from this tree passed all fifteen checks in two runs. Every
@@ -485,6 +508,25 @@ server started each time and the game was gone. It passed the size changes,
 because Android rebuilds an activity for a size change only when the change
 crosses a width or height its resources are qualified by, and the app has none.
 A plain rotation never reached the portrait-only activity.
+
+On 2026-10-17, on the same image and web view, the app built from this tree
+passed all nineteen checks in three runs. Left from the home screen, one BACK
+stopped the activity without finishing it, Android froze the cached app,
+server and all, about 70 s after it stopped, and the server answered nothing
+until the icon brought the app back; then the same activity, page and server
+resumed the game, and only the shutdown that followed wrote the record. Opened
+again during the drain, the app said it was waiting within 0.6 s of the new
+start and started the next server 9.0–9.8 s later, in the same millisecond as
+its line that the old one had ended, which the in-flight upload held to the
+drain's ten-second deadline; 9 of 9. The app from the commit before (eb93831),
+run the same way as a control, passed seventeen and failed two: after the font
+scale was put back the old activity's page was still one of the web views'
+pages (after the first rebuild it was not listed), and opened again during the
+drain it started the new server 0.1–1.9 s after `onDestroy` while the old one
+drained on for another 8–9.5 s, 0 of 3. Its home-screen checks passed: BACK
+from the home screen needed no change. Finishing was slower on this boot for
+both builds (`onDestroy` 1.2–2.9 s after BACK, the server gone 0.2–0.8 s
+after it), so the destroyed web view does not slow the drain.
 
 ### The iOS app on a simulator
 
@@ -948,7 +990,9 @@ Authored tests in `internal/platform/lgt`:
   thread beneath a class declaration thunk is refused by name and restored once
   it has left it. Thirty-five inconsistent Java records are refused, each for
   the reason the case names. A restored session saved again before it runs
-  writes the record it was restored from.
+  writes the record it was restored from. Sixteen threads running at once, the
+  most a title can start, save and load, and the next start throws
+  `OutOfMemoryError` instead of mapping a stack the record could not carry.
 - Three checks have tables of their own, because what they refuse is not
   contained by a panic boundary. `TestCheckpointRefusesAClassChainThatNeverEnds`
   closes a superclass chain through recorded links and through the name a

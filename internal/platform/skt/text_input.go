@@ -369,7 +369,9 @@ func (runtime *Runtime) initXTextFieldWithText(_ *jvm.VM, arguments []jvm.Value)
 
 // xTextFieldKeyPressed types into the platform's own field. Here the platform
 // holds the text, so it is the shared editor itself rather than the cycle
-// above — the same one a MIDP TextBox on this platform types with.
+// above — the same one a MIDP TextBox on this platform types with, under the
+// same constraint rules: the constraints the title's constructor states keep
+// an UNEDITABLE field as it is and a numeric one in digit mode.
 func (runtime *Runtime) xTextFieldKeyPressed(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	runtime.textMu.Lock()
 	defer runtime.textMu.Unlock()
@@ -381,7 +383,11 @@ func (runtime *Runtime) xTextFieldKeyPressed(_ *jvm.VM, arguments []jvm.Value) (
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	if !keypadEditable(data.constraints) {
+		return jvm.VoidValue(), nil
+	}
 	editor := data.editor()
+	runtime.holdDigitMode(editor, data.constraints)
 	switch keyCode {
 	case KeyCodeLeft:
 		data.textRevision++

@@ -443,6 +443,9 @@ func TestCheckpointWriterDropsOldFramesAndSoundBeforeReset(t *testing.T) {
 
 func dialCheckpointServer(t *testing.T, server *Server) (*wsproto.Conn, func()) {
 	t.Helper()
+	// The checkpoint tests read and set guest memory by address through the
+	// text console, which only a test server answers.
+	server.textConsole = true
 	httpServer := httptest.NewServer(server)
 	connection, _, err := wsproto.Dial("ws://"+strings.TrimPrefix(httpServer.URL, "http://")+"/api/session?protocol=2", nil)
 	if err != nil {

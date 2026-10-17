@@ -508,24 +508,54 @@ func (runtime *Runtime) getGraphicsRGBPixels(_ *jvm.VM, arguments []jvm.Value) (
 	if width == 0 || height == 0 {
 		return jvm.VoidValue(), nil
 	}
+	// A scan length shorter than the width overlaps the rows in the array,
+	// and a later row overwrites an earlier one. Walking the rows from the
+	// last and writing only the elements no later row has written leaves the
+	// array as the forward walk would, with each element written once, so the
+	// work is bounded by the array rather than by width*height. What later
+	// rows wrote is one interval when rows overlap, since consecutive rows
+	// then overlap too; rows that do not overlap are each written whole.
+	array := arrayObjectOf(arguments, 5)
 	pixels := make([]jvm.Value, int(width))
-	for row := int32(0); row < height; row++ {
-		for column := int32(0); column < width; column++ {
-			index, ok := contextPixelIndexUnclipped(context, x+column, y+row)
-			if !ok {
-				pixels[column] = jvm.IntValue(0)
+	writtenFrom, writtenTo := int64(0), int64(0)
+	for row := height - 1; row >= 0; row-- {
+		start := int64(offset) + int64(row)*int64(scanLength)
+		end := start + int64(width)
+		spans, count := [2][2]int64{{start, end}}, 1
+		if writtenFrom < writtenTo && start <= writtenTo && end >= writtenFrom {
+			// The row meets what later rows wrote: only its ends are new.
+			spans, count = [2][2]int64{{start, min(end, writtenFrom)}, {max(start, writtenTo), end}}, 2
+			writtenFrom, writtenTo = min(writtenFrom, start), max(writtenTo, end)
+		} else {
+			writtenFrom, writtenTo = start, end
+		}
+		for _, span := range spans[:count] {
+			if span[0] >= span[1] {
 				continue
 			}
-			pixels[column] = jvm.IntValue(int32(uint32(context.pixels[index+3])<<24 |
-				uint32(context.pixels[index])<<16 | uint32(context.pixels[index+1])<<8 |
-				uint32(context.pixels[index+2])))
-		}
-		start := int(offset) + int(row)*int(scanLength)
-		if err := jvm.SetArrayRange(arrayObjectOf(arguments, 5), start, pixels); err != nil {
-			return jvm.VoidValue(), err
+			length := int(span[1] - span[0])
+			first := x + int32(span[0]-start)
+			for column := range length {
+				pixels[column] = contextARGB(context, first+int32(column), y+row)
+			}
+			if err := jvm.SetArrayRange(array, int(span[0]), pixels[:length]); err != nil {
+				return jvm.VoidValue(), err
+			}
 		}
 	}
 	return jvm.VoidValue(), nil
+}
+
+// contextARGB is one surface pixel as getRGBPixels hands it out, 0 for a point
+// off the surface.
+func contextARGB(context *graphicsContext, x, y int32) jvm.Value {
+	index, ok := contextPixelIndexUnclipped(context, x, y)
+	if !ok {
+		return jvm.IntValue(0)
+	}
+	return jvm.IntValue(int32(uint32(context.pixels[index+3])<<24 |
+		uint32(context.pixels[index])<<16 | uint32(context.pixels[index+1])<<8 |
+		uint32(context.pixels[index+2])))
 }
 
 func (runtime *Runtime) setGraphicsRGBPixels(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -699,12 +729,20 @@ func (runtime *Runtime) wipiFileSizeOf(_ *jvm.VM, arguments []jvm.Value) (jvm.Va
 }
 
 // wipiFileRemove is FileSystem.remove, XFile.unlink's removal answered
-// without a value. A name that does not exist is left as it is, without the
-// IOException the specification gives it, which this platform has never
-// thrown here.
-func (runtime *Runtime) wipiFileRemove(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	if _, err := runtime.xFileUnlink(vm, arguments); err != nil {
+// without a value. A name with no file, and one that cannot be removed, throw
+// the IOException the specification gives both. Every remove in the local SKT
+// corpus runs behind the title's own existence check and inside a handler
+// that catches the exception (docs/skvm.md).
+func (runtime *Runtime) wipiFileRemove(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	name, err := stringArgument(arguments, 0)
+	if err != nil {
 		return jvm.VoidValue(), err
+	}
+	switch runtime.removeXFile(name) {
+	case xFileAbsent:
+		return jvm.VoidValue(), newGuestException("java/io/IOException", "no such file: "+name)
+	case xFileUnremovable:
+		return jvm.VoidValue(), newGuestException("java/io/IOException", "cannot remove: "+name)
 	}
 	return jvm.VoidValue(), nil
 }

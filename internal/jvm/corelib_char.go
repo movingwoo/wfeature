@@ -144,7 +144,7 @@ func (vm *VM) registerCharacterBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(string(utf16.Decode([]uint16{uint16(value)})))), nil
+		return vm.stringResult(string(utf16.Decode([]uint16{uint16(value)})))
 	})
 
 	vm.builtin(CharacterClass, "isDigit", "(C)Z", func(_ *VM, arguments []Value) (Value, error) {

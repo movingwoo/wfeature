@@ -87,7 +87,8 @@ type xTextFieldData struct {
 	input *textinput.State
 	// constraints is what a MIDP TextField would restrict its input to. It is
 	// kept because a title's constructor states it; the Host IME adapter uses
-	// it to validate a composed value before committing it.
+	// it to validate a composed value before committing it, and the keypad to
+	// refuse edits and hold digit mode as a TextBox's does.
 	constraints int32
 	focus       bool
 	x, y        int32
