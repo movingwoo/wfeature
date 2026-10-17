@@ -17,7 +17,8 @@ limit, under a browser token the page keeps in `localStorage`
 `wfeature.resume-token`), until it is stopped, replaced, pushed out by the
 four-game limit, or the server shuts down. The page reconnects and asks for it
 back when it is looked at again, retrying with a delay that doubles up to 15
-seconds. A page that finds its game controlled by another page shows
+seconds and starts again from one second after any answer from the server. A
+page that finds its game controlled by another page shows
 `다른 화면에서 게임을 진행 중입니다.` with **이 화면에서 이어하기**, an explicit
 takeover. **🔄 재시작** asks first ("게임을 처음부터 다시 시작할까요? 저장하지 않은
 진행은 사라집니다.", **다시 시작**), then stops the game and returns to the
@@ -47,9 +48,11 @@ picker.
   route is in [Server](#server)). **세이브 내보내기** downloads the selected game's
   saves as `<game>.wfs`, or hands them to the phone app's own save picker, and
   **세이브 가져오기** restores a `.wfs` over them after a confirmation
-  (`save-backup.js`). The server's refusals are shown as it words them. The
-  buttons sit on the picker because an import replaces a save and the game is
-  not running there.
+  (`save-backup.js`). The server's refusals are shown as it words them; a
+  request that never reaches the server says `서버에 연결하지 못했습니다.`
+  rather than the browser's own English error (`reach.js`, also used by the
+  game list and the upload and delete buttons). The buttons sit on the picker
+  because an import replaces a save and the game is not running there.
 - **Screen** — the game's own screen size, chosen per game under `📱 화면`:
   128×160, 176×220, 240×320 (the default), 240×400 or 320×480. A change takes
   effect on the next start, and the note under the setting says so. The picture
@@ -124,7 +127,8 @@ picker.
   `manual`, holding `5` or `OK` repeats it, toggling every 50 ms; in `auto`,
   pressing `5` or `OK` starts a continuous repeat of that key and pressing it
   again stops it. The mode resets to off on input loss, editing and session
-  changes.
+  changes, but not when the keypad only resizes (전체화면, rotation, a window
+  resize).
 - **Game controller** — one more way to hold a phone key. Its presses go
   through the same holds as the keypad and the keyboard (`key-holds.js`), so a
   key held two ways is one press, a held key lights its button, rapid fire
@@ -216,12 +220,17 @@ picker.
   dismissing it leaves whatever was open behind it open. Nothing hides on a
   timer; setting the empty string clears it. Checkpoint feedback uses a
   separate status line over the bottom of the game screen, which expires by
-  itself and neither dims the page nor captures input.
+  itself and neither dims the page nor captures input. A failure keeps its
+  time through a dropped connection and reconnect; returning to the picker
+  clears it.
 - **Confirmations** — every question (deleting a game, importing a save,
   restarting, replacing a game) is asked by the page's own dialog
   (`confirm.js`), not `window.confirm`: in the Android app a JavaScript confirm
-  is the web view client's decision and can answer "no" with nothing on screen.
-  The verb is on the button that carries it out.
+  is the web view client's decision and can answer "no" with nothing on screen,
+  and the iOS app's web view answers "no" without showing anything. The verb is
+  on the button that carries it out. While a question is open, neither the
+  keyboard nor a controller reaches the game, and Space and Enter press the
+  focused button of the question.
 - **Run log** — the page's own log as it is written: session events, key
   presses, the server's frame statistics and anything the page logged or threw,
   kept as a ring of 2000 lines. These are the lines a saved report carries, so
@@ -487,7 +496,7 @@ offline, where it comes up and then fails on an import. `service-worker.test.mjs
 therefore compares the list against what `index.html` names and what the module
 graph from `app.js` reaches; two modules had already drifted out of it. A
 change to the list wants the cache name bumped with it. The shell cache is
-`wfeature-pwa-v57` (the constant in `service-worker.js`). The `wfeature-pwa-`
+`wfeature-pwa-v58` (the constant in `service-worker.js`). The `wfeature-pwa-`
 prefix, introduced in version 35, keeps already-installed workers from deleting
 it through their broad `wfeature-shell-*` cleanup. Activation removes legacy
 shell caches and strictly older `wfeature-pwa-vN` versions, preserving future

@@ -151,7 +151,7 @@ func TestJavaDatabaseRefusesWhatItCannotHold(t *testing.T) {
 		t.Fatal("a record longer than the record size was stored")
 	}
 
-	database := &javaDatabase{}
+	database := &databaseContent{}
 	if err := database.decode([]byte("not a database at all")); err == nil {
 		t.Fatal("a file that is not a container was read as one")
 	}

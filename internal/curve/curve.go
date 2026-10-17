@@ -31,6 +31,48 @@ type Span struct {
 // whose fill can fail reports the first failure rather than drawing on past it.
 type Emit func(Span) error
 
+// Bounds is the part of the plane a caller's fill can reach — its clip met
+// with its target, in the coordinates it hands the shape — as the half-open
+// box [Left, Right) by [Top, Bottom).
+//
+// The box a guest names is untrusted and may be far larger than any surface:
+// walked whole, a fill of a hundred thousand pixels square takes minutes and
+// one as wide as an int never ends, all of it clipped away. The ...Within
+// forms walk only the rows, columns and stretches of curve that can land in
+// the bounds, hand out only the part of each span inside them, and draw every
+// pixel inside them exactly as many times as the whole walk would.
+type Bounds struct {
+	Left, Top, Right, Bottom int64
+}
+
+// everywhere holds every point an int32 shape can name, so a walk within it
+// is the whole walk and every span is handed out as it is.
+var everywhere = Bounds{Left: -1 << 40, Top: -1 << 40, Right: 1 << 40, Bottom: 1 << 40}
+
+func (bounds Bounds) empty() bool {
+	return bounds.Right <= bounds.Left || bounds.Bottom <= bounds.Top
+}
+
+// trim answers an emit that hands on only the part of each span within the
+// bounds, so a caller whose fill costs the span's width pays for what it can
+// draw rather than for the guest's box.
+func (bounds Bounds) trim(emit Emit) Emit {
+	return func(span Span) error {
+		left := max(int64(span.X), bounds.Left)
+		right := min(int64(span.X)+int64(span.Width), bounds.Right)
+		if right <= left || int64(span.Y) < bounds.Top || int64(span.Y) >= bounds.Bottom {
+			return nil
+		}
+		return emit(Span{X: int32(left), Y: span.Y, Width: int32(right - left)})
+	}
+}
+
+// rows answers which rows of a shape at y and height tall can land in the
+// bounds, as a half-open range of row offsets.
+func (bounds Bounds) rows(y, height int32) (int64, int64) {
+	return max(0, bounds.Top-int64(y)), min(int64(height), bounds.Bottom-int64(y))
+}
+
 // RoundRectRadii answers the corner radii a rounded rectangle actually uses.
 // A diameter larger than the side it rounds is clamped, which is what makes
 // `fillRoundRect(x, y, w, h, w, h)` an ellipse rather than an overflow.
@@ -88,11 +130,19 @@ func roundRectInset(row, height, radiusX, radiusY int32) int32 {
 // FillRoundRect fills a rectangle whose corners are quarter ellipses, a row at
 // a time so every row goes through the caller's own clipped fill.
 func FillRoundRect(x, y, width, height, arcWidth, arcHeight int32, emit Emit) error {
-	if width <= 0 || height <= 0 {
+	return FillRoundRectWithin(everywhere, x, y, width, height, arcWidth, arcHeight, emit)
+}
+
+// FillRoundRectWithin is FillRoundRect walking only the rows within bounds.
+func FillRoundRectWithin(bounds Bounds, x, y, width, height, arcWidth, arcHeight int32, emit Emit) error {
+	if width <= 0 || height <= 0 || bounds.empty() {
 		return nil
 	}
+	emit = bounds.trim(emit)
 	radiusX, radiusY := RoundRectRadii(width, height, arcWidth, arcHeight)
-	for row := int32(0); row < height; row++ {
+	first, last := bounds.rows(y, height)
+	for visible := first; visible < last; visible++ {
+		row := int32(visible)
 		inset := roundRectInset(row, height, radiusX, radiusY)
 		if span := width - 2*inset; span > 0 {
 			if err := emit(Span{X: x + inset, Y: y + row, Width: span}); err != nil {
@@ -107,12 +157,24 @@ func FillRoundRect(x, y, width, height, arcWidth, arcHeight int32, emit Emit) er
 // fill would have covered, which draws the straight edges and the corner
 // curves without a second piece of geometry.
 func DrawRoundRect(x, y, width, height, arcWidth, arcHeight int32, emit Emit) error {
-	if width <= 0 || height <= 0 {
+	return DrawRoundRectWithin(everywhere, x, y, width, height, arcWidth, arcHeight, emit)
+}
+
+// DrawRoundRectWithin is DrawRoundRect walking only the rows within bounds.
+func DrawRoundRectWithin(bounds Bounds, x, y, width, height, arcWidth, arcHeight int32, emit Emit) error {
+	if width <= 0 || height <= 0 || bounds.empty() {
 		return nil
 	}
+	emit = bounds.trim(emit)
 	radiusX, radiusY := RoundRectRadii(width, height, arcWidth, arcHeight)
+	first, last := bounds.rows(y, height)
 	previous := int32(-1)
-	for row := int32(0); row < height; row++ {
+	if first > 0 {
+		// A row's thickness follows the inset of the row above it.
+		previous = roundRectInset(int32(first-1), height, radiusX, radiusY)
+	}
+	for visible := first; visible < last; visible++ {
+		row := int32(visible)
 		inset := roundRectInset(row, height, radiusX, radiusY)
 		// The top and bottom rows are drawn whole; a row whose inset moved
 		// draws from the previous inset so the curve has no gaps in it.
@@ -178,21 +240,35 @@ func arcContains(offsetX, offsetY, begin, sweep float64) bool {
 // FillArc fills the pie slice an arc cuts out of its bounding ellipse, which
 // is what filling an arc means in both specifications.
 func FillArc(x, y, width, height, start, extent int32, emit Emit) error {
-	if width <= 0 || height <= 0 || extent == 0 {
+	return FillArcWithin(everywhere, x, y, width, height, start, extent, emit)
+}
+
+// FillArcWithin is FillArc testing only the pixels within bounds. A run that
+// crosses the bounds' right edge is closed there, as the box's own right edge
+// closes one.
+func FillArcWithin(bounds Bounds, x, y, width, height, start, extent int32, emit Emit) error {
+	if width <= 0 || height <= 0 || extent == 0 || bounds.empty() {
 		return nil
 	}
+	emit = bounds.trim(emit)
 	begin, sweep := arcSpan(start, extent)
 	radiusX, radiusY := float64(width)/2, float64(height)/2
 	centreX, centreY := float64(x)+radiusX, float64(y)+radiusY
-	for row := int32(0); row < height; row++ {
+	firstRow, lastRow := bounds.rows(y, height)
+	firstColumn, lastColumn := max(0, bounds.Left-int64(x)), min(int64(width), bounds.Right-int64(x))
+	for visible := firstRow; visible < lastRow; visible++ {
+		row := int32(visible)
 		pixelY := float64(y+row) + 0.5
 		offsetY := pixelY - centreY
 		// A run of covered pixels is emitted once rather than a pixel at a
 		// time, which keeps a full circle to one span per row.
 		runStart := int32(-1)
-		for column := int32(0); column <= width; column++ {
+		// The counter is wider than a column, so a box as wide as an int
+		// still ends.
+		for scan := firstColumn; scan <= lastColumn; scan++ {
+			column := int32(scan)
 			inside := false
-			if column < width {
+			if scan < lastColumn {
 				offsetX := float64(x+column) + 0.5 - centreX
 				normalX, normalY := offsetX/radiusX, offsetY/radiusY
 				inside = normalX*normalX+normalY*normalY <= 1 && arcContains(offsetX, offsetY, begin, sweep)
@@ -215,27 +291,80 @@ func FillArc(x, y, width, height, start, extent int32, emit Emit) error {
 // the pie's two straight edges, so this walks the angle rather than the
 // bounding box.
 func DrawArc(x, y, width, height, start, extent int32, emit Emit) error {
-	if width <= 0 || height <= 0 || extent == 0 {
+	return DrawArcWithin(everywhere, x, y, width, height, start, extent, emit)
+}
+
+// arcLeafSteps is the shortest stretch of curve worth asking about before it
+// is plotted.
+const arcLeafSteps = 64
+
+// DrawArcWithin is DrawArc plotting only the stretches of curve that can land
+// within bounds. A point moves along the ellipse no faster than its longer
+// radius per radian, so every step of a stretch lies within that speed times
+// the stretch's angle of the stretch's first point; a stretch whose reach
+// misses the bounds is skipped whole, and one that stays inside them is
+// plotted whole. After a skip, the next step is compared with the pixel the
+// step before it would have plotted, so every pixel within the bounds is
+// plotted exactly as often as the whole walk plots it.
+func DrawArcWithin(bounds Bounds, x, y, width, height, start, extent int32, emit Emit) error {
+	if width <= 0 || height <= 0 || extent == 0 || bounds.empty() {
 		return nil
 	}
+	emit = bounds.trim(emit)
 	begin, sweep := arcSpan(start, extent)
 	radiusX, radiusY := float64(width)/2, float64(height)/2
 	centreX, centreY := float64(x)+radiusX, float64(y)+radiusY
 	// One step per pixel of the longer radius keeps the curve continuous
 	// without plotting the same pixel dozens of times on a small arc.
 	steps := int(math.Max(8, 2*math.Pi*math.Max(radiusX, radiusY)))
-	previousX, previousY := int32(math.MinInt32), int32(math.MinInt32)
-	for step := 0; step <= steps; step++ {
-		angle := (begin + sweep*float64(step)/float64(steps)) * math.Pi / 180
+	angleAt := func(step int) float64 {
+		return (begin + sweep*float64(step)/float64(steps)) * math.Pi / 180
+	}
+	pixelAt := func(step int) (int32, int32) {
+		angle := angleAt(step)
 		pixelX := int32(math.Round(centreX + radiusX*math.Cos(angle) - 0.5))
 		pixelY := int32(math.Round(centreY - radiusY*math.Sin(angle) - 0.5))
-		if pixelX == previousX && pixelY == previousY {
-			continue
-		}
-		if err := emit(Span{X: pixelX, Y: pixelY, Width: 1}); err != nil {
-			return err
-		}
-		previousX, previousY = pixelX, pixelY
+		return pixelX, pixelY
 	}
-	return nil
+	speed := math.Max(radiusX, radiusY)
+	left, top := float64(bounds.Left), float64(bounds.Top)
+	right, bottom := float64(bounds.Right), float64(bounds.Bottom)
+	previousX, previousY := int32(math.MinInt32), int32(math.MinInt32)
+	next := 0
+	var walk func(first, last int) error
+	walk = func(first, last int) error {
+		if last-first >= arcLeafSteps {
+			angle := angleAt(first)
+			pointX, pointY := centreX+radiusX*math.Cos(angle), centreY-radiusY*math.Sin(angle)
+			// Two pixels of slack cover the rounding to a pixel and the
+			// arithmetic's own error.
+			reach := speed*(angleAt(last)-angle) + 2
+			if pointX+reach < left || pointX-reach >= right || pointY+reach < top || pointY-reach >= bottom {
+				return nil
+			}
+			if pointX-reach < left || pointX+reach >= right || pointY-reach < top || pointY+reach >= bottom {
+				middle := first + (last-first)/2
+				if err := walk(first, middle); err != nil {
+					return err
+				}
+				return walk(middle+1, last)
+			}
+		}
+		if first != next {
+			previousX, previousY = pixelAt(first - 1)
+		}
+		for step := first; step <= last; step++ {
+			pixelX, pixelY := pixelAt(step)
+			if pixelX == previousX && pixelY == previousY {
+				continue
+			}
+			if err := emit(Span{X: pixelX, Y: pixelY, Width: 1}); err != nil {
+				return err
+			}
+			previousX, previousY = pixelX, pixelY
+		}
+		next = last + 1
+		return nil
+	}
+	return walk(0, steps)
 }

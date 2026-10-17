@@ -20,7 +20,7 @@ type checkpointHeap struct {
 	wrappers  map[any]*jvm.Object
 	fixups    []func() error
 	checks    []func() error
-	files     []*xFileData
+	files     []*xFileData // restored handles; see rebuildCheckpointFiles
 	stores    []*recordStore
 	rmsCaches map[string]*recordStore
 	editors   []*textinput.State
@@ -238,7 +238,6 @@ func (heap *checkpointHeap) captureNative(native any) (jvm.HeapExternalPayload, 
 	case *sisImageData:
 		return nativeCheckpoint("sis", checkpointSIS{n.width, n.height})
 	case *xFileData:
-		heap.files = append(heap.files, n)
 		return nativeCheckpoint("file", checkpointXFile{n.name, n.archiveName, n.archiveEntry, n.mode, n.cursor, n.open, n.writable})
 	case *xTextFieldData:
 		return nativeCheckpoint("text", checkpointXText{n.textRevision, n.text, n.maxSize, n.constraints, n.paintedDisplayRevision, n.focus, n.x, n.y, n.width, n.height}, n.owner, n.paintedDisplay, heap.wrap(n.input))
@@ -280,7 +279,7 @@ func (heap *checkpointHeap) captureNative(native any) (jvm.HeapExternalPayload, 
 		refs := []*jvm.Object{n.ticker, n.listener, heap.wrap(n.screen), heap.wrap(n.game)}
 		return nativeCheckpoint("displayable", saved, append(refs, n.commands...)...)
 	case *gameCanvasData:
-		return nativeCheckpoint("game-canvas", checkpointGameCanvas{n.suppressKeys, n.keyStates}, heap.wrap(n.buffer), n.graphics)
+		return nativeCheckpoint("game-canvas", checkpointGameCanvas{n.suppressKeys, gameCanvasKeyRecord(n.keyStates, n.latchedKeys)}, heap.wrap(n.buffer), n.graphics)
 	case *playerData:
 		saved := checkpointPlayer{State: n.state, ContentType: n.contentType, Handle: n.handle, Duration: n.duration,
 			Loops: n.loops, MediaTime: n.mediaTime, Completed: n.completed, Listeners: len(n.listeners)}

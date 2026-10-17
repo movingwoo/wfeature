@@ -484,15 +484,15 @@ func TestNativeSaveFixtureHeldWritesReachTheStoreAtTheFrameEnd(t *testing.T) {
 		t.Fatalf("READ after HOLD and FINISH = %+v, want %+v", got, whole)
 	}
 
-	// The emptying is itself a write the platform holds back: the store keeps
-	// the save as it was until the frame ends, and has an empty one after it.
+	// The emptying is not held back like a write: the common save rule stores a
+	// truncating open's empty file at the open, and the frame changes nothing.
 	fixture.press(testfixture.KTFNativeSaveKeyTruncate)
 	handle = fixture.word(testfixture.KTFNativeSaveHandle)
 	if file := platform.files[handle]; file == nil || !file.writable || file.position != 0 || len(file.data) != 0 {
 		t.Fatalf("TRUNCATE did not keep one emptied object: %+v", file)
 	}
-	fixture.wantStored("after TRUNCATE", testfixture.KTFNativeSaveFile(second, third))
-	fixture.wantPending("after TRUNCATE", []byte{})
+	fixture.wantStored("after TRUNCATE", []byte{})
+	fixture.wantPending("after TRUNCATE", nil)
 	fixture.frame()
 	fixture.wantStored("a frame after TRUNCATE", []byte{})
 	// An emptied save is there and holds nothing, which is not a missing one,
@@ -546,7 +546,7 @@ func TestNativeSaveFixtureWithoutAFrameKeepsWritesPending(t *testing.T) {
 	}
 
 	// A second session over the same store reads what the first one's close
-	// stored, and its emptying open waits the same way.
+	// stored, and its emptying open is stored at the open.
 	fixture = startNativeSaveFixture(t, testfixture.KTFNativeSaveArchiveWithoutFrame, store)
 	found := nativeSaveFixtureReading{a: second, b: first ^ testfixture.KTFNativeSaveMask, status: testfixture.KTFNativeSaveStatusFound, length: 8}
 	if got := fixture.read(); got != found {
@@ -554,8 +554,8 @@ func TestNativeSaveFixtureWithoutAFrameKeepsWritesPending(t *testing.T) {
 	}
 	fixture.press(testfixture.KTFNativeSaveKeyTruncate)
 	idle(fixture)
-	fixture.wantStored("after TRUNCATE and five ticks", testfixture.KTFNativeSaveFile(second, first))
-	fixture.wantPending("after TRUNCATE and five ticks", []byte{})
+	fixture.wantStored("after TRUNCATE and five ticks", []byte{})
+	fixture.wantPending("after TRUNCATE and five ticks", nil)
 	fixture.progress(third)
 	fixture.press(testfixture.KTFNativeSaveKeyFinish)
 	fixture.wantStored("after FINISH on an emptied save", binary.LittleEndian.AppendUint32(nil, third^testfixture.KTFNativeSaveMask))

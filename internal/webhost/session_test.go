@@ -539,6 +539,9 @@ func TestSessionRefusesAMessageItDoesNotUnderstand(t *testing.T) {
 }
 
 func TestSessionWritesItsOwnReport(t *testing.T) {
+	if !backend.DebugBuild() {
+		t.Skip("a release collects no reports; TestTheSessionReportFollowsTheDebugLogRules is that half")
+	}
 	// The report is written by the side that has the numbers. A page that is
 	// only drawing pictures has nothing to say about why a game is slow, so
 	// the round trip the browser build makes does not exist here.
@@ -603,6 +606,9 @@ func TestSessionStopEndsTheGameWithoutClosingTheConnection(t *testing.T) {
 }
 
 func TestSessionReportsOnAGameThatIsNoLongerRunning(t *testing.T) {
+	if !backend.DebugBuild() {
+		t.Skip("a release collects no reports; TestTheSessionReportFollowsTheDebugLogRules is that half")
+	}
 	// A game that quits the moment it starts is the one worth a report, and it
 	// is exactly the one that used to answer "no game is running": the
 	// diagnostics went with the session when it was closed. The numbers now

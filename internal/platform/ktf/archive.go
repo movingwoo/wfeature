@@ -16,6 +16,7 @@ import (
 
 	"unicode/utf8"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/detect"
 	"github.com/movingwoo/wfeature/internal/zipentry"
 )
@@ -88,7 +89,21 @@ func (archive *Archive) GuestFiles() map[string][]byte {
 // same game reissued with modified drop rates) share a PID, which is the
 // sharing we do want. Descriptors without a PID fall back to the AID
 // rather than collapsing every such archive into one directory.
+//
+// The name is one the Hosts accept: a repack's PID that could not be a folder
+// is mapped to one that can (backend.AcceptedSaveOwner), and EarlierSaveOwner
+// names the directory the command line kept it in before.
 func SaveOwner(descriptor Descriptor) string {
+	return backend.AcceptedSaveOwner(rawSaveOwner(descriptor))
+}
+
+// EarlierSaveOwner names the directory an earlier release kept this title's
+// saves in, when it is not the one SaveOwner names; otherwise it is "".
+func EarlierSaveOwner(descriptor Descriptor) string {
+	return backend.EarlierSaveOwner(rawSaveOwner(descriptor))
+}
+
+func rawSaveOwner(descriptor Descriptor) string {
 	if descriptor.PID != "" {
 		return descriptor.PID
 	}
@@ -398,6 +413,16 @@ func readZIP(data []byte, label string) (map[string][]byte, error) {
 			return nil, fmt.Errorf("%s contains unsafe entry: %w", label, err)
 		}
 		folded := strings.ToLower(name)
+		if file.UncompressedSize64 > maxEntrySize {
+			return nil, fmt.Errorf("%s entry %q is too large (%d bytes)", label, name, file.UncompressedSize64)
+		}
+		// A duplicate is inflated to be compared, so it is charged like any
+		// other entry: without that, copies of one name, which can all point
+		// at the same compressed data, asked for unbounded decompression.
+		if file.UncompressedSize64 > maxExpandedSize-expanded {
+			return nil, fmt.Errorf("%s expands beyond %d bytes", label, maxExpandedSize)
+		}
+		expanded += file.UncompressedSize64
 		if previous, duplicate := names[folded]; duplicate {
 			// **What a duplicate entry is dangerous for is the ambiguity**:
 			// two entries under one name, and which one a reader takes decides
@@ -414,13 +439,6 @@ func readZIP(data []byte, label string) (map[string][]byte, error) {
 			continue
 		}
 		names[folded] = name
-		if file.UncompressedSize64 > maxEntrySize {
-			return nil, fmt.Errorf("%s entry %q is too large (%d bytes)", label, name, file.UncompressedSize64)
-		}
-		if file.UncompressedSize64 > maxExpandedSize-expanded {
-			return nil, fmt.Errorf("%s expands beyond %d bytes", label, maxExpandedSize)
-		}
-		expanded += file.UncompressedSize64
 		contents, err := readEntry(file)
 		if err != nil {
 			return nil, fmt.Errorf("read %s entry %q: %w", label, name, err)

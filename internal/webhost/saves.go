@@ -24,33 +24,13 @@ var platforms = map[string]bool{"ktf": true, "lgt": true, "skt": true}
 // may. The Windows-illegal set is refused too, so one save tree copied between
 // machines still resolves.
 func ownerRejected(owner string) bool {
-	if owner == "" || len(owner) > 64 || owner == "." || owner == ".." {
-		return true
-	}
-	for _, character := range owner {
-		switch {
-		case character < 0x20, character == 0x7f:
-			return true
-		case strings.ContainsRune(`/\:*?"<>|`, character):
-			return true
-		// The bidirectional overrides and the zero-width joiners are
-		// invisible in a file listing, which is exactly what makes a name
-		// carrying them worth refusing.
-		case character == 0x200e || character == 0x200f || character == 0x061c:
-			return true
-		case character >= 0x202a && character <= 0x202e:
-			return true
-		case character >= 0x2066 && character <= 0x2069:
-			return true
-		case character == 0xfeff:
-			return true
-		}
-	}
-	return false
+	return backend.SaveOwnerRefused(owner)
 }
 
 // saveResponse is the shape the page reads: every entry of one owner, keyed by
-// the same slash-separated names the DirectorySaveStore writes.
+// the same slash-separated save keys the DirectorySaveStore stores them under.
+// A key is not the name on disk, which spells its case out (see
+// backend/save_names.go).
 type saveResponse struct {
 	Saves map[string]string `json:"saves"`
 }

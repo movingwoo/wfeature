@@ -205,6 +205,9 @@ func (audio *Audio) loadEvents(events []smaf.Event, copyEvents bool) (AudioHandl
 	if err != nil {
 		return 0, err
 	}
+	if err := channelMessagesInRange(events); err != nil {
+		return 0, err
+	}
 	if err := audio.admitSoundResources(resources); err != nil {
 		return 0, err
 	}

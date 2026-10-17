@@ -118,11 +118,11 @@ func (client *Client) handleDraw(ctx context.Context, thread *armcore.Thread, sl
 			drawContext.fill(int(span.X), int(span.Y), int(span.Width), 1, drawContext.foreground)
 			return nil
 		}
-		arc := curve.DrawArc
+		arc := curve.DrawArcWithin
 		if slot == slotFillArc {
-			arc = curve.FillArc
+			arc = curve.FillArcWithin
 		}
-		if err := arc(values[1], values[2], values[3], values[4], values[5], values[6], emit); err != nil {
+		if err := arc(drawContext.curveBounds(), values[1], values[2], values[3], values[4], values[5], values[6], emit); err != nil {
 			return err
 		}
 	}
@@ -244,6 +244,13 @@ func (client *Client) readString(pointer uint32, length int32) (string, error) {
 	if length == 0 {
 		return "", nil
 	}
+	// The count is the guest's own, and the buffer is sized from it before
+	// guest memory says whether the bytes are there. A line of text drawn or
+	// measured on a handset is nowhere near the bound a strlen has, so a
+	// count past it is a bad argument rather than a string.
+	if uint32(length) > maxCStringLength {
+		return "", fmt.Errorf("LGT string of %d bytes at %#x exceeds the limit", length, pointer)
+	}
 	text := make([]byte, length)
 	if err := client.core.Memory().Read(pointer, text); err != nil {
 		return "", err
@@ -286,10 +293,14 @@ func (client *Client) copyArea(context *graphicsContext, values []int32) {
 	if context.target == nil || width <= 0 || height <= 0 {
 		return
 	}
+	firstRow, lastRow, firstColumn, lastColumn, ok := context.blitSteps(context.target, values[0:4], values[4:6])
+	if !ok {
+		return
+	}
 	snapshot := append([]uint16(nil), context.target.pixels...)
 	stride := context.target.width
-	for row := 0; row < height; row++ {
-		for column := 0; column < width; column++ {
+	for row := firstRow; row < lastRow; row++ {
+		for column := firstColumn; column < lastColumn; column++ {
 			sx, sy := sourceX+column, sourceY+row
 			if sx < 0 || sy < 0 || sx >= context.target.width || sy >= context.target.height {
 				continue
@@ -297,6 +308,32 @@ func (client *Client) copyArea(context *graphicsContext, values []int32) {
 			context.put(destinationX+column, destinationY+row, snapshot[sy*stride+sx])
 		}
 	}
+}
+
+// blitSteps answers the rows and columns of a surface copy that can change a
+// pixel: those whose source pixel is on the source surface and whose
+// destination is drawable. rectangle is the copy's destination x, y, width and
+// height, and origin its source x and y, all as the guest passed them.
+//
+// The loops run over these rather than over the guest's width and height,
+// which nothing bounds: a copy of 0x7fffffff by 0x7fffffff is one call, run in
+// host code with the platform lock held. The steps skipped are exactly the
+// ones the loop body would have skipped, so the copy is the same. See drawable.
+func (context *graphicsContext) blitSteps(
+	source *framebuffer, rectangle []int32, origin []int32,
+) (firstRow, lastRow, firstColumn, lastColumn int, ok bool) {
+	left, top, right, bottom, drawable := context.drawable()
+	if !drawable {
+		return 0, 0, 0, 0, false
+	}
+	width, height := int64(rectangle[2]), int64(rectangle[3])
+	readFirst, readLast := runSteps(int64(origin[1]), 1, height, 0, int64(source.height))
+	drawFirst, drawLast := runSteps(int64(rectangle[1]), 1, height, top, bottom)
+	firstRow, lastRow = int(max(readFirst, drawFirst)), int(min(readLast, drawLast))
+	readFirst, readLast = runSteps(int64(origin[0]), 1, width, 0, int64(source.width))
+	drawFirst, drawLast = runSteps(int64(rectangle[0]), 1, width, left, right)
+	firstColumn, lastColumn = int(max(readFirst, drawFirst)), int(min(readLast, drawLast))
+	return firstRow, lastRow, firstColumn, lastColumn, firstRow < lastRow && firstColumn < lastColumn
 }
 
 // maskPixel is the colour a surface copy leaves behind: pure magenta, which
@@ -328,12 +365,16 @@ func (client *Client) copyFramebuffer(context *graphicsContext, values []int32) 
 	if err := client.syncRowsFromGuest(source, rowsAt(sourceY, height)); err != nil {
 		return err
 	}
+	firstRow, lastRow, firstColumn, lastColumn, ok := context.blitSteps(source, values[0:4], values[5:7])
+	if !ok {
+		return nil
+	}
 	pixels := source.pixels
 	if source == context.target {
 		pixels = append([]uint16(nil), pixels...)
 	}
-	for row := 0; row < height; row++ {
-		for column := 0; column < width; column++ {
+	for row := firstRow; row < lastRow; row++ {
+		for column := firstColumn; column < lastColumn; column++ {
 			sx, sy := sourceX+column, sourceY+row
 			if sx < 0 || sy < 0 || sx >= source.width || sy >= source.height {
 				continue

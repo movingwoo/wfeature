@@ -19,9 +19,12 @@ const (
 	flagZero     uint32 = 1 << 30
 	flagCarry    uint32 = 1 << 29
 	flagOverflow uint32 = 1 << 28
-	flagThumb    uint32 = 1 << 5
-	modeMask     uint32 = 0x1f
-	modeUser     uint32 = 0x10
+	// flagSaturation is Q, the sticky flag the ARMv5TE saturating and
+	// signed-halfword instructions set. No condition reads it.
+	flagSaturation uint32 = 1 << 27
+	flagThumb      uint32 = 1 << 5
+	modeMask       uint32 = 0x1f
+	modeUser       uint32 = 0x10
 )
 
 // Context is the complete guest-visible state saved at a cooperative thread

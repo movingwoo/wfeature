@@ -74,24 +74,6 @@ type sisImageData struct {
 	height int32
 }
 
-type xFileData struct {
-	mu           sync.Mutex
-	name         string
-	archiveName  string
-	archiveEntry string
-	mode         int32
-	data         []byte
-	cursor       int
-	open         bool
-	writable     bool
-	// dirty marks a file whose bytes have not reached the Host save store yet;
-	// close and flush are what write them.
-	dirty bool
-	// synced is the last issued save version reflected in this buffer. It is
-	// Host bookkeeping, rebuilt from current saves rather than checkpointed.
-	synced uint64
-}
-
 type xTextFieldData struct {
 	textRevision uint64
 	text         []rune
@@ -537,7 +519,13 @@ func (runtime *Runtime) graphics2DCaptureLCD(_ *jvm.VM, arguments []jvm.Value) (
 		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException",
 			"capture width and height must be positive")
 	}
-	pixels := make([]byte, int(width)*int(height)*4)
+	// The image limit newMIDPImage applies, applied before the buffer it
+	// would refuse is allocated and filled.
+	byteLength, err := backend.RGBAByteLength(int(width), int(height))
+	if err != nil {
+		return jvm.VoidValue(), newGuestException("java/lang/IllegalArgumentException", err.Error())
+	}
+	pixels := make([]byte, byteLength)
 	for row := 0; row < int(height); row++ {
 		for column := 0; column < int(width); column++ {
 			destination := (row*int(width) + column) * 4
@@ -583,9 +571,13 @@ func (runtime *Runtime) graphics2DDrawImage(_ *jvm.VM, arguments []jvm.Value) (j
 		return jvm.VoidValue(), err
 	}
 	pixels := image.snapshot()
+	firstColumn, lastColumn := blitSpan(width, int64(sourceX), image.width, int64(x)+int64(context.translateX),
+		max(context.clip.minX, 0), min(context.clip.maxX, context.width))
+	firstRow, lastRow := blitSpan(height, int64(sourceY), image.height, int64(y)+int64(context.translateY),
+		max(context.clip.minY, 0), min(context.clip.maxY, context.height))
 	context.withDestinationWrite(func() {
-		for row := int32(0); row < height; row++ {
-			for column := int32(0); column < width; column++ {
+		for row := firstRow; row < lastRow; row++ {
+			for column := firstColumn; column < lastColumn; column++ {
 				sx, sy := sourceX+column, sourceY+row
 				if sx < 0 || sy < 0 || int(sx) >= image.width || int(sy) >= image.height {
 					continue
@@ -634,6 +626,22 @@ func contextPixelIndex(context *graphicsContext, x, y int32) (int, bool) {
 		return 0, false
 	}
 	return contextPixelIndexUnclipped(context, x, y)
+}
+
+// blitSpan is the part of a blit's [0, length) whose source position
+// sourceStart+i is inside [0, sourceSize) and whose destination position
+// destinationStart+i is inside [destinationMin, destinationMax). A pixel
+// outside it is one the blit skips anyway, so walking only the span draws the
+// same pixels; what it removes is the walk itself, which for a guest's width
+// and height of 2^31 held the screen lock for good. The positions are 64-bit
+// so that none of them wraps.
+func blitSpan(length int32, sourceStart int64, sourceSize int, destinationStart int64, destinationMin, destinationMax int) (int32, int32) {
+	first := max(0, -sourceStart, int64(destinationMin)-destinationStart)
+	last := min(int64(length), int64(sourceSize)-sourceStart, int64(destinationMax)-destinationStart)
+	if last <= first {
+		return 0, 0
+	}
+	return int32(first), int32(last)
 }
 
 // contextPixelIndexUnclipped is the read half of the pair: a pixel is bounded
@@ -726,8 +734,9 @@ func (runtime *Runtime) setBackLightColor(_ *jvm.VM, arguments []jvm.Value) (jvm
 // fixture is `start(10, 5)`, which fits that reading only awkwardly: five
 // milliseconds is below what a person feels. So this is the defensible reading
 // and not a confirmed one, and `docs/history/session.md` ("Where it reaches,
-// and where it does not") records that a real title has to settle it. Reading them wrong costs a buzz of the wrong length; not
-// reading them at all costs every buzz, which is where this started.
+// and where it does not") records that a real title has to settle it. Reading
+// them wrong costs a buzz of the wrong length; not reading them at all costs
+// every buzz, which is where this started.
 func (runtime *Runtime) vibrationStart(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	level, err := intArgument(arguments, 0)
 	if err != nil {
@@ -1573,9 +1582,14 @@ func (runtime *Runtime) xDisplayDrawImageEx(_ *jvm.VM, arguments []jvm.Value) (j
 	}
 	runtime.reportDrawImageExArguments(second, mode)
 	pixels := source.snapshot()
+	// blendPixel clips without translating, so the span does the same.
+	firstColumn, lastColumn := blitSpan(width, int64(sourceX), source.width, int64(x),
+		max(context.clip.minX, 0), min(context.clip.maxX, context.width))
+	firstRow, lastRow := blitSpan(height, int64(sourceY), source.height, int64(y),
+		max(context.clip.minY, 0), min(context.clip.maxY, context.height))
 	context.withDestinationWrite(func() {
-		for row := int32(0); row < height; row++ {
-			for column := int32(0); column < width; column++ {
+		for row := firstRow; row < lastRow; row++ {
+			for column := firstColumn; column < lastColumn; column++ {
 				sx, sy := sourceX+column, sourceY+row
 				if sx < 0 || sy < 0 || int(sx) >= source.width || int(sy) >= source.height {
 					continue

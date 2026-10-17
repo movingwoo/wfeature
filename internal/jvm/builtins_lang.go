@@ -204,9 +204,9 @@ func (vm *VM) registerBoxBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		value, parseErr := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
-		if parseErr != nil {
-			return VoidValue(), guestException("java/lang/NumberFormatException", parseErr.Error())
+		value, err := parseJavaInteger(text, 10, 64)
+		if err != nil {
+			return VoidValue(), err
 		}
 		return LongValue(value), nil
 	})
@@ -259,9 +259,9 @@ func (vm *VM) registerBoxBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		value, parseErr := strconv.ParseInt(strings.TrimSpace(text), 10, 8)
-		if parseErr != nil {
-			return VoidValue(), guestException("java/lang/NumberFormatException", parseErr.Error())
+		value, err := parseJavaInteger(text, 10, 8)
+		if err != nil {
+			return VoidValue(), err
 		}
 		return IntValue(int32(value)), nil
 	})
@@ -304,9 +304,9 @@ func (vm *VM) registerBoxBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		value, parseErr := strconv.ParseInt(strings.TrimSpace(text), 10, 16)
-		if parseErr != nil {
-			return VoidValue(), guestException("java/lang/NumberFormatException", parseErr.Error())
+		value, err := parseJavaInteger(text, 10, 16)
+		if err != nil {
+			return VoidValue(), err
 		}
 		return IntValue(int32(value)), nil
 	})
@@ -563,11 +563,7 @@ func parseRadix(arguments []Value, bits int) (int64, error) {
 		return 0, guestException("java/lang/NumberFormatException",
 			fmt.Sprintf("radix %d is outside %d..%d", radix, characterMinRadix, characterMaxRadix))
 	}
-	value, parseErr := strconv.ParseInt(strings.TrimSpace(text), int(radix), bits)
-	if parseErr != nil {
-		return 0, guestException("java/lang/NumberFormatException", parseErr.Error())
-	}
-	return value, nil
+	return parseJavaInteger(text, int(radix), bits)
 }
 
 func longPair(arguments []Value) (int64, int64, error) {
@@ -662,7 +658,7 @@ func (vm *VM) registerRuntimeBuiltins() {
 		if !vm.classForNameExists(internal) {
 			return VoidValue(), guestException("java/lang/ClassNotFoundException", name)
 		}
-		return ReferenceValue(&Object{ClassName: ClassClass, Native: internal}), nil
+		return ReferenceValue(vm.classObject(internal)), nil
 	})
 }
 
@@ -916,10 +912,15 @@ func (vm *VM) registerStringExtraBuiltins() {
 			return VoidValue(), err
 		}
 		data, ok := buffer.Native.(*stringBufferData)
-		if !ok {
+		if !ok || data == nil {
 			return VoidValue(), fmt.Errorf("argument is not a StringBuffer")
 		}
+		// Every read and write of the units takes the buffer's lock, because a
+		// title shares a StringBuffer between threads on the strength of it
+		// being synchronized.
+		data.mu.Lock()
 		object.Native = string(utf16.Decode(data.units))
+		data.mu.Unlock()
 		return VoidValue(), nil
 	})
 	vm.builtin(StringBufferClass, "setCharAt", "(IC)V", func(_ *VM, arguments []Value) (Value, error) {
@@ -935,6 +936,8 @@ func (vm *VM) registerStringExtraBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
+		data.mu.Lock()
+		defer data.mu.Unlock()
 		if index < 0 || int(index) >= len(data.units) {
 			return VoidValue(), guestException("java/lang/StringIndexOutOfBoundsException", fmt.Sprintf("index %d", index))
 		}
@@ -950,6 +953,8 @@ func (vm *VM) registerStringExtraBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
+		data.mu.Lock()
+		defer data.mu.Unlock()
 		if index < 0 || int(index) >= len(data.units) {
 			return VoidValue(), guestException("java/lang/StringIndexOutOfBoundsException", fmt.Sprintf("index %d", index))
 		}

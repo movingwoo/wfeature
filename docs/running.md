@@ -58,7 +58,24 @@ the same network. The server binds every interface, because being reachable
 from a phone is the point of running it. **It has no authentication: anything
 that can reach the port can read and write the save trees, list the games, and
 add or remove a game added from the page.** Give `-addr 127.0.0.1:11541` to keep
-it to the machine it runs on. A page opened by the machine's address over plain
+it to the machine it runs on.
+
+A browser page on another site is a different caller from the network: it
+can send a POST to `127.0.0.1` without asking anyone first. So every request
+that changes something — any method but `GET` and `HEAD` — is refused with 403
+when it carries an `Origin` whose host is not the `Host` it arrived on, the
+rule the session WebSocket already keeps. A request with no `Origin` (`stop`,
+curl, a script) is answered as before, and the page's own requests carry its
+own origin, by address, by name, in the phone apps and behind a proxy that
+passes `Host` through ([below](#behind-a-reverse-proxy-on-a-unix-socket)).
+**DNS rebinding is not covered**: a page whose own name is made to resolve to
+this machine sends an `Origin` and a `Host` that agree. A list of accepted
+`Host` names would close that, and would also refuse every name a person
+reaches the server by that the server cannot know — a `.local` name, a
+router's name for the machine, a proxy's — so there is none; keep the server
+off networks and browsers you do not trust, or bind it to loopback.
+
+A page opened by the machine's address over plain
 HTTP is not a secure context, so the browser gives it no game controller and
 registers no service worker; `127.0.0.1`, the phone apps and an HTTPS proxy are
 secure contexts.
@@ -127,7 +144,9 @@ megabytes.
 **Which root a game is in decides whether the page may delete it.** The library
 is `var/games`, grouped by whatever directories its owner made; page uploads
 land in `var/ext`. `DELETE /api/games?game=<picker path>` removes one archive
-from `var/ext` and refuses everything else with a sentence the page shows.
+from `var/ext` and refuses everything else with a sentence the page shows —
+including what in `var/ext` is not an archive the upload could have written,
+such as the `.adopted` marker or an upload still in progress.
 `games.json` marks those entries `"added": true` with an `ext/` path, and the
 picker lists them under 추가한 게임, the only entries on which **게임 삭제** is
 enabled.
@@ -204,9 +223,13 @@ at once on different ports.
 A stop asks the server to stop itself, which drains as Ctrl-C does: it finishes
 a save in flight and closes every game, including one whose page is still
 connected, so what a title wrote reaches the save folder before the process
-ends. Only a server that does not answer is signalled, and only one that
-ignores the signal is forced; a forced stop closes nothing. All output of
-`status` and `stop` is English.
+ends. `stop` reports the server stopped once the process it named has exited,
+not when its port goes quiet: the drain closes the listener first and closes
+the games after, so a `start` that followed a quiet port could run beside a
+server still holding their save folders. It waits up to 15 seconds, past the
+server's own 10-second drain. Only a server that does not answer is
+signalled, and only one that ignores the signal is forced; a forced stop
+closes nothing. All output of `status` and `stop` is English.
 
 ### /api/status
 
@@ -259,8 +282,9 @@ string works through `WFEATURE_ADDR`. Nothing above the listener knows which it
 got — the page, the save API and the session WebSocket are the same either way.
 
 **The proxy must pass the browser's `Host` through.** The WebSocket handshake
-refuses an `Origin` whose host is not the host the request arrived on, which
-stops any page on the internet from opening a session on someone's machine. A
+and every route that changes something refuse an `Origin` whose host is not
+the host the request arrived on, which stops any page on the internet from
+opening a session or writing a save on someone's machine. A
 proxy that rewrites `Host` to `localhost` while the browser sends
 `Origin: https://games.example.com` fails that check, and the page loads but
 never starts a game. nginx needs it spelled out; Caddy does it by default.
@@ -486,15 +510,42 @@ var/run/                       start.sh's per-profile server log
 The picker lists the `.zip` and `.jar` files one level under `var/games/`, and
 those directly in it, which the page groups as `기타`. A directory name is a
 label only — the platform comes from the archive's bytes — and nothing deeper
-than one level is scanned.
+than one level is scanned. A group directory may be a symbolic link to one kept
+elsewhere, and is listed like any other.
 
 `<owner>` is the game's PID for KTF and LGT, and for SKT its program number
-(`DD-ProgName`), or the MIDlet name for a bare JAR that has none. The browser
-reaches the same tree through the save API: `/api/saves/<owner>` is KTF (the
-form the page has always used) and `/api/saves/<platform>/<owner>` is any
-other platform. One game's saves leave and return as a `.wfs` container through
+(`DD-ProgName`), or the MIDlet name for a bare JAR that has none. A name that
+cannot be a folder on every system (a `:` or `?` in a repacked PID, or one over
+64 bytes) is made into one that can; see [RMS](rms.md). Inside it,
+each save is a file named by its key with the case spelled out: an upper-case
+letter is written `#` and the letter, `#` is written `##`, and another letter
+with case outside ASCII is written by its number (`rms/#Option`, `fs/save##1`,
+`caf#+0000e9`), so names that differ only by case are separate files on every
+system. A folder holding such names also holds `.wfeature-names#1`, which says
+so and moves with it; a folder an earlier version wrote is converted the first
+time it is used. See [save keys on disk](session.md#save-keys-on-disk). The
+browser reaches the same tree through the save API: `/api/saves/<owner>` is KTF
+(the form the page has always used) and `/api/saves/<platform>/<owner>` is any
+other platform; it takes and lists keys, not file names. One game's saves leave
+and return as a `.wfs` container through
 `GET`/`POST /api/savepack?game=<picker path>`, which the page's save export and
-import use; an import writes the saves it carries over the ones on disk.
+import use; an import writes the saves it carries over the ones on disk. An
+import is refused before it writes anything when the container holds no saves
+(no export writes one), more than 65,536 entries (the quick save's bound on a
+save tree), a name that is both a file and a folder, a name the folder on
+disk has the other shape for, or, on macOS, a name that is not UTF-8. Other
+write failures can still leave some entries restored and the rest as they
+were, with nothing removed. On a filesystem that ignores Unicode
+normalization, as macOS does by default, a restored save that lands on an
+existing file under a differently normalized name keeps that file's spelling
+and is not removed with the entries the backup left out. Case is not such a
+spelling: a name that differs only by case is another save.
+
+An owner the save tree cannot use as a folder name — longer than 64 bytes, or
+holding `/ \ : * ? " < > |`, a control character or an invisible direction
+mark — has no save folder. The server refuses to start such a game and says
+why, rather than running it with saves that would vanish when it closes, and
+logs the owner; the save export and import say the same.
 
 A per-game save folder may be a symbolic link to a directory kept elsewhere.
 Saves are read and written through it, and quick save and quick load work as
@@ -517,7 +568,8 @@ source and build trees.
 
 | | Ubuntu | macOS | Windows |
 |---|---|---|---|
-| `go build ./...` | CI ✔ | **run ✔** | CI ✔ |
+| `go build ./...` | CI ✔ | **run ✔** | cross-compiled ✔ |
+| `go build ./cmd/server` | CI ✔ | CI ✔ | CI ✔ |
 | `go vet ./...` | CI ✔ | **run ✔** | cross-compiled ✔ |
 | `gofmt -l cmd internal mobile`, `govulncheck ./...` | CI ✔ | — | — |
 | `make test`, `make test-debug`, `go test -race ./internal/...` | CI ✔ | **run ✔** | — |
@@ -531,8 +583,9 @@ source and build trees.
 Only macOS was executed by hand: the repository is developed on one machine,
 and cross-compiling proves a build, not a run. The CI rows are
 `.github/workflows/checks.yml`: its `test` job on Ubuntu, and its `smoke` job on
-Ubuntu, Windows and macOS runners, which also cross-compiles the Android server
-on Linux and compiles the iOS library and app on macOS. `verify.yml` calls
+Ubuntu, Windows and macOS runners, which builds only `./cmd/server` there, also
+cross-compiles the Android server on Linux and compiles the iOS library and app
+on macOS. The rest of the tree is compiled for Windows only by cross-compiling. `verify.yml` calls
 `checks.yml` on every push and pull request, and `release.yml` calls it before
 it publishes, so no tag can ship a binary that was never started. What the table
 shows is that nothing in the Go tree is platform-specific enough to fail to

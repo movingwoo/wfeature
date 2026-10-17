@@ -2,6 +2,7 @@ package cheat
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -14,18 +15,34 @@ const consoleListLimit = 20
 // listing is not useful until the search has narrowed.
 const consoleAutoListLimit = 10
 
+// maxTableFileBytes bounds what `load` reads. A table is a few frozen values
+// and patches; a path that names a device or a runaway file must not be read
+// until the process runs out of memory.
+const maxTableFileBytes = 4 << 20
+
 // Console executes the text cheat command language against a session, so the
 // native CLI and the browser Host share one command surface.
 type Console struct {
 	// game names what a saved table was made against.
 	game    string
 	session *Session
+	// files lets `save` and `load` reach the file system. It is off unless the
+	// Host is a local operator's terminal; see AllowFiles.
+	files bool
 }
 
 // NewConsole wraps session with the command processor.
 func NewConsole(session *Session) *Console {
 	return &Console{session: session}
 }
+
+// AllowFiles lets `save` and `load` read and write the paths typed into the
+// console. Only a Host whose console a local operator drives calls it. The
+// browser host forwards console commands from the session socket, where a
+// path would be a path on the server's file system chosen by whoever is
+// connected; the page exchanges table text through PanelSaveTable and
+// PanelLoadTable instead.
+func (console *Console) AllowFiles() { console.files = true }
 
 // SetGame names the game a saved table was made against, so a table read later
 // can be placed. It is free text: nothing enforces it.
@@ -134,8 +151,8 @@ const consoleHelp = `commands:
   unpatch -forget <name>      drop the record without writing
   patches                     list the patches now applied
   save <file>                 write frozen values, watches and patches to a
-                              cheat table
-  load <file>                 apply a cheat table`
+                              cheat table (terminal console only)
+  load <file>                 apply a cheat table (terminal console only)`
 
 // watch, unwatch, and hits expose the store instrumentation. A scan answers
 // where a value is; these answer what changes it, which is the part that
@@ -297,7 +314,14 @@ func parseHexSpan(what, text string) (HexBytes, error) {
 	return span, nil
 }
 
+// errNoConsoleFiles is what `save` and `load` answer on a console that was not
+// given the file system.
+var errNoConsoleFiles = fmt.Errorf("save and load work only in a terminal console; this one has no file access")
+
 func (console *Console) save(args []string) (string, error) {
+	if !console.files {
+		return "", errNoConsoleFiles
+	}
 	if len(args) != 1 {
 		return "", fmt.Errorf("save expects a file path")
 	}
@@ -320,10 +344,13 @@ func (console *Console) save(args []string) (string, error) {
 }
 
 func (console *Console) load(args []string) (string, error) {
+	if !console.files {
+		return "", errNoConsoleFiles
+	}
 	if len(args) != 1 {
 		return "", fmt.Errorf("load expects a file path")
 	}
-	data, err := os.ReadFile(args[0])
+	data, err := readTableFile(args[0])
 	if err != nil {
 		return "", err
 	}
@@ -354,6 +381,23 @@ func (console *Console) load(args []string) (string, error) {
 	}
 	return fmt.Sprintf("applied %d frozen value(s) and %d patch(es) from %s%s",
 		applied, len(console.session.Patches()), args[0], warning), nil
+}
+
+// readTableFile reads a table file of at most maxTableFileBytes.
+func readTableFile(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxTableFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxTableFileBytes {
+		return nil, fmt.Errorf("%s is larger than %d bytes, which no cheat table is", path, maxTableFileBytes)
+	}
+	return data, nil
 }
 
 func (console *Console) regions() (string, error) {
@@ -399,8 +443,8 @@ func (console *Console) setAlign(args []string) (string, error) {
 		return fmt.Sprintf("align is %d", scanner.Align()), nil
 	}
 	align, ok := parseNumber(args[0])
-	if !ok || align < 1 {
-		return "", fmt.Errorf("align must be a number of at least 1")
+	if !ok || align < 1 || align > maxScanAlign {
+		return "", fmt.Errorf("align must be a number from 1 to %d", maxScanAlign)
 	}
 	scanner.SetAlign(int(align))
 	return fmt.Sprintf("align is %d", align), nil
@@ -613,20 +657,44 @@ func (console *Console) valueTypeArg(args []string, index int) (ValueType, error
 	return valueType, nil
 }
 
+// parseAddress reads an address. An address is written in hex, and often
+// zero-padded to eight digits, so a bare number with a leading zero —
+// `08048000`, `00401000` — is hex, as it always was for one with an 8 or a 9
+// in it; anything else reads as parseNumber reads a value.
 func parseAddress(args []string, index int) (uint32, error) {
 	if index >= len(args) {
 		return 0, fmt.Errorf("missing address")
 	}
-	value, ok := parseNumber(args[index])
+	text := args[index]
+	value, ok := int64(0), false
+	if zeroPadded(text) {
+		raw, err := strconv.ParseUint(text, 16, 32)
+		value, ok = int64(raw), err == nil
+	} else {
+		value, ok = parseNumber(text)
+	}
 	if !ok || value < 0 || value > 0xffffffff {
-		return 0, fmt.Errorf("invalid address %q", args[index])
+		return 0, fmt.Errorf("invalid address %q", text)
 	}
 	return uint32(value), nil
 }
 
-// parseNumber accepts decimal, 0x-prefixed hex, and negative values.
+// zeroPadded reports whether a number starts with a zero that is not a radix
+// prefix.
+func zeroPadded(text string) bool {
+	return len(text) > 1 && text[0] == '0' && !strings.ContainsRune("xXbBoO", rune(text[1]))
+}
+
+// parseNumber accepts decimal, 0x-prefixed hex, and negative values. A
+// leading zero is still decimal: read as octal, `set addr 010` would write 8.
+// An address is read by parseAddress, where a leading zero is hex padding.
 func parseNumber(s string) (int64, bool) {
-	value, err := strconv.ParseInt(s, 0, 64)
+	base := 10
+	digits := strings.TrimLeft(s, "+-")
+	if len(digits) > 1 && digits[0] == '0' && strings.ContainsRune("xXbBoO", rune(digits[1])) {
+		base = 0
+	}
+	value, err := strconv.ParseInt(s, base, 64)
 	if err != nil {
 		// Addresses like ffff0000 without a 0x prefix are still common input.
 		raw, hexErr := strconv.ParseUint(s, 16, 32)

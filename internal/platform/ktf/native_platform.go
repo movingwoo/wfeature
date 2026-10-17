@@ -423,7 +423,7 @@ func (platform *NativePlatform) memoryFree(*armcore.Thread) (uint32, error) {
 // The three steps are the module's, not ours: its entry answers with a factory
 // through an out parameter, the factory builds the title's object from the
 // identifier the information file carries, and a small integer sent to that
-// object is an event. See docs/ktf.md.
+// object is an event. See docs/history/ktf.md, "The start-up protocol".
 func (platform *NativePlatform) Boot(ctx context.Context) error {
 	if err := platform.Create(ctx); err != nil {
 		return err
@@ -558,6 +558,11 @@ func (platform *NativePlatform) destroyObject(thread *armcore.Thread) (uint32, e
 	if object == 0 {
 		return 0, nil
 	}
+	// An image's bitmap copy was allocated beside its object and goes with
+	// it; nothing else holds that block.
+	if image, ok := platform.images[object]; ok && image != nil {
+		platform.client.Free(image.data)
+	}
 	delete(platform.images, object)
 	platform.client.Free(object)
 	return 1, nil
@@ -587,9 +592,25 @@ func (platform *NativePlatform) Colours() map[uint32]uint32 { return platform.co
 // ResourceNotes reports every resource request that went unanswered.
 func (platform *NativePlatform) ResourceNotes() []string { return platform.resourceNotes }
 
+// maxNativeRecordedNotes bounds the lists a run reports what the title did
+// through: the text it drew, the files it opened and the resource requests
+// nobody answered. Each gained an entry a call for as long as the title ran —
+// a title that draws its status line every frame added one a frame — so like
+// the ordered call log they keep the first entries, which is what a report
+// that starts from the beginning of a run reads.
+const maxNativeRecordedNotes = 4096
+
+// keepFirst appends one entry to a run log until it holds the bound.
+func keepFirst[T any](log []T, entry T) []T {
+	if len(log) >= maxNativeRecordedNotes {
+		return log
+	}
+	return append(log, entry)
+}
+
 // note records one unanswered resource request.
 func (platform *NativePlatform) note(text string) {
-	platform.resourceNotes = append(platform.resourceNotes, text)
+	platform.resourceNotes = keepFirst(platform.resourceNotes, text)
 }
 
 // handsetRecord fills the record the title turns into its identifier.

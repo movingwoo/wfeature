@@ -205,8 +205,13 @@ func TestMediaCallbackQueueIsBounded(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := clip.notify(1); err == nil {
-		t.Fatal("unbounded callback queue")
+	// The bound caps memory; a full queue drops its oldest transition rather
+	// than failing the call that made the new one.
+	if err := clip.notify(1); err != nil {
+		t.Fatal(err)
+	}
+	if len(clip.pending) != 64 {
+		t.Fatalf("unbounded callback queue: %d transitions", len(clip.pending))
 	}
 }
 

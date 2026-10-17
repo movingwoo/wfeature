@@ -30,7 +30,33 @@ main class for a JAR that omits it. KTF keys its owner by PID because several
 KTF games share an AID; a bare JAR has no such identifier, and `MIDlet-Name` is
 stable across rebuilds and recognizable in a directory listing.
 `wfeature checkgames` reports owner directories that archives with different
-main classes both claim (`skt.SaveOwnerCollisions`).
+main classes both claim (`skt.SaveOwnerCollisions`). A descriptor key is read
+case-insensitively, but the exact spelling wins, and among other spellings the
+first in byte order does, so a descriptor carrying two spellings of
+`DD-ProgName` names the same owner on every launch.
+
+**The owner is one both Hosts accept, on every platform.** The browser Host
+refuses an owner over 64 bytes, `.`, `..`, the reserved `.wfeature-quicksave`,
+or one carrying a path or Windows-reserved character, a control character or an
+invisible direction mark (`backend.SaveOwnerRefused`), and a title it refused
+ran with no save store at all. Such an owner is mapped to one the Host accepts
+(`backend.AcceptedSaveOwner`), for an SKT program number or MIDlet name and a
+KTF or LGT PID alike: a refused character becomes `_`, a name too long keeps
+its start, and the result ends in `~` and eight hex digits of a digest of the
+whole name, so `A: B`, `A? B` and a title really named `A_ B` keep three
+directories. Every owner that already passed is unchanged, so no existing save
+moves. Only the command line ever wrote under a refused name;
+`backend.MigrateSaveOwner(root, earlier, owner)` renames that directory to the
+mapped owner below the platform save root, together with the quick-save slots
+and set-aside generation the save store keeps for that name in
+`.wfeature-quicksave/owners/`. It claims both directories for the move, so it
+leaves a directory a session or tool has claimed for the next start, and it
+does so only when the mapped directory does not exist yet, never merges into
+or replaces one that does, and never follows a raw name that is not one
+directory directly below the root (`.` and `..` included). A Host calls it,
+with the earlier owner `session.Inspect` already found, before it claims the
+title's save directory; a quick-load check, which runs before a start and
+without the claim, only reads the slot where it is.
 
 Store names come from the game, so they go through `backend.NormalizeSaveKey`
 like every other save key: a name that escapes the owner directory is rejected
@@ -146,10 +172,14 @@ and no local title has been seen to read either.
 
 **The `fs/` scope is shared with KTF.** An `XFile` writes under `fs/`
 deliberately, so one owner directory holds a title's files whichever platform
-wrote them, and the KTF guest filesystem keeps its list of deleted paths at
-`fs/.removed`. A title writing that path from this side would put its own bytes
-where that list belongs, so the name is reserved here too
-(`xFileReservedNames` in `skvm_file.go`).
+wrote them, and both keep their list of removed paths at `fs/.removed`, in the
+same newline-separated form: `XFile.unlink` and WIPI `FileSystem.remove` write
+it on this side ([SKVM](skvm.md#saves-and-sound)). A title writing that path
+would put its own bytes where the list belongs, so the name, and any path
+below it, is reserved (`xFileReservedNames` in `skvm_file.go`). Files differ
+from record stores in one way: the list, not an index, says a file was
+removed, because a path nothing lists is found in the save or the archive by
+its own name.
 
 ## The two decisions worth knowing
 
@@ -159,7 +189,17 @@ holding an empty record list. If `openRecordStore` decided existence by looking
 for that file, a game that deleted its save would find it again on the next
 launch. `rms/.index` therefore lists the stores that exist, `listRecordStores`
 reads it, and `deleteRecordStore` removes the name from it. Every write this
-runtime makes updates both, so the two never disagree.
+runtime makes updates both, so the two never disagree — unless the index write
+failed while the records reached the Host. Creating a store the index does not
+name therefore still reads its key: an empty list is a deleted store and the
+new one starts empty, but records there are taken as the store's own instead of
+being overwritten with an empty list, and the name goes back into the index.
+Records that do not decode are reported as an unreadable store, as they are for
+a listed one.
+
+A store's records are encoded inside the write's own turn at the save
+boundary, so when two guest threads change one store, the older encoding can
+never reach the Host after the newer one.
 
 **The enumeration calls the application's own objects.** `RecordFilter` and
 `RecordComparator` are application objects. `RecordEnumeration` is a
@@ -173,6 +213,20 @@ The sort is an insertion sort. It is stable, so records the comparator calls
 equivalent keep the store's order, which a game sorting by one field expects
 for records that share it.
 
+**The cursor is on a record, as MIDP has it.** The `position` field is one past
+the record the last step returned, and zero before any step. After
+`nextRecord` answered A and then B, `previousRecord` answers A; a first
+`previousRecord` on a fresh or reset enumeration answers the last record, and
+`hasPreviousElement` is false only on the first record or an empty selection.
+`reset` and an explicit `rebuild` go back to the start. A kept-updated
+enumeration reselects on every change but keeps its place: on the record it was
+on, or, when that record left the selection, between records, which a negative
+`position` holds. The next step then answers the next record that is still
+there and the previous step the one before the deleted record, so deleting the
+first record leaves nothing behind and deleting the last nothing ahead. Going
+back to the start on each notification made a loop that rewrites each record it
+visits meet the first record again after every write.
+
 ## What is answered with a fixed value
 
 `getSizeAvailable` reports `rmsCapacity` minus the store's own bytes, with
@@ -180,8 +234,11 @@ for records that share it.
 of a small flash partition, and games use the number to decide whether a save
 will fit; a fixed budget is more honest than claiming unbounded space.
 `addRecord` and `setRecord` enforce it with `RecordStoreFullException`, which
-also answers a single record over 1 MiB. An `XFile` has the same 512 KiB
-capacity (`xFileCapacity`).
+also answers a single record over 1 MiB, and an `addRecord` once the store has
+used `backend.MaxSaveRecords` (1,048,576) record ids: ids are never reused, so
+empty and deleted records take a slot too, and a longer list could not be read
+back on the next launch. An `XFile` reports the same 512 KiB capacity
+(`xFileCapacity`).
 
 `setMode(int, boolean)` checks that the store is open and does nothing else.
 Only one MIDlet suite runs at a time, so every store is already private to it

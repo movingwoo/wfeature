@@ -107,7 +107,7 @@ func TestJavaPlatformCheckpointRestoresGraphAliasesAndCaches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file := &xFileData{name: "closed.bin", mode: xFileWrite, writable: true, data: []byte("old file")}
+	file := &xFileData{name: "closed.bin", mode: xFileWrite, writable: true, node: &xFileNode{key: "fs/closed.bin", data: []byte("old file"), present: true}}
 	source.wipiFileStreams = map[*jvm.Object]*xFileData{stream: file}
 	saved, state := capturePlatformCheckpointTest(t, source, now)
 	restored, _, heap := restorePlatformCheckpointTest(t, source, saved, state, now.Add(time.Hour))
@@ -139,7 +139,7 @@ func TestJavaPlatformCheckpointRestoresGraphAliasesAndCaches(t *testing.T) {
 		t.Fatal("closed stream ownership map was lost")
 	}
 	for object, target := range restored.wipiFileStreams {
-		if object == stream || target == file || target.name != "closed.bin" || target.open || len(target.data) != 0 {
+		if object == stream || target == file || target.name != "closed.bin" || target.open || target.node != nil {
 			t.Fatal("closed stream lost its original file or restored save bytes")
 		}
 	}

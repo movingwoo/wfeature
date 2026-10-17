@@ -372,8 +372,19 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 	// saves use, so one save root holds everything a user would think of as
 	// their progress.
 	if saveRoot == "" {
+		// A title whose owner an earlier build used raw has its saves moved
+		// to the name this build uses before the directory is claimed.
+		if err := skt.MigrateSaveOwner(platformSaveRoot("skt"), archive.Descriptor); err != nil {
+			logger.Warn("saves kept under an earlier owner name were not moved", "error", err)
+		}
 		saveRoot = filepath.Join(platformSaveRoot("skt"), skt.SaveOwner(archive.Descriptor))
 	}
+	releaseSaves, err := claimSaveDirectory(saveRoot, logger)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer releaseSaves()
 	runtime, err := skt.Start(archive, skt.Options{
 		DisableAuthentication: !authentication,
 		JVM:                   jvm.Options{Logger: logger, TraceInstructions: traceInstructions},
@@ -400,6 +411,16 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	// destroyApp is where a MIDlet writes the progress it holds, and closing a
+	// game is where the shared session calls it; a run that ended without it
+	// would drop that save. It runs after the summary, which describes the run
+	// rather than its ending, and before the claim is released. A Ctrl-C while
+	// it runs abandons it; see endRun.
+	defer func() {
+		if err := endRun(stderr, func(context.Context) error { return runtime.Destroy(true) }); err != nil {
+			logger.Debug("SKT destroy at the end of the run", "error", err)
+		}
+	}()
 	// Patches go in before the first Host pass — the earliest the object graph
 	// can be reached, and earlier than any patch a person could have typed.
 	if patchErr := applyStartPatches(runtime.CheatConsole(), path, patchTables, stderr); patchErr != nil {
@@ -426,7 +447,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		}
 		// This platform's title is a bag of classes rather than one executable
 		// image, so the archive file is what keys a table saved from it.
-		keyCheatTable(runtime.CheatConsole(), path)
+		attachCheatConsole(runtime.CheatConsole(), path)
 	}
 	// A scripted key is released -hold ticks after its press for the reason it
 	// is on the WIPI paths: a Canvas that samples the keypad once a frame never
@@ -1015,6 +1036,21 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			"-park":     parkAt > 0,
 			"-framedir": frameDir != "",
 			"-ticks":    ticksChosen,
+			// Only the tick loop restarts the profile; a serve session's
+			// step does not.
+			"-profile-from": profileFrom > 0,
+		}); reason != "" {
+			fmt.Fprintln(stderr, reason)
+			return 2
+		}
+	}
+	if routePath != "" {
+		if reason := routeConflict(map[string]bool{
+			"-cheat":        cheatConsole,
+			"-key":          len(keyEvents) > 0,
+			"-touch":        len(touchEvents) > 0,
+			"-park":         parkAt > 0,
+			"-profile-from": profileFrom > 0,
 		}); reason != "" {
 			fmt.Fprintln(stderr, reason)
 			return 2
@@ -1077,6 +1113,10 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			"-gdb":            gdbAddress != "",
 			"-profile":        profilePath != "",
 			"-profile-folded": profileFoldedPath != "",
+			"-profile-from":   profileFrom > 0,
+			// Its loop has no pointer and no lifecycle to park.
+			"-touch": len(touchEvents) > 0,
+			"-park":  parkAt > 0,
 		} {
 			if unsupported {
 				fmt.Fprintf(stderr, "%s is not available for the earlier KTF package\n", name)
@@ -1091,6 +1131,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			framePath:    framePath,
 			frameDir:     frameDir,
 			play:         play,
+			speed:        speed,
 			saveRoot:     saveRoot,
 			keyEvents:    keyEvents,
 			keyHold:      keyHold,
@@ -1212,7 +1253,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 		if !ticksChosen {
 			ticks = 1 << 30
 		}
-		keyCheatTable(session.CheatConsole(), path)
+		attachCheatConsole(session.CheatConsole(), path)
 		fmt.Fprintln(stdout, "cheat: attached. `help` for commands, ctrl-c to quit.")
 	}
 	ran := 0
@@ -1279,9 +1320,9 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	if script != nil {
 		// A route runs until it arrives, so it does not inherit the default
 		// tick count that bounds an unscripted probe; an explicit -ticks still
-		// caps it.
+		// caps it, whatever count it names.
 		budget := ticks
-		if budget == defaultProbeTicks {
+		if !ticksChosen {
 			budget = 0
 		}
 		routeResult, tickError = runRoute(ctx, session, script, routeRun{
@@ -1307,22 +1348,11 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 		if profiling && profileFrom > 0 && ran == profileFrom {
 			session.ResetProfile()
 		}
-		// Frame copies the whole RGBA buffer, so the loop only takes one when
-		// the flush counter says there is something new to look at.
-		flushes := session.Flushes()
-		if flushes > 0 && (!play || (frameDir != "" && flushes != dumpedFlush)) {
-			frame, width, height, _ := session.Frame()
-			if !play && frameLit(frame) > 0 {
-				break
-			}
-			if frameDir != "" && width > 0 && height > 0 && flushes != dumpedFlush {
-				dumpedFlush = flushes
-				name := filepath.Join(frameDir, fmt.Sprintf("tick%04d.png", ran))
-				if err := writePNG(name, frame, width, height); err != nil {
-					fmt.Fprintf(stderr, "write frame: %v\n", err)
-					return 1
-				}
-			}
+		if lit, err := probeFrame(session, frameDir, play, ran, &dumpedFlush); err != nil {
+			fmt.Fprintf(stderr, "write frame: %v\n", err)
+			return 1
+		} else if lit {
+			break
 		}
 		// A scripted key is pressed on its tick and released -hold ticks later.
 		// A title that samples the keypad once a frame never sees a press and a
@@ -1705,9 +1735,53 @@ func runRoute(ctx context.Context, session *ktf.Session, script *route.Route, op
 // difference between a caller who fixes the command and one who spends the
 // afternoon wondering why their keys never arrived.
 func serveConflict(options map[string]bool) string {
-	for _, name := range []string{"-cheat", "-route", "-key", "-touch", "-park", "-framedir", "-ticks"} {
+	for _, name := range []string{"-cheat", "-route", "-key", "-touch", "-park", "-framedir", "-ticks", "-profile-from"} {
 		if options[name] {
 			return fmt.Sprintf("%s cannot be combined with -serve, which is driven a command at a time instead", name)
+		}
+	}
+	return ""
+}
+
+// flushedFrames is what probeFrame needs of a session.
+type flushedFrames interface {
+	Flushes() uint32
+	Frame() ([]byte, int, int, uint32)
+}
+
+// probeFrame looks at the frame a tick of runktf's loop starts on. A new one
+// goes to -framedir, and a probe (no -play) reports whether it is lit, which is
+// where a probe stops. The frame is written before that answer, because the
+// first lit frame is the one a probe exists to find.
+//
+// Frame copies the whole RGBA buffer, so it is only taken when the flush
+// counter says there is something new to look at.
+func probeFrame(session flushedFrames, frameDir string, play bool, ran int, dumpedFlush *uint32) (bool, error) {
+	flushes := session.Flushes()
+	if flushes == 0 || (play && (frameDir == "" || flushes == *dumpedFlush)) {
+		return false, nil
+	}
+	frame, width, height, _ := session.Frame()
+	if frameDir != "" && width > 0 && height > 0 && flushes != *dumpedFlush {
+		*dumpedFlush = flushes
+		name := filepath.Join(frameDir, fmt.Sprintf("tick%04d.png", ran))
+		if err := writePNG(name, frame, width, height); err != nil {
+			return false, err
+		}
+	}
+	return !play && frameLit(frame) > 0, nil
+}
+
+// routeConflict names the first option runktf cannot honour beside -route.
+// A route replays through runRoute, which delivers the steps in its script and
+// nothing else: the tick loop that sends -key and -touch, parks the game, reads
+// the cheat console and restarts the profile at -profile-from does not run, so
+// each of them is refused by name rather than dropped. A route's own `key`
+// and `mark` steps are what it has instead.
+func routeConflict(options map[string]bool) string {
+	for _, name := range []string{"-cheat", "-key", "-touch", "-park", "-profile-from"} {
+		if options[name] {
+			return fmt.Sprintf("%s cannot be combined with -route, which replays only the steps in its script", name)
 		}
 	}
 	return ""
@@ -1752,6 +1826,18 @@ func keyCheatTable(console *cheat.Console, path string) {
 		return
 	}
 	console.SetTableKey(cheat.TableKey{File: fileDigest(path)})
+}
+
+// attachCheatConsole readies the console a -cheat run reads from the
+// terminal: it keys saved tables to the archive and lets `save` and `load`
+// reach the file system, which only a console a local operator types into
+// may do.
+func attachCheatConsole(console *cheat.Console, path string) {
+	if console == nil {
+		return
+	}
+	keyCheatTable(console, path)
+	console.AllowFiles()
 }
 
 // shootFrame writes the frame a `shot` command asked for, through the same
@@ -2521,8 +2607,20 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if saveRoot == "" {
-		saveRoot = filepath.Join(platformSaveRoot("lgt"), lgt.SaveOwner(archive.Descriptor))
+		// A title whose owner an earlier build used raw has its saves moved
+		// to the name this build uses before the directory is claimed.
+		root := platformSaveRoot("lgt")
+		if err := backend.MigrateSaveOwner(root, lgt.EarlierSaveOwner(archive.Descriptor), lgt.SaveOwner(archive.Descriptor)); err != nil {
+			logger.Warn("saves kept under an earlier owner name were not moved", "error", err)
+		}
+		saveRoot = filepath.Join(root, lgt.SaveOwner(archive.Descriptor))
 	}
+	releaseSaves, err := claimSaveDirectory(saveRoot, logger)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer releaseSaves()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
@@ -2558,6 +2656,17 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
+	// Close flushes the files the title wrote and left open and runs its
+	// destroy callback, and it is how the shared session ends every LGT game;
+	// a run that ended on its tick count, its route or an interrupt would
+	// otherwise drop both. An interrupt has already cancelled ctx, so the
+	// close gets a context of its own, which a Ctrl-C while it runs cancels;
+	// see endRun.
+	defer func() {
+		if err := endRun(stderr, session.Close); err != nil {
+			logger.Debug("LGT close at the end of the run", "error", err)
+		}
+	}()
 	if authentication {
 		fmt.Fprintf(stderr, "authentication: %s\n", session.Authentication())
 	}
@@ -2588,7 +2697,7 @@ func runLGT(path string, args []string, stdout, stderr io.Writer) int {
 		if !ticksChosen {
 			ticks = 1 << 30
 		}
-		keyCheatTable(session.CheatConsole(), path)
+		attachCheatConsole(session.CheatConsole(), path)
 		fmt.Fprintln(stdout, "cheat: attached. `help` for commands, ctrl-c to quit.")
 	}
 	// A scripted key is pressed on its tick and released -hold ticks later. A

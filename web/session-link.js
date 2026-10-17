@@ -58,12 +58,14 @@ export const createSessionLink = ({
     old?.close();
   };
   const answer = response => {
+    // Any answer is a server that is back, so the next outage starts its
+    // backoff from the beginning whether or not a game was waiting.
+    delay = 1000;
     if (response.occupied) {
       blocked = true;
       change("occupied");
     } else if (response.started) {
       blocked = false;
-      delay = 1000;
       change("playing");
       onStarted(response.started);
     } else {

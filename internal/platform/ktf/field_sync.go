@@ -699,6 +699,9 @@ func publishGuestTextComponent(runtime *initializationRuntime, address uint32, o
 			if array, err = runtime.allocateGuestCharArray(units); err != nil {
 				return false, fmt.Errorf("allocate KTF text component characters: %w", err)
 			}
+			// Only `wanted` names the new array until the fields are
+			// written, and binding the font or display below can allocate.
+			defer runtime.holdAllocationRoot(array)()
 		}
 		set(textComponentDataWord, array)
 	}

@@ -116,8 +116,9 @@ text must be encodable in KSC5601; other characters are refused. See
 [native text input](native-text-input.md) for the supported targets and limits.
 
 Display selection follows resource-name evidence. `skt.PackagedScreen` reads
-path components ending in `_<width>`; when every such component agrees, at
-least two state it, and the width is 128, 176, 240 or 320, it selects
+path components ending in `_<width>`, counting only the widths 128, 176, 240
+and 320 (a suffix such as `_120` is ignored rather than counted against them);
+when every counted component agrees and at least two state it, it selects
 128x160, 176x208, 240x320 or 320x480. An SKT descriptor declares no screen
 size. A Host's `-screen` flag or page setting overrides the selection.
 Supplying `-screen 320x240` is a diagnostic override, not proof that a
@@ -126,11 +127,79 @@ package declares landscape operation.
 ## Saves and sound
 
 MIDP RMS and vendor files share the Host save boundary. `XFile` keys live
-under `fs/` beside RMS, opening for writing creates a file, and `unlink`
-empties a file rather than removing it. Error-aware stores report read
-failures as guest storage exceptions. Record decoding rejects truncation and
-trailing bytes. [RMS](rms.md) describes record identity and layout;
-[save integrity](session.md#save-integrity) describes Host contracts.
+under `fs/` beside RMS. A writable open of a missing path creates the file: an
+empty one that every later read sees at once — `exists` and `isFile` answer
+true, `filesize` and `sizeOf` 0, a later open finds it — and that is stored no
+later than the handle's flush or close or the end of the session. That is
+`XFile` with the write bit, WIPI `File` `WRITE`, `READ_WRITE` and
+`WRITE_TRUNC`, and `com.xce.io.FileOutputStream`, appending or not. A
+read-only open of a missing path is an `IOException` and makes nothing.
+Error-aware stores report read failures as guest storage exceptions. Record
+decoding rejects truncation and trailing bytes. [RMS](rms.md) describes record
+identity and layout; [save integrity](session.md#save-integrity) describes
+Host contracts.
+
+**A path is one file for the whole session.** Every handle on it — an
+`XFile`, a WIPI `File`, the input stream a `File` opens, the
+`com.xce.io` streams built on `XFile` — reads and writes the same bytes with
+a position of its own, under every spelling of the path (`/save`, `save`,
+`./save`). A write or a truncation is therefore seen at once by every later
+read: `XFile.exists` and `filesize`, `FileSystem.exists`, `isFile` and
+`sizeOf`, a new open, and a handle or stream already open. A handle with a
+copy of its own would answer with the file as it was stored until that copy
+was closed, and its close could store the older copy over another handle's
+write.
+
+**Saves are stored at the points the KTF, LGT and SKT file layers share, and
+at no other:** the title's flush or close of a handle stores its path as every
+handle has left it; a truncating open stores the empty file at the open; a
+removal is stored when it is made; a quick save stores what is not stored yet
+before it records anything; and the end of the session — the Host's destroy,
+the title's `notifyDestroyed` or `System.exit`, or a failure that ends it —
+stores every file not stored yet and retries every RMS write the store
+refused. A store the Host refused leaves the file dirty, and the next of those
+points writes it again; `XFile`'s flush and close answer nothing, and a WIPI
+output stream reports the refusal as an `IOException`. Nothing stores on a
+timer, a pause, a resume or a tick. A session a quick load replaces stores its
+writes in the load's own step and nothing after it.
+
+WIPI `File` modes are the specification's enumeration, not the `XFile` bits
+of the handle underneath: 1 `READ_ONLY`, 2 `WRITE` (writing starts at the end
+of an existing file), 3 `WRITE_TRUNC` (the open empties the file and stores the
+empty file there and then, so a close with nothing written, or no close at
+all, leaves it empty) and 4 `READ_WRITE`; any other mode is an `IOException`.
+`File.read` answers -1 at the end of the file, where `XFile.read` answers 0.
+`com.xce.io.FileOutputStream(String)` and `(String, false)` start the file
+over as their java.io counterparts do — a truncating open, through the private
+`XFile.truncate`, which leaves an existing empty file rather than a removed
+one — and `(String, true)` appends; `FileInputStream.read` of zero bytes
+answers 0. `XFile`'s own modes never truncate. A write that would grow a file
+past 16 MiB (`xFileMaxBytes`) fails with -1, so a seek far past the end cannot
+make the process allocate gigabytes; `fsavail` still reports 512 KiB.
+
+**A removed file is gone, not empty.** `XFile.unlink` and `FileSystem.remove`
+make the path absent to every later read: `exists` and `isFile` answer false,
+`filesize` and `sizeOf` answer -1, a read-only open throws `IOException`, and a
+handle still open on it reads an empty file. The removal stores, in one batch,
+the emptied file and the path on `fs/.removed` — the key and form of the KTF
+guest filesystem's list, names joined by newlines, each the path of the save
+key below `fs/` — so the path stays absent in later sessions, a packaged file
+of the same name included. Opening the path for writing again brings it back as
+an empty file, and a write through a handle left open on it brings it back
+holding what was written; the store that writes it takes the name off the list
+in the same batch as its bytes. Removing a name that does not exist changes and
+stores nothing: `unlink` answers 0, as it always did, and `remove` throws
+nothing, where the specification has it throw `IOException`; no title has been
+seen to depend on either answer. Removing a file made or written in this
+session that never reached the store, and that the archive does not package,
+stores nothing either, since a later session would not find it. A name with a
+line break cannot go on the list, so `unlink` answers -1 for it and nothing is
+removed. An empty file an earlier build's `unlink` left behind is a present
+empty file: nothing records which empty files were removals. `/.removed` and
+paths below it are refused, as the list's own key.
+
+An SGS save load that cannot read `nv/data` stops the script with the error
+rather than handing the title zeros it would save over its progress.
 
 Audio requests use the guest timeline and shared sink boundary. MIDI messages
 and sampled-audio buffers prove software delivery, not audible playback on a
@@ -146,6 +215,13 @@ command and the page's keypad controls, without replaying startup. A load
 leaves ordinary saves where they are, per
 [the shared rule](architecture.md#quick-load-and-ordinary-saves). The state
 recorded, the refusals and the limits are in [SKT checkpoints](skt-checkpoints.md).
+A file handle's record holds its path, mode, open state and position and no
+bytes; a load puts every handle on one path back on the path's one file, read
+from the current saves (the removal list, the save, the packaged file), and
+records written before files were shared restore the same way. A handle the
+record had open for writing does not make its file again when the current
+saves do not have it, since a removal made after the quick save is the later
+write; a write through the handle brings the file back.
 
 ## Validation and limits
 

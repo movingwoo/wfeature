@@ -597,6 +597,12 @@ func TestStorageFieldsAreAccountedFor(t *testing.T) {
 		// between a restore and its bind.
 		"saveReadError":   absent,
 		"restoredStorage": absent,
+		// Writes held for one guest DataOutputStream call, stored before that
+		// call returns; a checkpoint is never taken inside one.
+		"fileBatch": absent,
+		// Counts of this session's writes per path, which a restored File
+		// starts from nothing; a rebind is not a write.
+		"guestFileWrites": absent,
 	}
 	words := []string{"file", "database", "removed", "director", "save", "storage", "record", "detached"}
 	fields := reflect.TypeOf(initializationRuntime{})

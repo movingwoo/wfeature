@@ -484,6 +484,10 @@ func (client *Client) ServiceThreads(ctx context.Context, limit int) (int, error
 		worker.grant <- struct{}{}
 		event := <-worker.events
 		client.forcedSlice = event.forced
+		// A worker can stop inside a DataOutputStream call without another
+		// platform call, so what that call holds is stored before anything
+		// else runs; see storeHeldGuestFiles.
+		runtime.storeHeldGuestFiles()
 		client.activeWorker = nil
 		serviced++
 		spent += client.core.Steps() - before
@@ -668,7 +672,7 @@ func (client *Client) serviceTimersLocked(ctx context.Context, limit int) (int, 
 	for index, timer := range pending {
 		if serviced >= limit {
 			// Preserve the rest for the next service round.
-			client.runtime.pendingTimers = append(client.runtime.pendingTimers, pending[index:]...)
+			client.runtime.requeueTimers(pending[index:])
 			break
 		}
 		if timer.callback == 0 && timer.task == nil {
@@ -709,6 +713,10 @@ func (client *Client) serviceTimersLocked(ctx context.Context, limit int) (int, 
 		// deadline this one was due at, wherever in the callback it is armed.
 		client.servingDue = timer.due
 		client.activeTimer = &timer
+		// The entries after this one are what a cancel or a re-arm from the
+		// callback has to find; see roundTimers.
+		previousRound := client.runtime.roundTimers
+		client.runtime.roundTimers = pending[index+1:]
 		run, err := client.core.Call(
 			ctx,
 			client.thread,
@@ -717,6 +725,7 @@ func (client *Client) serviceTimersLocked(ctx context.Context, limit int) (int, 
 			[]uint32{timer.pointer, timer.param},
 			client.runtime.handleSupervisorCall,
 		)
+		client.runtime.roundTimers = previousRound
 		client.servingDue = time.Time{}
 		client.activeTimer = nil
 		if input := &client.runtime.cInput; input.timerPointer == timer.pointer && input.timerCallback == timer.callback {
@@ -730,6 +739,10 @@ func (client *Client) serviceTimersLocked(ctx context.Context, limit int) (int, 
 			}
 		}
 		if err != nil {
+			// The callback that failed did not happen, and the timers behind
+			// it still do: a Host absorbs an uncaught guest exception here and
+			// carries on, and the rest of the batch has to be there for it.
+			client.runtime.requeueTimers(pending[index+1:])
 			// A fault inside a timer callback gets the same evidence a fault
 			// inside an AOT call gets. The address a fault names is never the
 			// answer on its own, and a title whose whole loop is a timer would

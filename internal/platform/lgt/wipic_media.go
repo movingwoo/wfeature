@@ -122,6 +122,10 @@ const mediaMaxVolume = 100
 // else's memory.
 const mediaClipRecordSize = 32
 
+// maxClipTransitions bounds the transitions a clip holds for its callback
+// between two deliveries, which is also the most a checkpoint record carries.
+const maxClipTransitions = 64
+
 const (
 	mediaEnded   uint32 = 1
 	mediaStarted uint32 = 2
@@ -183,6 +187,13 @@ func (client *Client) handleMedia(thread *armcore.Thread, slot uint32) error {
 		}
 		client.releaseClipSound(clip)
 		delete(client.clips, handle)
+		// A C clip's handle is the record createClip took from the platform
+		// arena, and a title that creates and frees a clip per sound effect
+		// would otherwise fill the arena with them. A Java clip's handle is
+		// its object, which only the collector frees.
+		if !clip.java {
+			client.arena.release(handle)
+		}
 		return answerInt(wipiSuccess)
 
 	case slotClipGetType:
@@ -605,13 +616,17 @@ func (client *Client) serviceAudio() error {
 
 // notify records a transition, never reentering a guest's media call. Bound
 // the queue so untrusted code cannot accumulate notifications indefinitely.
+// The bound is for memory only, so a full queue drops its oldest transition
+// rather than ending the run: a title that stops and restarts an effect many
+// times inside one tick has done nothing wrong, and the transitions that
+// matter to its callback are the latest ones.
 func (clip *mediaClip) notify(status uint32) error {
 	if clip.status == status {
 		return nil
 	}
 	if clip.callback != 0 {
-		if len(clip.pending) >= 64 {
-			return fmt.Errorf("LGT media callback queue exceeds 64 transitions")
+		if len(clip.pending) >= maxClipTransitions {
+			clip.pending = append(clip.pending[:0], clip.pending[len(clip.pending)-maxClipTransitions+1:]...)
 		}
 		clip.pending = append(clip.pending, status)
 	}

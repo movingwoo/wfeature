@@ -12,6 +12,20 @@ const scanChunkSize = 0x10000
 // How many previous candidate sets Undo can walk back through.
 const maxScanHistory = 16
 
+// maxScanAlign bounds the scan stride. The sweep walks 32-bit addresses, and a
+// stride wider than a page finds nothing a narrower one would not.
+const maxScanAlign = 4096
+
+// maxScanCandidates bounds one search. An unknown-value sweep seeds a
+// candidate per aligned address, so its size follows guest memory rather than
+// anything the search knows; past this it is refused instead of growing the
+// heap of the process every session shares.
+const maxScanCandidates = 1 << 22
+
+// maxScanHistoryCandidates bounds what Undo keeps across all its snapshots.
+// The oldest steps go first; a wide search keeps fewer steps, not more memory.
+const maxScanHistoryCandidates = 1 << 22
+
 // Region is a contiguous span of guest memory worth scanning.
 //
 // Targets are expected to report only memory that is actually backed by
@@ -125,6 +139,10 @@ func (filter ScanFilter) accepts(current int64, previous int64, hasPrevious bool
 // had been started.
 var ErrNeedsPreviousValue = errors.New("this filter compares against the previous scan")
 
+// ErrTooManyCandidates reports a first scan that would hold more than
+// maxScanCandidates addresses.
+var ErrTooManyCandidates = fmt.Errorf("more than %d addresses match; start from a known or rarer value, or use a wider type or a larger align", maxScanCandidates)
+
 // Scanner is a progressive value search over a MemoryTarget.
 //
 // The first scan sweeps every region; subsequent scans only re-read the
@@ -155,7 +173,7 @@ func (scanner *Scanner) Candidates() []Candidate { return scanner.candidates }
 // practice, so the default stride equals the value size; drop it to 1 when a
 // value turns out to be packed.
 func (scanner *Scanner) SetAlign(align int) {
-	scanner.align = max(align, 1)
+	scanner.align = min(max(align, 1), maxScanAlign)
 }
 
 // Reset drops all results and starts over, keeping the value type and
@@ -192,7 +210,10 @@ func (scanner *Scanner) Scan(target MemoryTarget, filter ScanFilter) (int, error
 		if filter.NeedsPrevious() {
 			return 0, ErrNeedsPreviousValue
 		}
-		candidates := scanner.sweep(target, filter)
+		candidates, ok := scanner.sweep(target, filter)
+		if !ok {
+			return 0, ErrTooManyCandidates
+		}
 		scanner.pushHistory()
 		scanner.candidates = candidates
 		scanner.started = true
@@ -222,6 +243,19 @@ func (scanner *Scanner) pushHistory() {
 	if len(scanner.history) == maxScanHistory {
 		scanner.history = scanner.history[1:]
 	}
+	retained := len(scanner.candidates)
+	for _, snapshot := range scanner.history {
+		retained += len(snapshot)
+	}
+	for len(scanner.history) > 0 && retained > maxScanHistoryCandidates {
+		retained -= len(scanner.history[0])
+		scanner.history = scanner.history[1:]
+	}
+	if retained > maxScanHistoryCandidates {
+		// Not even this step fits. Undo is left with nothing to go back to
+		// rather than with an older step it would skip to.
+		return
+	}
 	snapshot := make([]Candidate, len(scanner.candidates))
 	copy(snapshot, scanner.candidates)
 	scanner.history = append(scanner.history, snapshot)
@@ -230,8 +264,9 @@ func (scanner *Scanner) pushHistory() {
 // sweep is the first pass: walk every region at the configured stride.
 // Chunks overlap by size-1 bytes so a value straddling a chunk boundary is
 // still found, and unreadable chunks are skipped rather than aborting the
-// scan, because region reporting and readability can differ.
-func (scanner *Scanner) sweep(target MemoryTarget, filter ScanFilter) []Candidate {
+// scan, because region reporting and readability can differ. It reports false
+// when the result would exceed maxScanCandidates.
+func (scanner *Scanner) sweep(target MemoryTarget, filter ScanFilter) ([]Candidate, bool) {
 	size := scanner.valueType.Size()
 	align := uint32(scanner.align)
 	var result []Candidate
@@ -269,6 +304,9 @@ func (scanner *Scanner) sweep(target MemoryTarget, filter ScanFilter) []Candidat
 					break
 				}
 				if value, ok := scanner.valueType.Decode(buffer[local:]); ok && filter.accepts(value, 0, false) {
+					if len(result) == maxScanCandidates {
+						return nil, false
+					}
 					result = append(result, Candidate{Address: address, Value: value})
 				}
 				next := uint64(address) + uint64(align)
@@ -283,7 +321,7 @@ func (scanner *Scanner) sweep(target MemoryTarget, filter ScanFilter) []Candidat
 			offset += chunkLength - (size - 1)
 		}
 	}
-	return result
+	return result, true
 }
 
 // refilter is every later pass: only the surviving addresses are re-read.

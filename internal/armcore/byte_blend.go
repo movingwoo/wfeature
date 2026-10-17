@@ -131,12 +131,18 @@ func (memory *Memory) analyseByteBlend(head, branchPC uint32) *byteBlend {
 		// they are collected first and assigned after the walk.
 		loadBases   [2]uint32
 		loadTargets [2]uint32
+		loadPCs     [2]uint32
 		loads       int
 		storeBase   uint32
 		storePC     uint32
 		guardPC     uint32
 		comparePC   uint32
 		counterPC   uint32
+		// Where each pointer advanced and where the difference was taken,
+		// which the order check after the walk reads.
+		sourceAdvancePC uint32
+		destAdvancePC   uint32
+		differencePC    uint32
 
 		haveConstant   bool
 		haveDifference bool
@@ -184,7 +190,7 @@ func (memory *Memory) analyseByteBlend(head, branchPC uint32) *byteBlend {
 				if loads == len(loadBases) {
 					return nil
 				}
-				loadBases[loads], loadTargets[loads] = base, data
+				loadBases[loads], loadTargets[loads], loadPCs[loads] = base, data, address
 				loads++
 				continue
 			}
@@ -203,7 +209,7 @@ func (memory *Memory) analyseByteBlend(head, branchPC uint32) *byteBlend {
 			if immediate || !subtract || haveDifference || !haveConstant || operand != constant {
 				return nil
 			}
-			haveDifference, difference, incoming = true, data, source
+			haveDifference, difference, incoming, differencePC = true, data, source, address
 
 		case thumbALU:
 			// `cmp rV, rC` — the guard's comparison, and the only ALU
@@ -241,9 +247,9 @@ func (memory *Memory) analyseByteBlend(head, branchPC uint32) *byteBlend {
 			case opcode == 2 && operand == 1 && !haveSource && !haveDest:
 				// The first of the two pointers to advance; which is which is
 				// settled by the store's base, below.
-				haveSource, loop.source = true, register
+				haveSource, loop.source, sourceAdvancePC = true, register, address
 			case opcode == 2 && operand == 1 && !haveDest:
-				haveDest, loop.destination = true, register
+				haveDest, loop.destination, destAdvancePC = true, register, address
 			case opcode == 1 && operand == 0 && !haveCounter:
 				// `cmp rN, #0` — what the closing branch reads.
 				if !haveDecrement || register != loop.counter {
@@ -283,19 +289,32 @@ func (memory *Memory) analyseByteBlend(head, branchPC uint32) *byteBlend {
 			return nil
 		}
 		loop.source, loop.destination = loop.destination, loop.source
+		sourceAdvancePC, destAdvancePC = destAdvancePC, sourceAdvancePC
 	}
 	// One byte load reads the source and the other the destination, and the
 	// difference has to be the one taken from the source.
+	var sourceLoadPC, destLoadPC uint32
 	switch {
 	case loadBases[0] == loop.source && loadBases[1] == loop.destination:
 		if loadTargets[0] != incoming || loadTargets[1] != current {
 			return nil
 		}
+		sourceLoadPC, destLoadPC = loadPCs[0], loadPCs[1]
 	case loadBases[1] == loop.source && loadBases[0] == loop.destination:
 		if loadTargets[1] != incoming || loadTargets[0] != current {
 			return nil
 		}
+		sourceLoadPC, destLoadPC = loadPCs[1], loadPCs[0]
 	default:
+		return nil
+	}
+	// runByteBlend reads both bytes at the pointers the loop head holds, which
+	// is what the guest reads only when each byte is loaded before it is used
+	// and each pointer advances after every access through it. A body that
+	// advances first, or uses a byte the previous iteration loaded, walks
+	// one byte away from that.
+	if sourceLoadPC > differencePC || destLoadPC > comparePC ||
+		sourceAdvancePC < sourceLoadPC || destAdvancePC < storePC {
 		return nil
 	}
 

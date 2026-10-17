@@ -160,5 +160,8 @@ func (runtime *initializationRuntime) dropTimerTasks(match func(wipicTimer) bool
 		remaining = append(remaining, timer)
 	}
 	runtime.pendingTimers = remaining
+	// A cancel made from a C timer callback also reaches the tasks later in
+	// that round's batch, which are out of the queue while it runs.
+	dropped += runtime.cancelRoundTimers(func(timer wipicTimer) bool { return timer.task != nil && match(timer) })
 	return dropped
 }

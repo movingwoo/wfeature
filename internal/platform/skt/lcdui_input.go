@@ -18,6 +18,13 @@ const (
 	KeyCodeSoft2 int32 = -7
 )
 
+// The TextField constraints that admit only numbers.
+const (
+	textFieldNumeric     int32 = 2
+	textFieldPhoneNumber int32 = 3
+	textFieldDecimal     int32 = 5
+)
+
 // deliverScreenKey routes a key press to a runtime-drawn screen: navigation
 // moves the selection, the soft keys reach the commands, and nothing is
 // forwarded to the application except through a command or item callback.
@@ -37,13 +44,13 @@ func (runtime *Runtime) deliverScreenKey(screen *jvm.Object, eventType KeyEventT
 	state.mu.Unlock()
 
 	if menuOpen {
-		return runtime.handleMenuKey(screen, data, commands, keyCode)
+		return runtime.handleMenuKey(screen, data, content, commands, keyCode)
 	}
 
 	switch keyCode {
 	case KeyCodeSoft1:
 		if len(commands) > 0 {
-			return runtime.fireCommand(screen, commands[0])
+			return runtime.fireScreenCommand(screen, content, commands[0])
 		}
 		return nil
 	case KeyCodeSoft2:
@@ -56,7 +63,7 @@ func (runtime *Runtime) deliverScreenKey(screen *jvm.Object, eventType KeyEventT
 			state.mu.Unlock()
 			return runtime.queueScreenPaint(screen)
 		case len(commands) == 2:
-			return runtime.fireCommand(screen, commands[1])
+			return runtime.fireScreenCommand(screen, content, commands[1])
 		}
 		return nil
 	}
@@ -76,7 +83,21 @@ func (runtime *Runtime) deliverScreenKey(screen *jvm.Object, eventType KeyEventT
 // method, so a game types the same way here as it does in a KTF lwc field.
 func (runtime *Runtime) handleTextKey(screen *jvm.Object, content *screenData, keyCode int32) error {
 	runtime.textMu.Lock()
+	// An UNEDITABLE box is a read-only view, the same rule the Host keyboard
+	// path applies.
+	if content.constraint&textFieldUneditable != 0 {
+		runtime.textMu.Unlock()
+		return nil
+	}
 	editor := runtime.textEditor(content)
+	// A box that takes only numbers types the digit on the key, which is
+	// what the handset's digit mode did; the mode key cannot leave it.
+	switch content.constraint & midp.TextFieldConstraintMask {
+	case textFieldNumeric, textFieldPhoneNumber, textFieldDecimal:
+		for presses := 0; editor.Mode() != textinput.ModeNumeric && presses < 3; presses++ {
+			editor.Key('*', runtime.editorClock())
+		}
+	}
 	// The pad moves the caret, and only the pad: a digit is a letter here,
 	// so the 4 and 6 a game reads as left and right have to reach the
 	// keypad table instead. Without that neither "ghi" nor "mno" is typable.
@@ -127,7 +148,7 @@ func (runtime *Runtime) editorClock() time.Time {
 	return time.Unix(0, runtime.clockMillis()*int64(time.Millisecond))
 }
 
-func (runtime *Runtime) handleMenuKey(screen *jvm.Object, data *displayableData, commands []*jvm.Object, keyCode int32) error {
+func (runtime *Runtime) handleMenuKey(screen *jvm.Object, data *displayableData, content *screenData, commands []*jvm.Object, keyCode int32) error {
 	state := runtime.lcdui()
 	switch {
 	case isUpKey(keyCode):
@@ -150,7 +171,7 @@ func (runtime *Runtime) handleMenuKey(screen *jvm.Object, data *displayableData,
 			return err
 		}
 		if index >= 0 && index < len(commands) {
-			return runtime.fireCommand(screen, commands[index])
+			return runtime.fireScreenCommand(screen, content, commands[index])
 		}
 		return nil
 	case keyCode == KeyCodeSoft2:
@@ -163,35 +184,64 @@ func (runtime *Runtime) handleMenuKey(screen *jvm.Object, data *displayableData,
 	return nil
 }
 
+// fireScreenCommand reports a command a soft key or the command menu chose.
+// An IMPLICIT List selects its focused row first: MIDP defines IMPLICIT as the
+// choice whose focused element is selected when a Command is initiated, and a
+// title reads that row with getSelectedIndex in its commandAction.
+func (runtime *Runtime) fireScreenCommand(screen *jvm.Object, content *screenData, command *jvm.Object) error {
+	runtime.textMu.Lock()
+	if choice := content.choice; content.kind == screenList && choice != nil && choice.kind == choiceImplicit && len(choice.elements) > 0 {
+		content.selection = listFocus(content)
+		choice.selectExclusive(content.selection)
+	}
+	runtime.textMu.Unlock()
+	return runtime.fireCommand(screen, command)
+}
+
+// listFocus is a non-empty List's focused row, kept inside its rows. A focus
+// restored from a checkpoint taken while the List was empty is -1, and the
+// title may have added rows since.
+func listFocus(content *screenData) int {
+	return clamp(content.selection, 0, len(content.choice.elements)-1)
+}
+
+// handleListKey moves and acts on a List's focus. The List is read and
+// changed under textMu, the lock a title's own threads edit it under, and the
+// lock is released before anything calls back into the title.
 func (runtime *Runtime) handleListKey(screen *jvm.Object, content *screenData, commands []*jvm.Object, keyCode int32) error {
+	runtime.textMu.Lock()
 	choice := content.choice
 	if choice == nil || len(choice.elements) == 0 {
+		runtime.textMu.Unlock()
 		return nil
 	}
+	focus := listFocus(content)
+	selected := false
 	switch {
 	case isUpKey(keyCode):
-		content.selection = max(content.selection-1, 0)
-		return runtime.queueScreenPaint(screen)
+		content.selection = max(focus-1, 0)
 	case isDownKey(keyCode):
-		content.selection = min(content.selection+1, len(choice.elements)-1)
-		return runtime.queueScreenPaint(screen)
+		content.selection = min(focus+1, len(choice.elements)-1)
 	case isFireKey(keyCode):
-		switch choice.kind {
-		case choiceMultiple:
-			choice.elements[content.selection].selected = !choice.elements[content.selection].selected
-			return runtime.queueScreenPaint(screen)
-		default:
-			choice.selectExclusive(content.selection)
-			if err := runtime.queueScreenPaint(screen); err != nil {
-				return err
-			}
-			if choice.kind == choiceImplicit {
-				// An IMPLICIT List reports the selection as a command, which
-				// is the only way a game learns the user chose a row.
-				return runtime.fireCommand(screen, runtime.listSelectCommand(content, commands))
-			}
-			return nil
+		content.selection = focus
+		if choice.kind == choiceMultiple {
+			choice.elements[focus].selected = !choice.elements[focus].selected
+			break
 		}
+		choice.selectExclusive(focus)
+		selected = choice.kind == choiceImplicit
+	default:
+		runtime.textMu.Unlock()
+		return nil
+	}
+	runtime.textMu.Unlock()
+	if err := runtime.queueScreenPaint(screen); err != nil {
+		return err
+	}
+	if selected {
+		// An IMPLICIT List reports the selection as a command, which is the
+		// only way a game learns the user chose a row.
+		return runtime.fireCommand(screen, runtime.listSelectCommand(content, commands))
 	}
 	return nil
 }
@@ -199,8 +249,11 @@ func (runtime *Runtime) handleListKey(screen *jvm.Object, content *screenData, c
 // listSelectCommand is the command an IMPLICIT List fires on selection: the
 // one the application set, or List.SELECT_COMMAND.
 func (runtime *Runtime) listSelectCommand(content *screenData, commands []*jvm.Object) *jvm.Object {
-	if content.selectCommand != nil {
-		return content.selectCommand
+	runtime.textMu.Lock()
+	selectCommand := content.selectCommand
+	runtime.textMu.Unlock()
+	if selectCommand != nil {
+		return selectCommand
 	}
 	selectCommand, err := runtime.staticSelectCommand()
 	if err == nil && selectCommand != nil {
@@ -222,8 +275,12 @@ func (runtime *Runtime) staticSelectCommand() (*jvm.Object, error) {
 	return value.Reference()
 }
 
+// handleFormKey moves through a Form and acts on its focused item, under
+// textMu for the same reason handleListKey is.
 func (runtime *Runtime) handleFormKey(screen *jvm.Object, content *screenData, keyCode int32) error {
+	runtime.textMu.Lock()
 	if len(content.items) == 0 {
+		runtime.textMu.Unlock()
 		return nil
 	}
 	switch {
@@ -231,41 +288,55 @@ func (runtime *Runtime) handleFormKey(screen *jvm.Object, content *screenData, k
 		content.textRevision++
 		content.selection = runtime.previousFocusableItem(content)
 		content.subSelection = 0
+		runtime.textMu.Unlock()
 		return runtime.queueScreenPaint(screen)
 	case isDownKey(keyCode):
 		content.textRevision++
 		content.selection = runtime.nextFocusableItem(content)
 		content.subSelection = 0
+		runtime.textMu.Unlock()
 		return runtime.queueScreenPaint(screen)
 	}
-	data, err := itemOf(content.items[min(content.selection, len(content.items)-1)])
+	item := content.items[min(content.selection, len(content.items)-1)]
+	data, err := itemOf(item)
 	if err != nil {
+		runtime.textMu.Unlock()
 		return nil
 	}
 	switch {
 	case isLeftKey(keyCode) && data.choice != nil:
 		content.subSelection = max(content.subSelection-1, 0)
+		runtime.textMu.Unlock()
 		return runtime.queueScreenPaint(screen)
 	case isRightKey(keyCode) && data.choice != nil:
-		content.subSelection = min(content.subSelection+1, len(data.choice.elements)-1)
+		// An empty ChoiceGroup keeps its element focus at 0 rather than -1,
+		// which the FIRE after the title adds options would index with.
+		content.subSelection = max(min(content.subSelection+1, len(data.choice.elements)-1), 0)
+		runtime.textMu.Unlock()
 		return runtime.queueScreenPaint(screen)
 	case isFireKey(keyCode):
 		if data.choice != nil && len(data.choice.elements) > 0 {
-			index := min(content.subSelection, len(data.choice.elements)-1)
+			// A focus of -1 can come back from a checkpoint taken while the
+			// group was empty.
+			index := clamp(content.subSelection, 0, len(data.choice.elements)-1)
 			if data.choice.kind == choiceMultiple {
 				data.choice.elements[index].selected = !data.choice.elements[index].selected
 			} else {
 				data.choice.selectExclusive(index)
 			}
+			runtime.textMu.Unlock()
 			if err := runtime.queueScreenPaint(screen); err != nil {
 				return err
 			}
-			return runtime.reportItemStateChange(content.items[content.selection], data)
+			return runtime.reportItemStateChange(item, data)
 		}
 		if len(data.commands) > 0 {
-			return runtime.fireItemCommand(content.items[content.selection], data, data.commands[0])
+			command, listener := data.commands[0], data.listener
+			runtime.textMu.Unlock()
+			return runtime.fireItemCommand(item, listener, command)
 		}
 	}
+	runtime.textMu.Unlock()
 	return nil
 }
 
@@ -316,14 +387,14 @@ func (runtime *Runtime) fireCommand(displayable *jvm.Object, command *jvm.Object
 }
 
 // fireItemCommand reports a command attached to a Form item.
-func (runtime *Runtime) fireItemCommand(item *jvm.Object, data *itemData, command *jvm.Object) error {
-	if command == nil || data.listener == nil {
+func (runtime *Runtime) fireItemCommand(item *jvm.Object, listener *jvm.Object, command *jvm.Object) error {
+	if command == nil || listener == nil {
 		return nil
 	}
-	if _, err := runtime.VM.InvokeVirtual(data.listener, "commandAction",
+	if _, err := runtime.VM.InvokeVirtual(listener, "commandAction",
 		"(Ljavax/microedition/lcdui/Command;Ljavax/microedition/lcdui/Item;)V",
 		jvm.ReferenceValue(command), jvm.ReferenceValue(item)); err != nil {
-		if absorbed := runtime.absorbUncaughtCallback("item commandAction "+data.listener.ClassName, err); absorbed != nil {
+		if absorbed := runtime.absorbUncaughtCallback("item commandAction "+listener.ClassName, err); absorbed != nil {
 			return fmt.Errorf("deliver item commandAction: %w", absorbed)
 		}
 	}

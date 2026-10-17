@@ -2,6 +2,7 @@ package armcore
 
 import (
 	"fmt"
+	"math"
 	"math/bits"
 )
 
@@ -10,7 +11,7 @@ import (
 // caches that answer per address (see decodeARM), so the match chain below is
 // walked once per instruction in the program rather than once per execution.
 //
-// The chain is thirteen mask-and-compare tests deep and the forms games spend
+// The chain is fifteen mask-and-compare tests deep and the forms games spend
 // their time in — data processing, single transfer — are at the bottom of it.
 // On the one local title that is 100% ARM that was the whole cost of a step
 // after the fetch; see docs/history/armcore.md.
@@ -42,6 +43,12 @@ const (
 	armBlockTransfer
 	armDataProcessing
 	armCacheMaintenance
+	// The ARMv5TE instructions that sit where TST, TEQ, CMP and CMN would be
+	// with S clear. See classifyARMMiscellaneous.
+	armCountLeadingZeros
+	armBranchLinkExchange
+	armSaturatingArithmetic
+	armSignedHalfwordMultiply
 )
 
 // classifyARM answers the form of an encoding. The order of the tests is the
@@ -82,10 +89,36 @@ func classifyARM(instruction uint32) armForm {
 		return armSingleTransfer
 	case instruction&0x0e000000 == 0x08000000: // LDM/STM
 		return armBlockTransfer
+	case instruction&0x0f900000 == 0x01000000, // opcodes 8-11 with S clear, register form
+		instruction&0x0fb00000 == 0x03000000: // and the immediate form MSR does not take
+		return classifyARMMiscellaneous(instruction)
 	case instruction&0x0c000000 == 0: // data processing
 		return armDataProcessing
 	case isCacheMaintenance(instruction):
 		return armCacheMaintenance
+	}
+	return armUndefined
+}
+
+// classifyARMMiscellaneous answers the encodings a compare that sets no flags
+// would have, which the architecture gives to other instructions because such
+// a compare would do nothing. These handsets are ARMv5TE cores, and that is
+// where ARMv5TE keeps CLZ, BLX register, the saturating arithmetic and the
+// signed halfword multiplies. BX, MRS and MSR live in the same space and are
+// matched before it. Everything else here — BKPT, BXJ, and the ARMv6T2
+// MOVW/MOVT in the immediate form — is undefined, and faults like anything
+// else this core does not implement rather than running as a compare that
+// overwrites the flags.
+func classifyARMMiscellaneous(instruction uint32) armForm {
+	switch {
+	case instruction&0x0fff0ff0 == 0x016f0f10:
+		return armCountLeadingZeros
+	case instruction&0x0ffffff0 == 0x012fff30:
+		return armBranchLinkExchange
+	case instruction&0x0f900ff0 == 0x01000050: // QADD, QSUB, QDADD, QDSUB
+		return armSaturatingArithmetic
+	case instruction&0x0f900090 == 0x01000080: // SMLA<x><y>, SMLAW<y>, SMULW<y>, SMLAL<x><y>, SMUL<x><y>
+		return armSignedHalfwordMultiply
 	}
 	return armUndefined
 }
@@ -144,6 +177,14 @@ func executeARMForm(form armForm, context *Context, memory *Memory, pc, instruct
 		return noSupervisorCall, executeARMProgramStatusTransfer(context, instruction)
 	case armSwap:
 		return noSupervisorCall, executeARMSwap(context, memory, instruction)
+	case armCountLeadingZeros:
+		return noSupervisorCall, executeARMCountLeadingZeros(context, instruction)
+	case armBranchLinkExchange:
+		return noSupervisorCall, executeARMBranchLinkExchange(context, pc, instruction)
+	case armSaturatingArithmetic:
+		return noSupervisorCall, executeARMSaturatingArithmetic(context, instruction)
+	case armSignedHalfwordMultiply:
+		return noSupervisorCall, executeARMSignedHalfwordMultiply(context, instruction)
 	case armCacheMaintenance:
 		// A write to CP15 c7 is cache or write-buffer maintenance, which is
 		// nothing here: there is no cache to flush, and every path that
@@ -172,6 +213,123 @@ func executeARMBranch(context *Context, pc, instruction uint32) {
 // one, so it is a seventh of the instructions the local ARM title retires.
 func executeARMBranchExchange(context *Context, pc, instruction uint32) {
 	context.branchExchange(armRegisterValue(context, pc, instruction&0xf))
+}
+
+// executeARMBranchLinkExchange is BLX register, the ARM-state indirect call. It
+// interworks the way BX does, and the return address it leaves is the ARM
+// instruction after it.
+func executeARMBranchLinkExchange(context *Context, pc, instruction uint32) error {
+	rm := instruction & 0xf
+	if rm == RegisterPC {
+		return ErrUndefinedInstruction
+	}
+	target := context.Registers[rm]
+	context.Registers[RegisterLR] = pc + 4
+	context.branchExchange(target)
+	return nil
+}
+
+// executeARMCountLeadingZeros is CLZ, which a division helper built for
+// ARMv5TE uses to normalise its divisor.
+func executeARMCountLeadingZeros(context *Context, instruction uint32) error {
+	rd := instruction >> 12 & 0xf
+	rm := instruction & 0xf
+	if rd == RegisterPC || rm == RegisterPC {
+		return ErrUndefinedInstruction
+	}
+	context.Registers[rd] = uint32(bits.LeadingZeros32(context.Registers[rm]))
+	return nil
+}
+
+// saturate32 clamps a signed result to 32 bits and reports whether it had to.
+func saturate32(value int64) (uint32, bool) {
+	switch {
+	case value > math.MaxInt32:
+		return math.MaxInt32, true
+	case value < math.MinInt32:
+		return 1 << 31, true
+	}
+	return uint32(value), false
+}
+
+// executeARMSaturatingArithmetic is QADD, QSUB, QDADD and QDSUB: Rm plus or
+// minus Rn, with Rn doubled first in the D forms, each step clamped to 32
+// signed bits. A clamp at either step sets Q, which stays set until MSR
+// clears it.
+func executeARMSaturatingArithmetic(context *Context, instruction uint32) error {
+	rn := instruction >> 16 & 0xf
+	rd := instruction >> 12 & 0xf
+	rm := instruction & 0xf
+	if rn == RegisterPC || rd == RegisterPC || rm == RegisterPC {
+		return ErrUndefinedInstruction
+	}
+	operand := int64(int32(context.Registers[rn]))
+	saturated := false
+	if instruction&(1<<22) != 0 {
+		doubled, clamped := saturate32(operand * 2)
+		operand, saturated = int64(int32(doubled)), clamped
+	}
+	left := int64(int32(context.Registers[rm]))
+	result, clamped := saturate32(left + operand)
+	if instruction&(1<<21) != 0 {
+		result, clamped = saturate32(left - operand)
+	}
+	context.Registers[rd] = result
+	if saturated || clamped {
+		context.CPSR |= flagSaturation
+	}
+	return nil
+}
+
+// executeARMSignedHalfwordMultiply is the ARMv5TE signed multiplies that take
+// a halfword of each operand: x picks Rm's top or bottom half and y picks
+// Rs's. The accumulating forms set Q when the 32-bit sum overflows; the long
+// one wraps, and none of them touch N, Z, C or V.
+func executeARMSignedHalfwordMultiply(context *Context, instruction uint32) error {
+	rd := instruction >> 16 & 0xf // RdHi for SMLAL<x><y>
+	rn := instruction >> 12 & 0xf // RdLo for SMLAL<x><y>
+	rs := instruction >> 8 & 0xf
+	rm := instruction & 0xf
+	if rd == RegisterPC || rn == RegisterPC || rs == RegisterPC || rm == RegisterPC {
+		return ErrUndefinedInstruction
+	}
+	half := func(value uint32, top bool) int64 {
+		if top {
+			return int64(int16(value >> 16))
+		}
+		return int64(int16(value))
+	}
+	top := instruction&(1<<5) != 0
+	right := half(context.Registers[rs], instruction&(1<<6) != 0)
+	accumulate := func(product int64) {
+		sum := product + int64(int32(context.Registers[rn]))
+		context.Registers[rd] = uint32(sum)
+		if sum != int64(int32(sum)) {
+			context.CPSR |= flagSaturation
+		}
+	}
+	switch instruction >> 21 & 3 {
+	case 0: // SMLA<x><y>
+		accumulate(half(context.Registers[rm], top) * right)
+	case 1: // SMLAW<y>, or SMULW<y> with x set: bits 47:16 of a 32x16 product
+		product := int64(int32(context.Registers[rm])) * right >> 16
+		if top {
+			context.Registers[rd] = uint32(product)
+		} else {
+			accumulate(product)
+		}
+	case 2: // SMLAL<x><y>
+		if rd == rn {
+			return ErrUndefinedInstruction
+		}
+		total := uint64(context.Registers[rd])<<32 | uint64(context.Registers[rn])
+		total += uint64(half(context.Registers[rm], top) * right)
+		context.Registers[rd] = uint32(total >> 32)
+		context.Registers[rn] = uint32(total)
+	case 3: // SMUL<x><y>
+		context.Registers[rd] = uint32(half(context.Registers[rm], top) * right)
+	}
+	return nil
 }
 
 // isCacheMaintenance reports whether an instruction is an MCR to CP15 c7.
@@ -535,10 +693,12 @@ func executeARMProgramStatusTransfer(context *Context, instruction uint32) error
 	}
 	mask := uint32(0)
 	if fieldMask&8 != 0 {
-		mask = flagNegative | flagZero | flagCarry | flagOverflow
+		// Q is in the flags field on ARMv5TE, and MSR is the only way a
+		// program clears it after a saturating instruction set it.
+		mask = flagNegative | flagZero | flagCarry | flagOverflow | flagSaturation
 	}
-	// ARMv4T user mode cannot change the CPSR control field. Status and
-	// extension fields contain no state modeled by this execution core.
+	// User mode cannot change the CPSR control field. Status and extension
+	// fields contain no state modeled by this execution core.
 	context.CPSR = context.CPSR&^mask | value&mask
 	return nil
 }
@@ -654,7 +814,9 @@ func executeARMSingleTransfer(context *Context, memory *Memory, pc, instruction 
 			return err
 		}
 		if rd == RegisterPC {
-			context.setARMPC(value)
+			// An ARMv5T load to the PC interworks: bit zero selects Thumb,
+			// as it does for Thumb's POP {pc}.
+			context.branchExchange(value)
 		} else {
 			context.Registers[rd] = value
 		}
@@ -723,7 +885,9 @@ func executeARMBlockTransfer(context *Context, memory *Memory, pc, instruction u
 				return err
 			}
 			if register == RegisterPC {
-				context.setARMPC(value)
+				// Interworking, as for LDR pc: this is how an ARM function
+				// entered from Thumb through BLX returns there.
+				context.branchExchange(value)
 			} else {
 				context.Registers[register] = value
 			}

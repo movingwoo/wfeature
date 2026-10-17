@@ -1,0 +1,3 @@
+Manifest-Version: 1.0
+MIDlet-Name: Destroy Save Fixture
+MIDlet-1: Destroy Save Fixture, , DestroySaveMIDlet

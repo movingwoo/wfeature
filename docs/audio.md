@@ -304,7 +304,17 @@ a file can name more than sixteen logical channels. Melodic ones are allocated
 real MIDI channels on first use, in an order that skips channel 10; rhythm ones
 all go to channel 10. Whether a channel is rhythm must be known before its
 first event, and the bank select that says so can arrive after it, so
-`preclassify` walks the sequence once before playing it.
+`preclassify` walks the sequence once before playing it. When every melodic
+channel is taken, a logical channel within the first sixteen shares its own
+number. Handset files carry at most four score tracks, so only a malformed file
+reaches a logical channel past the sixteenth with none left; that channel is
+dropped with everything it plays rather than numbered past MIDI's sixteen.
+
+Score-track controls follow the PCM track's rule: a controller number or value
+with the top bit set is not a MIDI data byte, and the control is ignored without
+dropping its elapsed time. Volume and expression are clamped to 127, as the
+tone map already stores them. Every decoded MIDI event therefore fits the
+channel, note, controller and value ranges the checkpoint records.
 
 **Programs.** SMAF programs are Yamaha MA voices. Bank `0x7d` means "drum kit",
 and a handful of MA voices have General MIDI stand-ins that sound closer than

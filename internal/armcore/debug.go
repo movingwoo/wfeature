@@ -87,6 +87,15 @@ func (core *Core) StepOnce() {
 	core.debug.mu.Unlock()
 }
 
+// CancelStep drops a single step the guest has not taken yet: one a client
+// asked for and then left behind, or an interrupt a breakpoint beat to the
+// stop.
+func (core *Core) CancelStep() {
+	core.debug.mu.Lock()
+	core.debug.stepping = false
+	core.debug.mu.Unlock()
+}
+
 // debugAttached reports whether the run loop has to check for stops.
 func (core *Core) debugAttached() bool {
 	core.debug.mu.RLock()

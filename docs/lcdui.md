@@ -30,6 +30,12 @@ and `Command` constructors are native, so their state hangs off the object.
 method supplies the kind. A game subclasses these classes freely, so the class
 name does not reliably tell a `Form` from a `List`.
 
+A title edits a `List`, `ChoiceGroup`, `Form`, `Item` or `Alert` from its own
+threads as freely as from a callback, while the Host paints that content and
+moves through it on a key. The natives that read or change it therefore run
+under the same lock (`textMu`) the painter and the key handlers hold, and the
+key handlers release it before calling back into the title.
+
 ## Commands, soft keys, and the menu
 
 MIDP puts `addCommand`/`setCommandListener` on every `Displayable`, including
@@ -46,6 +52,12 @@ for itself. This runtime chooses:
   than an invented menu. The menu is drawn over the bottom of the screen,
   navigated with up/down, and confirmed with fire or the first soft key; the
   second soft key closes it.
+- **On an `IMPLICIT` List a command from a soft key or the menu first selects
+  the focused row.** MIDP defines `IMPLICIT` as the choice whose focused element
+  is selected when a command is initiated, so `getSelectedIndex` in
+  `commandAction` names the row the player is on. A row the title selects
+  itself with `setSelectedIndex` or `setSelectedFlags` becomes the highlighted
+  one, so the next command keeps it.
 - A `Canvas` gets the two soft keys but no menu and no command labels: a
   `Canvas` owns its pixels.
 
@@ -66,27 +78,37 @@ guess. A Jlet's card receives both soft keys as ordinary WIPI key codes.
 - **List**: up/down move the highlight, fire selects. An `IMPLICIT` list
   reports the selection by firing `List.SELECT_COMMAND` (or the command set
   with `setSelectCommand`), because that is the only way a game learns a row
-  was chosen. A `MULTIPLE` list toggles instead.
+  was chosen. A `MULTIPLE` list toggles instead. Deleting rows keeps the
+  highlight on a row that exists, the way `Form.delete` keeps its focus.
 - **Form**: up/down move between items, skipping any that cannot be acted on —
   a `StringItem` with no commands is decoration, and a cursor stopping on it
   would do nothing. When the focused item is a `ChoiceGroup`, left/right move
-  within its elements and fire toggles or selects one, which then calls the
-  form's `ItemStateListener`. Fire on any other item runs its first command. A
-  `TextField` item is not typed on the keypad; Host text input edits the
-  selected one ([native text input](native-text-input.md#supported-editors)).
+  within its elements (an empty one keeps its element focus at 0) and fire
+  toggles or selects one, which then calls the form's `ItemStateListener`.
+  Fire on any other item runs its first command. A `TextField` item is not
+  typed on the keypad; Host text input edits the selected one
+  ([native text input](native-text-input.md#supported-editors)).
 - **TextBox** takes keypad typing, with left/right moving the caret; see
-  "Deliberately incomplete".
+  "Deliberately incomplete". A `NUMERIC`, `PHONENUMBER` or `DECIMAL` box types
+  the digit on each key rather than its letters, and an `UNEDITABLE` box takes
+  no keypad edits, the same rules the Host text input applies.
 - **Alert** displays its content and is not navigable.
 
 ## GameCanvas
 
 A `GameCanvas` inverts the `Canvas` contract: it owns an off-screen buffer,
 draws into it whenever it likes, and calls `flushGraphics` to push it. The
-runtime never asks it to paint. `getKeyStates` is latched on every key event
+runtime never asks it to paint. `getKeyStates` is recorded on every key event
 whether or not the canvas also takes the callbacks, because polling is the
-point of the class; `suppressKeyEvents` suppresses only the callbacks.
+point of the class; `suppressKeyEvents` suppresses only the callbacks. As MIDP
+requires, a key reads as pressed if it is down or was pressed since the
+previous call, so a tap that starts and ends between two polls is reported
+once; a quicksave keeps that latch beside the held keys.
 `flushGraphics` presents only when the canvas is the current `Displayable`, so
-a background `GameCanvas` that keeps drawing does not reach the display.
+a background `GameCanvas` that keeps drawing does not reach the display. When
+one is painted the ordinary way, its inherited `paint` blits the buffer at the
+`Graphics` origin, inside its clip and under the lock every other drawing call
+takes.
 
 ## Media
 
@@ -118,6 +140,9 @@ corner **diameters**, so one equal to the side it rounds makes the shape an
 ellipse rather than overflowing it. The other two platforms draw these through
 the same geometry; see
 [the same geometry, on five surfaces](history/ktf.md#implementation-the-same-geometry-on-five-surfaces).
+The walk is bounded by the clip met with the surface (`curve.Bounds` and the
+`...Within` forms), so a box as large as an int draws what lands and returns;
+the pixels are those the whole walk drew.
 
 ## Deliberately incomplete
 

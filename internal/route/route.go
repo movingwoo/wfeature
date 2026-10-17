@@ -359,6 +359,10 @@ func (runner *Runner) runStep(ctx context.Context, step Step, budget int, result
 			// it holds for, which is why it is the caller's number.
 			if runner.Hold > 0 {
 				if stop, err := runner.tickFor(ctx, runner.Hold, budget, result, nil); err != nil || stop != "" {
+					// The release still goes out: a Host keeps the session
+					// open after a route that did not arrive, and what it
+					// drives next should not find the key still held.
+					_ = runner.SendKey(ctx, false, step.Key)
 					return stop, err
 				}
 			}

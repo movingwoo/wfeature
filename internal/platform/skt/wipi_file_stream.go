@@ -14,8 +14,10 @@ const (
 )
 
 // A file stream retains its storage provenance rather than hiding a copy in a
-// guest byte array. Inputs own a separate read cursor; outputs share the File
-// handle. A checkpoint can therefore reconnect both to the current save file.
+// guest byte array. An input stream is a handle of its own on the File's file,
+// with its own read position, so it reads what any handle writes; an output
+// stream is the File's handle. A checkpoint can therefore reconnect both to
+// the current save file.
 type wipiFileStreamData struct {
 	mu     sync.Mutex
 	file   *xFileData
@@ -85,17 +87,17 @@ func (runtime *Runtime) newWIPIFileStream(arguments []jvm.Value, output bool) (j
 			}
 		}
 	}
-	file.mu.Lock()
+	runtime.fileMu.Lock()
 	if !file.open || output && !file.writable || !output && file.mode&xFileRead == 0 {
-		file.mu.Unlock()
+		runtime.fileMu.Unlock()
 		return jvm.VoidValue(), newGuestException(jvm.IOExceptionClass, "file is not open for this stream direction")
 	}
 	data := &wipiFileStreamData{file: file}
 	if !output {
 		data.file = &xFileData{name: file.name, archiveName: file.archiveName, archiveEntry: file.archiveEntry,
-			mode: xFileRead, data: append([]byte(nil), file.data...), open: true}
+			mode: xFileRead, open: true, node: file.node}
 	}
-	file.mu.Unlock()
+	runtime.fileMu.Unlock()
 	object := &jvm.Object{ClassName: class, Fields: make(map[string]jvm.Value), Native: data}
 	if runtime.wipiFileStreams == nil {
 		runtime.wipiFileStreams = make(map[*jvm.Object]*xFileData)
@@ -119,10 +121,10 @@ func wipiStreamArgument(arguments []jvm.Value) (*jvm.Object, *wipiFileStreamData
 	return object, stream, nil
 }
 
-func (stream *wipiFileStreamData) checkOpen() error {
-	stream.file.mu.Lock()
+func (runtime *Runtime) wipiStreamOpen(stream *wipiFileStreamData) error {
+	runtime.fileMu.Lock()
 	open := stream.file.open
-	stream.file.mu.Unlock()
+	runtime.fileMu.Unlock()
 	if stream.closed || !open {
 		return newGuestException(jvm.IOExceptionClass, "file stream is closed")
 	}
@@ -142,16 +144,17 @@ func (runtime *Runtime) wipiStreamReadByte(_ *jvm.VM, arguments []jvm.Value) (jv
 	}
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	if err := stream.checkOpen(); err != nil {
+	if err := runtime.wipiStreamOpen(stream); err != nil {
 		return jvm.VoidValue(), err
 	}
 	file := stream.file
-	file.mu.Lock()
-	defer file.mu.Unlock()
-	if file.cursor >= len(file.data) {
+	runtime.fileMu.Lock()
+	defer runtime.fileMu.Unlock()
+	data := file.contents()
+	if file.cursor >= len(data) {
 		return jvm.IntValue(-1), nil
 	}
-	value := file.data[file.cursor]
+	value := data[file.cursor]
 	file.cursor++
 	return jvm.IntValue(int32(value)), nil
 }
@@ -163,7 +166,7 @@ func (runtime *Runtime) wipiStreamRead(vm *jvm.VM, arguments []jvm.Value) (jvm.V
 	}
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	if err := stream.checkOpen(); err != nil {
+	if err := runtime.wipiStreamOpen(stream); err != nil {
 		return jvm.VoidValue(), err
 	}
 	value, err := runtime.xFileRead(vm, wipiStreamFileArguments(arguments, stream.file))
@@ -182,7 +185,7 @@ func (runtime *Runtime) wipiStreamAvailable(vm *jvm.VM, arguments []jvm.Value) (
 	}
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	if err := stream.checkOpen(); err != nil {
+	if err := runtime.wipiStreamOpen(stream); err != nil {
 		return jvm.VoidValue(), err
 	}
 	return runtime.xFileAvailable(vm, wipiStreamFileArguments(arguments, stream.file))
@@ -199,12 +202,12 @@ func (runtime *Runtime) wipiStreamSkip(_ *jvm.VM, arguments []jvm.Value) (jvm.Va
 	}
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	if err := stream.checkOpen(); err != nil {
+	if err := runtime.wipiStreamOpen(stream); err != nil {
 		return jvm.VoidValue(), err
 	}
-	stream.file.mu.Lock()
-	defer stream.file.mu.Unlock()
-	skipped := min(max(count, 0), int64(max(len(stream.file.data)-stream.file.cursor, 0)))
+	runtime.fileMu.Lock()
+	defer runtime.fileMu.Unlock()
+	skipped := min(max(count, 0), int64(max(len(stream.file.contents())-stream.file.cursor, 0)))
 	stream.file.cursor += int(skipped)
 	return jvm.LongValue(skipped), nil
 }
@@ -217,9 +220,9 @@ func (runtime *Runtime) wipiStreamMark(_ *jvm.VM, arguments []jvm.Value) (jvm.Va
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	if !stream.closed {
-		stream.file.mu.Lock()
+		runtime.fileMu.Lock()
 		stream.mark = stream.file.cursor
-		stream.file.mu.Unlock()
+		runtime.fileMu.Unlock()
 	}
 	return jvm.VoidValue(), nil
 }
@@ -231,12 +234,12 @@ func (runtime *Runtime) wipiStreamReset(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	}
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	if err := stream.checkOpen(); err != nil {
+	if err := runtime.wipiStreamOpen(stream); err != nil {
 		return jvm.VoidValue(), err
 	}
-	stream.file.mu.Lock()
+	runtime.fileMu.Lock()
 	stream.file.cursor = stream.mark
-	stream.file.mu.Unlock()
+	runtime.fileMu.Unlock()
 	return jvm.VoidValue(), nil
 }
 
@@ -262,7 +265,7 @@ func (runtime *Runtime) wipiStreamWrite(vm *jvm.VM, arguments []jvm.Value) (jvm.
 	}
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	if err := stream.checkOpen(); err != nil {
+	if err := runtime.wipiStreamOpen(stream); err != nil {
 		return jvm.VoidValue(), err
 	}
 	if length, err := intArgument(arguments, 3); err == nil && length == 0 {
@@ -283,7 +286,7 @@ func (runtime *Runtime) wipiStreamFlush(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	}
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	if err := stream.checkOpen(); err != nil {
+	if err := runtime.wipiStreamOpen(stream); err != nil {
 		return jvm.VoidValue(), err
 	}
 	return jvm.VoidValue(), runtime.persistWIPIFileStream(stream.file)
@@ -309,25 +312,16 @@ func (runtime *Runtime) wipiStreamClose(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	return jvm.VoidValue(), nil
 }
 
-// Failed writes remain dirty so a retry or checkpoint cannot lose them.
+// persistWIPIFileStream stores the file an output stream writes, as every
+// handle on the path has left it. Unlike XFile's flush, the stream's flush and
+// close declare IOException, and a refusal is reported through it; the file
+// stays dirty, so a retry, a quick save or the end of the session cannot lose
+// it.
 func (runtime *Runtime) persistWIPIFileStream(file *xFileData) error {
-	file.mu.Lock()
-	defer file.mu.Unlock()
-	if !file.dirty {
-		return nil
-	}
-	store := runtime.saveStoreBoundary()
-	if store == nil {
-		return nil
-	}
-	key, err := xFileKey(file.name)
-	if err != nil {
-		return err
-	}
-	file.synced, err = runtime.storeSaveVersion(key, append([]byte(nil), file.data...))
-	if err != nil {
+	runtime.fileMu.Lock()
+	defer runtime.fileMu.Unlock()
+	if err := runtime.storeXFileLocked(file.node); err != nil {
 		return newGuestException(jvm.IOExceptionClass, err.Error())
 	}
-	file.dirty = false
 	return nil
 }

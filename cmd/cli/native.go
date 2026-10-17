@@ -32,10 +32,13 @@ type nativeRun struct {
 	ticks       int
 	// ticksChosen says the count came from -ticks rather than from the probe
 	// default, which is what decides whether a cheat session may run past it.
-	ticksChosen  bool
-	framePath    string
-	frameDir     string
-	play         bool
+	ticksChosen bool
+	framePath   string
+	frameDir    string
+	play        bool
+	// speed scales the title's clock the way the browser's speed control
+	// does; -speed turns -play on, so it is the wall clock it scales.
+	speed        float64
 	saveRoot     string
 	keyEvents    map[int][]int32
 	keyHold      int
@@ -55,6 +58,7 @@ type nativeRun struct {
 func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stderr io.Writer) int {
 	options := ktf.NativeSessionOptions{
 		Logger: run.logger,
+		Speed:  run.speed,
 		Width:  run.screenWidth,
 		Height: run.screenHeight,
 	}
@@ -118,7 +122,7 @@ func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stder
 		if !run.ticksChosen {
 			run.ticks = 1 << 30
 		}
-		keyCheatTable(session.CheatConsole(), run.archivePath)
+		attachCheatConsole(session.CheatConsole(), run.archivePath)
 		fmt.Fprintln(stdout, "cheat: attached. `help` for commands, ctrl-c to quit.")
 	}
 	ran := 0
@@ -319,7 +323,9 @@ func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stder
 			return 1
 		}
 	}
-	return 0
+	// A failed frame is the run's answer, so it is the exit code as well as
+	// the summary's tick_error, as it is for the other package; see exitForRun.
+	return exitForRun(tickError, ktf.ErrGuestExited)
 }
 
 // nativeSaveOwner reads the package far enough to name the directory its saves

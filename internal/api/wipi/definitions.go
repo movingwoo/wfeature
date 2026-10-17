@@ -58,8 +58,10 @@ func eventQueueDefinition() jvm.ClassDefinition {
 			{Name: "GAME_C", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(11)},
 			{Name: "GAME_D", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(12)},
 			{Name: "CLEAR", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(99)},
-			{Name: "SOFT1", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(21)},
-			{Name: "SOFT2", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(22)},
+			// The specification's values, and the codes the platform hands a
+			// Card for the two soft keys.
+			{Name: "SOFT1", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(90)},
+			{Name: "SOFT2", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(91)},
 			{Name: "KEY_NUM0", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(48)},
 			{Name: "KEY_NUM1", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(49)},
 			{Name: "KEY_NUM2", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(50)},
@@ -257,17 +259,27 @@ func cardDefinition() jvm.ClassDefinition {
 	}
 }
 
+// cardFieldKey is the name getfield and putfield give one of Card's four
+// bounds fields, which are declared on Card whatever subclass reads them.
+func cardFieldKey(name string) string {
+	return jvm.HeapField{Class: CardClass, Name: name, Descriptor: "I"}.Key()
+}
+
 func cardField(name string) jvm.ContextMethod {
 	return func(_ *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
 		object, err := receiver(arguments)
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
-		value, ok := object.Fields[name]
-		if !ok {
-			return jvm.IntValue(0), nil
+		if value, ok := object.FieldValue(cardFieldKey(name)); ok {
+			return value, nil
 		}
-		return value, nil
+		// A checkpoint taken before the bounds were keyed the way getfield
+		// keys them holds them under the bare field name.
+		if value, ok := object.FieldValue(name); ok {
+			return value, nil
+		}
+		return jvm.IntValue(0), nil
 	}
 }
 
@@ -338,13 +350,12 @@ func setCardBounds(call *jvm.Invocation, object *jvm.Object, x, y, w, h int32) e
 		w, _ = width.Int32()
 		h, _ = height.Int32()
 	}
-	if object.Fields == nil {
-		object.Fields = make(map[string]jvm.Value)
-	}
-	object.Fields["x"] = jvm.IntValue(x)
-	object.Fields["y"] = jvm.IntValue(y)
-	object.Fields["w"] = jvm.IntValue(w)
-	object.Fields["h"] = jvm.IntValue(h)
+	// The interpreter's own key and lock, so a subclass's getfield sees these
+	// and a title's other threads never meet an unguarded map write.
+	object.SetFieldValue(cardFieldKey("x"), jvm.IntValue(x))
+	object.SetFieldValue(cardFieldKey("y"), jvm.IntValue(y))
+	object.SetFieldValue(cardFieldKey("w"), jvm.IntValue(w))
+	object.SetFieldValue(cardFieldKey("h"), jvm.IntValue(h))
 	return nil
 }
 
@@ -482,9 +493,12 @@ func fileDefinition() jvm.ClassDefinition {
 		SuperName: "java/lang/Object",
 		Access:    jvm.AccessPublic,
 		Fields: []jvm.FieldDefinition{
+			// The specification's open modes: WRITE appends, WRITE_TRUNC
+			// empties the file on open.
 			{Name: "READ_ONLY", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(1)},
-			{Name: "WRITE_ONLY", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(2)},
-			{Name: "READ_WRITE", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(3)},
+			{Name: "WRITE", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(2)},
+			{Name: "WRITE_TRUNC", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(3)},
+			{Name: "READ_WRITE", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(4)},
 		},
 		Methods: []jvm.MethodDefinition{
 			{Name: "<init>", Descriptor: "(Ljava/lang/String;I)V", Access: publicNative},

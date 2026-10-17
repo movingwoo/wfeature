@@ -128,8 +128,11 @@ and LGT loaders would need to stop depending on the rule.
 ### Archive detection
 
 `detect.Archive` answers a platform or `unknown`. Detection reads entry names
-from the central directory after the shared directory is removed, matching
-case-insensitively, and asks in this order:
+from the central directory after the shared directory is removed and matches
+case-insensitively. The three named markers have no priority among themselves:
+entries are visited in central-directory order, and the first entry that wears
+any of them decides. Only when no entry does are the shapes below it asked, in
+table order:
 
 | Marker | Platform |
 | --- | --- |
@@ -405,6 +408,10 @@ frames it is sent and posts input back. The protocol is
   `Host` through leaves every session refused;
   [`running.md`](running.md#behind-a-reverse-proxy-on-a-unix-socket) has the
   configuration that works.
+- The HTTP routes follow the same rule: a request other than GET or HEAD whose
+  `Origin` names another host is refused with 403, so a page on another site
+  cannot submit to them. A request with no `Origin` (the `stop` command,
+  `curl`) is unaffected.
 
 ## Where a stopped game keeps its state
 
@@ -879,26 +886,26 @@ it through the same `internal/session` calls.
 Two things stand between the rule and a runtime, and every variant handles them
 the same way.
 
-**A write the game issued may still be in the Host.** On LGT a write waits in
-the buffer of its open file until the file is closed, and a native KTF package's
-write waits in the platform until a file is closed or a frame ends. A checkpoint
+**A write the game issued may still be in the Host.** On LGT and SKT a write
+waits in the buffer the handles on its path share until a flush or close, and a
+native KTF package's write waits in the platform until a file is closed or a
+frame ends. A checkpoint
 holds no save bytes, so such a write would be lost once the session that made it
 is gone. A quick save and a quick load therefore store it first, through a write
 whose failure is reported: when the store refuses, the step is refused with
 `backend.ErrCheckpointSaveWrite`, the game carries on, and the write is still
 pending in it. The descriptor KTF runtime stores every write before the call
 that made it returns, so it has nothing pending. Nothing the game has not issued
-is written: bytes a title put into a stream and did not flush stay in the
-stream.
+is written. A write through an output stream is a write to its file on every
+platform, so it is pending like any other.
 
-On LGT and SKT the buffer of an open file is the file as it was when the handle
-was opened plus what was written through it, and storing it stores all of it.
-When the file has changed since, through another handle or a removal, the Host
-would be putting the older part of the buffer over newer content, so the step is
-refused instead and names the file; the title's own close does that write and is
-the title's to make. The preflight also refuses independently dirty handles that
-share one normalized key, including an LGT `File` and `DataBase` that address
-the same container. LGT preloads any path lists pending writes need in an
+On SKT and LGT every handle on a path shares one buffer, so a quick step stores
+each path's current content once and has nothing older to refuse from another
+handle. LGT still refuses a buffer a `DataBase` stored a container behind under
+the same name, a buffer and a `DataBase` on one save that both hold a write, and
+a buffer whose name has no save key, because storing those would put older
+content over newer or write where no key is; the title's own close does that
+write and is the title's to make. LGT preloads any path lists pending writes need in an
 isolated view, so a failed checkpoint read cannot clear dirty buffers or poison
 the live session's caches. A prior guest read failure blocks a load while issued
 writes remain pending; with none pending, a load can still recover the session.
@@ -1037,6 +1044,52 @@ detailed traces, layouts and dated measurements.
 
 The backend boundaries share these services across the platforms. The contracts
 state caller responsibilities; they add no runtime layer.
+
+### One save rule
+
+Every file and record surface a title saves through — KTF's WIPI C file table,
+its Java `File` and the earlier native package's files; LGT's C file table,
+Java `File`, streams and `DataBase`; SKT's `XFile`, WIPI `File`, `com.xce.io`
+streams and record stores — keeps the same rule:
+
+1. **A write is seen at once.** A write — through a handle, or through an
+   output stream on one, which holds nothing back — or a truncation is what
+   every later read of that path in the session sees, through any handle, a
+   new open, an existence check, a size or a stream.
+2. **A write is stored by the close.** What a title wrote reaches the save
+   store no later than its flush or close of that file, and in any case when
+   the game ends, whether the title exits, fails, or the Host closes it.
+   Storing earlier is allowed and some surfaces do.
+3. **A truncation is stored at the open.** A truncating open empties the file
+   in the store at the open, as a handset's file system does.
+4. **Opening for writing creates the file.** Opening a missing file for
+   writing makes an empty file that every later read sees at once, stored by
+   the close as any write is; opening a missing file only for reading fails.
+5. **A removal lasts.** A removed file is absent to every later read and stays
+   absent in later sessions through the platform's removal list; writing the
+   path again brings it back.
+6. **A name is the same file on every host.** Names that differ only by case
+   are different files on a case-insensitive host file system as well;
+   [the save store](session.md#save-keys-on-disk) writes an upper-case letter
+   in a path as `#` and the letter, as a handset wrote it.
+7. **Nothing else saves.** No background, timer or lifecycle event writes a
+   save, and leaving a game in the background saves nothing. Saving is the
+   player's to do in the game. Quick save stores the title's pending writes
+   first and changes nothing else; a quick load changes no save.
+
+When a surface stores within rule 2 differs by platform:
+
+| Surface | Stored |
+| --- | --- |
+| KTF C table, KTF Java `File`, record stores of every platform | at every write |
+| KTF earlier native package | at the close, at the end of each frame, at the end of the game |
+| LGT C table, Java `File` and streams | at the close or flush, and at the end of the game |
+| SKT `XFile`, WIPI `File`, `com.xce.io` streams | at the close or flush, and at the end of the game |
+
+Two platform contracts stand beside the rule. A KTF C create-mode open of a
+database the archive itself ships does not empty it. The earlier KTF native
+package's platform names its files by lower-cased base name, so names that
+differ only by case are one file there by the platform's own contract.
 
 <a id="services-audio-time"></a>
 

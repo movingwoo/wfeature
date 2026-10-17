@@ -1,6 +1,9 @@
 package smaf
 
-import "sort"
+import (
+	"slices"
+	"sort"
+)
 
 // Translating SMAF into MIDI is not a relabelling. SMAF addresses up to four
 // channels per track and as many tracks as it likes, while MIDI has sixteen
@@ -52,6 +55,10 @@ type Event struct {
 const (
 	midiDrumChannel = 9
 	maxSMAFChannels = 64
+	// noMIDIChannel is what a logical channel past the sixteenth maps to when
+	// every MIDI channel is taken. Its events are dropped before they leave
+	// the track, so a malformed file never names a channel MIDI lacks.
+	noMIDIChannel = 0xff
 )
 
 // melodyAllocationOrder is every MIDI channel except the drum one, in the
@@ -270,6 +277,12 @@ func sequenceEvents(
 			events = budget.emit(events, tones.atmosphereNotes(time, uint32(duration), channel, note, velocity)...)
 
 		case SeqControlChange:
+			// MIDI data bytes are seven bits. A control carrying a wider one
+			// is ignored, as the PCM track's controls are, and the clock that
+			// already advanced keeps the rest of the timeline in place.
+			if event.Control > 0x7f || event.Value > 0x7f {
+				continue
+			}
 			channel := mapChannel(event.Channel)
 			tones.updateControl(channel, event.Control, event.Value)
 			events = budget.emit(events, Event{
@@ -298,6 +311,9 @@ func sequenceEvents(
 			events = budget.emit(events, tones.volumeEvents(time, mapChannel(event.Channel), event.Value)...)
 
 		case SeqPan:
+			if event.Value > 0x7f {
+				continue
+			}
 			channel := tones.realChannel(mapChannel(event.Channel))
 			events = budget.emit(events, Event{Time: time, Type: EventControlChange, Channel: channel, Control: 10, Value: event.Value})
 
@@ -315,6 +331,9 @@ func sequenceEvents(
 			}
 
 		case SeqModulation:
+			if event.Value > 0x7f {
+				continue
+			}
 			channel := tones.realChannel(mapChannel(event.Channel))
 			events = budget.emit(events, Event{Time: time, Type: EventControlChange, Channel: channel, Control: 1, Value: event.Value})
 
@@ -328,6 +347,7 @@ func sequenceEvents(
 		}
 	}
 	events = budget.emit(events, Event{Time: now, Type: EventEnd})
+	events = slices.DeleteFunc(events, func(event Event) bool { return event.Channel == noMIDIChannel })
 
 	nextOffset := channelOffset
 	if useChannelOffset {

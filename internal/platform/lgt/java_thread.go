@@ -116,7 +116,16 @@ func javaThreadConstructor(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	runtime := client.javaRuntimeState()
-	if len(runtime.threads) >= maxJavaThreads {
+	// A finished thread keeps its entry until the collector frees its object,
+	// and it is not one more thread running: a title that builds a thread per
+	// scene would otherwise stop at the seventeenth scene.
+	alive := 0
+	for _, thread := range runtime.threads {
+		if thread != nil && (thread.worker == nil || !thread.worker.done) {
+			alive++
+		}
+	}
+	if alive >= maxJavaThreads {
 		return 0, fmt.Errorf("a title started more than %d threads", maxJavaThreads)
 	}
 	runnable := arguments[0]
@@ -335,13 +344,52 @@ func javaCurrentThread(
 
 // startJavaWorker maps a private stack, derives the logical ARM thread, and
 // starts the goroutine that will enter `run` on its first slice.
+//
+// **A finished thread's stack is taken by the next thread to start.** Stacks
+// are mapped one after another and never unmapped, so mapping one per start
+// ran a title that starts a thread per scene out of address space after a few
+// thousand starts, and past maxJavaThreads stacks its checkpoints stopped
+// loading. A stack is free when no thread this platform still holds runs on
+// it; it is cleared on reuse, so the thread finds the zeros a fresh mapping
+// has rather than the words the last one left, which the collector would also
+// read as references.
 func (client *Client) startJavaWorker(thread *javaThread) (*javaWorker, error) {
 	runtime := client.javaRuntimeState()
-	base := javaThreadStackBase + uint32(runtime.threadStacks)*uint32(javaThreadStackSize)
-	if err := client.core.Memory().Map(base, javaThreadStackSize, armcore.PermissionReadWrite); err != nil {
-		return nil, fmt.Errorf("map an LGT guest thread stack: %w", err)
+	stack, reused := runtime.threadStacks, false
+	for index := 0; index < runtime.threadStacks && !reused; index++ {
+		base := javaThreadStackBase + uint32(index)*uint32(javaThreadStackSize)
+		taken := false
+		for _, worker := range runtime.workers {
+			if worker != nil && worker.stackBase == base {
+				taken = true
+				break
+			}
+		}
+		if !taken {
+			stack, reused = index, true
+		}
 	}
-	runtime.threadStacks++
+	base := javaThreadStackBase + uint32(stack)*uint32(javaThreadStackSize)
+	if reused {
+		// Only the pages the last thread touched hold anything; the rest
+		// still read as zero and are left uncommitted.
+		memory := client.core.Memory()
+		for _, region := range memory.CommittedRegions(armcore.PermissionReadWrite) {
+			start := max(uint64(region.Base), uint64(base))
+			end := min(uint64(region.Base)+region.Size, uint64(base)+javaThreadStackSize)
+			if start >= end {
+				continue
+			}
+			if err := memory.Write(uint32(start), make([]byte, end-start)); err != nil {
+				return nil, fmt.Errorf("clear an LGT guest thread stack: %w", err)
+			}
+		}
+	} else {
+		if err := client.core.Memory().Map(base, javaThreadStackSize, armcore.PermissionReadWrite); err != nil {
+			return nil, fmt.Errorf("map an LGT guest thread stack: %w", err)
+		}
+		runtime.threadStacks++
+	}
 	initial := armcore.NewContext()
 	initial.Registers[armcore.RegisterSP] = base + uint32(javaThreadStackSize)
 	worker := &javaWorker{

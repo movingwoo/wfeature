@@ -194,6 +194,9 @@ func (runtime *initializationRuntime) collectGuestObjects(extraRoots []uint32) (
 	for _, root := range extraRoots {
 		mark(root)
 	}
+	for _, root := range runtime.allocationRoots {
+		mark(root)
+	}
 
 	// Registers and thread-local words of every thread that can resume.
 	for _, thread := range runtime.collectionThreads() {
@@ -343,6 +346,19 @@ func (runtime *initializationRuntime) collectForAllocation() bool {
 	return stats.Freed > 0
 }
 
+// holdAllocationRoot makes an object the Host has just allocated a root until
+// the returned function runs. A String's character array is the case: its
+// address sits in a Go payload until the String is written, so a collection
+// the String's own allocation runs finds no guest word naming it, releases it,
+// and Go may then collect its binding before the String is ever scanned.
+func (runtime *initializationRuntime) holdAllocationRoot(address uint32) func() {
+	runtime.allocationRoots = append(runtime.allocationRoots, address)
+	depth := len(runtime.allocationRoots)
+	return func() {
+		runtime.allocationRoots = runtime.allocationRoots[:depth-1]
+	}
+}
+
 // referencedObjects reads one object's guest payload and answers the tracked
 // objects its words name — the guest-side edges of the graph, in the form Go
 // can hold. The lookup does not pin anything: pinning here is exactly what the
@@ -379,11 +395,17 @@ func (runtime *initializationRuntime) referencedObjects(index extentIndex, addre
 }
 
 // collectionThreads lists the ARM threads whose state can still name an
-// object: the Host's own service thread and every parked guest worker.
+// object: the Host's own service thread, the worker running its slice, and
+// every parked guest worker. The running worker is out of the parked list for
+// the length of its slice, and an allocation it makes can run a collection
+// while an object it holds is only in its registers.
 func (runtime *initializationRuntime) collectionThreads() []*armcore.Thread {
-	threads := make([]*armcore.Thread, 0, len(runtime.client.workers)+1)
+	threads := make([]*armcore.Thread, 0, len(runtime.client.workers)+2)
 	if runtime.client.thread != nil {
 		threads = append(threads, runtime.client.thread)
+	}
+	if worker := runtime.client.activeWorker; worker != nil && worker.armThread != nil {
+		threads = append(threads, worker.armThread)
 	}
 	for _, worker := range runtime.client.workers {
 		if worker != nil && worker.armThread != nil {

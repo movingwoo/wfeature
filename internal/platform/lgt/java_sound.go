@@ -98,6 +98,12 @@ func javaClipSetListener(
 	return 0, nil
 }
 
+// maxJavaClipBytes bounds what putData can accumulate in one Java clip, as
+// maxClipBytes does for a C one. It is the largest byte array a title can
+// build here, which is also the most `setBuffer` can hand a clip in one go, so
+// putData cannot build a clip that setBuffer could not.
+const maxJavaClipBytes = maxJavaArrayLength
+
 // javaClipPutData is `BaseClip.putData(byte[] buf, int off, int len)`: the
 // bytes a title appends to a clip it built empty. It answers how many were
 // taken, which is what the specification's `int` is.
@@ -123,6 +129,12 @@ func javaClipPutData(
 	}
 	if err := client.syncJavaMedia(client.clock.now()); err != nil {
 		return 0, err
+	}
+	// A clip that is full takes what fits and answers how much that was,
+	// which is what the C media slot does with the same call.
+	room := max(maxJavaClipBytes-len(clip.data), 0)
+	if uint64(length) > uint64(room) {
+		length = uint32(room)
 	}
 	clip.data = append(clip.data, data[offset:offset+length]...)
 	client.releaseClipSound(clip)

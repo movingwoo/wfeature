@@ -156,12 +156,9 @@ func setVector3DFrom(object *jvm.Object, arguments []jvm.Value, start int) error
 }
 
 func setVector3D(object *jvm.Object, x, y, z int32) error {
-	if object.Fields == nil {
-		object.Fields = make(map[string]jvm.Value)
-	}
-	object.Fields["x"] = jvm.IntValue(x)
-	object.Fields["y"] = jvm.IntValue(y)
-	object.Fields["z"] = jvm.IntValue(z)
+	setIntField(object, vector3DClass, "x", x)
+	setIntField(object, vector3DClass, "y", y)
+	setIntField(object, vector3DClass, "z", z)
 	return nil
 }
 
@@ -169,17 +166,24 @@ func vector3DOf(object *jvm.Object) (x, y, z int32) {
 	if object == nil {
 		return 0, 0, 0
 	}
-	x, _ = intField(object, "x")
-	y, _ = intField(object, "y")
-	z, _ = intField(object, "z")
+	x, _ = intField(object, vector3DClass, "x")
+	y, _ = intField(object, vector3DClass, "y")
+	z, _ = intField(object, vector3DClass, "z")
 	return x, y, z
 }
 
-func intField(object *jvm.Object, name string) (int32, bool) {
-	if object == nil || object.Fields == nil {
+// The fields are read and written under the key and the lock getfield and
+// putfield use, because the title reaches them that way. A checkpoint taken
+// before that holds them under the bare field name, which a read still
+// accepts when the object has nothing under the declared one.
+func intField(object *jvm.Object, class, name string) (int32, bool) {
+	if object == nil {
 		return 0, false
 	}
-	value, ok := object.Fields[name]
+	value, ok := object.FieldValue(jvm.HeapField{Class: class, Name: name, Descriptor: "I"}.Key())
+	if !ok {
+		value, ok = object.FieldValue(name)
+	}
 	if !ok {
 		return 0, false
 	}
@@ -188,6 +192,10 @@ func intField(object *jvm.Object, name string) (int32, bool) {
 		return 0, false
 	}
 	return number, true
+}
+
+func setIntField(object *jvm.Object, class, name string, value int32) {
+	object.SetFieldValue(jvm.HeapField{Class: class, Name: name, Descriptor: "I"}.Key(), jvm.IntValue(value))
 }
 
 // A new transform is the identity, which is what a title that builds a camera
@@ -299,17 +307,14 @@ func affineOf(object *jvm.Object) ([12]int32, error) {
 	}
 	var cells [12]int32
 	for index, name := range affine3DCells {
-		cells[index], _ = intField(object, name)
+		cells[index], _ = intField(object, affine3DClass, name)
 	}
 	return cells, nil
 }
 
 func writeAffine3D(object *jvm.Object, cells [12]int32) {
-	if object.Fields == nil {
-		object.Fields = make(map[string]jvm.Value)
-	}
 	for index, name := range affine3DCells {
-		object.Fields[name] = jvm.IntValue(cells[index])
+		setIntField(object, affine3DClass, name, cells[index])
 	}
 }
 

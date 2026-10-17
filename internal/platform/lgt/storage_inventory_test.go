@@ -100,30 +100,28 @@ func TestStorageInventoryCountsAnAuthoredSession(t *testing.T) {
 	callSlot(t, client, slotFsClose, handle)
 	boundary("the file closed", map[int]int{storageLedgersLoaded: 2})
 
-	// A reader and a writer on one file. The reader is not stale while the
-	// writer only holds its change, and is once the writer has stored it.
+	// A reader and a writer on one file share one buffer: the write is pending
+	// once, and once the writer has stored it the reader holds what the store
+	// does.
 	reader, writer := open(save, fileOpenReadOnly), open(save, fileOpenReadWrite)
 	boundary("two handles on one file", map[int]int{storageHandles: 2, storageWritable: 1, storageSharedKeys: 1, storageLedgersLoaded: 2})
 	callSlot(t, client, slotFsWrite, writer, text("LATER"), 5)
 	boundary("one of them written", map[int]int{
 		storageHandles: 2, storageWritable: 1, storageDirty: 1, storageStale: 1, storageSharedKeys: 1, storageLedgersLoaded: 2})
 	callSlot(t, client, slotFsClose, writer)
-	boundary("the writer closed over the reader", map[int]int{
-		storageHandles: 1, storageStale: 1, storageStaleClean: 1, storageLedgersLoaded: 2})
+	boundary("the writer closed beside the reader", map[int]int{storageHandles: 1, storageLedgersLoaded: 2})
 
-	// An open that truncates stores nothing until it is written to, so the
-	// file under it still holds its bytes.
+	// An open that truncates empties the file in the store at the open, and
+	// the reader's buffer with it.
 	truncating := open(save, fileOpenWriteTruncate)
 	boundary("a truncating open that has not written", map[int]int{
-		storageHandles: 2, storageWritable: 1, storageStale: 2, storageStaleClean: 2, storageEmptyOverContent: 1,
-		storageSharedKeys: 1, storageLedgersLoaded: 2})
+		storageHandles: 2, storageWritable: 1, storageSharedKeys: 1, storageLedgersLoaded: 2})
 
 	// Removed while it is open: the path reads as nothing, which is what the
-	// empty handle holds and not what the reader does.
+	// buffer both handles share holds.
 	callSlot(t, client, slotFsRemove, save)
 	boundary("the path removed under both", map[int]int{
-		storageHandles: 2, storageWritable: 1, storageStale: 1, storageStaleClean: 1, storageRemovedOpen: 2,
-		storageSharedKeys: 1, storageLedgersLoaded: 2})
+		storageHandles: 2, storageWritable: 1, storageRemovedOpen: 1, storageSharedKeys: 1, storageLedgersLoaded: 2})
 	callSlot(t, client, slotFsClose, reader)
 	callSlot(t, client, slotFsClose, truncating)
 	boundary("both closed", map[int]int{storageLedgersLoaded: 2})
@@ -137,13 +135,12 @@ func TestStorageInventoryCountsAnAuthoredSession(t *testing.T) {
 	callSlot(t, client, slotFsClose, unkeyed)
 	boundary("it closed", map[int]int{storageLedgersLoaded: 2})
 
-	// Two spellings a case-folding filesystem keeps as one file are one key.
+	// Two names that differ only by case are two files, on two keys.
 	lower, upper := open(text("twice.dat"), fileOpenReadWrite), open(text("TWICE.dat"), fileOpenReadWrite)
 	callSlot(t, client, slotFsWrite, lower, written, 4)
 	callSlot(t, client, slotFsWrite, upper, written, 6)
-	boundary("two written handles on one key", map[int]int{
-		storageHandles: 2, storageWritable: 2, storageDirty: 2, storageStale: 2, storageSharedKeys: 1,
-		storageSharedDirtyKeys: 1, storageLedgersLoaded: 2})
+	boundary("two written handles on two keys", map[int]int{
+		storageHandles: 2, storageWritable: 2, storageDirty: 2, storageStale: 2, storageLedgersLoaded: 2})
 	callSlot(t, client, slotFsClose, lower)
 	callSlot(t, client, slotFsClose, upper)
 	boundary("both of those closed", map[int]int{storageLedgersLoaded: 2})
@@ -156,13 +153,13 @@ func TestStorageInventoryCountsAnAuthoredSession(t *testing.T) {
 
 	for column, want := range map[int][]string{
 		storageDirty:            {"save.dat", `dir\name.dat`, "twice.dat", "TWICE.dat"},
-		storageStaleClean:       {"save.dat"},
-		storageEmptyOverContent: {"save.dat"},
+		storageStaleClean:       nil,
+		storageEmptyOverContent: nil,
 		storageNoSaveKey:        {`dir\name.dat`},
 		storageDirtyNoSaveKey:   {`dir\name.dat`},
 		storageRemovedOpen:      {"save.dat"},
-		storageSharedKeys:       {"key:fs/save.dat", "key:fs/twice.dat"},
-		storageSharedDirtyKeys:  {"key:fs/twice.dat"},
+		storageSharedKeys:       {"key:fs/save.dat"},
+		storageSharedDirtyKeys:  nil,
 		storageStaleLedgers:     {fileRemovedKey},
 	} {
 		got := slices.Clone(notes[column])
@@ -183,7 +180,7 @@ func TestStorageInventoryCountsAnAuthoredSession(t *testing.T) {
 	if got, want := record.Groups["pending"], (storageinventory.GroupRecord{Boundaries: 5, Runs: 4, LongestRun: 2}); got != want {
 		t.Errorf("pending = %+v, want %+v", got, want)
 	}
-	if got, want := record.Groups["stale"], (storageinventory.GroupRecord{Boundaries: 4, Runs: 2, LongestRun: 3}); got != want {
+	if got, want := record.Groups["stale"], (storageinventory.GroupRecord{Boundaries: 1, Runs: 1, LongestRun: 1}); got != want {
 		t.Errorf("stale = %+v, want %+v", got, want)
 	}
 	if record.Max["handles"] != 2 || record.BoundariesWith["handles"] != 9 || record.Max["dirty"] != 2 || record.BoundariesWith["dirty"] != 5 {
@@ -218,8 +215,8 @@ func TestStorageInventoryCountsJavaStorage(t *testing.T) {
 		wantStorageInventory(t, step, got, want)
 	}
 
-	// One name opened twice is two objects with a record list each, and the
-	// one that did not make a change no longer holds what the store does.
+	// One name opened twice is two objects on one set of records, so the one
+	// that did not make a change holds what the store does too.
 	first := openFixtureDatabase(t, client, "save", 64)
 	insertFixtureRecord(t, client, first, []byte("alpha"))
 	boundary("an open database", map[int]int{storageDatabases: 1, storageLedgersLoaded: 2})
@@ -227,10 +224,10 @@ func TestStorageInventoryCountsJavaStorage(t *testing.T) {
 	boundary("the same database opened twice", map[int]int{storageDatabases: 2, storageSharedDatabases: 1, storageLedgersLoaded: 2})
 	insertFixtureRecord(t, client, second, []byte("beta"))
 	boundary("a record inserted through the second", map[int]int{
-		storageDatabases: 2, storageSharedDatabases: 1, storageStaleDatabases: 1, storageLedgersLoaded: 2})
+		storageDatabases: 2, storageSharedDatabases: 1, storageLedgersLoaded: 2})
 
 	// Deleted by name while both are open: the container reads as nothing,
-	// and both objects still hold records.
+	// and so do the records both objects share.
 	name, err := client.newJavaString("save")
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +236,7 @@ func TestStorageInventoryCountsJavaStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	boundary("the database deleted under both", map[int]int{
-		storageDatabases: 2, storageSharedDatabases: 1, storageStaleDatabases: 2, storageLedgersLoaded: 2})
+		storageDatabases: 2, storageSharedDatabases: 1, storageLedgersLoaded: 2})
 	for _, object := range []uint32{first, second} {
 		if _, err := javaCloseDataBase(client, nil, nil, []uint32{object}); err != nil {
 			t.Fatal(err)
@@ -247,8 +244,8 @@ func TestStorageInventoryCountsJavaStorage(t *testing.T) {
 	}
 	boundary("both closed", map[int]int{storageLedgersLoaded: 2})
 
-	// A stream opened on a File holds what it is written until it is flushed,
-	// and only then does the file hold a write of its own.
+	// A stream opened on a File writes the file as it is written to, and its
+	// flush stores the file.
 	path, err := client.newJavaString("stream.dat")
 	if err != nil {
 		t.Fatal(err)
@@ -267,12 +264,12 @@ func TestStorageInventoryCountsJavaStorage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	boundary("bytes held by the stream", map[int]int{storageHandles: 1, storageWritable: 1, storageSinkFiles: 1, storageLedgersLoaded: 2})
+	boundary("bytes written through the stream", map[int]int{
+		storageHandles: 1, storageWritable: 1, storageDirty: 1, storageStale: 1, storageLedgersLoaded: 2})
 	if _, err := javaByteSinkFlush(client, nil, nil, []uint32{sink}); err != nil {
 		t.Fatal(err)
 	}
-	boundary("the stream flushed into the file", map[int]int{
-		storageHandles: 1, storageWritable: 1, storageDirty: 1, storageStale: 1, storageLedgersLoaded: 2})
+	boundary("the stream flushed", map[int]int{storageHandles: 1, storageWritable: 1, storageLedgersLoaded: 2})
 
 	if _, err := javaFileOpen(client, nil, nil, []uint32{reading, path, 1, 1}); err != nil {
 		t.Fatal(err)
@@ -281,9 +278,10 @@ func TestStorageInventoryCountsJavaStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The second File reads the buffer the first one wrote, which the flush
+	// stored.
 	boundary("an input stream on a second File", map[int]int{
-		storageHandles: 2, storageWritable: 1, storageDirty: 1, storageStale: 1, storageSharedKeys: 1,
-		storageFileStreams: 1, storageLedgersLoaded: 2})
+		storageHandles: 2, storageWritable: 1, storageSharedKeys: 1, storageFileStreams: 1, storageLedgersLoaded: 2})
 	if _, err := javaStreamClose(client, nil, nil, []uint32{stream}); err != nil {
 		t.Fatal(err)
 	}
@@ -294,11 +292,14 @@ func TestStorageInventoryCountsJavaStorage(t *testing.T) {
 	}
 	boundary("every File closed", map[int]int{storageLedgersLoaded: 2})
 
-	for column, want := range map[int]string{
-		storageStaleDatabases: "save", storageSharedDatabases: "save", storageSinkFiles: "stream.dat", storageFileStreams: "stream.dat",
-	} {
+	for column, want := range map[int]string{storageSharedDatabases: "save", storageFileStreams: "stream.dat"} {
 		if !slices.Contains(notes[column], want) {
 			t.Errorf("%s was noted on %q, want %q among them", storageInventoryNames[column], notes[column], want)
+		}
+	}
+	for _, column := range []int{storageStaleDatabases, storageSinkFiles} {
+		if len(notes[column]) != 0 {
+			t.Errorf("%s was noted on %q, want nothing", storageInventoryNames[column], notes[column])
 		}
 	}
 }

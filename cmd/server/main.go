@@ -462,6 +462,13 @@ func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger, 
 	// stops accepting and drains rather than dropping its connections.
 	signalled, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// A log nobody reads any more must not end the drain. The Android app
+	// stops the server with Process.destroy(), which sends SIGTERM and then
+	// closes the pipe the server logs to, and a Go program that writes to a
+	// broken standard error is ended by SIGPIPE: "shutting down" was enough
+	// to lose the games' last saves. Ignored, the write fails with EPIPE and
+	// the drain goes on.
+	signal.Ignore(syscall.SIGPIPE)
 
 	failed := make(chan error, 1)
 	go func() { failed <- httpServer.Serve(listener) }()

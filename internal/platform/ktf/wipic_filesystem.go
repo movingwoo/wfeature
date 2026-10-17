@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // **This file is WIPI C table 7, which is the filesystem.** Every slot in it
@@ -161,6 +162,10 @@ func (runtime *initializationRuntime) handleWIPICFileCall(thread *armcore.Thread
 		if err != nil {
 			return 0, fmt.Errorf("read KTF file name: %w", err)
 		}
+		if !cFileNameKeyed(name) {
+			// Nothing can be stored under it, so nothing is there.
+			return wipicErrorNotFound, nil
+		}
 		_, exists := runtime.cFiles[name]
 		_, seeded := runtime.databaseSeed(name)
 		made := runtime.createdDirectories()[name]
@@ -205,6 +210,11 @@ func (runtime *initializationRuntime) wipicFileDelete(thread *armcore.Thread) (u
 		// own lists: the deletion list answers as a seed as soon as anything
 		// has been deleted, so the removal would go through and wipe it, and
 		// every database the title had deleted would be back on the next open.
+		return wipicErrorInvalid, nil
+	}
+	if !storableName(cFileScope, name) {
+		// The removal list could not carry it: "a\nb" would come back as the
+		// two names a and b, and hide both.
 		return wipicErrorInvalid, nil
 	}
 	_, live := runtime.cFiles[name]
@@ -291,6 +301,12 @@ func (runtime *initializationRuntime) wipicFileRename(thread *armcore.Thread) (u
 	}
 	if oldName == "" || newName == "" {
 		return wipicErrorGeneric, nil
+	}
+	if !storableName(cFileScope, oldName) || !storableName(cFileScope, newName) {
+		// A name that is not a key of its own, or that the removal list could
+		// not carry. Refused before either name is looked up: a name that
+		// fails its key fails the read, and that read failure stays.
+		return wipicErrorInvalid, nil
 	}
 	if oldName == newName {
 		// The same file under the same name: there is nothing to move, and
@@ -413,7 +429,9 @@ func (runtime *initializationRuntime) wipicMakeDirectory(thread *armcore.Thread)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF directory name: %w", err)
 	}
-	if name == "" {
+	if name == "" || !storableName(cFileScope, name) {
+		// The list of made names is read back a line at a time, and a name
+		// that normalizes to the scope itself is no name at all.
 		return wipicErrorBadParam, nil
 	}
 	if runtime.createdDirectories()[name] {
@@ -502,7 +520,7 @@ func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uin
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
 	runtime.countDiagnostic(fmt.Sprintf("cdb open %s mode %d", name, int32(mode)))
-	if reservedStorageName(cFileScope, name) {
+	if reservedStorageName(cFileScope, name) || !cFileNameKeyed(name) {
 		return wipicErrorInvalid, nil
 	}
 	store, exists := runtime.cFiles[name]
@@ -527,7 +545,7 @@ func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uin
 	if int32(mode) == 4 && !hasPackaged {
 		staged.data = nil
 	}
-	if runtime.nextCDatabaseHandle >= maxCFileHandles {
+	if !runtime.cFileHandleFree() {
 		return wipicErrorInvalid, nil
 	}
 	if (!exists && !hasSeed) || (int32(mode) == 4 && !hasPackaged) || runtime.removedDatabases()[name] {
@@ -552,13 +570,59 @@ func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uin
 	if runtime.cFileHandles == nil {
 		runtime.cFileHandles = make(map[uint32]*runtimeCFileHandle)
 	}
-	if runtime.nextCDatabaseHandle >= maxCFileHandles {
+	handle, ok := nextTableHandle(&runtime.nextCDatabaseHandle, maxCFileHandles, cFileHandleBit, func(handle uint32) bool {
+		_, open := runtime.cFileHandles[handle]
+		return open
+	})
+	if !ok {
 		return wipicErrorInvalid, nil
 	}
-	runtime.nextCDatabaseHandle++
-	handle := cFileHandleBit | runtime.nextCDatabaseHandle
 	runtime.cFileHandles[handle] = &runtimeCFileHandle{store: store}
 	return handle, nil
+}
+
+// cFileHandleFree reports whether an open could be given a handle, which is
+// asked before the open stores anything.
+func (runtime *initializationRuntime) cFileHandleFree() bool {
+	return runtime.nextCDatabaseHandle < maxCFileHandles || len(runtime.cFileHandles) < maxCFileHandles
+}
+
+// nextTableHandle issues the next handle of a table whose handles are a tag
+// and a number. Numbers come from the counter while it lasts, which is every
+// handle a session has ever been given until now; once it reaches the limit a
+// closed number is reused, lowest first, the way a handset hands a closed
+// descriptor out again. The counter used to be the whole rule, so a session's
+// open after its 4095th failed however many had been closed — the open a
+// title makes to write its save among them.
+func nextTableHandle(counter *uint32, limit, tag uint32, open func(uint32) bool) (uint32, bool) {
+	if *counter < limit {
+		*counter++
+		return tag | *counter, true
+	}
+	for number := uint32(1); number <= limit; number++ {
+		if !open(tag | number) {
+			return tag | number, true
+		}
+	}
+	return 0, false
+}
+
+// cFileNameKeyed reports whether a name is a save key of its own under this
+// table's scope. readFileName drops only leading separators, so "/" arrives
+// as nothing and "." and "./" survive it; NormalizeSaveKey then collapses all
+// three onto the scope itself, and the store wrote a regular file named "db"
+// where the directory belongs, after which every save of the title failed. A
+// name with ".." fails its key, and that failure on a read stays for the rest
+// of the session. Line breaks are left alone here, unlike storableName: they
+// cannot corrupt a key, a save may already be stored under such a name, and
+// only the slots that write a name into a list refuse them.
+func cFileNameKeyed(name string) bool {
+	key, err := backend.NormalizeSaveKey(cFileScope + "/" + name)
+	if err != nil {
+		return false
+	}
+	rest, under := strings.CutPrefix(key, cFileScope+"/")
+	return under && rest != ""
 }
 
 func (runtime *initializationRuntime) wipicFileHandle(thread *armcore.Thread) (*runtimeCFileHandle, error) {
@@ -657,13 +721,19 @@ func (runtime *initializationRuntime) wipicFileStatByName(thread *armcore.Thread
 	if err != nil {
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
+	if !cFileNameKeyed(name) {
+		runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> missing", name))
+		return wipicErrorBadParam, nil
+	}
 	size := uint32(0)
 	if store, ok := runtime.cFiles[name]; ok {
 		size = uint32(len(store.data))
-	} else if saved, ok := runtime.loadSave("db/" + name); ok {
-		size = uint32(len(saved))
-	} else if packaged, ok := runtime.guestFile(name); ok {
-		size = uint32(len(packaged))
+	} else if seed, ok := runtime.databaseSeed(name); ok {
+		// The save, then the packaged copy, as before — through the removal
+		// list, which MC_fsIsExist and an open consult as well. A removed
+		// name leaves an empty entry under its key, because the store cannot
+		// delete, and read directly that was a file of zero bytes.
+		size = uint32(len(seed))
 	} else if runtime.createdDirectories()[name] {
 		// A made directory holds no bytes, so the length it reports is zero;
 		// what matters to the caller is that the call succeeded at all.

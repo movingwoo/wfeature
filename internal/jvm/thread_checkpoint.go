@@ -152,15 +152,13 @@ func (vm *VM) parkThread(state *execution) error {
 	}
 }
 
+// sleepCheckpointThread throws for an interrupt that came before the sleep.
+// Consuming it takes the wake token interrupt posted as well as the flag, or
+// the next sleep or wait would find the token and throw for it a second time.
 func (vm *VM) sleepCheckpointThread(execution *execution, duration time.Duration) error {
-	state := vm.threadState(execution.thread)
-	state.mu.Lock()
-	if state.interrupted {
-		state.interrupted = false
-		state.mu.Unlock()
+	if vm.consumeThreadInterrupt(execution.thread) {
 		return guestException("java/lang/InterruptedException", "thread interrupted")
 	}
-	state.mu.Unlock()
 	return vm.waitCheckpointSleep(execution, duration)
 }
 

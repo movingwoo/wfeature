@@ -339,13 +339,21 @@ func (vm *VM) PrepareThreadCheckpoint(saved ThreadCheckpointState, codec HeapCod
 		return nil, nil, err
 	}
 	prepared := &PreparedThreads{vm: vm}
+	// A checkpoint from a build that locked a Class object's own monitor
+	// names it by object; it is the class monitor now, and two records that
+	// land on one monitor held two locks the language says are one.
+	restored := make(map[*monitor]bool, len(saved.Monitors))
 	for i, record := range saved.Monitors {
 		var m *monitor
 		if record.Object == 0 {
 			m = vm.classMonitor(record.Class)
 		} else {
-			m = &roots[len(saved.Heap.Roots)+i].monitor
+			m = vm.monitorOf(roots[len(saved.Heap.Roots)+i])
 		}
+		if restored[m] {
+			return nil, nil, fmt.Errorf("JVM checkpoint holds one class monitor twice")
+		}
+		restored[m] = true
 		m.owner, m.depth = record.Owner, record.Depth
 	}
 	for _, record := range saved.Threads {
@@ -375,9 +383,10 @@ func (vm *VM) PrepareThreadCheckpoint(saved ThreadCheckpointState, codec HeapCod
 					if wait.notified {
 						close(wait.notification)
 					} else if !wait.reenter {
-						wait.object.monitor.waiters = append(wait.object.monitor.waiters, wait)
+						m := vm.monitorOf(wait.object)
+						m.waiters = append(m.waiters, wait)
 					}
-					if wait.object.monitor.owner == e.ID {
+					if vm.monitorOf(wait.object).owner == e.ID {
 						return nil, nil, fmt.Errorf("JVM checkpoint waiting thread still owns its released monitor")
 					}
 				}

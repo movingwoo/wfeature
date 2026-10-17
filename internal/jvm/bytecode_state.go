@@ -349,7 +349,7 @@ func (vm *VM) validateBytecodeMonitors(frames []*frame, owner uint64, released .
 		}
 	}
 	for m, depth := range depths {
-		if len(released) > 0 && released[0] != nil && released[0].kind == "wait" && m == &released[0].object.monitor {
+		if len(released) > 0 && released[0] != nil && released[0].kind == "wait" && m == vm.monitorOf(released[0].object) {
 			if released[0].depth < depth {
 				return fmt.Errorf("JVM bytecode checkpoint released monitor depth is too small")
 			}
@@ -372,7 +372,7 @@ func (vm *VM) bytecodeFrameMonitor(f *frame) *monitor {
 	if f.method.AccessFlags&0x0008 != 0 {
 		return vm.classMonitor(f.class.Name)
 	}
-	return &f.syncReceiver.monitor
+	return vm.monitorOf(f.syncReceiver)
 }
 
 func bytecodePendingReturn(class *classfile.Class, code *classfile.Code, pc int) (Type, error) {

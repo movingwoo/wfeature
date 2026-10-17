@@ -205,8 +205,9 @@ func TestLGTSaveCletKeysWriteAndReadTheSave(t *testing.T) {
 }
 
 // A write through a handle that is still open is in the platform's buffer for
-// that handle and nowhere else: the store has the save as it was until the
-// handle is closed, by the title or by the session ending.
+// that handle: the store has the save as it was until the handle is closed, by
+// the title or by the session ending. Another open of the path reads what is
+// waiting in that buffer, as a handset's write-through file would.
 func TestLGTSaveCletHoldLeavesTheWritePending(t *testing.T) {
 	archive := lgtSaveArchive(t)
 	const key = testfixture.LGTSaveFileKey
@@ -225,14 +226,14 @@ func TestLGTSaveCletHoldLeavesTheWritePending(t *testing.T) {
 	t.Run("finish", func(t *testing.T) {
 		s, store := held(t)
 		// A second hold is ignored while a handle is kept, and a read through
-		// another handle sees what the store has.
+		// another handle sees what is waiting in the kept one.
 		handle := lgtSaveWord(t, s, testfixture.LGTSaveHeld)
 		lgtSaveAct(t, s, 0x77770007, testfixture.LGTSaveKeyHold)
 		lgtSaveAct(t, s, 0x77770007, testfixture.LGTSaveKeyTruncate)
 		if lgtSaveWord(t, s, testfixture.LGTSaveHeld) != handle {
 			t.Fatal("a second hold replaced the handle that was kept")
 		}
-		if seen := lgtSaveRead(t, s); seen != lgtSaveFound(0x11110001, 0x11110001) {
+		if seen := lgtSaveRead(t, s); seen != lgtSaveFound(0x22220002, 0x11110001) {
 			t.Fatalf("while a write is pending a read answered %+v", seen)
 		}
 		lgtSaveAct(t, s, 0x33330003, testfixture.LGTSaveKeyFinish)
@@ -261,9 +262,11 @@ func TestLGTSaveCletHoldLeavesTheWritePending(t *testing.T) {
 	})
 }
 
-// A handle opened with truncation holds nothing and has written nothing, so
-// the stored save is untouched until something is written through it.
-func TestLGTSaveCletTruncateLeavesTheSaveUntilItIsFinished(t *testing.T) {
+// A handle opened with truncation empties the stored save at the open, before
+// anything is written through it: another open of the path reads the empty
+// file the truncation made, and a session that ends before the title writes
+// leaves the save empty, which is how a title clears a slot.
+func TestLGTSaveCletTruncateEmptiesTheSaveAtTheOpen(t *testing.T) {
 	archive := lgtSaveArchive(t)
 	const key = testfixture.LGTSaveFileKey
 	truncated := func(t *testing.T) (*session.Session, *backend.MemorySaveStore) {
@@ -274,9 +277,9 @@ func TestLGTSaveCletTruncateLeavesTheSaveUntilItIsFinished(t *testing.T) {
 		if lgtSaveWord(t, s, testfixture.LGTSaveHeld) == 0 {
 			t.Fatal("truncate kept no handle")
 		}
-		lgtSaveWantStored(t, store, key, lgtSaveParts(0x11110001, 0x11110001), "truncate")
-		if seen := lgtSaveRead(t, s); seen != lgtSaveFound(0x11110001, 0x11110001) {
-			t.Fatalf("while a truncation is pending a read answered %+v", seen)
+		lgtSaveWantStored(t, store, key, []byte{}, "truncate")
+		if seen := lgtSaveRead(t, s); seen != (lgtSaveSeen{Status: testfixture.LGTSaveStatusFound}) {
+			t.Fatalf("after the truncating open a read answered %+v", seen)
 		}
 		return s, store
 	}
@@ -295,7 +298,7 @@ func TestLGTSaveCletTruncateLeavesTheSaveUntilItIsFinished(t *testing.T) {
 	t.Run("session close", func(t *testing.T) {
 		s, store := truncated(t)
 		s.Close()
-		lgtSaveWantStored(t, store, key, lgtSaveParts(0x11110001, 0x11110001), "close")
+		lgtSaveWantStored(t, store, key, []byte{}, "close")
 	})
 }
 

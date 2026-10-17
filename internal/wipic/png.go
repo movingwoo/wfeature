@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"encoding/binary"
+	"fmt"
 	"hash/adler32"
 	"hash/crc32"
 	stdimage "image"
@@ -11,6 +12,9 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"math"
+
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // A title edits the PNG it is about to decode, and does not fix the checksum.
@@ -116,6 +120,7 @@ func RepairPNGPixelChecksum(data []byte) ([]byte, bool) {
 	// concatenation, so a trailer can straddle two of them.
 	type span struct{ at, length int }
 	var spans []span
+	var header []byte
 	total := 0
 	for at := pngHeader; at+2*pngChunkTag+pngChunkTag <= len(data); {
 		length := binary.BigEndian.Uint32(data[at:])
@@ -126,9 +131,14 @@ func RepairPNGPixelChecksum(data []byte) ([]byte, bool) {
 		if end > len(data) || end < at {
 			return nil, false
 		}
-		if string(data[at+pngChunkTag:at+2*pngChunkTag]) == "IDAT" {
+		switch string(data[at+pngChunkTag : at+2*pngChunkTag]) {
+		case "IDAT":
 			spans = append(spans, span{at: at + 2*pngChunkTag, length: int(length)})
 			total += int(length)
+		case "IHDR":
+			if header == nil {
+				header = data[at+2*pngChunkTag : end-pngChunkTag]
+			}
 		}
 		at = end
 	}
@@ -137,17 +147,26 @@ func RepairPNGPixelChecksum(data []byte) ([]byte, bool) {
 	if total < 6 {
 		return nil, false
 	}
+	// The header says how many bytes the pixels inflate to. A stream that
+	// runs past that is refused by the decoder whatever its trailer says, so
+	// it is not read further — deflate expands a thousandfold, and a few
+	// megabytes of it would otherwise inflate to gigabytes here.
+	limit := pngPixelBytes(header)
+	if limit == 0 {
+		return nil, false
+	}
 	stream := make([]byte, 0, total)
 	for _, part := range spans {
 		stream = append(stream, data[part.at:part.at+part.length]...)
 	}
 	// flate reads the deflate data on its own, without the trailer the zlib
 	// reader would check — which is the whole point of doing it here.
-	inflated, err := io.ReadAll(flate.NewReader(bytes.NewReader(stream[2 : len(stream)-4])))
-	if err != nil {
+	hash := adler32.New()
+	inflated, err := io.Copy(hash, io.LimitReader(flate.NewReader(bytes.NewReader(stream[2:len(stream)-4])), int64(limit)+1))
+	if err != nil || uint64(inflated) > limit {
 		return nil, false
 	}
-	computed := adler32.Checksum(inflated)
+	computed := hash.Sum32()
 	if binary.BigEndian.Uint32(stream[len(stream)-4:]) == computed {
 		return nil, false
 	}
@@ -167,6 +186,89 @@ func RepairPNGPixelChecksum(data []byte) ([]byte, bool) {
 	return repaired, true
 }
 
+// adam7Passes are the interlace passes as column and row offset, then column
+// and row step.
+var adam7Passes = [7][4]uint64{{0, 0, 8, 8}, {4, 0, 8, 8}, {0, 4, 4, 8}, {2, 0, 4, 4}, {0, 2, 2, 4}, {1, 0, 2, 2}, {0, 1, 1, 2}}
+
+// pngPixelBytes answers how many bytes the pixel stream behind this IHDR
+// inflates to: a filter byte and the packed samples for every row of every
+// pass. Zero answers a header that names no picture this package decodes.
+func pngPixelBytes(header []byte) uint64 {
+	if len(header) != 13 {
+		return 0
+	}
+	width, height := binary.BigEndian.Uint32(header), binary.BigEndian.Uint32(header[4:])
+	if width == 0 || height == 0 || width > math.MaxInt32 || height > math.MaxInt32 ||
+		checkDecodeSize(int(width), int(height)) != nil {
+		return 0
+	}
+	var samples uint64
+	switch header[9] {
+	case 0, 3:
+		samples = 1
+	case 4:
+		samples = 2
+	case 2:
+		samples = 3
+	case 6:
+		samples = 4
+	default:
+		return 0
+	}
+	depth := uint64(header[8])
+	if depth != 1 && depth != 2 && depth != 4 && depth != 8 && depth != 16 {
+		return 0
+	}
+	rowBytes := func(columns uint64) uint64 { return 1 + (columns*samples*depth+7)/8 }
+	switch header[12] {
+	case 0:
+		return uint64(height) * rowBytes(uint64(width))
+	case 1:
+		total := uint64(0)
+		for _, pass := range adam7Passes {
+			if uint64(width) <= pass[0] || uint64(height) <= pass[1] {
+				continue
+			}
+			columns := (uint64(width) - pass[0] + pass[2] - 1) / pass[2]
+			rows := (uint64(height) - pass[1] + pass[3] - 1) / pass[3]
+			total += rows * rowBytes(columns)
+		}
+		return total
+	}
+	return 0
+}
+
+// checkDecodeSize refuses a header naming more pixels than a framebuffer may
+// hold, before a decoder allocates the picture it names; the standard readers
+// size their buffer from the header and only then find the data missing. It
+// is the bound SKT's router already applies to the same header, so all three
+// platforms refuse the same pictures, and sixteen million pixels is dozens of
+// times the largest handset screen. An empty size is left to the decoder,
+// which judges it as it always has.
+func checkDecodeSize(width, height int) error {
+	if width <= 0 || height <= 0 {
+		return nil
+	}
+	if _, err := backend.RGBAByteLength(width, height); err != nil {
+		return fmt.Errorf("decode image dimensions: %w", err)
+	}
+	return nil
+}
+
+// decodeBounded runs the standard readers once the header has passed
+// checkDecodeSize. A header the reader cannot parse fails here exactly as the
+// full decode would have failed on it.
+func decodeBounded(data []byte) (stdimage.Image, string, error) {
+	config, _, err := stdimage.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, "", err
+	}
+	if err := checkDecodeSize(config.Width, config.Height); err != nil {
+		return nil, "", err
+	}
+	return stdimage.Decode(bytes.NewReader(data))
+}
+
 // DecodeStandard decodes with the standard library's own readers, and retries
 // over a PNG whose checksums a title rewrote — first the chunk CRCs, then the
 // Adler-32 the compressed pixels carry.
@@ -176,12 +278,12 @@ func RepairPNGPixelChecksum(data []byte) ([]byte, bool) {
 // and the BMP with a transparent palette entry — so the tolerance above is the
 // same on all of them without any of them stating it.
 func DecodeStandard(data []byte) (stdimage.Image, string, error) {
-	decoded, format, err := stdimage.Decode(bytes.NewReader(data))
+	decoded, format, err := decodeBounded(data)
 	if err == nil {
 		return decoded, format, nil
 	}
 	if repaired, mended := RepairPNGChecksums(data); mended {
-		if decoded, format, retryErr := stdimage.Decode(bytes.NewReader(repaired)); retryErr == nil {
+		if decoded, format, retryErr := decodeBounded(repaired); retryErr == nil {
 			return decoded, format, nil
 		}
 		data = repaired
@@ -190,5 +292,5 @@ func DecodeStandard(data []byte) (stdimage.Image, string, error) {
 	if !mended {
 		return nil, "", err
 	}
-	return stdimage.Decode(bytes.NewReader(repaired))
+	return decodeBounded(repaired)
 }

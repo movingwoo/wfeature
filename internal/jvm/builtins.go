@@ -57,7 +57,7 @@ func (vm *VM) registerBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		classObject := &Object{ClassName: "java/lang/Class", Native: object.ClassName}
+		classObject := vm.classObject(object.ClassName)
 		vm.objectIdentity(classObject)
 		return ReferenceValue(classObject), nil
 	})
@@ -122,27 +122,43 @@ func (vm *VM) registerMonitorBuiltins() {
 				if milliseconds < 0 {
 					return VoidValue(), guestException("java/lang/IllegalArgumentException", "negative wait timeout")
 				}
-				timeout = time.Duration(milliseconds) * time.Millisecond
+				// The nanoseconds round the way the specification's own body
+				// rounds them: half a millisecond or more adds one, and any
+				// nanoseconds at all turn a zero, which would wait untimed,
+				// into the shortest timed wait.
+				if descriptor == "(JI)V" {
+					nanos, err := nativeInt(arguments, 2)
+					if err != nil {
+						return VoidValue(), err
+					}
+					if nanos < 0 || nanos > 999999 {
+						return VoidValue(), guestException("java/lang/IllegalArgumentException", "nanosecond timeout value out of range")
+					}
+					if (nanos >= 500000 || nanos != 0 && milliseconds == 0) && milliseconds < math.MaxInt64 {
+						milliseconds++
+					}
+				}
+				timeout = guestMilliseconds(milliseconds)
 			}
 			return VoidValue(), vm.waitMonitor(state, object, vm.guestDelay(timeout))
 		})
 	}
-	vm.contextBuiltin("java/lang/Object", "notify", "()V", func(_ *VM, state *execution, arguments []Value) (Value, error) {
+	vm.contextBuiltin("java/lang/Object", "notify", "()V", func(vm *VM, state *execution, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
 		if err != nil {
 			return VoidValue(), err
 		}
-		if err := object.monitor.notify(state.id, false); err != nil {
+		if err := vm.monitorOf(object).notify(state.id, false); err != nil {
 			return VoidValue(), guestException("java/lang/IllegalMonitorStateException", err.Error())
 		}
 		return VoidValue(), nil
 	})
-	vm.contextBuiltin("java/lang/Object", "notifyAll", "()V", func(_ *VM, state *execution, arguments []Value) (Value, error) {
+	vm.contextBuiltin("java/lang/Object", "notifyAll", "()V", func(vm *VM, state *execution, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
 		if err != nil {
 			return VoidValue(), err
 		}
-		if err := object.monitor.notify(state.id, true); err != nil {
+		if err := vm.monitorOf(object).notify(state.id, true); err != nil {
 			return VoidValue(), guestException("java/lang/IllegalMonitorStateException", err.Error())
 		}
 		return VoidValue(), nil
@@ -198,14 +214,7 @@ func (vm *VM) registerThreadBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		state := vm.threadState(thread)
-		state.mu.Lock()
-		state.interrupted = true
-		select {
-		case state.wake <- struct{}{}:
-		default:
-		}
-		state.mu.Unlock()
+		vm.interruptThread(thread)
 		return VoidValue(), nil
 	})
 	vm.contextBuiltin(ThreadClass, "isAlive", "()Z", func(vm *VM, _ *execution, arguments []Value) (Value, error) {
@@ -230,9 +239,17 @@ func (vm *VM) registerThreadBuiltins() {
 		if milliseconds < 0 {
 			return VoidValue(), guestException("java/lang/IllegalArgumentException", "negative sleep timeout")
 		}
-		requested := vm.guestDelay(time.Duration(milliseconds) * time.Millisecond)
+		requested := vm.guestDelay(guestMilliseconds(milliseconds))
 		if execution.thread == nil {
-			time.Sleep(requested)
+			// The Host's own pass sleeps here, and Close releases it: a title
+			// may ask for longer than the session lasts.
+			timer := time.NewTimer(requested)
+			select {
+			case <-timer.C:
+			case <-vm.closed:
+				timer.Stop()
+				return VoidValue(), ErrClosed
+			}
 		} else if err := vm.sleepCheckpointThread(execution, requested); err != nil {
 			return VoidValue(), err
 		}
@@ -280,12 +297,15 @@ func (vm *VM) registerThreadBuiltins() {
 }
 
 func (vm *VM) registerDataInputBuiltins() {
-	vm.builtin(DataInputStreamClass, "readUTF", "()Ljava/lang/String;", func(vm *VM, arguments []Value) (Value, error) {
+	// The reads go through the caller's execution, so a stream whose read is
+	// synchronized can be read by a synchronized method of its own.
+	vm.contextBuiltin(DataInputStreamClass, "readUTF", "()Ljava/lang/String;", func(vm *VM, state *execution, arguments []Value) (Value, error) {
 		stream, err := nativeReference(arguments, 0)
 		if err != nil {
 			return VoidValue(), err
 		}
-		lengthValue, err := vm.InvokeVirtual(stream, "readUnsignedShort", "()I")
+		call := &Invocation{vm: vm, state: state}
+		lengthValue, err := call.InvokeVirtual(stream, "readUnsignedShort", "()I")
 		if err != nil {
 			return VoidValue(), err
 		}
@@ -295,13 +315,18 @@ func (vm *VM) registerDataInputBuiltins() {
 		}
 		bytes := NewByteArray(make([]byte, int(length)))
 		for index := int32(0); index < length; index++ {
-			value, readErr := vm.InvokeVirtual(stream, "read", "()I")
+			value, readErr := call.InvokeVirtual(stream, "read", "()I")
 			if readErr != nil {
 				return VoidValue(), readErr
 			}
 			integer, valueErr := value.Int32()
-			if valueErr != nil || integer < 0 {
-				return VoidValue(), guestException(IOExceptionClass, "unexpected end of modified UTF-8 string")
+			if valueErr != nil {
+				return VoidValue(), valueErr
+			}
+			if integer < 0 {
+				// DataInput's end of input is EOFException, which a title
+				// reading records until the end catches by name.
+				return VoidValue(), guestException(eofExceptionClass, "unexpected end of modified UTF-8 string")
 			}
 			if setErr := SetArrayRange(bytes, int(index), []Value{IntValue(integer)}); setErr != nil {
 				return VoidValue(), setErr
@@ -390,7 +415,24 @@ func (vm *VM) guestDelay(requested time.Duration) time.Duration {
 	if speed <= 0 {
 		return requested
 	}
-	return time.Duration(float64(requested) / speed)
+	// A slowed game stretches a wait, and the longest ones do not fit a
+	// Duration once stretched; converting the overflow is undefined.
+	scaled := float64(requested) / speed
+	if scaled >= math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return time.Duration(scaled)
+}
+
+// guestMilliseconds turns a millisecond count a guest passed into a duration.
+// Long.MAX_VALUE is how a title says "for ever", and its product with a
+// millisecond wraps to a negative wait that returns at once, so a count past
+// the longest Duration is held at it — about 292 years.
+func guestMilliseconds(milliseconds int64) time.Duration {
+	if milliseconds > int64(math.MaxInt64/time.Millisecond) {
+		return math.MaxInt64
+	}
+	return time.Duration(milliseconds) * time.Millisecond
 }
 
 // nowMilliseconds is the clock every date-shaped builtin reads: the guest's
@@ -433,17 +475,9 @@ func (vm *VM) registerUtilityBuiltins() {
 	})
 	vm.builtin("java/lang/Integer", "parseInt", "(Ljava/lang/String;)I", parseInteger(10))
 	vm.builtin("java/lang/Integer", "parseInt", "(Ljava/lang/String;I)I", func(_ *VM, arguments []Value) (Value, error) {
-		text, err := parsedText(arguments)
+		value, err := parseRadix(arguments, 32)
 		if err != nil {
 			return VoidValue(), err
-		}
-		radix, err := nativeInt(arguments, 1)
-		if err != nil {
-			return VoidValue(), err
-		}
-		value, parseErr := strconv.ParseInt(text, int(radix), 32)
-		if parseErr != nil {
-			return VoidValue(), guestException("java/lang/NumberFormatException", parseErr.Error())
 		}
 		return IntValue(int32(value)), nil
 	})
@@ -456,9 +490,9 @@ func (vm *VM) registerUtilityBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		value, parseErr := strconv.ParseInt(text, 10, 32)
-		if parseErr != nil {
-			return VoidValue(), guestException("java/lang/NumberFormatException", parseErr.Error())
+		value, err := parseJavaInteger(text, 10, 32)
+		if err != nil {
+			return VoidValue(), err
 		}
 		return ReferenceValue(&Object{ClassName: "java/lang/Integer", Native: int32(value)}), nil
 	})
@@ -795,12 +829,28 @@ func parseInteger(radix int) NativeMethod {
 		if err != nil {
 			return VoidValue(), err
 		}
-		value, parseErr := strconv.ParseInt(text, radix, 32)
-		if parseErr != nil {
-			return VoidValue(), guestException("java/lang/NumberFormatException", parseErr.Error())
+		value, err := parseJavaInteger(text, radix, 32)
+		if err != nil {
+			return VoidValue(), err
 		}
 		return IntValue(int32(value)), nil
 	}
+}
+
+// parseJavaInteger is the parse every boxed number shares. CLDC reads an
+// optional minus sign followed by digits of the radix and nothing else, so a
+// plus sign or a space is a NumberFormatException; strconv alone accepts the
+// sign, and a trim would accept the spaces. A title that checks typed or stored
+// text with a parse is asking exactly whether it is that shape.
+func parseJavaInteger(text string, radix, bits int) (int64, error) {
+	if strings.HasPrefix(text, "+") {
+		return 0, guestException("java/lang/NumberFormatException", "For input string: \""+text+"\"")
+	}
+	value, err := strconv.ParseInt(text, radix, bits)
+	if err != nil {
+		return 0, guestException("java/lang/NumberFormatException", err.Error())
+	}
+	return value, nil
 }
 
 // parsedText reads the string a parse method was handed. A null is the
@@ -1329,6 +1379,15 @@ func (vm *VM) registerStringBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
+		// Unlike the other comparisons, this one answers a null: it is not
+		// equal to anything.
+		object, err := nativeReference(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		if object == nil {
+			return IntValue(0), nil
+		}
 		other, err := nativeString(arguments, 1)
 		if err != nil {
 			return VoidValue(), err
@@ -1378,12 +1437,12 @@ func (vm *VM) registerStringBuiltins() {
 		value, err := nativeLong(arguments, 0)
 		return ReferenceValue(nativeStringValue(strconv.FormatInt(value, 10))), err
 	})
-	vm.builtin(StringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;", func(vm *VM, arguments []Value) (Value, error) {
+	vm.contextBuiltin(StringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;", func(vm *VM, state *execution, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
 		if err != nil {
 			return VoidValue(), err
 		}
-		text, err := vm.objectText(object)
+		text, err := vm.objectText(state, object)
 		if err != nil {
 			return VoidValue(), err
 		}
@@ -1449,13 +1508,15 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 		}
 		return nativeString(arguments, 1)
 	}))
-	vm.builtin(class, "append", "(Ljava/lang/Object;)"+self, appendStringBuffer(func(arguments []Value) (string, error) {
-		object, err := nativeReference(arguments, 1)
-		if err != nil {
-			return "", err
-		}
-		return vm.objectText(object)
-	}))
+	vm.contextBuiltin(class, "append", "(Ljava/lang/Object;)"+self, func(vm *VM, state *execution, arguments []Value) (Value, error) {
+		return appendStringBuffer(func(arguments []Value) (string, error) {
+			object, err := nativeReference(arguments, 1)
+			if err != nil {
+				return "", err
+			}
+			return vm.objectText(state, object)
+		})(vm, arguments)
+	})
 	vm.builtin(class, "append", "(J)"+self, appendStringBuffer(func(arguments []Value) (string, error) {
 		value, err := nativeLong(arguments, 1)
 		if err != nil {
@@ -1632,7 +1693,7 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 			return ReferenceValue(object), nil
 		})
 	}
-	vm.builtin(class, "setLength", "(I)V", func(_ *VM, arguments []Value) (Value, error) {
+	vm.builtin(class, "setLength", "(I)V", func(vm *VM, arguments []Value) (Value, error) {
 		_, data, err := stringBufferArgument(arguments)
 		if err != nil {
 			return VoidValue(), err
@@ -1643,6 +1704,13 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 		}
 		if length < 0 {
 			return VoidValue(), guestException("java/lang/IndexOutOfBoundsException", "StringBuffer.setLength")
+		}
+		// The buffer's characters are an array the guest asked for, and are
+		// held to the limit the guest's own arrays are, before anything is
+		// allocated: a length read from a corrupted record would otherwise be
+		// gigabytes the host commits.
+		if int64(length) > int64(vm.config.MaxArrayLength) {
+			return VoidValue(), fmt.Errorf("StringBuffer length %d exceeds limit %d", length, vm.config.MaxArrayLength)
 		}
 		data.mu.Lock()
 		if int(length) <= len(data.units) {
@@ -1848,10 +1916,16 @@ func nativeLong(arguments []Value, index int) (int64, error) {
 	return arguments[index].Int64()
 }
 
+// nativeString reads a String argument. A null one is the
+// NullPointerException the method raises in Java, which a title can catch;
+// a method that accepts null asks nativeReference first.
 func nativeString(arguments []Value, index int) (string, error) {
 	object, err := nativeReference(arguments, index)
 	if err != nil {
 		return "", err
+	}
+	if object == nil {
+		return "", guestException("java/lang/NullPointerException", fmt.Sprintf("native argument %d is null", index))
 	}
 	if value, ok := nativeStringObject(object); ok {
 		return value, nil
@@ -1865,6 +1939,28 @@ func nativeStringObject(object *Object) (string, bool) {
 	}
 	value, ok := object.Native.(string)
 	return value, ok
+}
+
+// classObject answers the java/lang/Class object for an internal class name,
+// the same object every time: the language compares classes by identity, so
+// `a.getClass() == b.getClass()` only means anything when there is one per
+// class. Locking it takes the class monitor; see monitorOf. The names come from classes this VM
+// resolved or objects it holds, so the table grows with the program and not
+// with the input.
+func (vm *VM) classObject(name string) *Object {
+	vm.mu.RLock()
+	object := vm.classObjects[name]
+	vm.mu.RUnlock()
+	if object != nil {
+		return object
+	}
+	vm.mu.Lock()
+	defer vm.mu.Unlock()
+	if object = vm.classObjects[name]; object == nil {
+		object = &Object{ClassName: ClassClass, Native: name}
+		vm.classObjects[name] = object
+	}
+	return object
 }
 
 // classObjectName reads the internal class name a java/lang/Class instance
@@ -2006,7 +2102,13 @@ func timeZoneArgument(arguments []Value) (*timeZoneData, error) {
 // finally needed it builds a resource path out of a `StringBuffer` and gets a
 // file name nothing in its archive answers, so it catches its own exception,
 // keeps the null image it was left with, and paints it several calls later.
-func (vm *VM) objectText(object *Object) (string, error) {
+//
+// The toString runs on the caller's execution, as every other library callback
+// does. It is the caller's own code underneath the caller: a synchronized
+// method formatting itself already holds the monitor its toString takes, and a
+// class initializer formatting one of its own instances is the initialization
+// that instance's toString would otherwise wait for.
+func (vm *VM) objectText(state *execution, object *Object) (string, error) {
 	if object == nil {
 		return "null", nil
 	}
@@ -2026,7 +2128,7 @@ func (vm *VM) objectText(object *Object) (string, error) {
 		vm.toStringDepth.Add(-1)
 		return identity, nil
 	}
-	result, err := vm.InvokeVirtual(object, "toString", "()Ljava/lang/String;")
+	result, err := vm.invokeInstance(state, object.ClassName, object, "toString", "()Ljava/lang/String;", nil)
 	vm.toStringDepth.Add(-1)
 	if err != nil {
 		return "", err

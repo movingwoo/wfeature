@@ -10,6 +10,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"golang.org/x/text/encoding/korean"
 )
 
@@ -250,9 +251,33 @@ func encodePlatformString(value string) []byte {
 // saves are keyed by: an id that stays put, where the title name is Korean
 // text whose bytes depend on how the archive was packed. The manifest rule is the
 // fallback for a bare JAR, which carries no such id.
+//
+// **The owner is one the Hosts accept.** An owner that passes the rule is
+// returned unchanged, because that is where its saves already are; one that
+// does not is mapped to one that does (backend.AcceptedSaveOwner), and
+// MigrateSaveOwner moves what the command line wrote under the old name.
 func SaveOwner(descriptor Descriptor) string {
+	return backend.AcceptedSaveOwner(rawSaveOwner(descriptor))
+}
+
+// EarlierSaveOwner names the directory an earlier release kept this title's
+// saves in, when it is not the one SaveOwner names; otherwise it is "".
+func EarlierSaveOwner(descriptor Descriptor) string {
+	return backend.EarlierSaveOwner(rawSaveOwner(descriptor))
+}
+
+// rawSaveOwner is the owner as earlier releases named it, before the Host's
+// rule was applied. The command line joined it into its save root as it was.
+func rawSaveOwner(descriptor Descriptor) string {
 	if id, ok := descriptor.Property("DD-ProgName"); ok && strings.TrimSpace(id) != "" {
 		return strings.TrimSpace(id)
 	}
 	return jarSaveOwner(descriptor)
+}
+
+// MigrateSaveOwner moves a title's saves from the directory an earlier release
+// named it by to the one SaveOwner names now, below one platform save root.
+// See backend.MigrateSaveOwner.
+func MigrateSaveOwner(root string, descriptor Descriptor) error {
+	return backend.MigrateSaveOwner(root, EarlierSaveOwner(descriptor), SaveOwner(descriptor))
 }

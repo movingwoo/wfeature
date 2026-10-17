@@ -13,6 +13,13 @@
   network, and the server is told to bind 127.0.0.1 so nothing on the Wi-Fi
   can reach it either.
 
+  configChanges lists what the activity takes without being rebuilt: a split
+  screen or pop-up view (smallestScreenSize), a keyboard or a controller
+  attached (keyboard, navigation) and a display size change (density) among
+  them. The web view adapts to each, and a rebuild would load the page again in
+  the middle of a game. What is not listed still rebuilds the activity, which
+  keeps the server running for the next one; see MainActivity.onDestroy.
+
   VIBRATE is for the page's `navigator.vibrate`, which a game's vibration
   becomes. The WebView answers the call either way, but without this it never
   reaches the motor, so the 📳 진동 switch was offered and did nothing. A
@@ -37,7 +44,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:screenOrientation="portrait"
-            android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|uiMode"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode"
             android:theme="@android:style/Theme.Black.NoTitleBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

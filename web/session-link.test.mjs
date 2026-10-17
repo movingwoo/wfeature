@@ -274,3 +274,41 @@ test("changed victims ask again and a disconnected dialog never restarts", async
   await assert.rejects(start, /연결/);
   assert.equal(calls, 2);
 });
+
+// An outage at the picker ends with an answer that carries no game. The
+// server was back within a second, so the next drop has to start the backoff
+// from the beginning rather than from where the last outage left it.
+test("a reconnect that finds no game starts the next backoff from one second", async () => {
+  let available = false;
+  const sockets = [];
+  const connect = async handlers => {
+    if (!available) throw new Error("offline");
+    const socket = { closed: false, resume: async () => ({}),
+      close() { this.closed = true; handlers.onClosed(); } };
+    sockets.push(socket);
+    return socket;
+  };
+  const timers = new Map();
+  const delays = [];
+  let sequence = 0;
+  const link = createSessionLink({ token: "browser", connect,
+    schedule: (callback, ms) => { timers.set(++sequence, callback); delays.push(ms); return sequence; },
+    cancel: id => timers.delete(id),
+  });
+  const retry = async () => {
+    const [id, callback] = timers.entries().next().value;
+    timers.delete(id);
+    callback();
+    await settled();
+  };
+  await link.wake();
+  for (let i = 0; i < 4; i++) await retry();
+  assert.deepEqual(delays, [1000, 2000, 4000, 8000, 15000]);
+  available = true;
+  await retry();
+  assert.equal(link.state(), "ready");
+  delays.length = 0;
+  sockets.at(-1).close();
+  assert.equal(link.state(), "offline");
+  assert.deepEqual(delays, [1000]);
+});

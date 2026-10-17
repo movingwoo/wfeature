@@ -3,6 +3,7 @@ package armcore
 import (
 	"context"
 	"fmt"
+	"math"
 )
 
 // CallStop identifies the Host operation suspended at a captured boundary.
@@ -104,7 +105,8 @@ func (core *Core) InspectParkedCalls(parent *Thread, inspect func(*Thread, CallF
 // ResumeCall recreates one captured call under a fresh logical parent. For a
 // supervisor stop, complete must perform only the saved operation's remainder;
 // it may recursively resume a child call. It must not repeat the native prefix.
-// A limit stop resumes after the grant, without invoking the old park twice.
+// A limit stop resumes after the grant, without invoking the old park twice,
+// carrying the overrun past the budget the live run would have carried.
 // The platform restores memory and private TLS before calling this method.
 func (core *Core) ResumeCall(ctx context.Context, parent *Thread, frame CallFrame, complete, handler SupervisorCallHandler) (RunSummary, error) {
 	if core == nil || parent == nil {
@@ -138,7 +140,9 @@ func (core *Core) ResumeCall(ctx context.Context, parent *Thread, frame CallFram
 	if frame.Stop == CallStoppedAtSupervisor {
 		derived.state = ThreadSuspended
 	} else {
-		derived.checkpoint.window = 0
+		// What the live run has once the hook grants: the window less the
+		// budget it used up. See Core.Run.
+		derived.checkpoint.window = frame.Window - frame.Budget
 		derived.checkpoint.stop = 0
 	}
 	parent.addCall(derived)
@@ -185,7 +189,13 @@ func (frame CallFrame) Validate() error {
 			return fmt.Errorf("invalid ARM call frame supervisor boundary")
 		}
 	case CallStoppedAtLimit:
-		if frame.Window < frame.Budget || frame.SupervisorCall != (SupervisorCall{}) {
+		// The window parks once it reaches the budget, and the most one
+		// quantum can run past it is what Engine.Run reports in 32 bits — a
+		// stand-in's charge included. A record claiming more is not one this
+		// core wrote, and resuming it would ask the limit hook for every
+		// window it claims.
+		if frame.Window < frame.Budget || frame.Window-frame.Budget > math.MaxUint32 ||
+			frame.SupervisorCall != (SupervisorCall{}) {
 			return fmt.Errorf("invalid ARM call frame instruction boundary")
 		}
 	default:

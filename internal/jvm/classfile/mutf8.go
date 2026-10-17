@@ -38,19 +38,10 @@ func decodeModifiedUTF8(data []byte) (string, error) {
 		}
 	}
 
-	for i := 0; i < len(units); i++ {
-		unit := units[i]
-		if 0xd800 <= unit && unit <= 0xdbff {
-			if i+1 >= len(units) || units[i+1] < 0xdc00 || units[i+1] > 0xdfff {
-				return "", fmt.Errorf("unpaired high surrogate at code unit %d", i)
-			}
-			i++
-			continue
-		}
-		if 0xdc00 <= unit && unit <= 0xdfff {
-			return "", fmt.Errorf("unpaired low surrogate at code unit %d", i)
-		}
-	}
-
+	// CONSTANT_Utf8 encodes each UTF-16 unit on its own, so half a surrogate
+	// pair is legal here and javac writes one for a literal such as "\uD800".
+	// Refusing it refused a valid class. The text is Go's, which cannot hold a
+	// lone half, so utf16.Decode makes it one replacement character, as the
+	// runtime does for one built at run time.
 	return string(utf16.Decode(units)), nil
 }

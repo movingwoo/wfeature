@@ -84,7 +84,7 @@ func (store *authenticationCertificate100Store) activate(client *Client) bool {
 	}
 	// Do not replace a file while the guest still holds its previous contents.
 	for _, file := range client.files {
-		if canonicalFileName(file.name) == canonicalFileName(store.contract.name) {
+		if fileListKey(file.name) == fileListKey(store.contract.name) {
 			return false
 		}
 	}

@@ -352,7 +352,12 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 		// Nothing is written here, not even the name: the store stays in
 		// `unwritten` until something writes it. See persistStore.
 	}
-	if found && boundary != nil {
+	// A create of a store the index does not name still looks at its key. A
+	// deleted store left an empty list there, and stays deleted; records there
+	// mean the index write that named the store failed while the records
+	// reached the Host, and creating the store over them would write an empty
+	// list over the player's save.
+	if boundary != nil {
 		data, ok, err := backend.ReadSave(boundary, key)
 		if err != nil {
 			return nil, newGuestException(midp.RecordStoreExceptionClass, err.Error())
@@ -366,7 +371,9 @@ func (runtime *Runtime) openStore(name string, create bool) (*recordStore, error
 				return nil, newGuestException(midp.RecordStoreExceptionClass,
 					fmt.Sprintf("record store %s is unreadable: %v", name, decodeErr))
 			}
-			records = decoded
+			if found || len(decoded) > 0 {
+				records = decoded
+			}
 		}
 	}
 	store := &recordStore{name: name, records: records, open: 1, modified: runtime.nowMillis()}
@@ -412,11 +419,15 @@ func (runtime *Runtime) persist(store *recordStore) {
 	// and persistStore now takes the state lock in that gap, so encoding
 	// without it read a slice another guest thread could be replacing. The
 	// order is state lock then store lock everywhere, which is the order
-	// openStore already takes them in.
-	store.mu.Lock()
-	encoded := backend.EncodeSaveRecords(store.records)
-	store.mu.Unlock()
-	if err := runtime.storeSave(key, encoded); err != nil && runtime.logger != nil {
+	// openStore already takes them in. The encoding happens inside the write's
+	// turn, so two threads changing one store cannot land the older records
+	// last.
+	err = runtime.storeSaveEncoded(key, func() []byte {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return backend.EncodeSaveRecords(store.records)
+	})
+	if err != nil && runtime.logger != nil {
 		runtime.logger.Debug("RMS store failed", "name", store.name, "error", err)
 	}
 }
@@ -707,6 +718,15 @@ func (runtime *Runtime) rmsAddRecord(_ *jvm.VM, arguments []jvm.Value) (jvm.Valu
 		store.mu.Unlock()
 		return jvm.VoidValue(), newGuestException(midp.RecordStoreFullExceptionClass,
 			fmt.Sprintf("record store %s has no room for %d bytes", store.name, len(data)))
+	}
+	// Ids are never reused, so every add takes a slot even when the record is
+	// empty or deleted again. A saved list longer than the decoder accepts
+	// would make the store unreadable on the next launch; a million slots is
+	// far past any save a title keeps, so the add is refused as a full store.
+	if len(store.records) >= backend.MaxSaveRecords {
+		store.mu.Unlock()
+		return jvm.VoidValue(), newGuestException(midp.RecordStoreFullExceptionClass,
+			fmt.Sprintf("record store %s has no record id left", store.name))
 	}
 	store.records = append(store.records, data)
 	id := int32(len(store.records) - 1 + rmsFirstRecordID)

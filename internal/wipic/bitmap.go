@@ -43,7 +43,17 @@ const (
 // so it carries its transparency the same way an encoding with an alpha
 // channel does and every caller reads it the same way.
 func DecodeBitmap(encoded []byte) (stdimage.Image, error) {
-	decoded, err := bmp.Decode(bytes.NewReader(bitmapPaletteHeader(encoded)))
+	normalized := bitmapPaletteHeader(encoded)
+	// The reader allocates the whole picture from its header before it reads
+	// a row, so the header is checked first, as DecodeStandard checks it.
+	config, err := bmp.DecodeConfig(bytes.NewReader(normalized))
+	if err != nil {
+		return nil, err
+	}
+	if err := checkDecodeSize(config.Width, config.Height); err != nil {
+		return nil, err
+	}
+	decoded, err := bmp.Decode(bytes.NewReader(normalized))
 	if err != nil {
 		return nil, err
 	}

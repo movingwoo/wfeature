@@ -292,25 +292,33 @@ func TestCheckpointRefusalsStoreNothing(t *testing.T) {
 // A buffer with unstored writes that is behind its file is not stored by the
 // host: it holds older bytes than the store for everything the title did not
 // write through it. The quick save is refused, naming the file, with nothing
-// written, until the title has closed the file.
+// written, until the title has closed the file. A name with no save key is
+// refused the same way: nothing can store what was written under it.
+//
+// The handles open on one path share one buffer, and a removal or a rename of
+// the path brings that buffer level with the file, so none of those leaves a
+// buffer behind any more: the quick save stores the one buffer, which holds
+// every handle's write, or has nothing to store. What still can is a store
+// that is not the buffer's, a DataBase written under the same name (see
+// TestCheckpointRefusesPendingFileAndDatabaseOnOneKey).
 func TestCheckpointRefusesAnOpenFileBehindItsSave(t *testing.T) {
 	archive := fixtureArchive(t)
-	for name, arrange := range map[string]func(files *guestFiles) (close func()){
-		"another handle stored the file since": func(files *guestFiles) func() {
+	for name, arrange := range map[string]func(files *guestFiles) (want map[string]string, close func()){
+		"another handle stored the file since": func(files *guestFiles) (map[string]string, func()) {
 			first := files.open("save.dat", fileOpenReadWrite)
 			second := files.open("save.dat", fileOpenReadWrite)
 			files.write(second, "newer")
 			files.close(second)
 			files.write(first, "ol")
-			return func() { files.close(first) }
+			return map[string]string{"fs/save.dat": "olwerd"}, func() { files.close(first) }
 		},
-		"the file was removed since": func(files *guestFiles) func() {
+		"the file was removed since": func(files *guestFiles) (map[string]string, func()) {
 			first := files.open("save.dat", fileOpenReadWrite)
 			files.write(first, "ol")
 			callSlot(files.t, files.client, slotFsRemove, files.name("save.dat"))
-			return func() { files.close(first) }
+			return map[string]string{"fs/save.dat": "stored", fileRemovedKey: fileListMarker + "\nsave.dat"}, func() { files.close(first) }
 		},
-		"another file was renamed onto it since": func(files *guestFiles) func() {
+		"another file was renamed onto it since": func(files *guestFiles) (map[string]string, func()) {
 			first := files.open("save.dat", fileOpenReadWrite)
 			files.write(first, "ol")
 			other := files.open("other.dat", fileOpenReadWrite)
@@ -318,45 +326,66 @@ func TestCheckpointRefusesAnOpenFileBehindItsSave(t *testing.T) {
 			files.close(other)
 			callSlot(files.t, files.client, slotFsRemove, files.name("save.dat"))
 			callSlot(files.t, files.client, slotFsRename, files.name("other.dat"), files.name("save.dat"))
-			return func() { files.close(first) }
+			return map[string]string{"fs/save.dat": "moved"}, func() { files.close(first) }
 		},
-		"two handles on it have unstored writes": func(files *guestFiles) func() {
+		"two handles on it have unstored writes": func(files *guestFiles) (map[string]string, func()) {
 			first := files.open("save.dat", fileOpenReadWrite)
 			second := files.open("save.dat", fileOpenReadWrite)
 			files.write(first, "one")
-			files.write(second, "two")
-			return func() { files.close(first); files.close(second) }
+			files.write(second, "TWO")
+			return map[string]string{"fs/save.dat": "TWOred"}, func() { files.close(first); files.close(second) }
 		},
 		// A title can spell one file more than one way, and the spellings are
 		// one save.
-		"another spelling of its name stored the file since": func(files *guestFiles) func() {
+		"another spelling of its name stored the file since": func(files *guestFiles) (map[string]string, func()) {
 			first := files.open("save.dat", fileOpenReadWrite)
 			files.write(first, "ol")
 			second := files.open("./save.dat", fileOpenWriteTruncate)
 			files.write(second, "newer")
 			files.close(second)
-			return func() { files.close(first) }
+			return map[string]string{"fs/save.dat": "newer"}, func() { files.close(first) }
 		},
-		"two spellings of its name have unstored writes": func(files *guestFiles) func() {
+		"two spellings of its name have unstored writes": func(files *guestFiles) (map[string]string, func()) {
+			first := files.open("save.dat", fileOpenReadWrite)
+			second := files.open("//save.dat", fileOpenReadWrite)
+			files.write(first, "one")
+			files.write(second, "TWO")
+			return map[string]string{"fs/save.dat": "TWOred"}, func() { files.close(first); files.close(second) }
+		},
+		// A name that differs only by case is another file, with a write of
+		// its own.
+		"a name that differs only by case has unstored writes": func(files *guestFiles) (map[string]string, func()) {
 			first := files.open("save.dat", fileOpenReadWrite)
 			second := files.open("//SAVE.dat", fileOpenReadWrite)
 			files.write(first, "one")
-			files.write(second, "two")
-			return func() { files.close(first); files.close(second) }
+			files.write(second, "TWO")
+			return map[string]string{"fs/save.dat": "onered", "fs/SAVE.dat": "TWO"}, func() { files.close(first); files.close(second) }
 		},
-		"its name is not one a save can have": func(files *guestFiles) func() {
+		"its name is not one a save can have": func(files *guestFiles) (map[string]string, func()) {
 			first := files.open("dir\\save.dat", fileOpenReadWrite)
 			files.write(first, "lost")
-			return func() { files.close(first) }
+			return nil, func() { files.close(first) }
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := newFaultStore(t, map[string]string{"fs/save.dat": "stored"})
 			session := checkpointFixtureSession(t, archive, store)
 			tickSession(t, session, 2)
-			closeFiles := arrange(newGuestFiles(t, session.client))
+			want, closeFiles := arrange(newGuestFiles(t, session.client))
 			before, attempts := store.snapshot(t), store.attempts
 			_, err := session.CaptureCheckpoint(context.Background())
+			if want != nil {
+				if err != nil {
+					t.Fatalf("the quick save = %v", err)
+				}
+				for key, data := range want {
+					if store.held(key) != data {
+						t.Fatalf("the quick save left %q under %s, want %q", store.held(key), key, data)
+					}
+				}
+				closeFiles()
+				return
+			}
 			if !errors.Is(err, backend.ErrCheckpointSaveWrite) || !strings.Contains(strings.ToLower(err.Error()), "save.dat") {
 				t.Fatalf("the quick save = %v, want a refusal that names the file", err)
 			}
@@ -573,7 +602,7 @@ func TestCheckpointRetriesWhatTheStoreRefused(t *testing.T) {
 		}
 		store.refuse = false
 		roundTripCheckpoint(t, archive, session)
-		if store.held("fs/.removed") != "save.dat" || session.client.removedUnsaved {
+		if store.held("fs/.removed") != fileListMarker+"\nsave.dat" || session.client.removedUnsaved {
 			t.Fatalf("the quick save left the removal list at %q", store.held("fs/.removed"))
 		}
 	})
@@ -607,18 +636,16 @@ func TestCheckpointRetriesWhatTheStoreRefused(t *testing.T) {
 		insertFixtureRecord(t, fixture.client, first, []byte{1, 1, 1, 1})
 		store.refuse = false
 		fixture.settle()
-		// Storing both would leave whichever was stored last, and the host
-		// would be the one choosing which of the title's inserts is lost.
-		before, attempts := store.snapshot(t), store.attempts
-		_, err := fixture.session.CaptureCheckpoint(context.Background())
-		if !errors.Is(err, backend.ErrCheckpointSaveWrite) || !strings.Contains(err.Error(), "rank") {
-			t.Fatalf("a quick save with two objects of one database waiting = %v", err)
+		// The two objects are one set of records holding both inserts, so the
+		// quick save stores it once and loses neither.
+		attempts := store.attempts
+		roundTripCheckpoint(t, fixture.archive, fixture.session)
+		held := fixture.client.javaRun.databases[first]
+		if store.attempts != attempts+1 || held.unsaved || fixture.client.javaRun.databases[second].unsaved {
+			t.Fatalf("the quick save stored %d times and left a write waiting", store.attempts-attempts)
 		}
-		if after := store.snapshot(t); !reflect.DeepEqual(after, before) || store.attempts != attempts {
-			t.Fatal("the refused quick save wrote to the store")
-		}
-		if !fixture.client.javaRun.databases[first].unsaved || !fixture.client.javaRun.databases[second].unsaved {
-			t.Fatal("the refused quick save forgot a write that is still waiting")
+		if len(held.records) != 2 || store.held("fs/rank.db") != string(held.encode()) {
+			t.Fatal("the quick save did not store both objects' inserts")
 		}
 	})
 	t.Run("a closed database whose container changed since", func(t *testing.T) {
@@ -635,9 +662,9 @@ func TestCheckpointRetriesWhatTheStoreRefused(t *testing.T) {
 		insertFixtureRecord(t, fixture.client, second, []byte{9, 9, 9, 9})
 		newer := store.held("fs/rank.db")
 		fixture.settle()
-		// No call of the title's reaches the closed object again, and its
-		// records are older than the container: the quick save neither stores
-		// them nor waits for them for the rest of the session.
+		// The second object took up the records the closed one could not
+		// store, and its insert stored them with its own: the quick save has
+		// nothing left to store or to wait for.
 		roundTripCheckpoint(t, fixture.archive, fixture.session)
 		if store.held("fs/rank.db") != newer || fixture.client.javaRun.databases[first].unsaved {
 			t.Fatalf("the quick save stored the closed database or kept it waiting: container changed %t", store.held("fs/rank.db") != newer)
@@ -650,13 +677,16 @@ func TestCheckpointRetriesWhatTheStoreRefused(t *testing.T) {
 		store.refuse = true
 		insertFixtureRecord(t, fixture.client, first, []byte{1, 2, 3, 4})
 		store.refuse = false
+		// The second object opens the records the first one holds, refused
+		// write and all, so its insert stores both and nothing is behind.
 		second := openFixtureDatabase(t, fixture.client, "rank", 4)
 		insertFixtureRecord(t, fixture.client, second, []byte{9, 9, 9, 9})
 		newer := store.held("fs/rank.db")
 		fixture.settle()
-		_, err := fixture.session.CaptureCheckpoint(context.Background())
-		if !errors.Is(err, backend.ErrCheckpointSaveWrite) || !strings.Contains(err.Error(), "rank") || store.held("fs/rank.db") != newer {
-			t.Fatalf("a quick save with an older database waiting = %v, container changed: %t", err, store.held("fs/rank.db") != newer)
+		roundTripCheckpoint(t, fixture.archive, fixture.session)
+		held := fixture.client.javaRun.databases[first]
+		if store.held("fs/rank.db") != newer || held.unsaved || len(held.records) != 2 || newer != string(held.encode()) {
+			t.Fatalf("the quick save changed the container or lost an insert: %d records", len(held.records))
 		}
 	})
 }
@@ -803,14 +833,14 @@ func TestCheckpointRebuildsAnOpenFileFromTheStore(t *testing.T) {
 	if got, _ := client.archive.Resource("data/hello.txt"); guest.read(packaged, 2) != string(got[2:4]) || shipped != string(got[:2]) {
 		t.Fatal("the packaged file was not read on from its cursor")
 	}
-	// Two handles on one file: each has the file as it is now, in a buffer of
-	// its own, and a write through one leaves the other alone.
-	if &client.files[writer].data[0] == &client.files[reader].data[0] {
-		t.Fatal("two handles on one file share a buffer")
+	// Two handles on one file: both have the file as it is now, in the one
+	// buffer they share, and a write through one is what the other reads.
+	if client.files[writer].fileContent != client.files[reader].fileContent {
+		t.Fatal("two handles on one file have a buffer each")
 	}
 	guest.write(writer, "ZZ")
-	if got := guest.read(reader, 8); got != "abcdefgh" {
-		t.Fatalf("a write through one handle reached the other: %q", got)
+	if got := guest.read(reader, 8); got != "ZZcdefgh" {
+		t.Fatalf("a write through one handle is not what the other reads: %q", got)
 	}
 	guest.close(writer)
 	if store.held("fs/twice.dat") != "ZZcdefgh" {
@@ -820,8 +850,9 @@ func TestCheckpointRebuildsAnOpenFileFromTheStore(t *testing.T) {
 
 // A handle opened on an empty file holds only what the title wrote through it.
 // A load gives it back at most that much, so what the restored title writes is
-// never followed by the tail of a file it did not write; and neither a quick
-// save nor a load carries out an emptying the title has not written through.
+// never followed by the tail of a file it did not write. The open emptied the
+// file in the store, so a quick save taken before anything was written finds
+// it empty, and a load leaves it so.
 func TestCheckpointNeverHandsAnEmptiedHandleANewerTail(t *testing.T) {
 	archive := fixtureArchive(t)
 	t.Run("emptied and part written", func(t *testing.T) {
@@ -860,20 +891,22 @@ func TestCheckpointNeverHandsAnEmptiedHandleANewerTail(t *testing.T) {
 		source := checkpointFixtureSession(t, archive, store)
 		files := newGuestFiles(t, source.client)
 		handle := files.open("save.dat", fileOpenWriteTruncate)
+		if store.held("fs/save.dat") != "" {
+			t.Fatalf("the truncating open left %q in the store", store.held("fs/save.dat"))
+		}
 		attempts := store.attempts
 		checkpoint := roundTripCheckpoint(t, archive, source)
-		if store.attempts != attempts || store.held("fs/save.dat") != "the earlier save" {
-			t.Fatal("the quick save emptied a file the title had only opened")
+		if store.attempts != attempts || store.held("fs/save.dat") != "" {
+			t.Fatal("the quick save stored something for a file the open had emptied already")
 		}
 		restored := mustCommitFixture(t, archive, checkpoint, source, store)
 		open := restored.client.files[handle]
-		if open == nil || !open.truncated || len(open.data) != 0 || store.held("fs/save.dat") != "the earlier save" {
-			t.Fatalf("the load emptied the file or filled the handle: %+v", open)
+		if open == nil || !open.truncated || len(open.data) != 0 || store.held("fs/save.dat") != "" {
+			t.Fatalf("the load changed the file or filled the handle: %+v", open)
 		}
-		// Closed without a write, the file is what it was; that is what this
-		// platform's own close does with such a handle.
+		// Closed without a write, the file is what the open made it.
 		newGuestFiles(t, restored.client).close(handle)
-		if store.held("fs/save.dat") != "the earlier save" {
+		if store.held("fs/save.dat") != "" {
 			t.Fatalf("closing the unwritten handle left %q", store.held("fs/save.dat"))
 		}
 	})
@@ -948,8 +981,8 @@ func TestCheckpointRereadsThePathLists(t *testing.T) {
 		t.Fatalf("the restored title lists %q", listed)
 	}
 	callSlot(t, restored.client, slotFsRemove, guest.name("kept.dat"))
-	if store.held("fs/.removed") != "kept.dat\nlater-removed.dat" {
-		t.Fatalf("the next removal wrote the list %q, want the list as it was with one name more", store.held("fs/.removed"))
+	if want := "later-removed.dat\n" + fileListMarker + "\nkept.dat"; store.held("fs/.removed") != want {
+		t.Fatalf("the next removal wrote the list %q, want the list as it was with one name more, %q", store.held("fs/.removed"), want)
 	}
 }
 
@@ -1115,16 +1148,15 @@ func TestCheckpointRebuildIsBoundedAndReadsEachSaveOnce(t *testing.T) {
 		}
 		return restored, store.reads - reads, err
 	}
-	restored, reads, err := commit(64)
+	// The four handles share one buffer of sixteen bytes, which is what the
+	// budget pays for.
+	restored, reads, err := commit(16)
 	if err != nil {
-		t.Fatalf("four handles of sixteen bytes on a budget of sixty-four: %v", err)
+		t.Fatalf("four handles on one file of sixteen bytes on a budget of sixteen: %v", err)
 	}
 	// The file once and the two lists: three reads for four handles.
 	if reads != 3 || len(restored.client.files) != 4 {
 		t.Fatalf("four handles on one file made %d store reads", reads)
-	}
-	if _, _, err := commit(63); !errors.Is(err, backend.ErrCheckpointSaveRead) {
-		t.Fatalf("four handles of sixteen bytes on a budget of sixty-three = %v", err)
 	}
 	if _, _, err := commit(15); !errors.Is(err, backend.ErrCheckpointSaveRead) {
 		t.Fatalf("a file larger than the budget = %v", err)
@@ -1282,7 +1314,8 @@ func TestCheckpointRebuildsFileStreamsFromTheStore(t *testing.T) {
 		return stream
 	}
 	// A File with a stream in and a stream out, and bytes waiting in the
-	// stream out.
+	// stream out, which this build hands the File at each write and a record
+	// an earlier build took can still hold.
 	file := openFile("save.dat")
 	stream := openStream(file, 2, 3)
 	sink, err := javaFileOpenOutputStream(client, ctx, client.thread, []uint32{file})
@@ -1320,10 +1353,16 @@ func TestCheckpointRebuildsFileStreamsFromTheStore(t *testing.T) {
 		t.Fatalf("the load wrote to the store: %+v", after)
 	}
 	copied := restored.client
-	if held := copied.javaRun.streams[stream]; string(held.Data) != "CDEFGHIJKLMNOP" || held.Read != 3 || !held.File || held.Offset != 2 {
+	// The waiting bytes go in at the File's cursor, in the file as it is now,
+	// as a write: the File holds them waiting and the stream out holds
+	// nothing, and the stream in reads the file with them in it.
+	if _, open, err := copied.javaFileHandle(file); err != nil || string(open.data) != "ABMARKER-pending" || open.cursor != 16 || !open.dirty || len(copied.javaRun.sinks[sink]) != 0 {
+		t.Fatalf("the File came back as %+v, %v, with %q in the stream out", open, err, copied.javaRun.sinks[sink])
+	}
+	if held := copied.javaRun.streams[stream]; string(held.Data) != "MARKER-pending" || held.Read != 3 || !held.File || held.Offset != 2 {
 		t.Fatalf("the stream on the open File came back as %+v", held)
 	}
-	if value, err := javaStreamRead(copied, ctx, copied.thread, []uint32{stream}); err != nil || value != 'F' {
+	if value, err := javaStreamRead(copied, ctx, copied.thread, []uint32{stream}); err != nil || value != 'K' {
 		t.Fatalf("the stream reads %d on from where it was, %v", value, err)
 	}
 	if held := copied.javaRun.streams[orphan]; string(held.Data) != "efghij" || held.Read != 1 {
@@ -1336,18 +1375,14 @@ func TestCheckpointRebuildsFileStreamsFromTheStore(t *testing.T) {
 	if value, err := javaStreamRead(copied, ctx, copied.thread, []uint32{short}); err != nil || value != ^uint32(0) {
 		t.Fatalf("a read at the end of the shorter window = %d, %v", int32(value), err)
 	}
-	// The waiting bytes go in at the File's cursor, in the file as it is now.
-	if string(copied.javaRun.sinks[sink]) != "MARKER-pending" {
-		t.Fatalf("the stream out came back holding %q", copied.javaRun.sinks[sink])
-	}
 	if _, err := javaByteSinkFlush(copied, ctx, copied.thread, []uint32{sink}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := javaFileClose(copied, ctx, copied.thread, []uint32{file}); err != nil {
 		t.Fatal(err)
 	}
 	if store.held("fs/save.dat") != "ABMARKER-pending" {
 		t.Fatalf("the flushed stream stored %q", store.held("fs/save.dat"))
+	}
+	if _, err := javaFileClose(copied, ctx, copied.thread, []uint32{file}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1419,7 +1454,7 @@ func TestCheckpointRebuildsAnOpenDataBaseFromTheStore(t *testing.T) {
 		if err := update(t, client, database, 0, "fourth"); err != nil {
 			t.Fatal(err)
 		}
-		want := &javaDatabase{name: "save", recordSize: 16, records: [][]byte{[]byte("fourth"), []byte("third")}, deleted: []bool{false, false}}
+		want := &databaseContent{recordSize: 16, records: [][]byte{[]byte("fourth"), []byte("third")}, deleted: []bool{false, false}}
 		if store.held("fs/save.db") != string(want.encode()) {
 			t.Fatal("the update did not land on the container as it was")
 		}
@@ -1475,9 +1510,9 @@ func TestCheckpointRebuildsAnOpenDataBaseFromTheStore(t *testing.T) {
 	})
 }
 
-// A database that no load has rebuilt is stored at its close, as it always
-// was: only a rebuilt one that has not changed since is left alone.
-func TestJavaDataBaseCloseStoresUnlessALoadFoundItUnchanged(t *testing.T) {
+// Every change to a database is stored when it is made, so a close stores
+// only a write the store refused, whether or not a load filled the object.
+func TestJavaDataBaseCloseStoresOnlyARefusedWrite(t *testing.T) {
 	store := newFaultStore(t, nil)
 	fixture := newJavaThreadFixture(t, store)
 	client := fixture.client
@@ -1486,11 +1521,22 @@ func TestJavaDataBaseCloseStoresUnlessALoadFoundItUnchanged(t *testing.T) {
 	if _, err := javaCloseDataBase(client, context.Background(), client.thread, []uint32{database}); err != nil {
 		t.Fatal(err)
 	}
+	if store.attempts != attempts {
+		t.Fatalf("an ordinary close asked the store %d times, want none", store.attempts-attempts)
+	}
+	refused := openFixtureDatabase(t, client, "save", 8)
+	store.refuse = true
+	insertFixtureRecord(t, client, refused, []byte("kept"))
+	store.refuse = false
+	attempts = store.attempts
+	if _, err := javaCloseDataBase(client, context.Background(), client.thread, []uint32{refused}); err != nil {
+		t.Fatal(err)
+	}
 	if store.attempts != attempts+1 {
-		t.Fatalf("an ordinary close asked the store %d times, want once", store.attempts-attempts)
+		t.Fatalf("a close after a refused write asked the store %d times, want once", store.attempts-attempts)
 	}
 	// A second close is ignored, as the specification says.
-	if _, err := javaCloseDataBase(client, context.Background(), client.thread, []uint32{database}); err != nil || store.attempts != attempts+1 {
+	if _, err := javaCloseDataBase(client, context.Background(), client.thread, []uint32{refused}); err != nil || store.attempts != attempts+1 {
 		t.Fatalf("a second close = %v after %d writes", err, store.attempts-attempts)
 	}
 }

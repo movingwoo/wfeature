@@ -3,6 +3,7 @@ package webhost
 import (
 	"net/http"
 	"os"
+	"path/filepath"
 )
 
 // Taking a game back off.
@@ -55,6 +56,15 @@ func (s *Server) serveGameRemoval(writer http.ResponseWriter, request *http.Requ
 		s.logger.Warn("refused to remove a game outside the added root", "path", file)
 		writeError(writer, http.StatusForbidden,
 			"이 게임은 서버 폴더에 직접 넣은 것이라 여기서 지울 수 없습니다.")
+		return
+	}
+	// The added root also holds what the server keeps there for itself — the
+	// marker that makes the one-time adoption run once, an upload still on
+	// its way to a rename — and neither is a game. What may go is a name the
+	// upload route would have written, which is the only kind it writes.
+	if _, err := uploadName(filepath.Base(file)); err != nil {
+		s.logger.Warn("refused to remove something in the added root that is not a game", "path", file)
+		writeError(writer, http.StatusBadRequest, "지울 게임을 찾지 못했습니다.")
 		return
 	}
 	info, err := os.Stat(file)

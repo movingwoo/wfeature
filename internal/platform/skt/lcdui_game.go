@@ -83,9 +83,13 @@ func (runtime *Runtime) gameCanvasKeyStates(_ *jvm.VM, arguments []jvm.Value) (j
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	// A key counts if it is down now or was pressed since the previous call,
+	// so a tap that comes and goes between two polls still reaches the title;
+	// reading the latch clears it.
 	state := runtime.lcdui()
 	state.mu.Lock()
-	states := game.keyStates
+	states := game.keyStates | game.latchedKeys
+	game.latchedKeys = 0
 	state.mu.Unlock()
 	return jvm.IntValue(states), nil
 }
@@ -159,7 +163,9 @@ func (runtime *Runtime) presentGameBuffer(canvas *jvm.Object, game *gameCanvasDa
 
 // gameCanvasDrawBuffer implements the inherited paint(Graphics) by blitting
 // the buffer, so a GameCanvas that is also repainted the ordinary way shows
-// the same pixels.
+// the same pixels. MIDP subjects that paint to the Graphics' clip and origin,
+// and like every other drawing call it writes under the destination's lock:
+// the title's own thread may be flushing the same screen meanwhile.
 func (runtime *Runtime) gameCanvasDrawBuffer(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	_, game, err := runtime.gameCanvasState(arguments)
 	if err != nil {
@@ -169,8 +175,24 @@ func (runtime *Runtime) gameCanvasDrawBuffer(_ *jvm.VM, arguments []jvm.Value) (
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	context.drawRGBA(game.buffer.snapshot(), game.buffer.width, game.buffer.height, 0, 0)
+	pixels := game.buffer.snapshot()
+	context.withDestinationWrite(func() {
+		context.drawRGBA(pixels, game.buffer.width, game.buffer.height,
+			int64(context.translateX), int64(context.translateY))
+	})
 	return jvm.VoidValue(), nil
+}
+
+// gameCanvasKeyRecord is the one int32 a checkpoint keeps a GameCanvas's key
+// state in: the held bits low, where they always were, and the latch above
+// them. Every getKeyStates bit is below bit 16, so a record written before
+// there was a latch reads back as the same held keys and no latch.
+func gameCanvasKeyRecord(held, latched int32) int32 {
+	return held&0xffff | latched&0xffff<<16
+}
+
+func splitGameCanvasKeyRecord(record int32) (held, latched int32) {
+	return record & 0xffff, int32(uint32(record) >> 16)
 }
 
 // recordGameCanvasKey maintains the getKeyStates bits for a GameCanvas and
@@ -187,6 +209,7 @@ func (runtime *Runtime) recordGameCanvasKey(canvas *jvm.Object, eventType KeyEve
 	switch eventType {
 	case KeyPressed, KeyRepeated:
 		data.game.keyStates |= bit
+		data.game.latchedKeys |= bit
 	case KeyReleased:
 		data.game.keyStates &^= bit
 	}

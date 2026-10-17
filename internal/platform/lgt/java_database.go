@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -47,33 +49,43 @@ const (
 	maxDatabaseName  = 128
 )
 
-// javaDatabase is one open database.
+// javaDatabase is one DataBase object: the database it stands for and whether
+// the title has closed it. What the database holds is the databaseContent it
+// shares with every other object open on the database.
 type javaDatabase struct {
-	name       string
+	name string
+	// closed marks a database the title has closed. The entry is kept rather
+	// than dropped, because closing one twice is defined and the second close
+	// has to be able to tell a database it already wrote from an object that
+	// was never a database at all. See javaCloseDataBase.
+	closed bool
+	*databaseContent
+}
+
+// databaseContent is a database's records as the objects open on it hold
+// them.
+//
+// **Every object on one database is one set of records.** A handset's objects
+// share one persistent store, so a record one object writes is what another
+// reads next. A copy per object kept a write the store had refused in the one
+// object that made it: another object read the container without it, stored
+// its own change over it, and the first object's close then put its older
+// copy back over that.
+type databaseContent struct {
 	recordSize uint32
 	records    [][]byte
 	// deleted marks the slots whose record was removed. The slot stays so the
 	// identifiers above it do not move.
 	deleted  []bool
 	modified int64
-	// closed marks a database the title has closed. The entry is kept rather
-	// than dropped, because closing one twice is defined and the second close
-	// has to be able to tell a database it already wrote from an object that
-	// was never a database at all. See javaCloseDataBase.
-	closed bool
-	// unsaved says the last store of this database was refused: the records
-	// here are ahead of the container. The next store the store takes clears
-	// it, and a quick save or a quick load asks again before it goes on.
+	// unsaved says the last store of these records was refused: they are
+	// ahead of the container. The next store the store takes clears it, and a
+	// quick save, a quick load and the ending ask again.
 	unsaved bool
 	// synced is the container's epoch when these records were last level with
-	// it: at the open, and at each store the store took. See openFile.synced.
+	// it: at the open, at each store the store took, and at each read of it
+	// again. See fileContent.synced and javaDatabaseOf.
 	synced uint64
-	// rebuilt says a quick load read these records from the store, and
-	// changed that the title has written to the database since. A close of a
-	// rebuilt database that has not changed stores nothing: what it holds is
-	// what the store holds, and writing it back would only bring a container
-	// the title deleted since into being again.
-	rebuilt, changed bool
 }
 
 // javaDatabaseMethods is this class's whole surface. It joins the platform
@@ -127,17 +139,36 @@ func javaOpenDataBase(
 	}
 	recordSize, create := arguments[1], arguments[2] != 0
 	stored, exists := client.readFile(databaseFileName(name))
+	// An object the title already has on the database is the database. Its
+	// records are the newest there are when they hold a write the store
+	// refused, and then they are the database whatever the store says.
+	shared := client.openDatabaseContent(name)
+	if shared != nil && shared.unsaved {
+		exists = true
+	}
 	if !exists && !create {
 		return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass,
 			fmt.Sprintf(": %q does not exist", name))
 	}
-	database := &javaDatabase{name: name, recordSize: recordSize, synced: client.fileEpoch(databaseFileName(name))}
-	if exists {
-		if err := database.decode(stored); err != nil {
-			return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass,
-				fmt.Sprintf(": %q: %v", name, err))
+	content := shared
+	if content == nil || !content.unsaved {
+		fresh := &databaseContent{recordSize: recordSize, synced: client.fileEpoch(databaseFileName(name))}
+		if exists {
+			if err := fresh.decode(stored); err != nil {
+				return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass,
+					fmt.Sprintf(": %q: %v", name, err))
+			}
+		}
+		if content == nil {
+			content = fresh
+		} else {
+			// The records as the container has them now, for every object on
+			// the database at once.
+			fresh.modified = content.modified
+			*content = *fresh
 		}
 	}
+	database := &javaDatabase{name: name, databaseContent: content}
 	class, err := client.preparePlatformJavaClass(javaDataBaseClass)
 	if err != nil {
 		return 0, err
@@ -172,8 +203,55 @@ func databaseFileName(name string) string {
 	return name + databaseSuffix
 }
 
+// openDatabaseContent answers the records the objects on a database share
+// while one of them is open, or holds a write the store refused; nil when no
+// object does.
+func (client *Client) openDatabaseContent(name string) *databaseContent {
+	for _, object := range slices.Sorted(maps.Keys(client.javaRuntimeState().databases)) {
+		database := client.javaRun.databases[object]
+		if database != nil && database.name == name && database.databaseContent != nil && (!database.closed || database.unsaved) {
+			return database.databaseContent
+		}
+	}
+	return nil
+}
+
+// databaseContents answers one object for each set of records, the lowest
+// numbered one, in object order, and whether any object on those records is
+// still open: what the ending and a quick step store, once each.
+func (client *Client) databaseContents() ([]*javaDatabase, map[*databaseContent]bool) {
+	if client.javaRun == nil {
+		return nil, nil
+	}
+	open := make(map[*databaseContent]bool)
+	databases := make([]*javaDatabase, 0, len(client.javaRun.databases))
+	for _, object := range slices.Sorted(maps.Keys(client.javaRun.databases)) {
+		database := client.javaRun.databases[object]
+		if database == nil || database.databaseContent == nil {
+			continue
+		}
+		if _, seen := open[database.databaseContent]; !seen {
+			databases = append(databases, database)
+			open[database.databaseContent] = false
+		}
+		if !database.closed {
+			open[database.databaseContent] = true
+		}
+	}
+	return databases, open
+}
+
 // javaDatabaseOf answers the database behind an object, and refuses one that is
 // closed or was never opened here.
+//
+// **The records are read again when the container moved on.** The objects on
+// a database share one set of records (see databaseContent), and every change
+// stores it whole; something other than those objects can still change the
+// container — the title deleting the database, a file written under its name.
+// So records whose container has been stored or deleted since they were last
+// level with it are read again before an object answers, and a write lands on
+// the records as they are. Records holding a write the store refused are kept,
+// because they are the only place that write is.
 func (client *Client) javaDatabaseOf(object uint32) (*javaDatabase, error) {
 	database, ok := client.javaRuntimeState().databases[object]
 	if !ok {
@@ -182,7 +260,32 @@ func (client *Client) javaDatabaseOf(object uint32) (*javaDatabase, error) {
 	if database.closed {
 		return nil, fmt.Errorf("the database %q is closed", database.name)
 	}
+	if !database.unsaved && database.synced != client.fileEpoch(databaseFileName(database.name)) {
+		client.reloadDatabase(database)
+	}
 	return database, nil
+}
+
+// reloadDatabase reads an object's container again. A deleted container is an
+// empty database, as it is to an object a quick load fills. A container that
+// cannot be read or decoded leaves the object as it was.
+func (client *Client) reloadDatabase(database *javaDatabase) {
+	name := databaseFileName(database.name)
+	epoch := client.fileEpoch(name)
+	stored, exists := client.readFile(name)
+	if client.saveReadError != nil {
+		return
+	}
+	fresh := &databaseContent{recordSize: database.recordSize}
+	if exists {
+		if err := fresh.decode(stored); err != nil {
+			if client.logger != nil {
+				client.logger.Debug("LGT java database could not be read again", "name", database.name, "error", err)
+			}
+			return
+		}
+	}
+	database.records, database.deleted, database.recordSize, database.synced = fresh.records, fresh.deleted, fresh.recordSize, epoch
 }
 
 // storeDatabase writes a database back. Every change goes through it, because a
@@ -190,7 +293,6 @@ func (client *Client) javaDatabaseOf(object uint32) (*javaDatabase, error) {
 // stored — which is what the specification promises of a record already saved.
 func (client *Client) storeDatabase(database *javaDatabase) {
 	database.modified = client.clock.unixMillis()
-	database.changed = true
 	database.unsaved = client.storeFile(databaseFileName(database.name), database.encode()) != nil
 	if !database.unsaved {
 		database.synced = client.fileEpoch(databaseFileName(database.name))
@@ -199,7 +301,7 @@ func (client *Client) storeDatabase(database *javaDatabase) {
 
 // encode lays the container out: the magic and version, the record size, the
 // count, then one length-prefixed record each.
-func (database *javaDatabase) encode() []byte {
+func (database *databaseContent) encode() []byte {
 	data := make([]byte, 0, 16)
 	data = append(data, databaseMagic...)
 	var header [12]byte
@@ -221,7 +323,7 @@ func (database *javaDatabase) encode() []byte {
 	return data
 }
 
-func (database *javaDatabase) decode(data []byte) error {
+func (database *databaseContent) decode(data []byte) error {
 	if len(data) < 16 || string(data[:4]) != databaseMagic {
 		return fmt.Errorf("is not a database container")
 	}
@@ -260,8 +362,13 @@ func (database *javaDatabase) decode(data []byte) error {
 	return nil
 }
 
-// javaCloseDataBase is `closeDataBase()`: the records are written back and the
-// object stops being usable.
+// javaCloseDataBase is `closeDataBase()`: the object stops being usable.
+//
+// **A close stores only a write the store refused.** Every change was stored
+// when it was made, so what the object holds otherwise is what the container
+// holds, or older: another object may have saved since, or the title deleted
+// the database. Writing the object's copy back would undo the one and bring
+// the other into being again.
 //
 // **Closing one that is already closed is ignored**, which the specification
 // says in as many words, and one local title depends on it: it closes its
@@ -280,7 +387,7 @@ func javaCloseDataBase(
 	if database.closed {
 		return 0, nil
 	}
-	if !database.rebuilt || database.changed {
+	if database.unsaved {
 		client.storeDatabase(database)
 	}
 	database.closed = true
@@ -418,7 +525,7 @@ func javaInsertRecord(
 
 // fits refuses a record longer than the size the database was created with,
 // which is the one limit the specification puts on a record.
-func (database *javaDatabase) fits(record []byte) error {
+func (database *databaseContent) fits(record []byte) error {
 	if database.recordSize == 0 || uint64(len(record)) <= uint64(database.recordSize) {
 		return nil
 	}
@@ -574,11 +681,21 @@ func javaDeleteDataBase(
 	if !ok {
 		return 0, fmt.Errorf("the name at %#x is not a string this platform built", arguments[0])
 	}
-	if _, exists := client.readFile(databaseFileName(name)); !exists {
+	_, exists := client.readFile(databaseFileName(name))
+	shared := client.openDatabaseContent(name)
+	if !exists && (shared == nil || !shared.unsaved) {
 		return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass,
 			fmt.Sprintf(": %q does not exist", name))
 	}
 	client.removeFile(databaseFileName(name))
+	// A write the store refused goes with the database, as a write waiting on
+	// a removed file goes with the file: neither a close nor the ending may
+	// bring the database back with it. The objects still open on it read it
+	// empty, as they would once they read the deleted container again.
+	if shared != nil {
+		shared.records, shared.deleted = nil, nil
+		shared.unsaved, shared.synced = false, client.fileEpoch(databaseFileName(name))
+	}
 	client.recordDatabaseName(name, false)
 	return 0, nil
 }

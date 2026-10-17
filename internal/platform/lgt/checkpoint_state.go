@@ -142,7 +142,9 @@ type fileState struct {
 	// Truncated says the handle's open asked for an empty file, and Length is
 	// how many bytes it held when the checkpoint was taken. A load gives such
 	// a handle at most that much of the file as it is then; see
-	// openFile.truncated. Length is zero for any other handle.
+	// openFile.truncated. Length is zero for any other handle. A record an
+	// earlier build took can say so of a handle whose open had not emptied the
+	// store yet; it loads the same way, with nothing more to carry out.
 	Truncated bool
 	Length    int
 }
@@ -602,9 +604,10 @@ func (client *Client) captureClientState() (clientState, error) {
 			saved.SourceMuted = append(saved.SourceMuted, source)
 		}
 	}
+	charged := make(map[*fileContent]bool, len(client.files))
 	for _, handle := range slices.Sorted(maps.Keys(client.files)) {
 		file := client.files[handle]
-		if file == nil {
+		if file == nil || file.fileContent == nil {
 			return clientState{}, fmt.Errorf("LGT checkpoint has a missing open file")
 		}
 		// A record holds no file bytes, so a write the store has not been
@@ -614,8 +617,14 @@ func (client *Client) captureClientState() (clientState, error) {
 			return clientState{}, fmt.Errorf("LGT checkpoint has an open file with writes the store has not been given")
 		}
 		// What the handle holds is charged although it is not recorded: a
-		// load reads it back, on the same budget.
-		if err := budget.charge(len(file.data) + len(file.name)); err != nil {
+		// load reads it back, on the same budget, once for the handles that
+		// share it.
+		held := len(file.name)
+		if !charged[file.fileContent] {
+			charged[file.fileContent] = true
+			held += len(file.data)
+		}
+		if err := budget.charge(held); err != nil {
 			return clientState{}, err
 		}
 		record := fileState{Handle: handle, Name: []byte(file.name), Cursor: file.cursor, Writable: file.writable, Truncated: file.truncated}
@@ -1048,16 +1057,20 @@ func restoreClientState(archive *Archive, saved clientState, options Options) (*
 	}
 	// The handles come back without their bytes, and the two path lists
 	// unread: committing the load fills both from the store the session will
-	// run over. See checkpoint_storage.go.
-	client.restoredStorage = &restoredStorage{lengths: make(map[uint32]int), recordSizes: make(map[uint32]uint32), cursors: make(map[uint32][2]int)}
+	// run over, and gives the handles on one path the buffer they share. See
+	// checkpoint_storage.go.
+	client.restoredStorage = &restoredStorage{lengths: make(map[uint32]int), recordSizes: make(map[uint32]uint32),
+		cursors: make(map[uint32][2]int), fileCursors: make(map[uint32]int, len(saved.Files)), sinkBytes: make(map[uint32][]byte)}
 	client.files = make(map[uint32]*openFile, len(saved.Files))
 	for _, file := range saved.Files {
-		client.files[file.Handle] = &openFile{name: string(file.Name), cursor: file.Cursor, writable: file.Writable, truncated: file.Truncated}
+		client.files[file.Handle] = &openFile{name: string(file.Name), fileContent: &fileContent{}, cursor: file.Cursor,
+			writable: file.Writable, truncated: file.Truncated}
+		client.restoredStorage.fileCursors[file.Handle] = file.Cursor
 		if file.Truncated {
 			client.restoredStorage.lengths[file.Handle] = file.Length
 		}
 	}
-	client.removed, client.created = nil, nil
+	client.removed, client.created, client.removedLegacy, client.createdLegacy = nil, nil, nil, nil
 	client.tmStorage, client.strtokScan = saved.TimeStorage, saved.StrtokScan
 	if saved.Random != nil {
 		if client.cRandom, err = restoreGuestRandom(*saved.Random); err != nil {

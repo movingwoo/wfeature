@@ -227,10 +227,10 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	// degrees at three o'clock. Both used to be answered with the plain
 	// rectangle, which drew a title's panels with square corners and had no
 	// answer at all for a curve.
-	"org/kwis/msp/lcdui/Graphics.fillRoundRect(IIIIII)V": {Words: 7, Implementat: javaCurve(curve.FillRoundRect)},
-	"org/kwis/msp/lcdui/Graphics.drawRoundRect(IIIIII)V": {Words: 7, Implementat: javaCurve(curve.DrawRoundRect)},
-	"org/kwis/msp/lcdui/Graphics.fillArc(IIIIII)V":       {Words: 7, Implementat: javaCurve(curve.FillArc)},
-	"org/kwis/msp/lcdui/Graphics.drawArc(IIIIII)V":       {Words: 7, Implementat: javaCurve(curve.DrawArc)},
+	"org/kwis/msp/lcdui/Graphics.fillRoundRect(IIIIII)V": {Words: 7, Implementat: javaCurve(curve.FillRoundRectWithin)},
+	"org/kwis/msp/lcdui/Graphics.drawRoundRect(IIIIII)V": {Words: 7, Implementat: javaCurve(curve.DrawRoundRectWithin)},
+	"org/kwis/msp/lcdui/Graphics.fillArc(IIIIII)V":       {Words: 7, Implementat: javaCurve(curve.FillArcWithin)},
+	"org/kwis/msp/lcdui/Graphics.drawArc(IIIIII)V":       {Words: 7, Implementat: javaCurve(curve.DrawArcWithin)},
 
 	"org/kwis/msp/lcdui/Graphics.translate(II)V": {Words: 3, Implementat: javaTranslate},
 	// The origin a title reads back is the one its own `translate` calls moved
@@ -603,19 +603,30 @@ func javaDrawRect(
 // geometry they walk and in the two trailing arguments it takes. Every span
 // goes through the same clipped fill the rectangle calls use, so the clip, the
 // translation, the alpha and the XOR mode apply to a curve as they do to a
-// rectangle.
-func javaCurve(walk func(x, y, width, height, a, b int32, emit curve.Emit) error) func(*Client, context.Context, *armcore.Thread, []uint32) (uint32, error) {
+// rectangle. The walk is bounded by what that fill can reach, because the box
+// comes from the guest and can be far larger than any surface.
+func javaCurve(walk func(bounds curve.Bounds, x, y, width, height, a, b int32, emit curve.Emit) error) func(*Client, context.Context, *armcore.Thread, []uint32) (uint32, error) {
 	return func(client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32) (uint32, error) {
 		return 0, client.javaDraw(arguments[0], func(drawContext *graphicsContext, state *javaGraphics) error {
 			emit := func(span curve.Span) error {
 				drawContext.fill(int(span.X), int(span.Y), int(span.Width), 1, state.color)
 				return nil
 			}
-			return walk(
+			return walk(drawContext.curveBounds(),
 				int32(arguments[1])+int32(state.translateX), int32(arguments[2])+int32(state.translateY),
 				int32(arguments[3]), int32(arguments[4]), int32(arguments[5]), int32(arguments[6]), emit)
 		})
 	}
+}
+
+// curveBounds is the part of the plane fill can reach, in the coordinates fill
+// takes: a curve walks only this part of the box a guest names.
+func (context *graphicsContext) curveBounds() curve.Bounds {
+	left, top, right, bottom, ok := context.drawable()
+	if !ok {
+		return curve.Bounds{}
+	}
+	return curve.Bounds{Left: left, Top: top, Right: right, Bottom: bottom}
 }
 
 func javaDrawLine(

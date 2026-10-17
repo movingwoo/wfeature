@@ -346,12 +346,19 @@ func (platform *NativePlatform) Listeners() []NativeListener { return platform.l
 
 // addListener records a registration against the source it was made on. The
 // module registers before anything is delivered, so recording is all this has
-// to do to be correct.
+// to do to be correct. The first registration on a source is the one called
+// (listenerFor), which is how this package has always dispatched and how a
+// checkpoint that holds several on one source still does. A later one is
+// accepted and not recorded: no title has been seen to register twice, and
+// recording it would only grow the list.
 func (platform *NativePlatform) addListener(source uint32) NativeSlotHandler {
 	return func(thread *armcore.Thread) (uint32, error) {
 		arguments, err := nativeArguments(thread, 3)
 		if err != nil {
 			return 0, err
+		}
+		if _, registered := platform.listenerFor(source); registered {
+			return 1, nil
 		}
 		platform.listeners = append(platform.listeners, NativeListener{
 			Source:   source,

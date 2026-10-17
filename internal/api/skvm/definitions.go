@@ -359,6 +359,8 @@ func definitions() []jvm.ClassDefinition {
 				{Name: "initArchive", Descriptor: "(Ljava/lang/String;Ljava/lang/String;)V", Access: jvm.AccessPrivate | jvm.AccessNative, Throws: []string{"java/io/IOException"}},
 				{Name: "initHandle", Descriptor: "(I)V", Access: jvm.AccessPrivate | jvm.AccessNative},
 				{Name: "initName", Descriptor: "(Ljava/lang/String;I)V", Access: jvm.AccessPrivate | jvm.AccessNative, Throws: []string{"java/io/IOException"}},
+				// The truncating half of FileOutputStream(String); see truncateStreamFile.
+				{Name: "truncate", Descriptor: "()V", Access: jvm.AccessPrivate | jvm.AccessNative, Throws: []string{"java/io/IOException"}},
 				{Name: "available", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "close", Descriptor: "()V", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "flush", Descriptor: "()V", Access: jvm.AccessPublic | jvm.AccessNative},

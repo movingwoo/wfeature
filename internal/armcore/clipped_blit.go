@@ -130,7 +130,7 @@ func (memory *Memory) runClippedBlit(context *Context, loop *clippedBlit) (uint3
 			memory.declinedValue, memory.haveDeclined = flag, true
 			return 0, nil
 		}
-		return memory.runBlendedClipped(context, loop, draw, low, high)
+		return memory.runBlendedClipped(context, loop, draw, low, high, flagRecord)
 	}
 	record, err := memory.readData32(stack + loop.record)
 	if err != nil {

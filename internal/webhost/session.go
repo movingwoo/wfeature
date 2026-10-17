@@ -791,7 +791,21 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "invalid screen size"})
 		return
 	}
+	r.server.migrateSaveOwner(summary)
 	directory := r.server.saveDirectory(summary.Platform, summary.SaveOwner)
+	// **A game that has saves of its own is not started without a place to
+	// keep them.** An owner saveDirectory refuses would give it no store: it
+	// would save as usual, nothing would look wrong, and closing it would lose
+	// every bit of progress. Refusing the start is the one answer that loses
+	// nothing, and it is said where both the player and the log can see it.
+	if directory == "" && summary.SaveOwner != "" {
+		r.server.logger.Warn("refused to start a game whose save owner names no directory",
+			"game", label, "platform", summary.Platform, "owner", summary.SaveOwner)
+		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: fmt.Sprintf(
+			"이 게임의 세이브 이름(%q)은 폴더 이름으로 쓸 수 없어 시작하지 않았습니다. 그대로 실행하면 진행이 저장되지 않습니다.",
+			summary.SaveOwner)})
+		return
+	}
 	if !r.admitStart(message, directory, label) {
 		return
 	}
@@ -1424,13 +1438,27 @@ func runCheatOperation(engine *cheat.Session, game string, message clientMessage
 // the browser's. The report is written by the side that has the numbers, which
 // is now this one — a page that is only drawing pictures has nothing to say
 // about why a game is slow.
+//
+// It writes into the directory the debug-log API does, so it answers to that
+// route's rules: a release writes no report at all — its page has no button
+// that asks — and a debug build writes no more than allowDebugReport allows.
+// See debuglog.go.
 func (r *sessionRunner) storeReport(message clientMessage) {
+	if !r.server.diagnostics {
+		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "this build does not collect run reports"})
+		return
+	}
 	report := r.postMortem
 	if r.game != nil {
 		report = r.composeReport("")
 	}
 	if report == "" {
 		r.send(serverMessage{Kind: serverResult, ID: message.ID, Message: "no game is running"})
+		return
+	}
+	if !r.server.allowDebugReport(time.Now()) {
+		r.server.logger.Warn("refused a session report over the rate", "game", r.label)
+		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "too many reports; wait a minute and ask again"})
 		return
 	}
 	label := message.Label
@@ -1844,11 +1872,25 @@ func (s *Server) saveDirectory(platform, owner string) string {
 	if owner == "" || ownerRejected(owner) {
 		return ""
 	}
-	root := s.saveRoot
+	return filepath.Join(s.platformSaveRoot(platform), owner)
+}
+
+// platformSaveRoot is the directory a platform's owner directories are in.
+func (s *Server) platformSaveRoot(platform string) string {
 	if platform != "" && platform != "ktf" && platforms[platform] {
-		root = filepath.Join(filepath.Dir(root), platform)
+		return filepath.Join(filepath.Dir(s.saveRoot), platform)
 	}
-	return filepath.Join(root, owner)
+	return s.saveRoot
+}
+
+// migrateSaveOwner moves saves an earlier build kept under an owner name this
+// build no longer uses to the one saveDirectory now names, before anything
+// claims the directory. A failure leaves the old saves where they were and is
+// logged; the start goes on with the current owner.
+func (s *Server) migrateSaveOwner(summary session.Summary) {
+	if err := session.MigrateSaveOwner(summary, s.platformSaveRoot(summary.Platform)); err != nil {
+		s.logger.Warn("saves kept under an earlier owner name were not moved", "platform", summary.Platform, "error", err)
+	}
 }
 
 // saveStoreIn opens the store for a directory saveDirectory already named.

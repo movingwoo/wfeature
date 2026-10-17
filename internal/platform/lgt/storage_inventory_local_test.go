@@ -31,26 +31,31 @@ import (
 //
 //	handles             open MC_fsOpen handles, a Java File's among them
 //	writable            the ones opened with write intent
+//
+// The handles open on one path share one buffer, and the next seven count
+// buffers, each under the name of the lowest handle on it:
+//
 //	dirty               the ones written to and not stored since: a write the
-//	                    title issued that only the handle's buffer holds
-//	stale               the ones whose buffer is not what an open of the same
-//	                    name would read now
+//	                    title issued that only the buffer holds
+//	stale               the ones that are not what an open of the same name
+//	                    would read now
 //	stale_clean         the stale ones that are not dirty, so that nothing the
-//	                    title wrote through the handle explains the difference
+//	                    title wrote explains the difference
 //	empty_over_content  writable, clean and empty over a name that holds bytes:
-//	                    an open that truncated and has not written yet, or a
-//	                    file that gained its content behind the handle
+//	                    a file that gained its content behind the buffer
 //	no_save_key         the ones whose name the save store has no key for
 //	dirty_no_save_key   the dirty ones among those, which nothing can store
 //	removed_open        the ones whose path is on the removal list
 //	shared_keys         keys two or more handles are open on
-//	shared_dirty_keys   keys two or more dirty handles are open on
+//	shared_dirty_keys   keys two or more dirty buffers are open on, which a
+//	                    buffer shared by the handles on a path leaves none of
 //	databases           open Java DataBase objects
 //	stale_databases     the ones whose records are not the container the store
 //	                    holds
 //	shared_databases    names two or more open DataBase objects stand for
 //	sink_files          output streams opened on a File that hold bytes the
-//	                    file has not been handed
+//	                    file has not been handed, which a stream that hands
+//	                    the File every write leaves none of
 //	file_streams        input streams opened on a File and not closed
 //	ledgers_loaded      how many of the removal list and the created list the
 //	                    session has read
@@ -58,10 +63,10 @@ import (
 //	unreadable          lookups the store answered with an error
 //	read_error          1 while the session holds a read failure of its own
 //
-// A write is pending at a boundary when a handle is dirty or a stream bound to
-// a File holds bytes. The first is what ending the game stores and the second
-// is what it does not, so they are counted apart; they are one group because
-// both are bytes a title has issued and the store has not received.
+// A write is pending at a boundary when a buffer is dirty or a stream bound to
+// a File holds bytes. They are counted apart because the second is where an
+// earlier build kept a stream's writes; they are one group because both are
+// bytes a title has issued and the store has not received.
 //
 // **What the store holds is asked of a second client, not of the session.** A
 // file's content on this platform is the removal list, then the save, then the
@@ -141,14 +146,14 @@ var storageInventoryLayout = storageinventory.Layout{
 }
 
 // storageInventoryKey is what two handles are compared by to say they are open
-// on one file: the save key, folded the way the removal list folds a name, so
-// that two spellings a case-folding filesystem keeps as one file count as one.
-// A name with no save key is compared as the removal list compares it.
+// on one file: the save key, case kept, so that the spellings the store gives
+// one key count as one file and two names that differ only by case as two. A
+// name with no save key is compared as the removal list compares it.
 func storageInventoryKey(name string) string {
 	if key, err := fileSaveKey(name); err == nil {
-		return "key:" + strings.ToLower(key)
+		return "key:" + key
 	}
-	return "name:" + canonicalFileName(name)
+	return "name:" + fileListKey(name)
 }
 
 // sameNameSet reports whether two ledgers list the same names.
@@ -195,20 +200,32 @@ func inventoryStorage(client *Client, note func(column int, name string)) storag
 		return true
 	}
 
-	removed := view.removedFiles()
+	view.removedFiles()
 	removedRefused := refused(fileRemovedKey)
 	type sharing struct{ handles, dirty int }
 	keys := make(map[string]sharing, len(client.files))
+	writable := make(map[*fileContent]bool, len(client.files))
 	for _, file := range client.files {
 		if file == nil {
 			continue
 		}
 		counts[storageHandles]++
+		key := storageInventoryKey(file.name)
+		shared := keys[key]
+		shared.handles++
+		keys[key] = shared
 		if file.writable {
 			counts[storageWritable]++
+			writable[file.fileContent] = true
 		}
+	}
+	for _, file := range client.openContents() {
 		if file.dirty {
 			mark(storageDirty, file.name)
+			key := storageInventoryKey(file.name)
+			shared := keys[key]
+			shared.dirty++
+			keys[key] = shared
 		}
 		if _, err := fileSaveKey(file.name); err != nil {
 			mark(storageNoSaveKey, file.name)
@@ -216,18 +233,11 @@ func inventoryStorage(client *Client, note func(column int, name string)) storag
 				mark(storageDirtyNoSaveKey, file.name)
 			}
 		}
-		if removed[canonicalFileName(file.name)] {
+		if view.fileRemoved(file.name) {
 			mark(storageRemovedOpen, file.name)
 		}
-		key := storageInventoryKey(file.name)
-		shared := keys[key]
-		shared.handles++
-		if file.dirty {
-			shared.dirty++
-		}
-		keys[key] = shared
 
-		// An absent name reads as no bytes, which is what a handle rebuilt over
+		// An absent name reads as no bytes, which is what a buffer rebuilt over
 		// it would hold.
 		stored, _ := view.readFile(file.name)
 		if refused(file.name) {
@@ -239,7 +249,7 @@ func inventoryStorage(client *Client, note func(column int, name string)) storag
 				mark(storageStaleClean, file.name)
 			}
 		}
-		if file.writable && !file.dirty && len(file.data) == 0 && len(stored) != 0 {
+		if writable[file.fileContent] && !file.dirty && len(file.data) == 0 && len(stored) != 0 {
 			mark(storageEmptyOverContent, file.name)
 		}
 	}
@@ -296,14 +306,14 @@ func inventoryStorage(client *Client, note func(column int, name string)) storag
 	// not a copy of anything.
 	if client.removed != nil {
 		counts[storageLedgersLoaded]++
-		if !removedRefused && !sameNameSet(client.removed, removed) {
+		if !removedRefused && (!sameNameSet(client.removed, view.removed) || !sameNameSet(client.removedLegacy, view.removedLegacy)) {
 			mark(storageStaleLedgers, fileRemovedKey)
 		}
 	}
 	if client.created != nil {
 		counts[storageLedgersLoaded]++
-		created := view.createdFiles()
-		if !refused(fileCreatedKey) && !sameNameSet(client.created, created) {
+		view.createdFiles()
+		if !refused(fileCreatedKey) && (!sameNameSet(client.created, view.created) || !sameNameSet(client.createdLegacy, view.createdLegacy)) {
 			mark(storageStaleLedgers, fileCreatedKey)
 		}
 	}

@@ -71,6 +71,10 @@ type PanelHits struct {
 // the panel shows. Comparing against the previous scan needs a previous scan.
 var ErrNoPreviousScan = errors.New("이 필터는 이전 검색과 비교합니다. 먼저 `이 값으로 찾기`나 `값 모름`으로 시작하세요.")
 
+// ErrPanelTooManyCandidates is ErrTooManyCandidates in the words the panel
+// shows.
+var ErrPanelTooManyCandidates = errors.New("찾은 곳이 너무 많습니다. 아는 값이나 더 드문 값으로 `이 값으로 찾기`를 하거나 u16·u32처럼 더 큰 형식을 고르세요.")
+
 // PanelScan runs one scan and answers what survived. The value type and filter
 // arrive as the names the panel uses, and are parsed through the same parser
 // the text console uses so the two cannot drift.
@@ -92,6 +96,9 @@ func PanelScan(session *Session, valueTypeName, filterName string, operand int64
 	if _, err := session.Scan(filter); err != nil {
 		if errors.Is(err, ErrNeedsPreviousValue) {
 			return PanelCandidates{}, ErrNoPreviousScan
+		}
+		if errors.Is(err, ErrTooManyCandidates) {
+			return PanelCandidates{}, ErrPanelTooManyCandidates
 		}
 		return PanelCandidates{}, err
 	}

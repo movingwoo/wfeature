@@ -167,3 +167,28 @@ test("a control that is not a cell runs the same action under the same rules", a
   await f.controls.run(QUICK_SAVE);
   assert.deepEqual(f.calls, ["save", "load"], "editing the pad blocks it too");
 });
+
+// A dropped socket rejects the pending quick save and leaves play in the same
+// turn, before the failure is written. The note has to outlive that, or the
+// player sees "저장 중…" vanish and may take it for a save that happened.
+test("a quick save the dropped connection broke still says it failed", async () => {
+  const ui = setup();
+  ui.state("playing");
+  ui.controls.started({ can_checkpoint: true, has_checkpoint: false });
+  ui.socket.quickSave = async () => {
+    ui.state("offline");
+    throw new Error("세션 연결이 끊어졌습니다.");
+  };
+  await ui.save.click();
+  assert.equal(ui.note.hidden, false);
+  assert.equal(ui.note.textContent, "퀵세이브 실패: 세션 연결이 끊어졌습니다.");
+  assert.ok(ui.classes.has("error"));
+  assert.deepEqual([...ui.timers.values()].map(timer => timer.ms), [8000]);
+  // Reconnecting to the same game does not take it away before it is read.
+  ui.state("connecting");
+  ui.state("playing");
+  assert.equal(ui.note.hidden, false);
+  // The picker covers the screen, and the note goes with the game.
+  ui.state("ready");
+  assert.equal(ui.note.hidden, true);
+});

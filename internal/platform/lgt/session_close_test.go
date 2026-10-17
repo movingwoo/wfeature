@@ -28,7 +28,7 @@ func TestClosingASessionStoresAnUnclosedWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.files = map[uint32]*openFile{
-		1: {name: "progress.dat", data: []byte("written and left open"), writable: true, dirty: true},
+		1: {name: "progress.dat", fileContent: &fileContent{data: []byte("written and left open"), dirty: true}, writable: true},
 	}
 	session := &Session{client: client, archive: archive}
 	if err := session.Close(context.Background()); err != nil {

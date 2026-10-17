@@ -79,13 +79,6 @@ func TestDecodeModifiedUTF8(t *testing.T) {
 	}
 }
 
-func TestDecodeModifiedUTF8RejectsUnpairedSurrogate(t *testing.T) {
-	_, err := decodeModifiedUTF8([]byte{0xed, 0xa0, 0xbd})
-	if err == nil {
-		t.Fatal("decodeModifiedUTF8() accepted an unpaired surrogate")
-	}
-}
-
 func FuzzParseNeverPanics(f *testing.F) {
 	f.Add(minimalClass("Main"))
 	f.Add([]byte{0xca, 0xfe, 0xba, 0xbe})

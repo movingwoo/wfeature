@@ -36,8 +36,8 @@ const (
 	LGTJavaSaveSurfaceFile uint32 = 0
 	// LGTJavaSaveSurfaceStream is the same File written through the stream
 	// `File.openOutputStream` answers and read through `File.openInputStream`.
-	// A write waits one step further back: in the stream, until a flush or the
-	// File's close moves it into the handle's buffer.
+	// The stream holds nothing back: a write is in the File's buffer at once,
+	// and a flush or the File's close stores it.
 	LGTJavaSaveSurfaceStream uint32 = 1
 	// LGTJavaSaveSurfaceDatabase is `org/kwis/msp/db/DataBase`, where the two
 	// parts are records 0 and 1. Every change is stored as it is made, so
@@ -53,9 +53,9 @@ const (
 	// LGTJavaSaveOwner is the Java title's own save owner.
 	LGTJavaSaveOwner = "PF0000JS"
 
-	// LGTJavaSaveKeyFlush flushes the stream LGTJavaSaveHeldStream names: what
-	// was written to it moves into the File's buffer, and still not into the
-	// store.
+	// LGTJavaSaveKeyFlush flushes the stream LGTJavaSaveHeldStream names: the
+	// File holds what was written to the stream already, and the flush stores
+	// it.
 	LGTJavaSaveKeyFlush int32 = '0'
 )
 

@@ -68,7 +68,7 @@ test("one bad file does not take the others down with it", async () => {
 });
 
 test("what the user is told afterwards", () => {
-  assert.match(describe({ added: ["영웅서기2.zip"], failed: [] }), /영웅서기2\.zip/);
+  assert.match(describe({ added: ["게임.zip"], failed: [] }), /게임\.zip/);
   assert.match(describe({ added: ["a.zip", "b.zip", "c.zip"], failed: [] }), /3개/);
   // A single failure is its own reason rather than a count: there is room for
   // it, and the reason is the useful half.
@@ -313,5 +313,17 @@ test("the button goes back to whatever the picker landed on", async () => {
   await listeners.click();
   assert.equal(button.disabled, true);
   assert.equal(button.textContent, "게임 삭제");
+});
+
+// A request that never reached the server rejects with the browser's own
+// English sentence; the player is told what it means instead.
+test("a server that cannot be reached is said in Korean, not in the browser's words", async () => {
+  const unreachable = async () => {
+    throw new TypeError("Load failed");
+  };
+  const result = await uploadGames([fileOf("a.zip")], unreachable);
+  assert.equal(result.failed.length, 1);
+  assert.match(result.failed[0].reason, /^서버에 연결하지 못했습니다/);
+  await assert.rejects(() => removeGame("ext/a.zip", unreachable), { message: /^서버에 연결하지 못했습니다/ });
 });
 

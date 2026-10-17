@@ -74,6 +74,9 @@ func (store *DirectorySaveStore) ReadSaveLimit(name string, limit int64) ([]byte
 	if limit < 0 {
 		return nil, false, fmt.Errorf("save %q has a negative read limit %d", name, limit)
 	}
+	if _, err := NormalizeSaveKey(name); err != nil {
+		return nil, false, err
+	}
 	unlock, err := lockSaveTree(store.root)
 	if err != nil {
 		return nil, false, err
@@ -82,12 +85,16 @@ func (store *DirectorySaveStore) ReadSaveLimit(name string, limit int64) ([]byte
 	if err := store.recoverSaveReplacement(); err != nil {
 		return nil, false, err
 	}
-	return store.readSaveLimit(name, limit)
+	names, err := store.settleSaveNames()
+	if err != nil {
+		return nil, false, err
+	}
+	return store.readSaveLimit(name, limit, names)
 }
 
-func (store *DirectorySaveStore) readSaveLimit(name string, limit int64) ([]byte, bool, error) {
-	path, err := store.savePath(name)
-	if err != nil {
+func (store *DirectorySaveStore) readSaveLimit(name string, limit int64, names saveNames) ([]byte, bool, error) {
+	path, located, err := store.locateSave(name, names, false)
+	if err != nil || !located {
 		return nil, false, err
 	}
 	file, err := os.Open(path)

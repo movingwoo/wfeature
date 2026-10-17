@@ -119,6 +119,34 @@ func soundResourceUsage(events []smaf.Event, active []AudioNoteState) (audioReso
 	return used, nil
 }
 
+// channelMessagesInRange refuses a program change, control change or pitch
+// bend whose fields do not fit MIDI, as soundResourceUsage refuses such a
+// note. The recorder cannot represent one: the first it is handed marks the
+// output unrepresentable, and every quick save after that is refused. So the
+// sound is refused when it is loaded, before anything of it plays.
+//
+// It is the load's check only. A checkpoint an earlier build wrote may hold a
+// loaded sound with such a message in it, and that checkpoint still restores.
+func channelMessagesInRange(events []smaf.Event) error {
+	for _, event := range events {
+		switch event.Type {
+		case smaf.EventProgramChange:
+			if event.Channel >= 16 || event.Program >= 128 {
+				return fmt.Errorf("audio program change has an invalid channel or program")
+			}
+		case smaf.EventControlChange:
+			if event.Channel >= 16 || event.Control >= 128 || event.Value >= 128 {
+				return fmt.Errorf("audio control change has an invalid channel, control or value")
+			}
+		case smaf.EventPitchBend:
+			if event.Channel >= 16 || event.Bend >= 16384 {
+				return fmt.Errorf("audio pitch bend has an invalid channel or value")
+			}
+		}
+	}
+	return nil
+}
+
 // Costs are immutable after admission. Closing a handle releases its budget by
 // removing its cached record; stop and pause retain the loaded payload.
 func (audio *Audio) admitSoundResources(next audioResourceUsage) error {

@@ -57,7 +57,7 @@ func (vm *VM) catches(exceptionClass, catchClass string) bool {
 		return true
 	}
 
-	for current := exceptionClass; current != ""; {
+	for current, depth := exceptionClass, 0; current != "" && depth < maxSuperclassDepth; depth++ {
 		if current == catchClass {
 			return true
 		}

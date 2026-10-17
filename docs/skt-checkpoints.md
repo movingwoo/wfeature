@@ -82,13 +82,14 @@ attempting the old session's writes, and rebuilds again if those writes changed
 anything. Unique reads and reconstructed cache copies each have a 128 MiB budget;
 repeated handles cannot multiply one large save into unbounded allocations.
 
-Before flushing anything, a quick step compares dirty file buffers with the
-latest issued write for their normalized key. A later write or deletion through
-another handle, two independently dirty aliases, or an open over a failed newer
-write refuses the step with `backend.ErrCheckpointSaveWrite`. All buffers and
-current saves remain available to the running guest. Its own explicit flush or
-close still decides the order of writes. These versions are Host bookkeeping;
-they are rebuilt on load and do not change the checkpoint or save format.
+Every handle on one normalized key shares one file in the session (see
+[the one save rule](architecture.md#one-save-rule)), so a quick step stores each
+dirty path's current content once: there are no aliases to compare and no older
+buffer to refuse. A store that refuses a write refuses the step with
+`backend.ErrCheckpointSaveWrite` and leaves the file dirty for the running
+guest. A load binds every restored handle onto one file per path, read from the
+current saves; a checkpoint written while handles kept their own buffers
+restores the same way, so the checkpoint format is unchanged.
 
 WIPI streams retain file provenance. Input streams keep an independent cursor
 and mark; output streams write the original file buffer and flush through the

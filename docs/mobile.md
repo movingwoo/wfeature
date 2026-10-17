@@ -67,6 +67,38 @@ app's data directory. Settings left under the random ports older builds used
 cannot cross the origin boundary, so the first launch after that change started
 from the defaults once.
 
+## When the app leaves the screen
+
+**Saving is the player's to do.** A game's saves follow the common save rule
+([architecture](architecture.md#one-save-rule)): what a title writes reaches the
+store by the time it flushes or closes the file, and at the latest when the
+game ends. Neither app saves anything because it left the screen: no background
+drain, timer or lifecycle save. A player who leaves a game in the background
+saves in the game first, as on a handset. What each app does make sure of is
+that a game is not ended by something that is not an ending.
+
+- **Android** runs the server as a child process. A configuration change the
+  activity declares in `configChanges` — rotation, a density or display size
+  change, night mode, a keyboard or navigation device — is taken without
+  rebuilding the activity, so the page and its socket stay as they were. A
+  change it does not declare (a font scale change, for one) rebuilds the
+  activity in the same app process; the process handle belongs to the class,
+  so the new activity finds the server and the game in it still running, and
+  the new page resumes the game. Only an activity that is gone for good
+  (`isChangingConfigurations()` false) ends the server, with SIGTERM, and the
+  server's drain closes the game so its exit-time saves are written.
+  `Process.destroy()` closes the server's output pipe right after the signal,
+  so the server ignores SIGPIPE: a log line nobody reads fails instead of
+  ending the drain. Before this, a density or font scale change ended the game
+  and started a second server, and finishing the app lost a game's exit-time
+  saves about half the time.
+- **iOS** links the server into the app. It drains the server only in
+  `applicationWillTerminate`, which iOS calls for an app it ends while running.
+  iOS ends a suspended app without telling it, so a game it reclaims while the
+  app is in the background ends without its exit-time saves, as a handset whose
+  battery is pulled does; the app does not close the game on its own to
+  prevent that, by decision, because the player saves.
+
 ## Building
 
 Neither app is part of `make dist`: each needs a toolchain the desktop build
@@ -262,6 +294,11 @@ no permission.
   the same processor. Over a network that trade spared a phone from emulating;
   in-process it buys nothing, and handing the frame over as raw pixels is the
   next thing to measure.
+- **The lifecycle on a phone.** What each app does on a configuration change,
+  on leaving the screen and on finishing is checked on an Android emulator and
+  an iOS simulator (see [testing](testing.md#the-android-apps-lifecycle-on-an-emulator)
+  and [the iOS check](testing.md#the-ios-app-on-a-simulator)); a phone has not
+  run them, and a simulator does not end a suspended app the way a phone does.
 - **How far each app has been played.** Both builds are verified as far as
   their contents: signed, correct architecture, the server and the page inside.
   The Android app has run KTF titles in an emulator and for users, which is how

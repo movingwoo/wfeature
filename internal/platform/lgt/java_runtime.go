@@ -604,7 +604,8 @@ func (client *Client) allocateJavaClassObject(class *javaRuntimeClass) (uint32, 
 	// The compiler bakes most of those offsets, so a block sized to the class
 	// object's own use is a block the guest writes past — which is exactly what
 	// overwrote a class object in two local titles, at an address the arena had
-	// handed out for something else. See docs/lgt.md.
+	// handed out for something else. See docs/history/lgt.md, "A class's
+	// statics live in its class object".
 	data := make([]uint32, javaClassDataWords+class.StaticWords)
 	data[javaClassNameWord] = name
 	block, err := client.allocateWords(data)

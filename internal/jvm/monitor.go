@@ -89,8 +89,23 @@ func (m *monitor) exit(owner uint64) error {
 	return nil
 }
 
+// monitorOf answers the monitor that locking an object takes. A
+// java/lang/Class object stands for its class, so it takes the class monitor
+// a static synchronized method of that class takes: `synchronized (Foo.class)`
+// and Foo's static synchronized methods exclude each other, as the language
+// requires, whichever Class object for Foo the code holds. The class monitor
+// is also what a checkpoint records for it (HeapState.ClassMonitors).
+func (vm *VM) monitorOf(object *Object) *monitor {
+	if object.ClassName == ClassClass {
+		if name, ok := object.Native.(string); ok {
+			return vm.classMonitor(name)
+		}
+	}
+	return &object.monitor
+}
+
 func (vm *VM) waitMonitor(state *execution, object *Object, timeout time.Duration) error {
-	m := &object.monitor
+	m := vm.monitorOf(object)
 	m.mu.Lock()
 	if m.owner != state.id || m.depth == 0 {
 		m.mu.Unlock()
@@ -114,7 +129,7 @@ func (vm *VM) waitMonitor(state *execution, object *Object, timeout time.Duratio
 }
 
 func (vm *VM) continueMonitorWait(state *execution, wait *bytecodeThreadWait) error {
-	m := &wait.object.monitor
+	m := vm.monitorOf(wait.object)
 	state.wait = wait
 	defer func() { state.wait = nil }()
 	thread := state.thread
@@ -161,7 +176,19 @@ func (vm *VM) continueMonitorWait(state *execution, wait *bytecodeThreadWait) er
 	}
 	m.mu.Lock()
 	m.waiters = slices.DeleteFunc(m.waiters, func(other *bytecodeThreadWait) bool { return other == wait })
+	// A notify that chose this waiter is its notification even when an
+	// interrupt woke it first, and a notification may not be lost to an
+	// interrupt (JLS 17.2.4): the other waiters were passed over for this one.
+	// So the wait returns normally and the interrupt stays pending for the
+	// thread's next wait or sleep.
+	keepInterrupt := wait.interrupted && wait.notified
+	if keepInterrupt {
+		wait.interrupted = false
+	}
 	m.mu.Unlock()
+	if keepInterrupt {
+		vm.interruptThread(thread)
+	}
 	if err := vm.enterMonitor(state, m); err != nil {
 		return err
 	}

@@ -33,7 +33,7 @@ func javaCurveFixture(t *testing.T, width, height int) (*framebuffer, *Client, u
 func TestJavaFillRoundRectRoundsItsCorners(t *testing.T) {
 	target, client, object := javaCurveFixture(t, 24, 8)
 
-	fill := javaCurve(curve.FillRoundRect)
+	fill := javaCurve(curve.FillRoundRectWithin)
 	if _, err := fill(client, nil, nil, []uint32{object, 0, 0, 24, 8, 24, 8}); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestJavaFillRoundRectRoundsItsCorners(t *testing.T) {
 func TestJavaFillArcCutsThePieItNames(t *testing.T) {
 	target, client, object := javaCurveFixture(t, 20, 20)
 
-	fill := javaCurve(curve.FillArc)
+	fill := javaCurve(curve.FillArcWithin)
 	if _, err := fill(client, nil, nil, []uint32{object, 0, 0, 20, 20, 0, 90}); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestJavaCurveHonoursTheTranslation(t *testing.T) {
 	if _, err := javaTranslate(client, nil, nil, []uint32{object, 10, 10}); err != nil {
 		t.Fatal(err)
 	}
-	fill := javaCurve(curve.FillArc)
+	fill := javaCurve(curve.FillArcWithin)
 	if _, err := fill(client, nil, nil, []uint32{object, 0, 0, 8, 8, 0, 360}); err != nil {
 		t.Fatal(err)
 	}

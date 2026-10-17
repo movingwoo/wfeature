@@ -163,7 +163,9 @@ func (platform *NativePlatform) advanceSound(ctx context.Context) error {
 		return nil
 	}
 	platform.audio.Advance(platform.guestElapsed())
-	if !platform.sounding || platform.clip == 0 || platform.audio.Playing(platform.clip) {
+	// No clip while sounding is a sounding clip that setClip closed and could
+	// not replace, so it has ended as surely as one that played out.
+	if !platform.sounding || platform.clip != 0 && platform.audio.Playing(platform.clip) {
 		return nil
 	}
 	platform.sounding = false

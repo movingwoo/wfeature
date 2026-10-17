@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -551,7 +553,13 @@ func readRecords(path string) (runRecord, []archiveRecord, error) {
 	for {
 		var line json.RawMessage
 		if err := decoder.Decode(&line); err != nil {
-			break
+			// Only the end of the file ends it. A line cut off by a full disk
+			// or a killed run is a partial record, and planning or comparing
+			// from it would report every archive after the cut as gone.
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return runRecord{}, nil, fmt.Errorf("read %s: %w", filepath.Base(path), err)
 		}
 		var head struct {
 			Schema int    `json:"schema"`

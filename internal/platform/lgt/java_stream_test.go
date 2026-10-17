@@ -185,10 +185,11 @@ func TestJavaStreamSkipMovesTheCursor(t *testing.T) {
 }
 
 // A stream opened on a File writes into the file rather than into memory, and
-// the bytes are there by the time the flush returns. This is the difference
-// between `openOutputStream` and the `ByteArrayOutputStream` it is built on: a
-// title that writes a save through the stream and then reads it back has to
-// find it, and one that only closes the File must not lose what it wrote.
+// the bytes are there as soon as the write returns: a write to the stream is
+// a write to the file. This is the difference between `openOutputStream` and
+// the `ByteArrayOutputStream` it is built on: a title that writes a save
+// through the stream and then reads it back has to find it, and one that only
+// closes the File must not lose what it wrote.
 func TestFileOutputStreamWritesReachTheFile(t *testing.T) {
 	client := fixtureClient(t)
 	client.saveStore = newMemorySaveStore()
@@ -220,8 +221,8 @@ func TestFileOutputStreamWritesReachTheFile(t *testing.T) {
 		}
 	}
 	handle := client.javaRuntimeState().files[file]
-	if held := client.files[handle]; len(held.data) != 0 {
-		t.Errorf("the file holds %d bytes before the flush, want 0", len(held.data))
+	if held := client.files[handle]; string(held.data) != string([]byte{7, 8, 9}) {
+		t.Errorf("the file holds %v before the flush, want [7 8 9]", held.data)
 	}
 	if _, err := javaByteSinkFlush(client, nil, nil, []uint32{stream}); err != nil {
 		t.Fatalf("flush() error = %v", err)

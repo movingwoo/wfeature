@@ -2,6 +2,7 @@ package skt
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -349,10 +350,7 @@ func (runtime *Runtime) drawTextBody(context *graphicsContext, font *fontData, c
 	display := string(content.text)
 	if content.constraint&midp.TextFieldConstraintMask == midp.TextFieldPasswordConstraint ||
 		content.constraint&midp.TextFieldPassword != 0 {
-		display = ""
-		for range content.text {
-			display += "*"
-		}
+		display = strings.Repeat("*", len(content.text))
 	}
 	y := body.minY + 2*screenPadding
 	for _, line := range wrapText(font, display, body.maxX-body.minX-4*screenPadding) {

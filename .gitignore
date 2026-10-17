@@ -84,7 +84,7 @@ run/
 # Working notes rather than documentation.
 TODO.md
 # Should be temporarily banned
-AGENTS.md
-CLAUDE.md
+/AGENTS.md
+/CLAUDE.md
 
 .DS_Store
