@@ -196,7 +196,9 @@ func (store *DirectorySaveStore) storeSave(name string, data []byte, names *save
 // prepareSaveWrite answers the path a key's entry is written at. A directory
 // without the record becomes an encoded one before the first name with a '#'
 // in it is written, and nothing is written to one that still holds an
-// earlier build's names it could not convert.
+// earlier build's names it could not convert. A key whose encoded path is too
+// long has no name to write unless an earlier build left it one, and is
+// refused before the directory is touched (see saveNamesFit).
 func (store *DirectorySaveStore) prepareSaveWrite(name string, names *saveNames) (string, error) {
 	if store == nil || store.root == "" {
 		return "", fmt.Errorf("save store has no root")
@@ -208,7 +210,7 @@ func (store *DirectorySaveStore) prepareSaveWrite(name string, names *saveNames)
 	if names.naming == namingEarlier {
 		return "", refuseEarlierSaveNames(store.root, *names)
 	}
-	if names.naming == namingPlain && encodeSaveKey(key) != key {
+	if encoded := encodeSaveKey(key); names.naming == namingPlain && encoded != key && saveNamesFit(encoded) {
 		if err := encodeSaveNames(store.root); err != nil {
 			return "", fmt.Errorf("prepare save directory %s for the name %q: %w", store.root, key, err)
 		}

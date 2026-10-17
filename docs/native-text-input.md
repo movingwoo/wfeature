@@ -238,6 +238,10 @@ the same way wherever it asks. It composes no Hangul.
   ([LCDUI](lcdui.md#deliberately-incomplete)).
 - A Java field's limit counts UTF-16 units, and insertion that would exceed it
   is refused.
+- SKT `TextBox` and `XTextField` follow the field's constraint as the Host
+  dialog does: an `UNEDITABLE` field takes no key at all, caret moves
+  included, and a `NUMERIC`, `PHONENUMBER` or `DECIMAL` field is held in
+  numeric mode, so a key types its digit and `*` cannot leave it.
 
 An editor's state, including an unfinished multi-tap cycle, is captured in
 quick saves (`textinput.StateSnapshot`) and restored without sending keys.

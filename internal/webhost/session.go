@@ -1335,16 +1335,10 @@ func (r *sessionRunner) runCheat(message clientMessage) {
 		})
 		return
 	}
-	if message.Op == "console" || message.Op == "" {
-		console := r.game.CheatConsole()
-		if console == nil {
-			r.send(serverMessage{Kind: serverResult, ID: message.ID, Message: "this session has no cheat engine"})
-			return
-		}
+	if console := r.game.CheatConsole(); r.server.textConsole && message.Op == "" && console != nil {
 		console.SetGame(r.label)
 		text := console.Execute(message.Command)
-		r.send(serverMessage{Kind: serverResult, ID: message.ID, Message: text,
-			Cheat: &cheatResult{Text: text, Searchable: true}})
+		r.send(serverMessage{Kind: serverResult, ID: message.ID, Message: text, Cheat: &cheatResult{Searchable: true}})
 		return
 	}
 

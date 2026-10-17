@@ -83,21 +83,12 @@ func (runtime *Runtime) deliverScreenKey(screen *jvm.Object, eventType KeyEventT
 // method, so a game types the same way here as it does in a KTF lwc field.
 func (runtime *Runtime) handleTextKey(screen *jvm.Object, content *screenData, keyCode int32) error {
 	runtime.textMu.Lock()
-	// An UNEDITABLE box is a read-only view, the same rule the Host keyboard
-	// path applies.
-	if content.constraint&textFieldUneditable != 0 {
+	if !keypadEditable(content.constraint) {
 		runtime.textMu.Unlock()
 		return nil
 	}
 	editor := runtime.textEditor(content)
-	// A box that takes only numbers types the digit on the key, which is
-	// what the handset's digit mode did; the mode key cannot leave it.
-	switch content.constraint & midp.TextFieldConstraintMask {
-	case textFieldNumeric, textFieldPhoneNumber, textFieldDecimal:
-		for presses := 0; editor.Mode() != textinput.ModeNumeric && presses < 3; presses++ {
-			editor.Key('*', runtime.editorClock())
-		}
-	}
+	runtime.holdDigitMode(editor, content.constraint)
 	// The pad moves the caret, and only the pad: a digit is a letter here,
 	// so the 4 and 6 a game reads as left and right have to reach the
 	// keypad table instead. Without that neither "ghi" nor "mno" is typable.
@@ -126,6 +117,25 @@ func (runtime *Runtime) handleTextKey(screen *jvm.Object, content *screenData, k
 	content.caret = editor.Caret()
 	runtime.textMu.Unlock()
 	return runtime.queueScreenPaint(screen)
+}
+
+// keypadEditable reports whether keypad typing may change a field with this
+// constraint. An UNEDITABLE field is a read-only view, the same rule the Host
+// keyboard path applies. A TextBox and the vendor XTextField both ask it.
+func keypadEditable(constraint int32) bool {
+	return constraint&textFieldUneditable == 0
+}
+
+// holdDigitMode keeps the keypad editor of a field that takes only numbers
+// in digit mode, so a key types its digit, which is what the handset's digit
+// mode did; the mode key cannot leave it. The caller holds textMu.
+func (runtime *Runtime) holdDigitMode(editor *textinput.State, constraint int32) {
+	switch constraint & midp.TextFieldConstraintMask {
+	case textFieldNumeric, textFieldPhoneNumber, textFieldDecimal:
+		for presses := 0; editor.Mode() != textinput.ModeNumeric && presses < 3; presses++ {
+			editor.Key('*', runtime.editorClock())
+		}
+	}
 }
 
 // textEditor is the screen's keypad editor, created on first use and kept in

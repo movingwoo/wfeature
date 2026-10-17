@@ -1,6 +1,7 @@
 package lgt
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -137,6 +138,13 @@ func javaOpenDataBase(
 	if err := validDatabaseName(name); err != nil {
 		return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass, ": "+err.Error())
 	}
+	// The container of a database by this name would be the index of names,
+	// which no title's database may take; see fileSaveKey. Restoring a record
+	// does not ask, so an object an earlier build opened under it still loads.
+	if strings.EqualFold(databaseFileName(name), databaseIndexName) {
+		return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass,
+			fmt.Sprintf(": %q is the name of the platform's own index", name))
+	}
 	recordSize, create := arguments[1], arguments[2] != 0
 	stored, exists := client.readFile(databaseFileName(name))
 	// An object the title already has on the database is the database. Its
@@ -205,11 +213,18 @@ func databaseFileName(name string) string {
 
 // openDatabaseContent answers the records the objects on a database share
 // while one of them is open, or holds a write the store refused; nil when no
-// object does.
+// object does. The records of an object the collector reclaimed with such a
+// write are one of these.
 func (client *Client) openDatabaseContent(name string) *databaseContent {
-	for _, object := range slices.Sorted(maps.Keys(client.javaRuntimeState().databases)) {
-		database := client.javaRun.databases[object]
+	runtime := client.javaRuntimeState()
+	for _, object := range slices.Sorted(maps.Keys(runtime.databases)) {
+		database := runtime.databases[object]
 		if database != nil && database.name == name && database.databaseContent != nil && (!database.closed || database.unsaved) {
+			return database.databaseContent
+		}
+	}
+	for _, database := range runtime.collectedDatabases {
+		if database.name == name && database.unsaved {
 			return database.databaseContent
 		}
 	}
@@ -217,18 +232,18 @@ func (client *Client) openDatabaseContent(name string) *databaseContent {
 }
 
 // databaseContents answers one object for each set of records, the lowest
-// numbered one, in object order, and whether any object on those records is
-// still open: what the ending and a quick step store, once each.
+// numbered one, in object order, then the records of objects the collector
+// reclaimed, and whether any object on those records is still open: what the
+// ending and a quick step store, once each.
 func (client *Client) databaseContents() ([]*javaDatabase, map[*databaseContent]bool) {
 	if client.javaRun == nil {
 		return nil, nil
 	}
 	open := make(map[*databaseContent]bool)
-	databases := make([]*javaDatabase, 0, len(client.javaRun.databases))
-	for _, object := range slices.Sorted(maps.Keys(client.javaRun.databases)) {
-		database := client.javaRun.databases[object]
+	databases := make([]*javaDatabase, 0, len(client.javaRun.databases)+len(client.javaRun.collectedDatabases))
+	add := func(database *javaDatabase) {
 		if database == nil || database.databaseContent == nil {
-			continue
+			return
 		}
 		if _, seen := open[database.databaseContent]; !seen {
 			databases = append(databases, database)
@@ -238,7 +253,65 @@ func (client *Client) databaseContents() ([]*javaDatabase, map[*databaseContent]
 			open[database.databaseContent] = true
 		}
 	}
+	for _, object := range slices.Sorted(maps.Keys(client.javaRun.databases)) {
+		add(client.javaRun.databases[object])
+	}
+	for _, database := range client.javaRun.collectedDatabases {
+		add(database)
+	}
 	return databases, open
+}
+
+// keepCollectedDatabases is what the collector does with the DataBase objects
+// it reclaims. **A write the store refused outlives its object.** Every change
+// is stored when it is made, so an object holds nothing the store lacks unless
+// that store was refused; those records are then the only place the write is,
+// and the ending and a quick step reach a database only through its objects.
+// Dropped with the object, the write was lost although the title had made it
+// and the session had not ended.
+//
+// So the reclaimed object is closed as the title would close it: records
+// another object still has wait with that object, and the rest are given to
+// the store now, as closeDataBase gives them. What the store refuses again
+// waits here, closed, for the ending, a quick step, or the next open of the
+// database, which takes them up as its own.
+func (client *Client) keepCollectedDatabases(reclaimed []*javaDatabase) {
+	client.dropStoredCollectedDatabases()
+	runtime := client.javaRun
+	held := make(map[*databaseContent]bool, len(runtime.databases)+len(runtime.collectedDatabases))
+	for _, database := range runtime.databases {
+		if database != nil {
+			held[database.databaseContent] = true
+		}
+	}
+	for _, database := range runtime.collectedDatabases {
+		held[database.databaseContent] = true
+	}
+	for _, database := range reclaimed {
+		if !database.unsaved || held[database.databaseContent] {
+			continue
+		}
+		held[database.databaseContent] = true
+		database.closed = true
+		if _, err := client.storeRefusedDatabase(database, false); err != nil {
+			if client.logger != nil {
+				client.logger.Debug("LGT java database kept a write the store refused when its object was collected",
+					"name", database.name, "error", err)
+			}
+			runtime.collectedDatabases = append(runtime.collectedDatabases, database)
+		}
+	}
+}
+
+// dropStoredCollectedDatabases lets go of the reclaimed records that no longer
+// wait: the store took them, or they were let go as stale, or the title
+// deleted the database.
+func (client *Client) dropStoredCollectedDatabases() {
+	if client.javaRun == nil {
+		return
+	}
+	client.javaRun.collectedDatabases = slices.DeleteFunc(client.javaRun.collectedDatabases,
+		func(database *javaDatabase) bool { return !database.unsaved })
 }
 
 // javaDatabaseOf answers the database behind an object, and refuses one that is
@@ -640,12 +713,45 @@ func javaListDataBases(
 	return client.newJavaStringArray(client.databaseNames())
 }
 
-// databaseIndexName is the entry the names are kept in. It carries the suffix
-// so that a title with a database of the same name cannot collide with it.
+// databaseIndexName is the entry the names are kept in, at the root of the
+// file scope. It carries the suffix so that it reads as a database's
+// container, and **it is the platform's, not a guest file**: fileSaveKey gives
+// no title's path a key there, and openDataBase refuses the one database name
+// whose container it would be. The builds before this one read and wrote it
+// as a guest path, so a title's file of that name was the index, a database of
+// that name wrote its records over it, and the created list named it as a
+// file. Its key and layout are unchanged.
 const databaseIndexName = "__databases__" + databaseSuffix
 
+// databaseIndexKey is the save key of the index.
+const databaseIndexKey = fileSaveScope + databaseIndexName
+
+// loadDatabaseIndex reads the index from the store, or from what a session
+// with no store keeps. Neither an open file, the removal list nor the archive
+// answers for it, because it is no guest path.
+func (client *Client) loadDatabaseIndex() ([]byte, bool) {
+	if client.saveStore != nil {
+		if data, ok := client.loadSave(databaseIndexKey); ok {
+			return data, true
+		}
+	}
+	data, kept := client.sessionFiles[databaseIndexKey]
+	return bytes.Clone(data), kept
+}
+
+// storeDatabaseIndex writes the index. A refusal is a diagnostic: the index
+// is written again whole at the next create or delete.
+func (client *Client) storeDatabaseIndex(data []byte) {
+	if client.saveReadError != nil {
+		return
+	}
+	if err := client.storeSessionSave(databaseIndexKey, data); err != nil && client.logger != nil {
+		client.logger.Debug("LGT database index store failed", "error", err)
+	}
+}
+
 func (client *Client) databaseNames() []string {
-	data, ok := client.readFile(databaseIndexName)
+	data, ok := client.loadDatabaseIndex()
 	if !ok {
 		return nil
 	}
@@ -671,7 +777,7 @@ func (client *Client) recordDatabaseName(name string, present bool) {
 		kept = append(kept, name)
 	}
 	sort.Strings(kept)
-	client.writeFile(databaseIndexName, []byte(strings.Join(kept, "\n")))
+	client.storeDatabaseIndex([]byte(strings.Join(kept, "\n")))
 }
 
 func javaDeleteDataBase(

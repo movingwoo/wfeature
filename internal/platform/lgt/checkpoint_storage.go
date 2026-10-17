@@ -195,7 +195,7 @@ func (client *Client) prepareIssuedWriteLists() error {
 	needRemoved, needCreated := false, false
 	needsFile := func(name string) {
 		pending, needRemoved = true, true
-		if _, packaged := client.archive.Resource(name); !packaged {
+		if !client.packagedAs(name) {
 			needCreated = true
 		}
 	}
@@ -289,6 +289,7 @@ func (client *Client) storeIssuedWrites() (int, error) {
 			stored++
 		}
 	}
+	client.dropStoredCollectedDatabases()
 	for _, file := range client.openContents() {
 		if !file.dirty {
 			continue
@@ -338,6 +339,7 @@ func (client *Client) storeRefusedDatabases() {
 			client.logger.Debug("LGT java database store failed at the ending", "name", database.name, "error", err)
 		}
 	}
+	client.dropStoredCollectedDatabases()
 }
 
 // bindRestoredStorage connects a restored client to the store it will run

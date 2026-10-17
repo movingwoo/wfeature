@@ -57,6 +57,7 @@ const (
 type liveTarget interface {
 	Target
 	resume(single bool, interrupt <-chan struct{}) (Signal, error)
+	parked() bool
 	endClient()
 }
 
@@ -109,7 +110,7 @@ func Serve(connection io.ReadWriter, target Target) error {
 		var reply string
 		var done bool
 		var err error
-		if isLive && resumes(next.payload) {
+		if isLive && (resumes(next.payload) || halts(next.payload, live)) {
 			reply, backlog, err = run(next.payload, live, requests, backlog)
 		} else {
 			reply, done, err = handle(next.payload, target)
@@ -147,6 +148,16 @@ func resumes(payload string) bool {
 	return payload != "" && (payload[0] == 'c' || payload[0] == 's')
 }
 
+// halts reports whether a request has to stop a running guest before it is
+// answered. A client asks '?' first, and takes the answer as "stopped": its
+// register and memory reads follow from there. A guest that is not parked is
+// running — on a client's first connection, or after the last one left — so
+// it is stopped at its next instruction, the way an interrupt stops it, and
+// the client reads the place it stopped rather than an empty register file.
+func halts(payload string, target liveTarget) bool {
+	return payload == "?" && !target.parked()
+}
+
 // run resumes a live target and waits for its stop while still listening to
 // the client. A Ctrl-C interrupts the target, and a request that arrives
 // meanwhile waits its turn in the backlog. A connection that ends abandons
@@ -156,7 +167,7 @@ func run(payload string, target liveTarget, requests <-chan request, backlog []r
 	interrupt := make(chan struct{}, 1)
 	result := make(chan string, 1)
 	go func() {
-		signal, err := target.resume(payload[0] == 's', interrupt)
+		signal, err := target.resume(payload[0] != 'c', interrupt)
 		if err != nil {
 			result <- "E03"
 			return

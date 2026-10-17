@@ -517,11 +517,13 @@ elsewhere, and is listed like any other.
 (`DD-ProgName`), or the MIDlet name for a bare JAR that has none. A name that
 cannot be a folder on every system (a `:` or `?` in a repacked PID, or one over
 64 bytes) is made into one that can; see [RMS](rms.md). Inside it,
-each save is a file named by its key with the case spelled out: an upper-case
-letter is written `#` and the letter, `#` is written `##`, and another letter
-with case outside ASCII is written by its number (`rms/#Option`, `fs/save##1`,
-`caf#+0000e9`), so names that differ only by case are separate files on every
-system. A folder holding such names also holds `.wfeature-names#1`, which says
+each save is a file named by its key with what a file system would fold or
+refuse spelled out: an upper-case letter is written `#` and the letter, `#` is
+written `##`, and another letter with case outside ASCII, a character Unicode
+normalization changes, and what Windows refuses or drops in a name are written
+by their number (`rms/#Option`, `fs/save##1`, `caf#+0000e9`, `slot#+00003a1`),
+so two keys are two files on every system. A folder holding such names also
+holds `.wfeature-names#1`, which says
 so and moves with it; a folder an earlier version wrote is converted the first
 time it is used. See [save keys on disk](session.md#save-keys-on-disk). The
 browser reaches the same tree through the save API: `/api/saves/<owner>` is KTF
@@ -533,13 +535,16 @@ import use; an import writes the saves it carries over the ones on disk. An
 import is refused before it writes anything when the container holds no saves
 (no export writes one), more than 65,536 entries (the quick save's bound on a
 save tree), a name that is both a file and a folder, a name the folder on
-disk has the other shape for, or, on macOS, a name that is not UTF-8. Other
+disk has the other shape for, a name longer than a file system stores once it
+is written out (unless the folder already holds it under an earlier build's
+name), or, on macOS, a name that is not UTF-8. Other
 write failures can still leave some entries restored and the rest as they
 were, with nothing removed. On a filesystem that ignores Unicode
-normalization, as macOS does by default, a restored save that lands on an
-existing file under a differently normalized name keeps that file's spelling
-and is not removed with the entries the backup left out. Case is not such a
-spelling: a name that differs only by case is another save.
+normalization, as macOS does by default, a restored save that lands on a file
+an earlier build left under a differently normalized name keeps that file's
+spelling and is not removed with the entries the backup left out. Two keys the
+encoding writes are never such spellings of each other: a name that differs
+only by case or normalization is another save.
 
 An owner the save tree cannot use as a folder name — longer than 64 bytes, or
 holding `/ \ : * ? " < > |`, a control character or an invisible direction

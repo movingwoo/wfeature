@@ -233,6 +233,12 @@ type Client struct {
 	// tells a buffer that is the file plus the title's writes from one that
 	// is behind its file. See fileContent.synced.
 	fileEpochs map[string]uint64
+	// sessionFiles is, in a session with no save store, every file the title
+	// has stored, by save key, and sessionFileBytes how much they hold between
+	// them. It is that session's store and lasts as long as it does. See
+	// keepSessionFile.
+	sessionFiles     map[string][]byte
+	sessionFileBytes int
 	// restoredStorage is what a checkpoint brought back about open storage
 	// that a store has not filled yet. It is nil in a running session. See
 	// checkpoint_storage.go.

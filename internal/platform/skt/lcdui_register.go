@@ -16,12 +16,12 @@ type nativeRegistration struct {
 
 // screenContent runs a native that reads or changes what a runtime-drawn
 // screen shows — a List's or ChoiceGroup's elements, a Form's items, an
-// Item's or an Alert's fields — under textMu. The Host paints that content
-// and moves through it on a key under the same lock, and a title calls these
-// from its own threads as freely as from a callback, so without it a List
-// rebuilt during a key press is indexed through a stale length. None of these
-// natives calls back into the guest, which is what makes holding the lock
-// for the whole call safe; the text natives take it themselves.
+// Item's or an Alert's fields, a Ticker's text — under textMu. The Host paints
+// that content and moves through it on a key under the same lock, and a title
+// calls these from its own threads as freely as from a callback, so without it
+// a List rebuilt during a key press is indexed through a stale length. None of
+// these natives calls back into the guest, which is what makes holding the
+// lock for the whole call safe; the text natives take it themselves.
 func (runtime *Runtime) screenContent(method jvm.NativeMethod) jvm.NativeMethod {
 	return func(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		runtime.textMu.Lock()
@@ -59,9 +59,9 @@ func (runtime *Runtime) registerHighLevelNatives() error {
 		{midp.CommandClass, "getCommandType", "()I", runtime.commandType},
 		{midp.CommandClass, "getPriority", "()I", runtime.commandPriority},
 
-		{midp.TickerClass, "init", "(" + text + ")V", runtime.initTicker},
-		{midp.TickerClass, "getString", "()" + text, runtime.tickerString},
-		{midp.TickerClass, "setString", "(" + text + ")V", runtime.setTickerString},
+		{midp.TickerClass, "init", "(" + text + ")V", runtime.screenContent(runtime.initTicker)},
+		{midp.TickerClass, "getString", "()" + text, runtime.screenContent(runtime.tickerString)},
+		{midp.TickerClass, "setString", "(" + text + ")V", runtime.screenContent(runtime.setTickerString)},
 
 		{midp.ItemClass, "initItem", "()V", runtime.screenContent(runtime.initItem)},
 		{midp.ItemClass, "getLabel", "()" + text, runtime.screenContent(runtime.itemLabel)},

@@ -6,12 +6,13 @@ import (
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
-// The specification gives SOFT1 and SOFT2 as 90 and 91, and those are the
-// numbers the platform hands a Card for the two soft keys. A title that reads
-// the field at run time rather than inlining it has to see the same numbers.
+// The specification gives SOFT1, SOFT2 and SOFT3 as 90, 91 and 92, and the
+// first two are the numbers the platform hands a Card for the two soft keys. A
+// title that reads the field at run time rather than inlining it has to see
+// the same numbers.
 func TestEventQueueSoftKeysAreTheCodesACardReceives(t *testing.T) {
 	machine := newMachine(t)
-	for name, want := range map[string]int32{"SOFT1": 90, "SOFT2": 91} {
+	for name, want := range map[string]int32{"SOFT1": 90, "SOFT2": 91, "SOFT3": 92} {
 		value, err := machine.StaticField(EventQueueClass, name, "I")
 		if err != nil {
 			t.Fatalf("EventQueue.%s error = %v", name, err)

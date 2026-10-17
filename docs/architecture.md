@@ -1069,9 +1069,11 @@ streams and record stores — keeps the same rule:
    absent in later sessions through the platform's removal list; writing the
    path again brings it back.
 6. **A name is the same file on every host.** Names that differ only by case
-   are different files on a case-insensitive host file system as well;
-   [the save store](session.md#save-keys-on-disk) writes an upper-case letter
-   in a path as `#` and the letter, as a handset wrote it.
+   or by Unicode normalization are different files on a host file system that
+   folds them as well, and a name Windows refuses or changes is stored as any
+   other; [the save store](session.md#save-keys-on-disk) writes an upper-case
+   letter in a path as `#` and the letter, as a handset wrote it, and what a
+   host would fold or refuse by its number.
 7. **Nothing else saves.** No background, timer or lifecycle event writes a
    save, and leaving a game in the background saves nothing. Saving is the
    player's to do in the game. Quick save stores the title's pending writes

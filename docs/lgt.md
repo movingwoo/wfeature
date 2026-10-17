@@ -48,16 +48,32 @@ metadata, objects, arrays, exceptions, monitors, workers, resource streams,
 and supported library methods belong to the LGT implementation. Collection
 traces guest references and platform roots, including shown/focused widgets,
 and releases unreachable resources. A wrapper over a title's own `InputStream`
-holds that stream object and the buffer its `read([BII)` is handed. A finished
-guest thread's 1 MiB stack goes to the next thread started (only committed
-pages are cleared), and the 16-thread bound counts threads that have not
-finished. Byte sinks and Vectors stop with an error at `maxJavaArrayLength`
-(4 Mi bytes or references), the largest array the platform builds, and Java
-`putData` fills a clip to at most 4 MiB, answering the bytes taken. Checkpoint
-class records must carry an element width of 0, 1, 2, 4 or 8.
+holds that stream object and the buffer its `read([BII)` is handed. Byte sinks
+and Vectors stop with an error at `maxJavaArrayLength` (4 Mi bytes or
+references), the largest array the platform builds, and Java `putData` fills a
+clip to at most 4 MiB, answering the bytes taken. Checkpoint class records must
+carry an element width of 0, 1, 2, 4 or 8.
 The long-array store interface takes high then low words; long results and
 array storage are low-first. [ABI evidence](lgt-qa-2026-09-21.md#long-array-store-word-order)
 records the restored timed logo transition.
+
+A guest thread runs on a 1 MiB stack of its own, and a finished thread's stack
+goes to the next thread started (only committed pages are cleared). At most 16
+guest threads run at once, which is also the most stacks a checkpoint loads, so
+no number of threads a title reaches makes a quick save refused or unloadable.
+The bound is met at `Thread.start`, whichever way the thread was built: a start
+that finds all 16 stacks taken throws `OutOfMemoryError`, which the title can
+catch, and leaves the thread unstarted. Uncaught, it goes the way of any other
+uncaught exception: a thread's `run` or a card callback ends and the session
+carries on. The specification gives `start` no bound and no failure of its
+own, so running out is reported as the memory a thread runs on running out.
+Building a `Thread` takes no stack and is not counted, and a finished thread
+holds its stack until the tick's thread round drops it. Formerly a start on a
+`Thread` subclass the module built itself was not counted, so a seventeenth
+thread running at once left every later quick save of the session refused, and
+building a `Thread` while 16 unfinished ones existed ended the session. Over
+the 18 distinct local Java archives, 1,500 ticks each with a confirm press
+every 150, no title ran more than two threads at once or built more than four.
 
 Under allocation pressure, the decoded-image cache releases surfaces that no
 Image or Graphics object owns. Live owners and the existing memory limit are
@@ -175,14 +191,35 @@ hiding or losing them:
   `DataOutputStream` over it, is a write to the `File` at once, and a stream
   opened for reading reads the buffer as it is now. A rename takes the open
   handles with it, so a later close stores under the new name.
+- **Streams after their `File`.** `File` is a `StreamConnection`, and
+  closing a connection whose streams are open leaves them usable, with the
+  connection open under them until they close. So a stream opened on a `File`
+  holds the file open once the `File` closes: an input stream goes on reading
+  the file as it is now, an output stream goes on writing it, and the
+  stream's own close, or the collector reclaiming it, closes the file as the
+  `File`'s close would have. Closing an output stream ends its binding, so
+  the `File` can open another. A stream in a record an earlier build took,
+  whose `File` was closed then, keeps the window the load gives it.
 - **Durability.** What waits in a buffer reaches the store no later than the
-  close of a handle on the path (`MC_fsClose`, `File.close`, or the collector
-  closing a `File` nothing holds) or the flush or close of a stream on it, and
-  in any case at the ending: `MC_knlExit`, `Jlet.notifyDestroyed` and closing
-  the session (before `destroyClet` and again after it). The ending also gives
-  the store again a database or a path list it refused earlier. A quick load
-  stores the waiting writes of the session it displaces, as a quick save does
-  (below).
+  close of a handle on the path (`MC_fsClose`, `File.close`, the close of a
+  stream holding its file open, or the collector closing either one when
+  nothing holds it) or the flush or close of a stream on it, and in any case
+  at the ending: `MC_knlExit`, `Jlet.notifyDestroyed` and closing the session
+  (before `destroyClet` and again after it). The ending also gives the store
+  again a database or a path list it refused earlier. A quick load stores the
+  waiting writes of the session it displaces, as a quick save does (below).
+- **Objects the collector reclaims.** A `File`, or a stream holding its file
+  open, that nothing holds any more is closed by the collector, which stores
+  what waits in its buffer as a close does: earlier than the ending, which the
+  rule allows, and only what the title wrote. A store that refuses leaves the
+  handle open with nothing holding it, for the ending and quick steps. A
+  `DataBase` object reclaimed while it holds a change the store refused is
+  closed the same way: its records are given to the store at once, and if
+  the store refuses again they wait, for the ending, a quick step, or the
+  next open of that database, which takes them up. Nothing waiting is lost
+  with its object; as at the ending, records whose container the title has
+  since written another way, through a file of the same name, give way to
+  that later write.
 - **Creation.** Opening a missing file for writing (`MC_fsOpen` flags 2, 4 and
   8, `File` modes 2, 3 and 4) creates it: an empty file that every later read
   sees at once, stored at the open. Opening a missing file only to read fails:
@@ -193,10 +230,13 @@ hiding or losing them:
   handle on the path reads it empty from there.
 - If the store refuses a close, a flush, or the emptying or creation an open
   makes, the write stays waiting in the buffer, which every read in the
-  session sees. `MC_fsClose` answers an error, `File.close` and a stream's
-  flush return normally, and the next close, the ending and quick steps try
-  again. A rename whose new name the store refuses answers an error and keeps
-  the old name.
+  session sees, and the next close, the ending and quick steps try again.
+  `MC_fsClose` answers an error. `File.close`, and a stream's flush and
+  close, throw the `IOException` each declares, and the `File` stays open
+  with its streams bound. An open whose emptying or creation the store
+  refuses still opens. A rename whose new name the store refuses answers an
+  error and keeps the old name. Closing a `File` that is already closed is
+  nothing, as the specification says.
 - A write or seek that would take a file past 16 MiB fails like any bad file
   call: `MC_fsWrite` and `MC_fsSeek` answer an error, `File.write` answers -1,
   and a stream write past it stops the run. That is sixteen times the 1 MiB the
@@ -222,11 +262,21 @@ hiding or losing them:
   have been saved under the plain name since. This build writes its own
   entries after a marker line, `#Case-sensitive paths follow`, which no entry of
   those builds can be (it holds capitals); a list with none of its own entries
-  is written as those builds wrote it.
-- The file scope itself and the names `.removed` and `.created` at its root
-  (any case, and anything beneath them) hold the platform's own path lists and
-  are not guest files. A title can open and write them, but nothing reaches the
-  store, like a path with `..`. The on-disk layout is unchanged.
+  is written as those builds wrote it. A save whose name differs only by case
+  from a packaged file is a file of its own and is on the created list, so a
+  listing shows it beside the packaged file; a write under the packaged
+  file's own spelling is not, and the listing shows that file once. A save
+  an earlier build wrote that way is listed once the title writes it again.
+- The file scope itself, the names `.removed` and `.created` at its root,
+  which hold the platform's own path lists, and `__databases__.db` there,
+  which holds the index of database names (any case, and anything beneath
+  them), are not guest files. A title can open and write them, but nothing
+  reaches the store, like a path with `..`. `openDataBase` refuses the one
+  name whose container would be the index, `__databases__` in any case, with
+  `DataBaseException`. The path lists record only paths that have a save: an
+  entry of any other kind, which earlier builds wrote for such paths and for
+  the index, is read as nothing and left out when the list is next stored.
+  The on-disk layout is unchanged.
 - `DataBase` objects opened on one database share one set of records, so a
   change one makes is what another reads, a change the store refused included.
   The records are read again when something else changed the container (a
@@ -235,8 +285,12 @@ hiding or losing them:
   change the store refused, as the ending and quick steps do.
 - Nothing else writes a save: no background, timer or lifecycle store. A quick
   save and a quick load store the title's waiting writes first, below.
-- A session with no save store, or whose writes are held back by a failed
-  read, keeps a write visible only while a buffer holds it waiting.
+- A session with no save store, or with only an authentication adapter and no
+  store beneath it, keeps every file its title stores in memory for as long
+  as it runs, up to 64 MiB: a closed file, a database and the database index
+  read back as the title left them, and nothing reaches a store or the next
+  session. Such a session takes no quick save. A failed save read stops the
+  run at the platform call that made it, and holds back every write.
 
 `File.openDataInputStream` returns a typed stream using the existing file
 binding and primitive readers. Closing a file input stream releases its binding
@@ -306,12 +360,14 @@ Three properties of this platform's storage shape how it gets there:
 - An open file, a stream opened on a file and an open `DataBase` are recorded
   by name, cursor and record size, and filled from the store when a load
   commits: the handles on one path share one buffer again, and the objects on
-  one database one set of records. A handle opened with the truncating flag
-  takes at most what the file held at the quick save, which is what the title
-  had written since the open emptied it; a handle whose open made a file that
-  was not there takes the whole file, like any other. Like any `DataBase`
-  object, one filled that way stores its container at close only if its last
-  change was refused. A record an earlier build took while a truncating open
+  one database one set of records. A stream holding its file open after its
+  `File` closed is recorded with the handle it holds, as a `File` is, so it
+  goes on following the file after a load; the record's layout is unchanged.
+  A handle opened with the truncating flag takes at most what the file held
+  at the quick save, which is what the title had written since the open
+  emptied it; a handle whose open made a file that was not there takes the
+  whole file, like any other. Like any `DataBase` object, one filled that way
+  stores its container at close only if its last change was refused. A record an earlier build took while a truncating open
   had not emptied the store yet loads the same way: the handle holds what it
   had written, and the load leaves the store as it is. Such a record can also
   hold bytes a stream had not handed its `File` yet, because that build kept a

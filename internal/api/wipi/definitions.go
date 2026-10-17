@@ -58,10 +58,11 @@ func eventQueueDefinition() jvm.ClassDefinition {
 			{Name: "GAME_C", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(11)},
 			{Name: "GAME_D", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(12)},
 			{Name: "CLEAR", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(99)},
-			// The specification's values, and the codes the platform hands a
-			// Card for the two soft keys.
+			// The specification's values, and for the first two the codes the
+			// platform hands a Card for the two soft keys.
 			{Name: "SOFT1", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(90)},
 			{Name: "SOFT2", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(91)},
+			{Name: "SOFT3", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(92)},
 			{Name: "KEY_NUM0", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(48)},
 			{Name: "KEY_NUM1", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(49)},
 			{Name: "KEY_NUM2", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(50)},

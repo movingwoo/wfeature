@@ -11,6 +11,7 @@ import android.view.InputEvent;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -20,8 +21,14 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.TextView;
 
+import org.json.JSONObject;
+
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -59,6 +66,7 @@ public class MainActivity extends Activity {
     private static final int SERVER_PORT = 11541;
 
     private WebView webView;
+    private TextView waiting;
 
     /**
      * The server outlives an activity that is only being recreated. A change
@@ -70,6 +78,18 @@ public class MainActivity extends Activity {
      * thread that ends it are different threads.
      */
     private static Process server;
+
+    /**
+     * A server an activity that finished has asked to end, while it may still
+     * be draining: closing its games so their exit-time saves are written. The
+     * app process outlives the activity, so the player can open the app again
+     * within that time, and the next server must not start until this one has
+     * ended. Started any sooner, it takes the port the moment the old one
+     * stops listening, while the old one may still be closing its games and
+     * holding their save directories. Guarded by the class lock, as
+     * {@link #server} is.
+     */
+    private static Process ending;
 
     /**
      * Set when this activity is gone for good rather than recreated, so a
@@ -88,7 +108,7 @@ public class MainActivity extends Activity {
         // in the middle of one is the first thing anybody would report.
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        TextView waiting = new TextView(this);
+        waiting = new TextView(this);
         waiting.setText("에뮬레이터를 시작하는 중...");
         waiting.setTextColor(0xFFEEEEEE);
         waiting.setBackgroundColor(0xFF1A1A1A);
@@ -98,22 +118,50 @@ public class MainActivity extends Activity {
         new Thread(this::startServerAndShow).start();
     }
 
+    /** What the screen says while the page is not up yet. */
+    private void showWaiting(String message) {
+        runOnUiThread(() -> {
+            if (!isDestroyed() && webView == null) {
+                waiting.setText(message);
+            }
+        });
+    }
+
     /**
      * Starts the server, or finds the one an earlier instance of this activity
-     * started, waits for it to answer, and then shows the page.
+     * started, waits for it to answer, and then shows the page. A server a
+     * finished activity ended is waited out first.
      */
     private void startServerAndShow() {
         try {
             int port = SERVER_PORT;
             File root = dataRoot();
-            synchronized (MainActivity.class) {
-                if (finished) {
-                    return;
+            // Launching and the check that nothing is still draining happen
+            // under one lock, so an activity that finishes in between cannot
+            // leave a server draining beside the one launched here.
+            while (true) {
+                Process previous;
+                synchronized (MainActivity.class) {
+                    if (finished) {
+                        return;
+                    }
+                    if (ending != null && ending.isAlive()) {
+                        previous = ending;
+                    } else {
+                        ending = null;
+                        if (server == null || !server.isAlive()) {
+                            server = launch(port, root);
+                            readLog(server);
+                        }
+                        break;
+                    }
                 }
-                if (server == null || !server.isAlive()) {
-                    server = launch(port, root);
-                    readLog(server);
-                }
+                // No time limit: the drain is what writes the games' exit-time
+                // saves, and it is bounded by the server itself.
+                Log.i(TAG, "waiting for the server a finished activity ended");
+                showWaiting("이전 실행을 마치는 중...");
+                int exit = previous.waitFor();
+                Log.i(TAG, "the earlier server ended (exit " + exit + ")");
             }
             if (!waitUntilServing(port)) {
                 showFailure("서버가 시작되지 않았습니다.");
@@ -200,6 +248,12 @@ public class MainActivity extends Activity {
      * Waits for the port to answer as this server rather than for a fixed
      * time. A cold start reads the game root and the fonts, and the honest
      * signal that it is ready is /api/status answering.
+     *
+     * <p>Any program on the phone may listen on a loopback port, so an answer
+     * counts only when it names a process this app started: /api/status
+     * carries the server's pid, and the kernel says whose child that is. With
+     * nothing left draining (see {@link #ending}), the one child that answers
+     * is the server just launched.
      */
     private boolean waitUntilServing(int port) {
         long deadline = System.currentTimeMillis() + 20_000;
@@ -218,8 +272,9 @@ public class MainActivity extends Activity {
                 connection.setConnectTimeout(500);
                 connection.setReadTimeout(500);
                 int status = connection.getResponseCode();
+                String body = status == 200 ? readSmall(connection.getInputStream()) : "";
                 connection.disconnect();
-                if (status == 200 && launched.isAlive()) {
+                if (status == 200 && launched.isAlive() && startedHere(body)) {
                     return true;
                 }
             } catch (Exception retry) {
@@ -232,6 +287,50 @@ public class MainActivity extends Activity {
             }
         }
         return false;
+    }
+
+    /** A status answer is a few dozen bytes; anything past 4 KiB is not one. */
+    private static String readSmall(InputStream in) throws IOException {
+        try (InputStream body = in) {
+            ByteArrayOutputStream read = new ByteArrayOutputStream();
+            byte[] chunk = new byte[512];
+            int n;
+            while ((n = body.read(chunk)) > 0 && read.size() <= 4096) {
+                read.write(chunk, 0, n);
+            }
+            return read.toString("UTF-8");
+        }
+    }
+
+    /**
+     * Whether a status answer is from a wfeature server that is a child of
+     * this app's process. {@code /proc/<pid>/stat} gives the parent after the
+     * parenthesised command name; a process of another app is not visible
+     * there at all, which also answers no.
+     */
+    private static boolean startedHere(String status) {
+        try {
+            JSONObject answer = new JSONObject(status);
+            int pid = answer.optInt("pid", 0);
+            if (!"wfeature".equals(answer.optString("server")) || pid <= 0) {
+                return false;
+            }
+            String stat;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    new FileInputStream("/proc/" + pid + "/stat")))) {
+                stat = reader.readLine();
+            }
+            int name = stat == null ? -1 : stat.lastIndexOf(')');
+            if (name < 0) {
+                return false;
+            }
+            // ") <state> <ppid> ..."
+            String[] fields = stat.substring(name + 1).trim().split(" ");
+            return fields.length > 1
+                    && Integer.parseInt(fields[1]) == android.os.Process.myPid();
+        } catch (Exception unreadable) {
+            return false;
+        }
     }
 
     private void showFailure(String message) {
@@ -487,6 +586,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        closePage();
         super.onDestroy();
         // A recreation is not an ending: the next instance finds the server
         // and the game in it still running. Ending it here closed the game the
@@ -501,10 +601,32 @@ public class MainActivity extends Activity {
             if (server != null) {
                 // The session drains on its own when the process goes; what
                 // must not happen is the process outliving the app that
-                // started it.
+                // started it. The next activity waits for the drain.
                 server.destroy();
+                ending = server;
                 server = null;
             }
         }
+    }
+
+    /**
+     * The web view goes with the activity that made it. A recreated activity
+     * shows the page in a web view of its own, and the old one left alive kept
+     * its page loaded and hidden — harmless while hidden, since a hidden page
+     * parks its game, but one made visible again (a DevTools client did it)
+     * took the game back from the new page. Destroying it closes its session
+     * socket, and the server parks the game, if the page had not already, for
+     * the new page to resume. The server is not touched here.
+     */
+    private void closePage() {
+        if (webView == null) {
+            return;
+        }
+        ViewGroup parent = (ViewGroup) webView.getParent();
+        if (parent != null) {
+            parent.removeView(webView);
+        }
+        webView.destroy();
+        webView = null;
     }
 }

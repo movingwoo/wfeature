@@ -649,7 +649,7 @@ test("quick load resets pending picture decoding, audio definitions and input be
   await new Promise(resolve => setImmediate(resolve));
   socket.deliverFrame(soundMessage([0x10, ...word(1), ...word(2), 1, 0]));
   assert.equal(session.audio.definitions.size, 1);
-  const oldCheat = assert.rejects(session.cheat("read 0x100900"), /이전 요청/);
+  const oldCheat = assert.rejects(session.ask({ kind: "cheat", op: "frozen" }), /이전 요청/);
   const loading = session.quickLoad();
   const request = socket.sent.at(-1);
   const sentBefore = socket.sent.length;
