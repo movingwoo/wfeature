@@ -9,7 +9,7 @@
 KTF · LGT · SKT (GNEX/GVM 포함)
 
 [![Release](https://img.shields.io/github/v/release/movingwoo/wfeature?style=flat-square)](https://github.com/movingwoo/wfeature/releases)
-[![License](https://img.shields.io/github/license/movingwoo/wfeature?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![Go](https://img.shields.io/github/go-mod/go-version/movingwoo/wfeature?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux%20%C2%B7%20Android%20%C2%B7%20iOS-555?style=flat-square)](#시작하기)
 
@@ -149,7 +149,7 @@ KTF · LGT · SKT (GNEX/GVM 포함)
 
 ## 라이선스
 
-[MIT](LICENSE). 번들된 구성 요소는 각자의 라이선스를 따르며, 전문은 [`THIRD-PARTY-NOTICES.md`](internal/licenses/THIRD-PARTY-NOTICES.md)에 있고 모든 릴리스 바이너리에 포함됩니다.
+[MIT](LICENSE). 번들된 구성 요소는 각자의 라이선스를 따르며 전문은 [`THIRD-PARTY-NOTICES.md`](internal/licenses/THIRD-PARTY-NOTICES.md)에 있고 모든 릴리스 바이너리에 포함됩니다.
 
 | 구성 요소 | 쓰임 | 라이선스 |
 |---|---|---|
