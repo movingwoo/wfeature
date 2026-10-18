@@ -9,7 +9,7 @@
 KTF · LGT · SKT (GNEX/GVM 포함)
 
 [![Release](https://img.shields.io/github/v/release/movingwoo/wfeature?style=flat-square)](https://github.com/movingwoo/wfeature/releases)
-[![License](https://img.shields.io/github/license/movingwoo/wfeature?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![Go](https://img.shields.io/github/go-mod/go-version/movingwoo/wfeature?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux%20%C2%B7%20Android%20%C2%B7%20iOS-555?style=flat-square)](#시작하기)
 
