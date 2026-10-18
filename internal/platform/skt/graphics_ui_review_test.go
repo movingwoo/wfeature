@@ -103,6 +103,11 @@ func TestGetRGBPixelsReadsTheScreenUnderItsLock(t *testing.T) {
 		}
 	}
 	<-done
+	// The reads above may all come before the first drawing; this one follows
+	// the last.
+	if _, err := session.getGraphicsRGBPixels(vm, rgbPixelArguments(context, 0, 0, 8, 8, buffer, 0, 8)); err != nil {
+		t.Fatal(err)
+	}
 	_, values, err := jvm.ArraySnapshot(buffer)
 	if err != nil {
 		t.Fatal(err)
