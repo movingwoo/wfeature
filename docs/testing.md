@@ -91,7 +91,7 @@ packaging, not runtime behavior.
 | ARM | Authored ARM/Thumb programs, memory checks, instruction charging, and backend conformance. |
 | Platforms | Service fixtures, Java/ARM round trips, graphics pixels, file/record failure injection, and resource lifetime. |
 | Sessions | Lifecycle, save ownership, admission, parking/resume, protocol handlers, and encoder output. |
-| Page | Node tests for controls, transport, composition, frame handling, and lifecycle. |
+| Page | Node tests for controls, transport, composition, frame handling, and lifecycle; `text.test.mjs` for the text file — read the way the server reads it, every key asked for written and every key written asked for, and no Korean outside it. |
 | Release | Cross-platform server smoke checks, archive contents, metadata, and embedded notices (`internal/licenses` requires the three lists of bundled components to agree). |
 | Tools | The acceptance runner's records, cache and sweep staging; `distcheck`, `apiscan` and `javastub` against authored inputs; the settle and relaunch rules in `internal/ladder`. |
 

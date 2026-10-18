@@ -19,6 +19,7 @@
 
 import { askToConfirm } from "./confirm.js";
 import { reach } from "./reach.js";
+import { phrase } from "./text.js";
 
 // uploadGame sends one archive and answers with nothing, or throws with what
 // the server said. The name travels in the query rather than a header because
@@ -32,7 +33,7 @@ export const uploadGame = async (file, fetcher = fetch) => {
     // The server's refusals are written for this screen, so they are shown
     // rather than replaced. Anything else gets a sentence of our own.
     const said = await response.text().catch(() => "");
-    throw new Error(said.trim() || `게임을 추가하지 못했습니다 (${response.status})`);
+    throw new Error(said.trim() || phrase("add.failed-status", { status: response.status }));
   }
 };
 
@@ -58,10 +59,10 @@ export const uploadGames = async (files, fetcher = fetch) => {
 export const describe = ({ added, failed }) => {
   if (added.length === 0 && failed.length === 1) return failed[0].reason;
   const parts = [];
-  if (added.length === 1) parts.push(`${added[0]} 을(를) 추가했습니다.`);
-  else if (added.length > 1) parts.push(`게임 ${added.length}개를 추가했습니다.`);
-  if (failed.length === 1) parts.push(`${failed[0].name}: ${failed[0].reason}`);
-  else if (failed.length > 1) parts.push(`${failed.length}개는 추가하지 못했습니다.`);
+  if (added.length === 1) parts.push(phrase("add.added.one", { name: added[0] }));
+  else if (added.length > 1) parts.push(phrase("add.added.many", { count: added.length }));
+  if (failed.length === 1) parts.push(phrase("add.failed.one", failed[0]));
+  else if (failed.length > 1) parts.push(phrase("add.failed.many", { count: failed.length }));
   return parts.join(" ");
 };
 
@@ -86,7 +87,7 @@ export const gameFileName = game => {
 // works on. A blank heading reads as a glitch, so the archives loose in the
 // library get one of their own.
 export const groupLabel = game =>
-  game.added ? "추가한 게임" : (game.group ? game.group.toUpperCase() : "기타");
+  game.added ? phrase("picker.group.added") : (game.group ? game.group.toUpperCase() : phrase("picker.group.other"));
 
 // syncRemoveButton puts the delete button in the state of whatever the picker
 // is showing. The option carries the answer because the listing did: this page
@@ -108,7 +109,7 @@ export const removeGame = async (game, fetcher = fetch) => {
   });
   if (!response.ok) {
     const said = await response.text().catch(() => "");
-    throw new Error(said.trim() || `게임을 지우지 못했습니다 (${response.status})`);
+    throw new Error(said.trim() || phrase("remove.failed-status", { status: response.status }));
   }
 };
 
@@ -131,7 +132,7 @@ export const initAddGame = ({ document, fetcher = fetch, onAdded, onStatus } = {
 
     const previous = button.textContent;
     button.disabled = true;
-    button.textContent = "추가하는 중...";
+    button.textContent = phrase("add.adding");
     try {
       const result = await uploadGames(files, fetcher);
       onStatus?.(describe(result));
@@ -154,7 +155,7 @@ export const initRemoveGame = ({
   document,
   chosenGame,
   fetcher = fetch,
-  confirmRemoval = message => askToConfirm({ document, message, confirmLabel: "삭제" }),
+  confirmRemoval = message => askToConfirm({ document, message, confirmLabel: phrase("remove.confirm") }),
   onRemoved,
   onStatus,
 } = {}) => {
@@ -168,14 +169,14 @@ export const initRemoveGame = ({
     // Awaited, because the question is asked in the page rather than by the
     // browser: window.confirm is not dependable in the app's WebView, and what
     // it would do there is answer "no" with nothing on screen. See confirm.js.
-    if (!(await confirmRemoval(`${name} 을(를) 지울까요? 저장된 세이브는 남습니다.`))) return;
+    if (!(await confirmRemoval(phrase("remove.question", { name })))) return;
 
     const previous = button.textContent;
     button.disabled = true;
-    button.textContent = "지우는 중...";
+    button.textContent = phrase("remove.removing");
     try {
       await removeGame(game, fetcher);
-      onStatus?.(`${name} 을(를) 지웠습니다.`);
+      onStatus?.(phrase("remove.removed", { name }));
       await onRemoved?.();
     } catch (error) {
       onStatus?.(error.message);

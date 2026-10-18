@@ -2,7 +2,6 @@ package webhost
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -70,7 +69,7 @@ func (s *Server) serveGameUpload(writer http.ResponseWriter, request *http.Reque
 	name, err := uploadName(request.URL.Query().Get(uploadNameQuery))
 	if err != nil {
 		s.logger.Warn("refused a game upload", "reason", err)
-		writeError(writer, http.StatusBadRequest, err.Error())
+		writeError(writer, http.StatusBadRequest, s.explain(err))
 		return
 	}
 	body, err := readBody(request, maxGameUpload)
@@ -78,14 +77,14 @@ func (s *Server) serveGameUpload(writer http.ResponseWriter, request *http.Reque
 		// A file too large is the one failure worth naming, since the fix is
 		// the user's: everything else here is a broken request.
 		if errors.Is(err, errBodyTooLarge) {
-			writeError(writer, http.StatusRequestEntityTooLarge, "게임 파일이 너무 큽니다.")
+			writeError(writer, http.StatusRequestEntityTooLarge, s.phrase("add.too-large"))
 			return
 		}
 		writeError(writer, http.StatusBadRequest, "Bad Request")
 		return
 	}
 	if len(body) == 0 {
-		writeError(writer, http.StatusBadRequest, "빈 파일입니다.")
+		writeError(writer, http.StatusBadRequest, s.phrase("add.empty"))
 		return
 	}
 
@@ -96,12 +95,12 @@ func (s *Server) serveGameUpload(writer http.ResponseWriter, request *http.Reque
 	// group.
 	if err := os.MkdirAll(s.addedRoot, 0o755); err != nil {
 		s.logger.Error("could not make the added root", "path", s.addedRoot, "error", err)
-		writeError(writer, http.StatusInternalServerError, "게임을 저장하지 못했습니다.")
+		writeError(writer, http.StatusInternalServerError, s.phrase("add.store-failed"))
 		return
 	}
 	if err := writeFileAtomically(filepath.Join(s.addedRoot, name), body); err != nil {
 		s.logger.Error("could not write an uploaded game", "name", name, "error", err)
-		writeError(writer, http.StatusInternalServerError, "게임을 저장하지 못했습니다.")
+		writeError(writer, http.StatusInternalServerError, s.phrase("add.store-failed"))
 		return
 	}
 	s.logger.Info("a game was added from the page", "name", name, "bytes", len(body))
@@ -109,7 +108,7 @@ func (s *Server) serveGameUpload(writer http.ResponseWriter, request *http.Reque
 }
 
 // uploadName checks the name an upload carries and answers with the one to
-// write, or with what is wrong with it in the words the page will show.
+// write, or with a refusal that says what is wrong with it in the page's words.
 //
 // It refuses rather than repairs. A name with a separator in it, or one that
 // climbs, is not a mistake to be trimmed into something safe — it is a request
@@ -117,18 +116,18 @@ func (s *Server) serveGameUpload(writer http.ResponseWriter, request *http.Reque
 func uploadName(raw string) (string, error) {
 	name := strings.TrimSpace(raw)
 	if name == "" {
-		return "", errors.New("파일 이름이 없습니다.")
+		return "", refuse("add.no-name")
 	}
 	if strings.ContainsAny(name, "/\\\x00") || name == "." || name == ".." {
-		return "", errors.New("파일 이름을 쓸 수 없습니다.")
+		return "", refuse("add.bad-name")
 	}
 	// A leading dot hides the file from every listing this project does, which
 	// makes an upload that appears to work and then shows no game.
 	if strings.HasPrefix(name, ".") {
-		return "", errors.New("파일 이름을 쓸 수 없습니다.")
+		return "", refuse("add.bad-name")
 	}
 	if !gameExtensions[strings.ToLower(filepath.Ext(name))] {
-		return "", fmt.Errorf("%s 파일은 게임이 아닙니다. zip 또는 jar 파일을 골라주세요.", filepath.Ext(name))
+		return "", refuse("add.not-a-game", "extension", filepath.Ext(name))
 	}
 	return name, nil
 }

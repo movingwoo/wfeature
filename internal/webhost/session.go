@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -769,16 +770,14 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		// said the way the rest of this page speaks to them: what the file
 		// is, and what to do with it.
 		if errors.Is(err, session.ErrArchiveOfArchives) {
-			r.send(serverMessage{Kind: serverError, ID: message.ID,
-				Message: "이 zip 안에는 다른 zip만 들어 있습니다. 게임이 아니라 게임 여러 개를 담은 묶음이니, 압축을 풀어 하나씩 추가하세요."})
+			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: r.server.phrase("start.bundle")})
 			return
 		}
 		// A locked package is the other refusal a person can act on, and the
 		// one thing they must not be told is that the file is broken: it is
 		// whole, and what it needs is a copy that was never locked.
 		if errors.Is(err, session.ErrDRMWrapped) {
-			r.send(serverMessage{Kind: serverError, ID: message.ID,
-				Message: "이 파일은 잠긴 게임입니다. 파일이 손상되었거나 지원하지 않는 형식인 것이 아니라, 배포될 때 걸린 잠금을 푸는 열쇠가 이 에뮬레이터에 없습니다. 잠기지 않은 파일을 구해야 실행할 수 있습니다."})
+			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: r.server.phrase("start.locked")})
 			return
 		}
 		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
@@ -801,9 +800,8 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	if directory == "" && summary.SaveOwner != "" {
 		r.server.logger.Warn("refused to start a game whose save owner names no directory",
 			"game", label, "platform", summary.Platform, "owner", summary.SaveOwner)
-		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: fmt.Sprintf(
-			"이 게임의 세이브 이름(%q)은 폴더 이름으로 쓸 수 없어 시작하지 않았습니다. 그대로 실행하면 진행이 저장되지 않습니다.",
-			summary.SaveOwner)})
+		r.send(serverMessage{Kind: serverError, ID: message.ID,
+			Message: r.server.phrase("start.bad-owner", "owner", strconv.Quote(summary.SaveOwner))})
 		return
 	}
 	if !r.admitStart(message, directory, label) {
@@ -1041,7 +1039,7 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 		// beyond forgetting it, and it is the ordinary case after a long
 		// absence, so it answers rather than fails.
 		r.send(serverMessage{Kind: serverResumed, ID: message.ID, Resumed: false,
-			Occupied: r.server.attachedSession(message.Token) != nil, Message: "이어서 진행할 게임이 없습니다."})
+			Occupied: r.server.attachedSession(message.Token) != nil, Message: r.server.phrase("resume.none")})
 		return
 	}
 
@@ -1344,11 +1342,25 @@ func (r *sessionRunner) runCheat(message clientMessage) {
 
 	result, err := runCheatOperation(r.game.Cheat(), r.label, message)
 	if err != nil {
-		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
+		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: r.server.cheatRefusal(err)})
 		return
 	}
 	result.Searchable = true
 	r.send(serverMessage{Kind: serverResult, ID: message.ID, Cheat: result.normalize()})
+}
+
+// cheatRefusal is what the panel shows for a failed operation: the failures a
+// player can act on in the panel's words, and anything else as it is.
+func (s *Server) cheatRefusal(err error) string {
+	switch {
+	case errors.Is(err, cheat.ErrNoPreviousScan):
+		return s.phrase("cheat.no-previous-scan")
+	case errors.Is(err, cheat.ErrPanelTooManyCandidates):
+		return s.phrase("cheat.too-many")
+	case errors.Is(err, cheat.ErrNothingToUndo):
+		return s.phrase("cheat.nothing-to-undo")
+	}
+	return err.Error()
 }
 
 // runCheatOperation is the panel's vocabulary. It is a switch over names

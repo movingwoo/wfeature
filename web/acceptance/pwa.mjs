@@ -6,6 +6,7 @@ import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { resolve, join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import net from "node:net";
+import { phrase } from "./page-text.mjs";
 
 const [baseline, candidate, engineName = "chromium"] = process.argv.slice(2);
 if (!baseline || !candidate || !process.env.PLAYWRIGHT_MODULE) {
@@ -220,7 +221,7 @@ try {
   await page.locator("#save-import-file").setInputFiles(backup);
   // The page's own question, which the auto-accepted browser dialog no longer answers.
   await page.locator("#confirm-accept").click();
-  await page.waitForFunction(() => document.querySelector("#status-text").textContent.includes("복원"));
+  await page.waitForFunction(text => document.querySelector("#status-text").textContent.endsWith(text), phrase("savepack.restart"));
   await startGame("persistence.zip"); await color([0, 255, 0]);
   await page.screenshot({ path: join(output, "restored-progress.png") });
   await stopGame();

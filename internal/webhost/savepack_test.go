@@ -155,7 +155,7 @@ func TestSavePackRefusesAnotherGamesBackupAndADamagedOne(t *testing.T) {
 		if recorder.Code != http.StatusConflict {
 			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusConflict)
 		}
-		if !strings.Contains(recorder.Body.String(), "다른 게임") {
+		if !saysSentence(t, "savepack.other-game", recorder.Body.String()) {
 			t.Errorf("body = %q, want it to say this is another game's backup", recorder.Body.String())
 		}
 	})
@@ -167,7 +167,7 @@ func TestSavePackRefusesAnotherGamesBackupAndADamagedOne(t *testing.T) {
 		if recorder.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnprocessableEntity)
 		}
-		if !strings.Contains(recorder.Body.String(), "손상") {
+		if !saysSentence(t, "savepack.damaged", recorder.Body.String()) {
 			t.Errorf("body = %q, want it to say the file is damaged", recorder.Body.String())
 		}
 	})
@@ -177,7 +177,7 @@ func TestSavePackRefusesAnotherGamesBackupAndADamagedOne(t *testing.T) {
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 		}
-		if !strings.Contains(recorder.Body.String(), "백업 파일이 아닙니다") {
+		if !saysSentence(t, "savepack.not-a-backup", recorder.Body.String()) {
 			t.Errorf("body = %q", recorder.Body.String())
 		}
 	})
@@ -285,7 +285,7 @@ func TestSavePackWillNotExportAGameThatHasNeverSaved(t *testing.T) {
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
 	}
-	if !strings.Contains(recorder.Body.String(), "저장된 데이터가 없습니다") {
+	if !saysSentence(t, "savepack.empty", recorder.Body.String()) {
 		t.Errorf("body = %q", recorder.Body.String())
 	}
 }

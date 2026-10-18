@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { initCheckpoints, QUICK_SAVE, QUICK_LOAD } from "./checkpoint.js";
+import "./text-fixture.mjs";
+import { phrase } from "./text.js";
 
 const setup = () => {
   const handlers = {}, buttons = [], timers = new Map();
@@ -55,17 +57,16 @@ test("keypad actions run immediately and report inline without a modal", async (
   await saving;
   assert.equal(ui.load.disabled, false);
   assert.equal(ui.note.hidden, false);
-  assert.match(ui.note.textContent, /저장했습니다/);
+  assert.equal(ui.note.textContent, phrase("checkpoint.saved"));
   ui.expire();
   assert.equal(ui.note.hidden, true);
   const loading = ui.load.click();
   assert.deepEqual(ui.calls, ["save", "load"]);
-  assert.equal(ui.note.textContent, "퀵로드 중…");
+  assert.equal(ui.note.textContent, phrase("checkpoint.loading"));
   await loading;
   assert.deepEqual(ui.loaded, [{ restored: true }]);
   // A load says the game is back at the quick save, not that something loaded.
-  assert.equal(ui.note.textContent, "퀵세이브 시점으로 돌아갔습니다.");
-  assert.doesNotMatch(ui.note.textContent, /불러왔습니다/);
+  assert.equal(ui.note.textContent, phrase("checkpoint.loaded"));
   assert.deepEqual([...ui.timers.values()].map(timer => timer.ms), [3000]);
 });
 
@@ -73,10 +74,10 @@ test("a refused load shows the server's reason and keeps the slot offered", asyn
   const ui = setup();
   ui.state("playing");
   ui.controls.started({ can_checkpoint: true, has_checkpoint: true });
-  const reason = "이전 버전의 퀵로드 형식";
+  const reason = phrase("checkpoint.refused.legacy");
   ui.socket.quickLoad = async () => { throw new Error(reason); };
   await ui.load.click();
-  assert.equal(ui.note.textContent, `퀵로드 실패: ${reason}`);
+  assert.equal(ui.note.textContent, phrase("checkpoint.load-failed", { reason }));
   assert.ok(ui.classes.has("error"));
   assert.equal(ui.loaded.length, 0);
   // The slot is still there and still refused, so the key stays as it was:
@@ -170,18 +171,18 @@ test("a control that is not a cell runs the same action under the same rules", a
 
 // A dropped socket rejects the pending quick save and leaves play in the same
 // turn, before the failure is written. The note has to outlive that, or the
-// player sees "저장 중…" vanish and may take it for a save that happened.
+// player sees the saving note vanish and may take it for a save that happened.
 test("a quick save the dropped connection broke still says it failed", async () => {
   const ui = setup();
   ui.state("playing");
   ui.controls.started({ can_checkpoint: true, has_checkpoint: false });
   ui.socket.quickSave = async () => {
     ui.state("offline");
-    throw new Error("세션 연결이 끊어졌습니다.");
+    throw new Error(phrase("session.disconnected"));
   };
   await ui.save.click();
   assert.equal(ui.note.hidden, false);
-  assert.equal(ui.note.textContent, "퀵세이브 실패: 세션 연결이 끊어졌습니다.");
+  assert.equal(ui.note.textContent, phrase("checkpoint.save-failed", { reason: phrase("session.disconnected") }));
   assert.ok(ui.classes.has("error"));
   assert.deepEqual([...ui.timers.values()].map(timer => timer.ms), [8000]);
   // Reconnecting to the same game does not take it away before it is read.

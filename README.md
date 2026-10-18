@@ -338,6 +338,13 @@ make run ARGS="runktf var/games/ktf/game.zip -play"
 `framestats`는 프레임에 그려진 내용을 색 수와 켜진 픽셀 수로 보고하며, 모든 프레임이 단색이면 0이 아닌 종료 코드를 반환합니다.  
 명령과 플래그 전체, 재현 스크립트와 `ktfdump`는 [`docs/cli.md`](docs/cli.md)에 있습니다.
 
+## 화면 문구
+
+페이지에 보이는 문구는 키 이름, 버튼, 안내문, 서버가 보내는 거절 문구까지 전부 [`web/text.properties`](web/text.properties) 한 파일에 있습니다.  
+한 줄에 `키 = 문구` 하나이고, `{count}`처럼 중괄호로 쓴 자리에는 보여 줄 때 값이 들어갑니다.  
+`make serve`처럼 저장소의 `web/`을 쓰는 서버는 파일을 고친 뒤 새로고침만 하면 바뀐 문구가 보이고, 실행 파일에는 빌드할 때 들어갑니다.  
+형식과 규칙은 [`web/README.md`](web/README.md#text)에 있습니다.
+
 ## 테스트
 
 ```sh

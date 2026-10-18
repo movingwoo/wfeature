@@ -6,6 +6,7 @@ import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSy
 import net from "node:net";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { phrase } from "./page-text.mjs";
 
 const [binary, engineName = "chromium"] = process.argv.slice(2);
 if (!binary || !process.env.PLAYWRIGHT_MODULE) {
@@ -166,7 +167,7 @@ try {
   await page.waitForFunction(() => !document.querySelector("#game-start").disabled);
   await settings();
   await page.locator("#keypad-arrange-open").click();
-  for (const [cell, label] of [["r2c1", "퀵세이브"], ["r6c1", "퀵로드"]]) {
+  for (const [cell, label] of [["r2c1", phrase("key.QUICK_SAVE")], ["r6c1", phrase("key.QUICK_LOAD")]]) {
     await page.locator(`[data-cell="${cell}"]`).click();
     await page.locator("#keypad-arrange-keys").getByRole("button", { name: label, exact: true }).click();
   }
@@ -190,7 +191,7 @@ try {
     assert.equal(await load.isDisabled(), true);
     const savedFrame = await snapshot();
     await save.click();
-    await page.waitForFunction(() => document.querySelector("#checkpoint-status").textContent === "퀵세이브를 저장했습니다.");
+    await page.waitForFunction(text => document.querySelector("#checkpoint-status").textContent === text, phrase("checkpoint.saved"));
     assert.equal(await load.isDisabled(), false);
     const identity = digest(join(games, "library", `${kind}.zip`));
     const slots = files(saves).filter(file => file.endsWith(`/${identity}.v3.wfq`));
@@ -220,7 +221,7 @@ try {
     const savesBeforeLoad = ordinarySaves(), beforeLoad = (await events()).length;
     assert.ok(Object.keys(savesBeforeLoad).length, "fixture did not persist ordinary save data");
     await load.click();
-    await page.waitForFunction(() => document.querySelector("#checkpoint-status").textContent === "퀵세이브 시점으로 돌아갔습니다.");
+    await page.waitForFunction(text => document.querySelector("#checkpoint-status").textContent === text, phrase("checkpoint.loaded"));
     await waitForFrame(savedFrame);
     assert.deepEqual(await snapshot(), savedFrame);
     assert.deepEqual(ordinarySaves(), savesBeforeLoad);

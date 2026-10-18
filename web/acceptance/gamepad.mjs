@@ -10,6 +10,7 @@ import { mkdirSync, copyFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import net from "node:net";
+import { phrase, says } from "./page-text.mjs";
 
 const [binary, engineName = "chromium"] = process.argv.slice(2);
 if (!binary || !process.env.PLAYWRIGHT_MODULE) {
@@ -135,9 +136,10 @@ try {
   await page.evaluate(() => window.connectPad(0, "Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e Product: 0b13)", "standard"));
   await page.waitForFunction(() => !document.querySelector("#pad-bindings").classList.contains("hidden"));
   await settle();
-  assert.match(await page.locator("#pad-bindings-status").textContent(), /연결됨: Xbox/);
+  const connected = await page.locator("#pad-bindings-status").textContent();
+  assert.ok(says(connected, "pad.connected") && connected.includes("Xbox"), connected);
   assert.equal(await page.locator("#pad-bindings-list select").count(), 28);
-  assert.equal(await page.locator('#pad-bindings-list div[data-input="b0"] .key-binding-key').textContent(), "A (아래)");
+  assert.equal(await page.locator('#pad-bindings-list div[data-input="b0"] .key-binding-key').textContent(), phrase("pad.face", { name: "A", side: phrase("pad.side.bottom") }));
   await clear();
   result.checks.push("first controller reveals the settings with the standard layout");
 
@@ -267,9 +269,10 @@ try {
   await settle();
   await button(3, 1, 1);
   await button(3, 0, 1);
-  assert.match(await page.locator("#pad-bindings-status").textContent(), /표준 배치로 읽히지 않는/);
+  const unrecognised = await page.locator("#pad-bindings-status").textContent();
+  assert.ok(says(unrecognised, "pad.connected-raw"), unrecognised);
   assert.equal(await page.locator("#pad-bindings-list select").count(), 14);
-  assert.equal(await page.locator('#pad-bindings-list div[data-input="b3"] .key-binding-key').textContent(), "버튼 4");
+  assert.equal(await page.locator('#pad-bindings-list div[data-input="b3"] .key-binding-key').textContent(), phrase("pad.button", { number: 4 }));
   await expectSent([], "an unrecognised controller starts with nothing bound");
   if (!await page.locator("#pad-bindings").evaluate(e => e.open)) await page.locator("#pad-bindings summary").click();
   await page.locator('#pad-bindings-list select[data-input="b3"]').selectOption("OK");
@@ -295,7 +298,7 @@ try {
   await settle();
   await button(0, 1, 2);
   await button(0, 0, 2);
-  assert.equal(await page.locator('#pad-bindings-list div[data-input="h9-up"] .key-binding-key').textContent(), "십자 ↑ (축 10)");
+  assert.equal(await page.locator('#pad-bindings-list div[data-input="h9-up"] .key-binding-key').textContent(), phrase("pad.hat", { direction: "↑", number: 10 }));
   assert.equal(await page.locator('#pad-bindings-list select[data-input="a9+"]').count(), 0, "the hat's axis is not also a lever");
   await expectSent([], "a hat at rest presses nothing, though its axis reads past the end");
   for (const [way, key] of [["up", "UP"], ["right", "RIGHT"], ["down", "DOWN"], ["left", "LEFT"]]) {
@@ -315,7 +318,7 @@ try {
 
   await page.evaluate(() => { window.disconnectPad(2); window.disconnectPad(1); window.disconnectPad(0); });
   await settle();
-  assert.match(await page.locator("#pad-bindings-status").textContent(), /아무거나 누르면/);
+  assert.equal(await page.locator("#pad-bindings-status").textContent(), phrase("pad.waiting"));
   result.checks.push("disconnecting returns the panel to its waiting state");
 
   await page.screenshot({ path: join(output, "settings.png") });

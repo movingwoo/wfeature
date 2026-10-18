@@ -1,0 +1,151 @@
+{
+  "_comment": "How text.properties is read and filled, for both of its readers: internal/webhost/text.go, which serves the page, and web/text-fixture.mjs with web/text.js, which the page's tests use. Each reader must turn every source under parsed into its table, refuse every source under refused, and fill every sentence under phrased into want.",
+  "parsed": [
+    {
+      "source": "a = 1\nb=2\n",
+      "table": {
+        "a": "1",
+        "b": "2"
+      }
+    },
+    {
+      "source": " \t key.one \t=\t value with  inner  spaces \t\n",
+      "table": {
+        "key.one": "value with  inner  spaces"
+      }
+    },
+    {
+      "source": "a = 1\r\nb = 2\r\n",
+      "table": {
+        "a": "1",
+        "b": "2"
+      }
+    },
+    {
+      "source": "\ufeffa = 1\n",
+      "table": {
+        "a": "1"
+      }
+    },
+    {
+      "source": "# a comment\n\n   # an indented comment\na = 1\n",
+      "table": {
+        "a": "1"
+      }
+    },
+    {
+      "source": "a = x = y # not a comment\n",
+      "table": {
+        "a": "x = y # not a comment"
+      }
+    },
+    {
+      "source": "a =\nb = \n",
+      "table": {
+        "a": "",
+        "b": ""
+      }
+    },
+    {
+      "source": "a = back\\slash and \\n stay as written\n",
+      "table": {
+        "a": "back\\slash and \\n stay as written"
+      }
+    },
+    {
+      "source": "add.added.one = {name} 을(를) 추가했습니다.\n",
+      "table": {
+        "add.added.one": "{name} 을(를) 추가했습니다."
+      }
+    },
+    {
+      "source": "A-b_c.9 = v\n",
+      "table": {
+        "A-b_c.9": "v"
+      }
+    },
+    {
+      "source": "a = 1",
+      "table": {
+        "a": "1"
+      }
+    },
+    {
+      "source": "a = \u00a0x\u3000\n",
+      "table": {
+        "a": "\u00a0x\u3000"
+      }
+    },
+    {
+      "source": "",
+      "table": {}
+    }
+  ],
+  "refused": [
+    "no equals sign\n",
+    " = value\n",
+    "a b = c\n",
+    ".a = c\n",
+    "a = 1\na = 2\n",
+    "키 = 값\n"
+  ],
+  "phrased": [
+    {
+      "sentence": "{name} 을(를) 추가했습니다.",
+      "values": {
+        "name": "게임.zip"
+      },
+      "want": "게임.zip 을(를) 추가했습니다."
+    },
+    {
+      "sentence": "{code} 키를 {from}에서 가져왔습니다. {from}은 이제 비어 있습니다.",
+      "values": {
+        "code": "Q",
+        "from": "취소"
+      },
+      "want": "Q 키를 취소에서 가져왔습니다. 취소은 이제 비어 있습니다."
+    },
+    {
+      "sentence": "{a} {b}",
+      "values": {
+        "a": "1"
+      },
+      "want": "1 {b}"
+    },
+    {
+      "sentence": "{a}",
+      "values": {},
+      "want": "{a}"
+    },
+    {
+      "sentence": "{a}",
+      "values": {
+        "a": "{b}",
+        "b": "x"
+      },
+      "want": "{b}"
+    },
+    {
+      "sentence": "{a}",
+      "values": {
+        "a": "$& $1"
+      },
+      "want": "$& $1"
+    },
+    {
+      "sentence": "{1} {a-b} { a } {a",
+      "values": {
+        "1": "x",
+        "a": "y"
+      },
+      "want": "{1} {a-b} { a } {a"
+    },
+    {
+      "sentence": "no placeholders",
+      "values": {
+        "a": "1"
+      },
+      "want": "no placeholders"
+    }
+  ]
+}

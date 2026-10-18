@@ -1,3 +1,5 @@
+import { phrase } from "./text.js";
+
 export const QUICK_SAVE = "QUICK_SAVE";
 export const QUICK_LOAD = "QUICK_LOAD";
 export const isCheckpointKey = name => name === QUICK_SAVE || name === QUICK_LOAD;
@@ -42,7 +44,7 @@ export const initCheckpoints = ({ document, session, state, editing,
     busy = true;
     refresh();
     const saving = name === QUICK_SAVE;
-    feedback(saving ? "퀵세이브 저장 중…" : "퀵로드 중…");
+    feedback(phrase(saving ? "checkpoint.saving" : "checkpoint.loading"));
     try {
       if (saving) {
         await session().quickSave();
@@ -51,10 +53,11 @@ export const initCheckpoints = ({ document, session, state, editing,
         const response = await session().quickLoad();
         onLoaded(response.started);
       }
-      if (saving) feedback("퀵세이브를 저장했습니다.", false, 2000);
-      else feedback("퀵세이브 시점으로 돌아갔습니다.", false, 3000);
+      if (saving) feedback(phrase("checkpoint.saved"), false, 2000);
+      else feedback(phrase("checkpoint.loaded"), false, 3000);
     } catch (error) {
-      feedback(`${saving ? "퀵세이브" : "퀵로드"} 실패: ${error instanceof Error ? error.message : String(error)}`, true, 8000);
+      const reason = error instanceof Error ? error.message : String(error);
+      feedback(phrase(saving ? "checkpoint.save-failed" : "checkpoint.load-failed", { reason }), true, 8000);
       onError(error);
     }
     finally { busy = false; refresh(); }

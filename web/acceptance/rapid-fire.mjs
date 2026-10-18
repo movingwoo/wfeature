@@ -5,6 +5,7 @@ import { mkdirSync, copyFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import net from "node:net";
+import { phrase, rapidFire } from "./page-text.mjs";
 
 const [binary, engineName = "chromium"] = process.argv.slice(2);
 if (!binary || !process.env.PLAYWRIGHT_MODULE) throw new Error("Usage: PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node web/acceptance/rapid-fire.mjs SERVER [chromium|webkit]");
@@ -58,10 +59,10 @@ try {
   if (!await page.locator("#settings-panel").evaluate(element => element.classList.contains("visible"))) await page.locator('button[data-key="SETTINGS"]').click();
   await page.locator("#keypad-arrange-open").click();
   await page.locator('[data-cell="r2c1"]').click();
-  await page.locator("#keypad-arrange-keys").getByRole("button", { name: "연사", exact: true }).click();
+  await page.locator("#keypad-arrange-keys").getByRole("button", { name: phrase("key.RAPID_FIRE"), exact: true }).click();
   await page.locator("#keypad-arrange-close").click();
   const toggle = page.locator('button[data-cell="r2c1"][data-key="RAPID_FIRE"]');
-  assert.equal(await toggle.textContent(), "연사 off");
+  assert.equal(await toggle.textContent(), rapidFire("off"));
   result.checks.push("switch assigned through keypad editor");
   const clear = () => page.evaluate(() => { window.rapidMessages = []; });
   const messages = () => page.evaluate(() => window.rapidMessages);
@@ -74,7 +75,7 @@ try {
   await toggle.focus();
   for (const [code, mode] of [["Space", "manual"], ["Enter", "auto"], ["Space", "off"]]) {
     await page.keyboard.press(code);
-    assert.equal(await toggle.textContent(), `연사 ${mode}`);
+    assert.equal(await toggle.textContent(), rapidFire(mode));
   }
   assert.deepEqual(await messages(), []);
   result.checks.push("focused Space/Enter changes mode without a handset key");
@@ -122,7 +123,7 @@ try {
   result.checks.push("auto switches both ways and toggles each target off");
   await gameKey("Space");
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
-  assert.equal(await toggle.textContent(), "연사 off");
+  assert.equal(await toggle.textContent(), rapidFire("off"));
   await clear(); await pause(200); assert.deepEqual(await messages(), []);
   result.checks.push("focus loss releases and stops auto");
   await toggle.click();
@@ -142,7 +143,7 @@ try {
   await toggle.click();
   await gameKey("Space");
   await page.locator("#keypad-arrange-open").click();
-  assert.equal(await toggle.textContent(), "연사 off");
+  assert.equal(await toggle.textContent(), rapidFire("off"));
   await page.locator("#keypad-arrange-close").click();
   result.checks.push("editing resets auto");
   await toggle.click(); await toggle.click();
@@ -151,7 +152,7 @@ try {
   await page.locator("#confirm-accept").click();
   await page.locator("#game-start").click();
   await page.waitForFunction(() => !document.querySelector("#restart").classList.contains("hidden"));
-  assert.equal(await toggle.textContent(), "연사 off");
+  assert.equal(await toggle.textContent(), rapidFire("off"));
   result.checks.push("new game starts off and retains switch placement");
   await page.setViewportSize({ width: 390, height: 844 });
   await pause(350);

@@ -16,11 +16,13 @@
 // that the last thing read before a file goes is what is about to happen to
 // it.
 
+import { phrase } from "./text.js";
+
 // askToConfirm shows the question and answers true only if the person pressed
 // the button that goes through. Escape and the backdrop are "no", as is a page
 // with no dialog in it at all: a caller that cannot ask has not been answered,
 // and a destructive default is the one thing this must not have.
-export const askToConfirm = ({ document, message, confirmLabel = "확인" } = {}) =>
+export const askToConfirm = ({ document, message, confirmLabel = phrase("confirm.accept") } = {}) =>
   new Promise(resolve => {
     const dialog = document?.getElementById("confirm-dialog");
     const text = document?.getElementById("confirm-text");

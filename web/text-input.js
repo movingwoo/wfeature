@@ -1,4 +1,6 @@
 // The OS owns composition. Only an explicit submission sends complete text.
+import { phrase } from "./text.js";
+
 export const createTextInputDialog = ({ document, getSession, releaseInput }) => {
   const node = name => document.getElementById(`text-input-${name}`);
   const dialog = node("dialog"), status = node("status"), single = node("value"), multi = node("multiline");
@@ -7,7 +9,7 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
   const showStatus = state => {
     status.dataset.state = state;
     status.hidden = state === "checking";
-    status.textContent = status.hidden ? "" : state === "available" ? "입력 가능" : "입력 불가능";
+    status.textContent = status.hidden ? "" : phrase(state === "available" ? "textinput.available" : "textinput.unavailable");
   };
   const showError = error => {
     const stale = error?.message === "the active text field changed; open text input again";
@@ -28,8 +30,8 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
     composing = busy = false;
     showStatus("checking");
     single.readOnly = multi.readOnly = false;
-    apply.textContent = "입력";
-    cancel.textContent = "닫기";
+    apply.textContent = phrase("textinput.apply");
+    cancel.textContent = phrase("textinput.close");
     if (dialog.open) dialog.close();
   };
   const open = async () => {
@@ -58,8 +60,8 @@ export const createTextInputDialog = ({ document, getSession, releaseInput }) =>
       field.value = textInput.text;
       field.disabled = false;
       apply.disabled = false;
-      apply.textContent = textInput.append ? "삽입" : "입력";
-      cancel.textContent = "취소";
+      apply.textContent = phrase(textInput.append ? "textinput.insert" : "textinput.apply");
+      cancel.textContent = phrase("textinput.cancel");
       showStatus("available");
       // Phones may require a fresh tap after the asynchronous response.
       field.focus();

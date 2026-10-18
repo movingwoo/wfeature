@@ -27,6 +27,7 @@ import { keyName, SETTINGS } from "./keypad-layout.js";
 import { RAPID_FIRE } from "./rapid-fire.js";
 import { QUICK_LOAD, QUICK_SAVE } from "./checkpoint.js";
 import { FULLSCREEN } from "./fullscreen.js";
+import { phrase } from "./text.js";
 
 export const PAD_BINDINGS_KEY = "wfeature:padBindings";
 export const RAW_PAD_BINDINGS_KEY = "wfeature:padBindingsRaw";
@@ -36,7 +37,7 @@ export const RAW_PAD_BINDINGS_KEY = "wfeature:padBindingsRaw";
 export const padActions = [SETTINGS, RAPID_FIRE, FULLSCREEN, QUICK_SAVE, QUICK_LOAD];
 const knownTarget = new Set([...keyOrder, ...padActions]);
 export const isPadAction = name => padActions.includes(name);
-export const targetLabel = name => (name ? keyName(name) : "없음");
+export const targetLabel = name => (name ? keyName(name) : phrase("pad.none"));
 
 // The two sticks of the standard layout, as sectors read clockwise from
 // pointing right — the browser's y axis points down. The left stick has four,
@@ -197,7 +198,7 @@ const faceNames = {
   playstation: ["✕", "○", "□", "△"],
   nintendo: ["B", "A", "Y", "X"],
 };
-const faceSides = ["아래", "오른쪽", "왼쪽", "위"];
+const faceSides = ["pad.side.bottom", "pad.side.right", "pad.side.left", "pad.side.top"];
 const upperNames = {
   xbox: ["LB", "RB", "LT", "RT", "View", "Menu"],
   playstation: ["L1", "R1", "L2", "R2", "Share", "Options"],
@@ -217,20 +218,22 @@ const arrows = {
 // What a control is called on screen.
 export const inputLabel = (input, { standard = true, family = "xbox" } = {}) => {
   const stick = /^(ls|rs)-(\w+)$/.exec(input);
-  if (stick) return `${stick[1] === "ls" ? "왼스틱" : "오른스틱"} ${arrows[stick[2]] ?? stick[2]}`;
+  if (stick) {
+    return phrase(stick[1] === "ls" ? "pad.stick.left" : "pad.stick.right", { direction: arrows[stick[2]] ?? stick[2] });
+  }
   const axis = /^a(\d+)([+-])$/.exec(input);
-  if (axis) return `축 ${Number(axis[1]) + 1} ${axis[2] === "+" ? "+" : "−"}`;
+  if (axis) return phrase("pad.axis", { number: Number(axis[1]) + 1, sign: axis[2] === "+" ? "+" : "−" });
   const hat = /^h(\d+)-(\w+)$/.exec(input);
-  if (hat) return `십자 ${arrows[hat[2]] ?? hat[2]} (축 ${Number(hat[1]) + 1})`;
+  if (hat) return phrase("pad.hat", { direction: arrows[hat[2]] ?? hat[2], number: Number(hat[1]) + 1 });
   const button = /^b(\d+)$/.exec(input);
   if (!button) return input;
   const n = Number(button[1]);
-  if (!standard || n > 15) return `버튼 ${n + 1}`;
-  if (n < 4) return `${(faceNames[family] ?? faceNames.xbox)[n]} (${faceSides[n]})`;
+  if (!standard || n > 15) return phrase("pad.button", { number: n + 1 });
+  if (n < 4) return phrase("pad.face", { name: (faceNames[family] ?? faceNames.xbox)[n], side: phrase(faceSides[n]) });
   if (n < 10) return (upperNames[family] ?? upperNames.xbox)[n - 4];
-  if (n === 10) return "L3 (왼스틱 누르기)";
-  if (n === 11) return "R3 (오른스틱 누르기)";
-  return `십자 ${["↑", "↓", "←", "→"][n - 12]}`;
+  if (n === 10) return phrase("pad.stick.left-press");
+  if (n === 11) return phrase("pad.stick.right-press");
+  return phrase("pad.dpad", { direction: ["↑", "↓", "←", "→"][n - 12] });
 };
 
 const record = value => (value !== null && typeof value === "object" && !Array.isArray(value) ? value : {});

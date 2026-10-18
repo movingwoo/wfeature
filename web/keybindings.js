@@ -8,6 +8,8 @@
 // panel reads it in and the direction the uniqueness rule is stated in. The
 // keydown handler needs the other direction and builds it with codeLookup.
 
+import { phrase } from "./text.js";
+
 // The keys the panel lists, in the order they sit on the keypad. This is a
 // list of its own rather than the table's own order because a table keyed by
 // "1" and "0" is not read back in the order it was written: JavaScript hands
@@ -49,8 +51,9 @@ export const defaultBindings = {
   OK: "Space",
 };
 
-// What each phone key is called on screen. The direction pad is drawn with
-// arrows on the keypad itself, so it is named with arrows here too.
+// What each phone key is called on screen, by its entry in text.properties;
+// the digits, * and # are their own names. The direction pad is drawn with
+// arrows on the keypad itself, so it is named with arrows there too.
 //
 // The right soft key is named for where it sat, because that is the only name
 // the titles give it: their help screens say 우측상단키 and never what the key
@@ -58,18 +61,18 @@ export const defaultBindings = {
 // have borrowed is taken — a help screen's 확인키 is the centre key ("5번 및
 // 확인키"), which is why that is the name OK keeps.
 const keyNames = {
-  CLR: "취소",
-  CALL: "통화",
-  MENU: "메뉴",
-  SOFT2: "우상단",
-  UP: "↑",
-  DOWN: "↓",
-  LEFT: "←",
-  RIGHT: "→",
-  OK: "확인",
+  CLR: "key.CLR",
+  CALL: "key.CALL",
+  MENU: "key.MENU",
+  SOFT2: "key.SOFT2",
+  UP: "key.UP",
+  DOWN: "key.DOWN",
+  LEFT: "key.LEFT",
+  RIGHT: "key.RIGHT",
+  OK: "key.OK",
 };
 
-export const keyLabel = name => keyNames[name] ?? name;
+export const keyLabel = name => (Object.hasOwn(keyNames, name) ? phrase(keyNames[name]) : name);
 
 // Keys that the browser or the page needs more than the game does. Binding one
 // would take it away for the rest of the run: the handler answers a bound key
@@ -82,9 +85,20 @@ const modifierCodes = /^(Shift|Control|Alt|Meta|OS)(Left|Right)?$|^(CapsLock|Num
 export const bindable = code =>
   typeof code === "string" && code !== "" && !reservedCodes.has(code) && !modifierCodes.test(code);
 
+// The keys called by a word rather than by what is printed on them, which is
+// wording and so in text.properties; the rest are named by their own symbol.
+const codeWords = {
+  Space: "keyboard.code.Space",
+  Backspace: "keyboard.code.Backspace",
+  Insert: "keyboard.code.Insert",
+  Delete: "keyboard.code.Delete",
+  Home: "keyboard.code.Home",
+  End: "keyboard.code.End",
+  PageUp: "keyboard.code.PageUp",
+  PageDown: "keyboard.code.PageDown",
+};
+
 const codeNames = {
-  Space: "Space",
-  Backspace: "Backspace",
   Backslash: "\\",
   Slash: "/",
   Semicolon: ";",
@@ -100,12 +114,6 @@ const codeNames = {
   ArrowDown: "↓",
   ArrowLeft: "←",
   ArrowRight: "→",
-  Insert: "Ins",
-  Delete: "Del",
-  Home: "Home",
-  End: "End",
-  PageUp: "PgUp",
-  PageDown: "PgDn",
 };
 
 // What a physical key is called on screen. `event.code` names a position on the
@@ -114,13 +122,14 @@ const codeNames = {
 // and the row shows what was actually pressed, which settles it either way.
 export const codeLabel = code => {
   if (!code) return "";
+  if (Object.hasOwn(codeWords, code)) return phrase(codeWords[code]);
   if (codeNames[code]) return codeNames[code];
   const letter = /^Key([A-Z])$/.exec(code);
   if (letter) return letter[1];
   const digit = /^Digit([0-9])$/.exec(code);
   if (digit) return digit[1];
   const numpad = /^Numpad(.+)$/.exec(code);
-  if (numpad) return `숫자패드 ${codeNames[numpad[1]] ?? numpad[1]}`;
+  if (numpad) return phrase("keyboard.numpad", { key: codeNames[numpad[1]] ?? numpad[1] });
   return code;
 };
 

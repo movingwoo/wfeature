@@ -13,6 +13,7 @@
 
 import { AudioStream, isAudioMessage } from "./audio-stream.js";
 import { FrameReceiver, decodesLosslessWebP } from "./frame-stream.js";
+import { phrase } from "./text.js";
 
 // Whether this browser decodes lossless WebP, found once before the first
 // session is opened: a page that can asks for its pictures that way, which
@@ -79,7 +80,7 @@ export class GameSession {
   open(timeoutMillis = 10000) {
     if (losslessWebP === undefined) {
       return probingWebP.then(() => {
-        if (this.closed) throw new Error("세션 연결이 끊어졌습니다.");
+        if (this.closed) throw new Error(phrase("session.disconnected"));
         return this.open(timeoutMillis);
       });
     }
@@ -99,7 +100,7 @@ export class GameSession {
 
       let ready = false;
       const timer = setTimeout(() => {
-        reject(new Error("세션 서버가 응답하지 않습니다."));
+        reject(new Error(phrase("session.server-silent")));
         this.close();
       }, timeoutMillis);
       socket.addEventListener("message", event => {
@@ -125,7 +126,7 @@ export class GameSession {
         this.#receive(message);
       });
       socket.addEventListener("error", () => {
-        if (!ready) { clearTimeout(timer); reject(new Error("세션 서버에 연결하지 못했습니다.")); this.close(); }
+        if (!ready) { clearTimeout(timer); reject(new Error(phrase("session.unreachable"))); this.close(); }
       });
       socket.addEventListener("close", () => {
         this.closed = true;
@@ -133,10 +134,10 @@ export class GameSession {
         clearTimeout(timer);
         // Everything still waiting for an answer is never getting one.
         for (const { reject: rejectPending } of this.pending.values()) {
-          rejectPending(new Error("세션 연결이 끊어졌습니다."));
+          rejectPending(new Error(phrase("session.disconnected")));
         }
         this.pending.clear();
-        if (!ready) reject(new Error("세션 서버에 연결하지 못했습니다."));
+        if (!ready) reject(new Error(phrase("session.unreachable")));
         this.handlers.onClosed?.();
       });
     });
@@ -155,7 +156,7 @@ export class GameSession {
       for (const [id, pending] of this.pending) {
         if (id !== message.id && ["cheat", "text", "quickSave", "quickLoad"].includes(pending.kind)) {
           this.pending.delete(id);
-          pending.reject(new Error("퀵세이브를 불러와 이전 요청을 취소했습니다."));
+          pending.reject(new Error(phrase("session.cancelled-by-load")));
         }
       }
       this.resetting = true;
@@ -213,7 +214,7 @@ export class GameSession {
         break;
       case "error":
         if (message.exited) this.handlers.onExited?.(message.message ?? "");
-        this.handlers.onError?.(message.message ?? "세션 오류");
+        this.handlers.onError?.(message.message ?? phrase("session.error"));
         break;
       default:
         break;
@@ -276,13 +277,13 @@ export class GameSession {
       this.pending.set(id, { resolve: settle(resolve), reject: settle(reject), kind: message.kind });
       if (!this.#send({ ...message, id })) {
         this.pending.delete(id);
-        reject(new Error("세션이 연결되어 있지 않습니다."));
+        reject(new Error(phrase("session.not-connected")));
         return;
       }
       timer = setTimeout(() => {
         if (!this.pending.has(id)) return;
         this.pending.delete(id);
-        reject(new Error("세션이 응답하지 않습니다."));
+        reject(new Error(phrase("session.silent")));
       }, timeoutMillis);
     });
   }
@@ -345,7 +346,7 @@ export class GameSession {
     this.closed = true;
     this.frames.close();
     for (const { reject } of this.pending.values()) {
-      reject(new Error("세션 연결이 끊어졌습니다."));
+      reject(new Error(phrase("session.disconnected")));
     }
     this.pending.clear();
     this.socket?.close();

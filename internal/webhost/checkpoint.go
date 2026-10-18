@@ -63,21 +63,21 @@ func (step checkpointStep) String() string {
 // The sentence takes the place of the cause, and the cause names the file and
 // what the store answered, so it goes to the log.
 func (r *sessionRunner) checkpointRefusal(step checkpointStep, game string, err error) string {
-	var sentence string
+	var key string
 	switch {
 	case errors.Is(err, backend.ErrCheckpointLegacy):
-		sentence = "이전 버전의 퀵로드 형식"
+		key = "checkpoint.refused.legacy"
 	case errors.Is(err, backend.ErrCheckpointSaveWrite) && step == checkpointSaving:
-		sentence = "게임이 쓰던 세이브를 디스크에 기록하지 못해 퀵세이브를 중단했습니다."
+		key = "checkpoint.refused.save-write"
 	case errors.Is(err, backend.ErrCheckpointSaveWrite):
-		sentence = "게임이 쓰던 세이브를 디스크에 기록하지 못해 퀵로드를 중단했습니다."
+		key = "checkpoint.refused.load-write"
 	case errors.Is(err, backend.ErrCheckpointSaveRead):
-		sentence = "세이브를 읽지 못해 퀵로드를 중단했습니다."
+		key = "checkpoint.refused.load-read"
 	default:
 		return err.Error()
 	}
 	r.server.logger.Warn("checkpoint refused", "game", game, "step", step.String(), "error", err)
-	return sentence
+	return r.server.phrase(key)
 }
 
 // quickLoadRefusal reads the slot a start from the quick save would restore,

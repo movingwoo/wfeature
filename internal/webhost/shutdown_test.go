@@ -116,7 +116,7 @@ func TestAStoppingServerStartsAndResumesNothing(t *testing.T) {
 	}
 	send(t, late, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
 	refusal := expectMessage(t, late, serverError)
-	if !strings.Contains(refusal.Message, "종료") {
+	if !saysSentence(t, "start.shutting-down", refusal.Message) {
 		t.Errorf("the refusal was %q, want it to say the server is stopping", refusal.Message)
 	}
 	if server.parkedCount() != 0 || server.claimCount() != 0 {

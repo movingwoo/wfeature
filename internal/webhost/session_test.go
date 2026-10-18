@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"net/http/httptest"
@@ -503,7 +504,7 @@ func TestSessionNamesALockedPackageForWhatItIs(t *testing.T) {
 
 	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/locked.zip"})
 	refusal := expectMessage(t, connection, serverError)
-	if !strings.Contains(refusal.Message, "잠긴") {
+	if !saysSentence(t, "start.locked", refusal.Message) {
 		t.Errorf("refusal = %q, want it to say the file is locked", refusal.Message)
 	}
 	// The loader's own English complaint reaching a page is the failure this
@@ -614,6 +615,21 @@ func TestCheatScanRefusalCarriesThePanelsWords(t *testing.T) {
 	_, err := runCheatOperation(engine, "game", clientMessage{Kind: clientCheat, Op: "scan", Type: "u8", Filter: "unknown"})
 	if !errors.Is(err, cheat.ErrPanelTooManyCandidates) {
 		t.Fatalf("refused scan answered %v, want the panel's words", err)
+	}
+	// The engine's refusals are said in the panel's words, and only those: any
+	// other failure reaches the panel as it is.
+	server := newTestServer(t, Options{})
+	for err, key := range map[error]string{
+		cheat.ErrNoPreviousScan:         "cheat.no-previous-scan",
+		cheat.ErrPanelTooManyCandidates: "cheat.too-many",
+		cheat.ErrNothingToUndo:          "cheat.nothing-to-undo",
+	} {
+		if got, want := server.cheatRefusal(fmt.Errorf("scan: %w", err)), pageSentence(t, key); got != want {
+			t.Errorf("cheatRefusal(%v) = %q, want %q", err, got, want)
+		}
+	}
+	if got := server.cheatRefusal(errors.New("unknown value type")); got != "unknown value type" {
+		t.Errorf("an engine error was reworded: %q", got)
 	}
 }
 

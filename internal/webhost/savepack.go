@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -83,22 +84,22 @@ func (s *Server) serveSavePack(writer http.ResponseWriter, request *http.Request
 
 // savePackTarget resolves the query into everything both directions need: the
 // archive's identity, the directory its saves live in, and a name for the file.
-// Every refusal it answers is written for the page to show.
+// Every refusal it answers is written for the page to show; see explain.
 func (s *Server) savePackTarget(request *http.Request) (identity [32]byte, directory, label string, err error) {
 	game := request.URL.Query().Get(savePackQuery)
 	if strings.TrimSpace(game) == "" {
-		return identity, "", "", errors.New("게임을 고르지 않았습니다.")
+		return identity, "", "", refuse("savepack.no-game")
 	}
 	archive, label, readErr := s.readGameArchive(game)
 	if readErr != nil {
-		return identity, "", "", errors.New("게임 파일을 찾을 수 없습니다.")
+		return identity, "", "", refuse("savepack.game-missing")
 	}
 	summary, inspectErr := session.Inspect(archive)
 	if inspectErr != nil {
 		// A damaged archive still names its platform, but it cannot name the
 		// directory its saves belong in, which is the whole of what is needed
 		// here.
-		return identity, "", "", errors.New("이 게임 파일을 읽을 수 없어 세이브 위치를 알 수 없습니다.")
+		return identity, "", "", refuse("savepack.unreadable-game")
 	}
 	s.migrateSaveOwner(summary)
 	directory = s.saveDirectory(summary.Platform, summary.SaveOwner)
@@ -106,10 +107,10 @@ func (s *Server) savePackTarget(request *http.Request) (identity [32]byte, direc
 	// with no saves: the game has them and this server will not start it
 	// for that reason, so saying it keeps none would be untrue.
 	if directory == "" && summary.SaveOwner != "" {
-		return identity, "", "", fmt.Errorf("이 게임의 세이브 이름(%q)은 폴더 이름으로 쓸 수 없습니다.", summary.SaveOwner)
+		return identity, "", "", refuse("savepack.bad-owner", "owner", strconv.Quote(summary.SaveOwner))
 	}
 	if directory == "" {
-		return identity, "", "", errors.New("이 게임은 세이브를 따로 두지 않습니다.")
+		return identity, "", "", refuse("savepack.no-saves-kept")
 	}
 	return backend.SaveIdentity(archive), directory, label, nil
 }
@@ -117,7 +118,7 @@ func (s *Server) savePackTarget(request *http.Request) (identity [32]byte, direc
 func (s *Server) exportSavePack(writer http.ResponseWriter, request *http.Request) {
 	identity, directory, label, err := s.savePackTarget(request)
 	if err != nil {
-		writeError(writer, http.StatusBadRequest, err.Error())
+		writeError(writer, http.StatusBadRequest, s.explain(err))
 		return
 	}
 	entries, err := backend.ReadSaveTree(directory)
@@ -126,20 +127,20 @@ func (s *Server) exportSavePack(writer http.ResponseWriter, request *http.Reques
 	backend.WarnSaveLockFallback(s.logger, directory)
 	if err != nil {
 		s.logger.Error("could not read a save tree for export", "directory", directory, "error", err)
-		writeError(writer, http.StatusInternalServerError, "세이브를 읽지 못했습니다.")
+		writeError(writer, http.StatusInternalServerError, s.phrase("savepack.read-failed"))
 		return
 	}
 	// An empty backup is worse than no backup: it is a file the person keeps,
 	// believing their progress is in it. A game that has never saved is told
 	// so instead.
 	if len(entries) == 0 {
-		writeError(writer, http.StatusNotFound, "이 게임에는 아직 저장된 데이터가 없습니다.")
+		writeError(writer, http.StatusNotFound, s.phrase("savepack.empty"))
 		return
 	}
 	container, err := backend.EncodeSavePack(backend.SavePack{Identity: identity, Entries: entries})
 	if err != nil {
 		s.logger.Error("could not encode a save backup", "directory", directory, "error", err)
-		writeError(writer, http.StatusInternalServerError, "세이브를 내보내지 못했습니다.")
+		writeError(writer, http.StatusInternalServerError, s.phrase("savepack.encode-failed"))
 		return
 	}
 
@@ -172,13 +173,13 @@ type savePackResult struct {
 func (s *Server) importSavePack(writer http.ResponseWriter, request *http.Request) {
 	identity, directory, label, err := s.savePackTarget(request)
 	if err != nil {
-		writeError(writer, http.StatusBadRequest, err.Error())
+		writeError(writer, http.StatusBadRequest, s.explain(err))
 		return
 	}
 	body, err := readBody(request, maxSavePackUpload)
 	if err != nil {
 		if errors.Is(err, errBodyTooLarge) {
-			writeError(writer, http.StatusRequestEntityTooLarge, "세이브 파일이 너무 큽니다.")
+			writeError(writer, http.StatusRequestEntityTooLarge, s.phrase("savepack.too-large"))
 			return
 		}
 		writeError(writer, http.StatusBadRequest, "Bad Request")
@@ -193,13 +194,11 @@ func (s *Server) importSavePack(writer http.ResponseWriter, request *http.Reques
 		switch {
 		case errors.Is(err, backend.ErrNotSavePack):
 			writeError(writer, http.StatusBadRequest,
-				"이 파일은 세이브 백업 파일이 아닙니다. 내보내기로 만든 "+savePackExtension+" 파일을 고르세요.")
+				s.phrase("savepack.not-a-backup", "extension", savePackExtension))
 		case errors.Is(err, backend.ErrSavePackVersion):
-			writeError(writer, http.StatusBadRequest,
-				"이 백업은 더 새로운 버전에서 만들어져 이 빌드가 읽을 수 없습니다.")
+			writeError(writer, http.StatusBadRequest, s.phrase("savepack.newer"))
 		default:
-			writeError(writer, http.StatusUnprocessableEntity,
-				"백업 파일이 손상되었습니다. 옮기는 중에 파일이 깨진 것이니 다시 내보내거나 다시 옮겨 오세요.")
+			writeError(writer, http.StatusUnprocessableEntity, s.phrase("savepack.damaged"))
 		}
 		s.logger.Warn("refused a save import", "game", label, "reason", err)
 		return
@@ -210,9 +209,8 @@ func (s *Server) importSavePack(writer http.ResponseWriter, request *http.Reques
 		// right file and looking for a second copy of this one.
 		s.logger.Warn("refused a save import for another game", "game", label,
 			"backup", shortIdentity(pack.Identity), "expected", shortIdentity(identity))
-		writeError(writer, http.StatusConflict, fmt.Sprintf(
-			"이 백업은 다른 게임의 것입니다. 백업 %s, 지금 게임 %s.",
-			shortIdentity(pack.Identity), shortIdentity(identity)))
+		writeError(writer, http.StatusConflict, s.phrase("savepack.other-game",
+			"backup", shortIdentity(pack.Identity), "current", shortIdentity(identity)))
 		return
 	}
 	// An export never writes an empty backup — a game that has not saved is
@@ -221,8 +219,7 @@ func (s *Server) importSavePack(writer http.ResponseWriter, request *http.Reques
 	// success.
 	if len(pack.Entries) == 0 {
 		s.logger.Warn("refused an empty save import", "game", label)
-		writeError(writer, http.StatusUnprocessableEntity,
-			"백업 파일에 세이브가 하나도 없습니다. 내보내기로 만든 백업 파일을 고르세요.")
+		writeError(writer, http.StatusUnprocessableEntity, s.phrase("savepack.backup-empty"))
 		return
 	}
 
@@ -230,12 +227,11 @@ func (s *Server) importSavePack(writer http.ResponseWriter, request *http.Reques
 	// write takes, and for the same reason. Unlike that write it takes a parked
 	// holder over — a person chose this file and this game, and the parked game
 	// it would otherwise be refused by is this game.
-	held, holder := s.holdSaveDirectory(directory, "세이브 가져오기", true)
+	held, holder := s.holdSaveDirectory(directory, s.phrase("savepack.holder"), true)
 	if !held {
 		s.logger.Warn("refused a save import into a directory a game holds",
 			"game", label, "holder", holder)
-		writeError(writer, http.StatusConflict,
-			"이 게임이 실행 중입니다("+holder+"). 그 창에서 게임을 멈춘 뒤 다시 가져오세요.")
+		writeError(writer, http.StatusConflict, s.phrase("savepack.running", "holder", holder))
 		return
 	}
 	defer s.releaseSaveDirectory(directory)
@@ -244,7 +240,7 @@ func (s *Server) importSavePack(writer http.ResponseWriter, request *http.Reques
 	if err != nil {
 		s.logger.Error("a save import failed partway", "game", label,
 			"written", written, "error", err)
-		writeError(writer, http.StatusInternalServerError, "세이브를 복원하지 못했습니다.")
+		writeError(writer, http.StatusInternalServerError, s.phrase("savepack.restore-failed"))
 		return
 	}
 	s.logger.Info("a save was imported", "game", label, "written", written, "removed", removed)

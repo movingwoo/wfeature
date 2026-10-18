@@ -7,6 +7,7 @@ import { mkdirSync, copyFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import net from "node:net";
+import { phrase } from "./page-text.mjs";
 
 const [binary, engineName = "chromium"] = process.argv.slice(2);
 if (!binary || !process.env.PLAYWRIGHT_MODULE) {
@@ -74,7 +75,7 @@ try {
   assert.equal(await on(), true);
   assert.equal(await display(".button-container"), "none");
   assert.equal(await settingsOpen(), false, "a docked panel would be a modal over the game");
-  assert.equal(await page.locator("#fullscreen-toggle").textContent(), "⛶ 전체화면 끝내기");
+  assert.equal(await page.locator("#fullscreen-toggle").textContent(), phrase("fullscreen.leave"));
   assert.equal(await page.evaluate(() => localStorage.getItem("wfeature:fullscreen")), "on");
   result.checks.push("the settings button puts the keypad and the panels away");
 
@@ -143,7 +144,7 @@ try {
   assert.equal(await page.locator("#keypad-arrange").evaluate(e => getComputedStyle(e).display !== "none"), true);
   // A cell can carry it, and a press on the cell puts the keypad away.
   await page.locator('[data-cell="r2c1"]').click();
-  await page.locator("#keypad-arrange-keys").getByRole("button", { name: "전체화면", exact: true }).click();
+  await page.locator("#keypad-arrange-keys").getByRole("button", { name: phrase("key.FULLSCREEN"), exact: true }).click();
   await page.locator("#keypad-arrange-close").click();
   const cell = page.locator('button[data-cell="r2c1"][data-key="FULLSCREEN"]');
   assert.equal(await cell.count(), 1);

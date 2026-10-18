@@ -45,7 +45,7 @@ const removeGameQuery = "game"
 func (s *Server) serveGameRemoval(writer http.ResponseWriter, request *http.Request) {
 	file, added, err := s.gameFileInQuery(request.URL.Query().Get(removeGameQuery))
 	if err != nil {
-		writeError(writer, http.StatusBadRequest, "지울 게임을 찾지 못했습니다.")
+		writeError(writer, http.StatusBadRequest, s.phrase("remove.not-found"))
 		return
 	}
 	if !added {
@@ -54,8 +54,7 @@ func (s *Server) serveGameRemoval(writer http.ResponseWriter, request *http.Requ
 		// the server that decides, because a page is not a place to keep a
 		// rule that protects files.
 		s.logger.Warn("refused to remove a game outside the added root", "path", file)
-		writeError(writer, http.StatusForbidden,
-			"이 게임은 서버 폴더에 직접 넣은 것이라 여기서 지울 수 없습니다.")
+		writeError(writer, http.StatusForbidden, s.phrase("remove.library"))
 		return
 	}
 	// The added root also holds what the server keeps there for itself — the
@@ -64,19 +63,19 @@ func (s *Server) serveGameRemoval(writer http.ResponseWriter, request *http.Requ
 	// upload route would have written, which is the only kind it writes.
 	if _, err := uploadName(filepath.Base(file)); err != nil {
 		s.logger.Warn("refused to remove something in the added root that is not a game", "path", file)
-		writeError(writer, http.StatusBadRequest, "지울 게임을 찾지 못했습니다.")
+		writeError(writer, http.StatusBadRequest, s.phrase("remove.not-found"))
 		return
 	}
 	info, err := os.Stat(file)
 	if err != nil || !info.Mode().IsRegular() {
 		// Already gone, or never there. The page reloads its list either way,
 		// and that list is what was out of date.
-		writeError(writer, http.StatusNotFound, "그 게임이 이미 없습니다.")
+		writeError(writer, http.StatusNotFound, s.phrase("remove.gone"))
 		return
 	}
 	if err := os.Remove(file); err != nil {
 		s.logger.Error("could not remove a game", "path", file, "error", err)
-		writeError(writer, http.StatusInternalServerError, "게임을 지우지 못했습니다.")
+		writeError(writer, http.StatusInternalServerError, s.phrase("remove.failed"))
 		return
 	}
 	s.logger.Info("a game was removed from the page", "path", file, "bytes", info.Size())

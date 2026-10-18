@@ -433,10 +433,10 @@ func TestQuickSaveAndLoadOnALinkedSaveFolder(t *testing.T) {
 // goes to the log. In every case the game that was running is still running,
 // nothing on disk has changed, and the same press works once the cause is gone.
 func TestQuickStepRefusalsAreWordedForThePage(t *testing.T) {
-	const (
-		saveWrite = "게임이 쓰던 세이브를 디스크에 기록하지 못해 퀵세이브를 중단했습니다."
-		loadWrite = "게임이 쓰던 세이브를 디스크에 기록하지 못해 퀵로드를 중단했습니다."
-		loadRead  = "세이브를 읽지 못해 퀵로드를 중단했습니다."
+	var (
+		saveWrite = pageSentence(t, "checkpoint.refused.save-write")
+		loadWrite = pageSentence(t, "checkpoint.refused.load-write")
+		loadRead  = pageSentence(t, "checkpoint.refused.load-read")
 	)
 	// refused checks one refusal: the reply, the log, the disk and the game.
 	refused := func(t *testing.T, host *saveHost, reply serverMessage, sentence string, before map[string]string, running *session.Session) {
@@ -520,7 +520,7 @@ func TestQuickStepRefusalsAreWordedForThePage(t *testing.T) {
 // person who asks is told why; a new quick save is written beside the old file
 // and loads. Envelope version 2 is what 0.5.2 wrote, version 1 came before it.
 func TestQuickLoadRefusesAnEarlierBuildsSlotWithAReason(t *testing.T) {
-	const sentence = "이전 버전의 퀵로드 형식"
+	sentence := pageSentence(t, "checkpoint.refused.legacy")
 	for _, earlierFormat := range []struct {
 		name    string
 		version byte
@@ -658,7 +658,7 @@ func TestStartFromAQuickSaveIsRefusedBeforeTheRunningGameIsStopped(t *testing.T)
 			if err := os.Rename(host.slot(false), host.slot(true)); err != nil {
 				t.Fatal(err)
 			}
-		}, "이전 버전의 퀵로드 형식"},
+		}, pageSentence(t, "checkpoint.refused.legacy")},
 		{"a damaged quick save", func(t *testing.T, host *saveHost, valid []byte) {
 			damaged := bytes.Clone(valid)
 			damaged[len(damaged)-1] ^= 1

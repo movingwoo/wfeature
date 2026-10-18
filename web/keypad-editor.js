@@ -10,16 +10,20 @@ import {
 } from "./keypad-layout.js";
 import { groupGeometry } from "./keypad-geometry.js";
 import { local } from "./storage.js";
+import { phrase } from "./text.js";
 
 const svgNamespace = "http://www.w3.org/2000/svg";
+// What the hint says for each refusal the layout answers with.
 const errors = {
-  disconnected: "인접한 칸끼리만 합칠 수 있습니다.",
-  "choose-key": "서로 다른 키가 있습니다. 합친 버튼에 넣을 키를 먼저 고르세요.",
-  settings: "설정 키를 다른 칸으로 옮긴 뒤 변경하세요.",
-  "select-more": "합칠 버튼이나 빈 칸을 두 개 이상 고르세요.",
-  "select-merged": "나눌 병합 버튼 하나를 고르세요.",
-  invalid: "선택한 칸을 다시 확인하세요.",
+  disconnected: "arrange.error.disconnected",
+  "choose-key": "arrange.error.choose-key",
+  settings: "arrange.error.settings",
+  "select-more": "arrange.error.select-more",
+  "select-merged": "arrange.error.select-merged",
+  invalid: "arrange.error.invalid",
 };
+const refusal = (error) =>
+  Object.hasOwn(errors, error) ? phrase(errors[error]) : "";
 
 // Measure the actual font rather than estimating width from character count.
 // Reset first so wider buttons and shorter dynamic labels can grow back.
@@ -111,29 +115,33 @@ export const initKeypadEditor = ({
     }
     if (message) hint.textContent = message;
     else if (!groups.length)
-      hint.textContent = multiple
-        ? "여러 칸을 선택 후 합칠 수 있습니다."
-        : "버튼이나 빈 칸을 눌러 키를 지정합니다. 합치거나 나눠서 크기와 모양을 변경합니다.";
+      hint.textContent = phrase(
+        multiple ? "arrange.hint.multiple" : "arrange.hint.single",
+      );
     else if (multiple)
       hint.textContent = connected(members)
-        ? `${members.length}칸 선택.`
-        : errors.disconnected;
+        ? phrase("arrange.hint.selected", { count: members.length })
+        : refusal("disconnected");
     else if (keepsSettings)
-      hint.textContent = `${members.length}칸 · 설정 키는 지울 수 없습니다. 다른 칸에 설정을 넣으면 옮겨집니다.`;
+      hint.textContent = phrase("arrange.hint.settings", {
+        count: members.length,
+      });
     else
-      hint.textContent = `${members.length}칸 · 넣을 키를 고르세요. 나누면 첫 칸에만 키가 남습니다.`;
+      hint.textContent = phrase("arrange.hint.key", { count: members.length });
     const state = layout.persistence();
     notice.hidden = !state.reason;
-    notice.textContent =
+    notice.textContent = phrase(
       state.reason === "recovered"
-        ? "저장된 일부 배치를 읽지 못해 기본 배치로 복구했습니다."
+        ? "arrange.storage.recovered"
         : state.reason === "future" || state.reason === "oversized"
-          ? "저장된 배치를 보존했습니다. 이번 변경은 이 탭에서만 유지됩니다."
-          : "배치를 저장하지 못했습니다. 이번 변경은 이 탭에서만 유지됩니다.";
+          ? "arrange.storage.kept"
+          : "arrange.storage.failed",
+    );
     const edited = layout.edited();
     for (const [option, name] of shapeNames) {
       const mine = option.value === layout.shape();
-      option.textContent = mine && edited ? `${name} (수정됨)` : name;
+      option.textContent =
+        mine && edited ? phrase("arrange.shape-edited", { name }) : name;
     }
     for (const list of shapeLists) list.value = layout.shape();
   };
@@ -202,7 +210,9 @@ export const initKeypadEditor = ({
       const [, row, column] = /^r(\d+)c(\d+)$/.exec(group.id);
       button.setAttribute(
         "aria-label",
-        group.key ? keyName(group.key) : `${row}행 ${column}열 빈 칸`,
+        group.key
+          ? keyName(group.key)
+          : phrase("arrange.empty-cell", { row, column }),
       );
       const clipId = `keypad-clip-${group.id}`;
       const clip = svg("clipPath", {
@@ -248,7 +258,7 @@ export const initKeypadEditor = ({
     gesture = null;
   };
   const apply = (result) => {
-    message = result.ok ? "" : errors[result.error];
+    message = result.ok ? "" : refusal(result.error);
     if (result.ok) {
       clearSelection();
       draw();
@@ -270,7 +280,7 @@ export const initKeypadEditor = ({
       } else {
         const id = [...selected][0],
           result = layout.set(id, key);
-        message = result.ok ? "" : errors[result.error];
+        message = result.ok ? "" : refusal(result.error);
         draw();
       }
     });

@@ -5,12 +5,16 @@ import {
   assign,
   bindable,
   clear,
+  codeLabel,
   codeLookup,
   defaultBindings,
   heldBy,
+  keyLabel,
   keyOrder,
   loadBindings,
 } from "./keybindings.js";
+import "./text-fixture.mjs";
+import { phrase } from "./text.js";
 
 // The rule the whole feature rests on is that a physical key is on one phone
 // key at a time. Nothing at runtime would say otherwise if it broke — a press
@@ -119,4 +123,19 @@ test("the panel can say which key is about to lose one", () => {
   assert.equal(heldBy(bindings, "Space", "5"), "OK");
   assert.equal(heldBy(bindings, "Space", "OK"), "", "a key does not take from itself");
   assert.equal(heldBy(bindings, "KeyP", "5"), "");
+});
+
+// The names the panel shows: a phone key by its entry in text.properties, a
+// digit by itself; a keyboard key by its word in the file or by its own symbol.
+test("keys are named by the text file, and what has no word by itself", () => {
+  assert.equal(keyLabel("SOFT2"), phrase("key.SOFT2"));
+  assert.equal(keyLabel("OK"), phrase("key.OK"));
+  assert.equal(keyLabel("5"), "5");
+  assert.equal(codeLabel("Space"), phrase("keyboard.code.Space"));
+  assert.equal(codeLabel("PageDown"), phrase("keyboard.code.PageDown"));
+  assert.equal(codeLabel("Backslash"), "\\");
+  assert.equal(codeLabel("KeyQ"), "Q");
+  assert.equal(codeLabel("Digit7"), "7");
+  assert.equal(codeLabel("NumpadAdd"), phrase("keyboard.numpad", { key: "Add" }));
+  assert.equal(codeLabel(""), "");
 });

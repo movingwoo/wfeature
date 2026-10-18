@@ -12,6 +12,8 @@ import {
   uploadGame,
   uploadGames,
 } from "./add-game.js";
+import "./text-fixture.mjs";
+import { phrase } from "./text.js";
 
 const fileOf = name => ({ name, size: 4 });
 
@@ -52,7 +54,7 @@ test("what the server says about a refusal is what the user reads", async () => 
 
 test("a refusal with nothing to say still says something", async () => {
   const { fetcher } = recorder({ ok: false, status: 500, text: async () => "" });
-  await assert.rejects(() => uploadGame(fileOf("game.zip"), fetcher), /500/);
+  await assert.rejects(() => uploadGame(fileOf("game.zip"), fetcher), { message: phrase("add.failed-status", { status: 500 }) });
 });
 
 // Picking five archives and losing four of them to one bad file is the failure
@@ -68,12 +70,15 @@ test("one bad file does not take the others down with it", async () => {
 });
 
 test("what the user is told afterwards", () => {
-  assert.match(describe({ added: ["게임.zip"], failed: [] }), /게임\.zip/);
-  assert.match(describe({ added: ["a.zip", "b.zip", "c.zip"], failed: [] }), /3개/);
+  assert.equal(describe({ added: ["게임.zip"], failed: [] }), phrase("add.added.one", { name: "게임.zip" }));
+  assert.equal(describe({ added: ["a.zip", "b.zip", "c.zip"], failed: [] }), phrase("add.added.many", { count: 3 }));
   // A single failure is its own reason rather than a count: there is room for
   // it, and the reason is the useful half.
   assert.equal(describe({ added: [], failed: [{ name: "x.txt", reason: "게임이 아닙니다." }] }), "게임이 아닙니다.");
-  assert.match(describe({ added: ["a.zip"], failed: [{ name: "b", reason: "안 됨" }] }), /a\.zip.*b: 안 됨/);
+  assert.equal(
+    describe({ added: ["a.zip"], failed: [{ name: "b", reason: "안 됨" }] }),
+    `${phrase("add.added.one", { name: "a.zip" })} ${phrase("add.failed.one", { name: "b", reason: "안 됨" })}`,
+  );
 });
 
 // The picker has to refill itself: a game that was added and does not appear
@@ -88,7 +93,7 @@ test("adding a game refills the list and says what happened", async () => {
       click: () => {},
     },
     "game-add": {
-      textContent: "＋ 게임 추가",
+      textContent: phrase("add.button"),
       disabled: false,
       addEventListener: (name, handler) => { listeners[`button:${name}`] = handler; },
     },
@@ -107,20 +112,20 @@ test("adding a game refills the list and says what happened", async () => {
 
   await listeners.change();
   assert.equal(refills, 1);
-  assert.match(said[0], /game\.zip/);
+  assert.equal(said[0], phrase("add.added.one", { name: "game.zip" }));
   // The input is cleared so that picking the same file twice in a row is two
   // changes rather than one — re-adding a corrected archive is a thing people
   // do.
   assert.equal(elements["game-file"].value, "");
   assert.equal(elements["game-add"].disabled, false);
-  assert.equal(elements["game-add"].textContent, "＋ 게임 추가");
+  assert.equal(elements["game-add"].textContent, phrase("add.button"));
 });
 
 test("picking nothing does nothing", async () => {
   const listeners = {};
   const elements = {
     "game-file": { files: [], value: "", addEventListener: (n, h) => { listeners[n] = h; }, click: () => {} },
-    "game-add": { textContent: "＋ 게임 추가", disabled: false, addEventListener: () => {} },
+    "game-add": { textContent: phrase("add.button"), disabled: false, addEventListener: () => {} },
   };
   let refills = 0;
   initAddGame({ document: { getElementById: id => elements[id] ?? null }, onAdded: () => { refills++; } });
@@ -161,7 +166,7 @@ test("the file name comes back out of the path", () => {
 const removalPage = ({ added = true } = {}) => {
   const listeners = {};
   const button = {
-    textContent: "게임 삭제",
+    textContent: phrase("remove.button"),
     disabled: false,
     addEventListener: (name, handler) => { listeners[name] = handler; },
   };
@@ -199,8 +204,7 @@ test("nothing is deleted until the question is answered", async () => {
   assert.equal(refills, 0);
   // The question names the file, because the picker is a list and the wrong
   // row is the whole failure — and it says the saves stay, because they do.
-  assert.match(asked[0], /한글이름\.zip/);
-  assert.match(asked[0], /세이브는 남습니다/);
+  assert.equal(asked[0], phrase("remove.question", { name: "한글이름.zip" }));
   assert.equal(button.disabled, false);
 });
 
@@ -221,8 +225,8 @@ test("a confirmed removal refills the list and says what happened", async () => 
   await listeners.click();
   assert.equal(calls.length, 1);
   assert.equal(refills, 1);
-  assert.match(said[0], /game\.zip/);
-  assert.equal(button.textContent, "게임 삭제");
+  assert.equal(said[0], phrase("remove.removed", { name: "game.zip" }));
+  assert.equal(button.textContent, phrase("remove.button"));
 });
 
 // A refusal leaves the button pressable: the list it was working from is what
@@ -266,8 +270,8 @@ test("no selection asks nothing and sends nothing", async () => {
 // that says which games this page can delete.
 test("the picker heads each game by where it came from", () => {
   assert.equal(groupLabel({ group: "ktf", name: "x" }), "KTF");
-  assert.equal(groupLabel({ group: "", name: "x" }), "기타");
-  assert.equal(groupLabel({ group: "", name: "x", added: true }), "추가한 게임");
+  assert.equal(groupLabel({ group: "", name: "x" }), phrase("picker.group.other"));
+  assert.equal(groupLabel({ group: "", name: "x", added: true }), phrase("picker.group.added"));
 });
 
 // The button follows the selection, and a game put beside the server by hand
@@ -312,18 +316,18 @@ test("the button goes back to whatever the picker landed on", async () => {
 
   await listeners.click();
   assert.equal(button.disabled, true);
-  assert.equal(button.textContent, "게임 삭제");
+  assert.equal(button.textContent, phrase("remove.button"));
 });
 
 // A request that never reached the server rejects with the browser's own
 // English sentence; the player is told what it means instead.
-test("a server that cannot be reached is said in Korean, not in the browser's words", async () => {
+test("a server that cannot be reached is said in the page's words, not in the browser's", async () => {
   const unreachable = async () => {
     throw new TypeError("Load failed");
   };
   const result = await uploadGames([fileOf("a.zip")], unreachable);
   assert.equal(result.failed.length, 1);
-  assert.match(result.failed[0].reason, /^서버에 연결하지 못했습니다/);
-  await assert.rejects(() => removeGame("ext/a.zip", unreachable), { message: /^서버에 연결하지 못했습니다/ });
+  assert.equal(result.failed[0].reason, phrase("network.unreachable"));
+  await assert.rejects(() => removeGame("ext/a.zip", unreachable), { message: phrase("network.unreachable") });
 });
 

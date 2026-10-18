@@ -18,8 +18,9 @@ import (
 // The save locations a release before the file lock ran on, and what a start
 // is told when the claim really is refused.
 
-// closeAnotherGame is the advice only contention earns.
-const closeAnotherGame = "다른 실행 중인 게임이나 도구를 종료"
+// closeAnotherGame is the advice only contention earns: start.claim-busy, which
+// tells the person to close the other game or tool.
+const closeAnotherGame = "start.claim-busy"
 
 // fallbackWarning is the line the server logs for a directory only this
 // process is kept out of.
@@ -160,7 +161,7 @@ func TestStartRefusalSaysWhatActuallyFailed(t *testing.T) {
 		if r.game != nil || len(replies) != 1 || replies[0].Kind != serverError {
 			t.Fatalf("a held directory did not refuse the start: %+v", replies)
 		}
-		if !strings.Contains(replies[0].Message, closeAnotherGame) {
+		if !saysSentence(t, closeAnotherGame, replies[0].Message) {
 			t.Fatalf("contention was not told what to close: %q", replies[0].Message)
 		}
 	})
@@ -180,7 +181,7 @@ func TestStartRefusalSaysWhatActuallyFailed(t *testing.T) {
 		if r.game != nil || len(replies) != 1 || replies[0].Kind != serverError {
 			t.Fatalf("an unusable save folder did not refuse the start: %+v", replies)
 		}
-		if strings.Contains(replies[0].Message, closeAnotherGame) {
+		if saysSentence(t, closeAnotherGame, replies[0].Message) || !saysSentence(t, "start.claim-failed", replies[0].Message) {
 			t.Fatalf("an unusable save folder was reported as a running game: %q", replies[0].Message)
 		}
 		if !strings.Contains(replies[0].Message, "not a directory") {
@@ -230,7 +231,7 @@ func TestReadOnlySaveRootStartsOnAnInProcessClaim(t *testing.T) {
 		t.Fatalf("the claim reported the fallback %d times, want once", reported)
 	}
 	other, refused := startCheckpointGame(t, competitor)
-	if other.game != nil || len(refused) != 1 || !strings.Contains(refused[0].Message, closeAnotherGame) {
+	if other.game != nil || len(refused) != 1 || !saysSentence(t, closeAnotherGame, refused[0].Message) {
 		t.Fatalf("a second session on a read-only save root = %+v", refused)
 	}
 	// Reads are served while the game holds its claim, as on any other root.
