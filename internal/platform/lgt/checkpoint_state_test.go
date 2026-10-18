@@ -839,6 +839,9 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			// Every restored buffer is level with the store, so the counts
 			// start again from nothing.
 			"fileEpochs": rebuilt,
+			// A session with no store keeps its files here, and such a
+			// session takes no checkpoint.
+			"sessionFiles": host, "sessionFileBytes": host,
 			// What a load has still to fill exists only between its restore
 			// and its commit.
 			"restoredStorage": boundary,
@@ -862,6 +865,9 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"screenGraphics": recorded, "named": diagnostic, "serial": recorded, "jlet": recorded, "objects": recorded,
 			"pins": boundary, "collectAt": recorded, "condemned": recorded, "sinceCollection": recorded,
 			"collected": recorded, "collections": recorded,
+			// Reclaimed records wait only while the store refuses them, and a
+			// quick save stores them first or is refused.
+			"collectedDatabases": boundary,
 		},
 		"javaWorker": {
 			"armThread": recorded, "stackBase": recorded, "grant": rebuilt, "events": rebuilt, "wakeAt": recorded,

@@ -79,7 +79,11 @@ type Options struct {
 	MaxSteps       uint64
 	MaxFrames      int
 	MaxArrayLength int
-	Logger         *slog.Logger
+	// MaxHeapBytes is the most the guest may keep alive, in the bytes this
+	// runtime spends on its objects; past it an allocation raises
+	// OutOfMemoryError. Zero is DefaultMaxHeapBytes. See guestHeap.
+	MaxHeapBytes int64
+	Logger       *slog.Logger
 	// TraceInstructions writes one log line per bytecode instruction. It is a
 	// tool rather than a log level, and it is off unless a Host asks for it:
 	// the line is on the hottest path there is, and a title that runs for a
@@ -176,6 +180,8 @@ type VM struct {
 
 	loader *Loader
 	config Options
+	// heap is the budget every guest allocation is charged to.
+	heap *guestHeap
 	// traceInstructions is the answer to "is anyone listening to the per
 	// instruction trace", settled once at construction because the logger and
 	// its level are settled once too. See Options.TraceInstructions.
@@ -285,9 +291,13 @@ func New(source ClassSource, options Options) *VM {
 	if options.MaxArrayLength == 0 {
 		options.MaxArrayLength = 16 * 1024 * 1024
 	}
+	if options.MaxHeapBytes == 0 {
+		options.MaxHeapBytes = DefaultMaxHeapBytes
+	}
 	vm := &VM{
 		loader: NewLoader(source),
 		config: options,
+		heap:   newGuestHeap(options.MaxHeapBytes, heapSampleBytes, options.Logger),
 		// Asked once here rather than at every instruction. slog evaluates a
 		// call's arguments before the handler decides whether to keep them, so
 		// an ungated Debug on the interpreter loop formats an opcode and boxes
@@ -916,6 +926,9 @@ func (vm *VM) newObject(state *execution, className string) (*Object, error) {
 		}
 	}
 	object := &Object{ClassName: className, Fields: make(map[string]Value)}
+	if err := vm.chargeObject(object, objectHeapBytes); err != nil {
+		return nil, err
+	}
 	vm.objectIdentity(object)
 	return object, nil
 }
@@ -1101,11 +1114,23 @@ func (vm *VM) NewArray(component Type, length int32) (*Object, error) {
 }
 
 func (vm *VM) newArray(component Type, length int32) (*Object, error) {
+	return vm.makeArray(component, length, true)
+}
+
+// makeArray is newArray with a choice of whether the heap budget may refuse
+// the array or only charges it.
+func (vm *VM) makeArray(component Type, length int32, refuse bool) (*Object, error) {
 	if length < 0 {
 		return nil, guestException("java/lang/NegativeArraySizeException", fmt.Sprintf("length %d", length))
 	}
 	if int64(length) > int64(vm.config.MaxArrayLength) {
 		return nil, fmt.Errorf("array size %d exceeds limit %d", length, vm.config.MaxArrayLength)
+	}
+	// Charged before anything is made, so an array the budget cannot hold is
+	// refused without the host committing it first.
+	weight, err := vm.heap.charge(arrayHeapBytes+int64(length)*valueHeapBytes, refuse)
+	if err != nil {
+		return nil, err
 	}
 	values := make([]Value, int(length))
 	for index := range values {
@@ -1115,6 +1140,7 @@ func (vm *VM) newArray(component Type, length int32) (*Object, error) {
 		ClassName: "[" + component.Descriptor(),
 		Native:    &Array{Component: component, storage: valueStorage(values)},
 	}
+	vm.recordHeapArray(weight, object, values)
 	vm.objectIdentity(object)
 	return object, nil
 }
@@ -1309,6 +1335,11 @@ func (vm *VM) initializeClass(state *execution, className string) error {
 			return err
 		}
 	}
+	if class.AccessFlags&AccessInterface == 0 {
+		if err := vm.initializeDefaultMethodInterfaces(state, class); err != nil {
+			return err
+		}
+	}
 	if err := vm.initializeStaticFields(class); err != nil {
 		return err
 	}
@@ -1334,6 +1365,70 @@ func (vm *VM) initializeClass(state *execution, className string) error {
 		return fmt.Errorf("initialize class %s: %w", className, err)
 	}
 	return nil
+}
+
+// initializeDefaultMethodInterfaces is the second half of step 7 of JVMS 5.5
+// for a class: after its superclass, every superinterface that declares a
+// non-abstract instance method (a default method) is initialized, and no other
+// interface is. The order is a walk of the class's direct interfaces in
+// declaration order in which an interface's own superinterfaces come before
+// it. The superclass's interfaces are its own initialization's business.
+//
+// Only a class file of version 52 or later can declare such a method, so for
+// the CLDC-era archives this runtime runs the walk finds nothing to initialize.
+// It still visits each interface once and loads it, which is the cost of
+// asking. An interface that cannot be loaded is passed over rather than
+// failing the class: the loader resolves interfaces lazily, a title may name
+// one the platform does not declare, and nothing was initialized for it before.
+// The interface graph comes from class files, so a diamond is visited once and
+// the walk is held to MaxFrames interfaces and maxInstanceRelations edges.
+func (vm *VM) initializeDefaultMethodInterfaces(state *execution, class *classfile.Class) error {
+	if len(class.Interfaces) == 0 {
+		return nil
+	}
+	visited := make(map[string]bool, len(class.Interfaces))
+	edges := 0
+	var walk func(names []string) error
+	walk = func(names []string) error {
+		for _, name := range names {
+			if edges++; edges > maxInstanceRelations {
+				return fmt.Errorf("superinterfaces of %s exceed %d edges", class.Name, maxInstanceRelations)
+			}
+			if visited[name] {
+				continue
+			}
+			if len(visited) >= vm.config.MaxFrames {
+				return fmt.Errorf("superinterfaces of %s exceed %d interfaces", class.Name, vm.config.MaxFrames)
+			}
+			visited[name] = true
+			declared, err := vm.loader.Load(name)
+			if err != nil || declared.AccessFlags&AccessInterface == 0 {
+				continue
+			}
+			if err := walk(declared.Interfaces); err != nil {
+				return err
+			}
+			if declaresDefaultMethod(declared) {
+				if err := vm.ensureInitialized(state, name); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return walk(class.Interfaces)
+}
+
+// declaresDefaultMethod reports whether an interface declares a method that
+// is neither abstract nor static, which is what makes JVMS 5.5 initialize it
+// with a class that implements it.
+func declaresDefaultMethod(class *classfile.Class) bool {
+	for _, method := range class.Methods {
+		if method.Name != "<clinit>" && method.AccessFlags&(AccessAbstract|AccessStatic) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (vm *VM) initializeStaticFields(class *classfile.Class) error {

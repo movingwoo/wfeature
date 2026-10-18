@@ -92,6 +92,37 @@ that a game is not ended by something that is not an ending.
   ending the drain. Before this, a density or font scale change ended the game
   and started a second server, and finishing the app lost a game's exit-time
   saves about half the time.
+
+  Every activity destroys its own web view in `onDestroy`, rebuilt or
+  finished, and leaves the server alone there. A rebuilt activity used to
+  leave its page loaded and hidden behind the new one; hidden, it had parked
+  its game and did nothing, but made visible again (a DevTools client did it)
+  it took the game back from the new page. Now its socket closes, and the
+  server parks the game, if the page had not, for the new page to resume.
+
+  The app process outlives a finished activity, so the app can be opened
+  again while the server it ended is still draining. The ended server is
+  kept (`MainActivity.ending`), and the next activity starts a server only once
+  that one has ended, saying 이전 실행을 마치는 중... meanwhile. The wait has
+  no time limit: the drain is what writes the games' exit-time saves, and the
+  server bounds it itself. Before, the new server started with the new
+  activity and took the port the moment the old one stopped listening, while
+  the old one could still be closing its games. The start-up wait then takes
+  a `/api/status` answer only from a wfeature server whose parent process is
+  the app (the answer's `pid`, its parent read from `/proc`), so neither a
+  server still draining nor another program listening on the port passes for
+  the new one.
+
+  BACK on a task started from the home screen does not finish the activity on
+  Android 12 and later: Android moves the task to the back. The activity only
+  stops, the page parks its game, and the server keeps running; it is in the
+  app's cgroup, so when Android freezes the cached app (about 70 s after it
+  stopped, on the emulator) the server freezes with it and answers nothing
+  until the app is back. Nothing is saved on the way out; opened again, the
+  same page resumes the game. Nothing here needed a change for it. Android
+  ending the cached app's process to reclaim memory is not exercised; the
+  server is the app's child and would end with it, without the drain, as on
+  iOS below.
 - **iOS** links the server into the app. It drains the server only in
   `applicationWillTerminate`, which iOS calls for an app it ends while running.
   iOS ends a suspended app without telling it, so a game it reclaims while the
@@ -208,6 +239,27 @@ starts on both, loads the page and runs a game.
 `UIFileSharingEnabled` puts the games and saves in the Files app, so an archive
 can arrive either from the page's own ＋ 게임 추가 button or by being dropped
 into the folder. Android has no equivalent — see below.
+
+**The save backup is a declared type.** `UTExportedTypeDeclarations` names
+`com.movingwoo.wfeature.save-backup`, extension `wfs`, conforming to
+`public.data`, so a backup the page exported is a type of its own rather than
+the dynamic type iOS makes up for an extension nobody declares. It has no MIME
+type on purpose. WebKit's file panel turns the 세이브 가져오기 input's
+`accept=".wfs"` into the picker's types through each extension's MIME type,
+and with none it offers every file (`public.item`). That much is read from the
+iOS 26.5 simulator's WebKit: `-[WKFileUploadPanel presentWithParameters:resultListener:]`
+maps an extension with `MIMETypeRegistry::mimeTypeForExtension`, which asks
+`NSURLFileTypeMappings`, and the MIME type with `+[UTType typeWithMIMEType:]`.
+So the picker did not grey a backup out before the declaration either, and
+the declaration changes what iOS calls the file, not what the picker offers.
+A MIME type would narrow the picker to this one type, and a file provider that
+typed a backup some other way would then show it greyed out. There is no
+`CFBundleDocumentTypes`, so Files offers no Open In: a backup comes in through
+the page. Checked on 2026-10-17 by installing a simulator build, without
+launching it, on iOS 26.5 and 27.0 simulators: `UTType(filenameExtension:
+"wfs")` changed from `dyn.ah62d4rv4ge81s3xx` to the declared type, and
+`NSURLFileTypeMappings` still maps `wfs` to no MIME type. The picker itself
+has not been looked at on a phone or in a simulator.
 
 The icons are resized from `web/icon-512.png` at build time.
 `mobile/ios/acceptance/` holds a simulator-only controller driver

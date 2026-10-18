@@ -393,12 +393,12 @@ func TestAStreamWriteIsAWriteToTheFile(t *testing.T) {
 	if got := store.held("fs/save.dat"); got != "streamedABCD+more" {
 		t.Fatalf("after the stream's flush the store holds %q", got)
 	}
-	// A flush the store refuses keeps the write waiting in the File, for the
-	// File's close to store.
+	// A flush the store refuses throws the IOException it declares and keeps
+	// the write waiting in the File, for the File's close to store.
 	writeJavaSink(t, client, sink, "!")
 	store.refuse = true
-	if _, err := javaByteSinkFlush(client, ctx, client.thread, []uint32{sink}); err != nil {
-		t.Fatal(err)
+	if _, err := javaByteSinkFlush(client, ctx, client.thread, []uint32{sink}); thrownClass(err) != javaIOExceptionClass {
+		t.Fatalf("a flush the store refused answered %v", err)
 	}
 	store.refuse = false
 	if size, _ := files.stat("save.dat"); size != 18 || store.held("fs/save.dat") != "streamedABCD+more" {

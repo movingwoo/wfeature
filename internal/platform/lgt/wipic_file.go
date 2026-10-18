@@ -656,6 +656,9 @@ func (client *Client) seekFile(handle uint32, offset int32, whence uint32) int32
 // in the store at the close; and a write the store refused, which is in the
 // session and nowhere else. A removal leaves the buffer nothing waiting, so it
 // is the removal that answers until something writes the path again.
+//
+// A session with no store reads what it wrote from sessionFiles, where its
+// stores went, after an authentication adapter has answered for its own keys.
 func (client *Client) readFile(name string) ([]byte, bool) {
 	if content := client.openContent(name); content != nil && content.dirty {
 		return bytes.Clone(content.data), true
@@ -663,9 +666,14 @@ func (client *Client) readFile(name string) ([]byte, bool) {
 	if client.fileRemoved(name) {
 		return nil, false
 	}
-	if key, err := fileSaveKey(name); err == nil && client.saveStore != nil {
-		if data, ok := client.loadSave(key); ok {
-			return data, true
+	if key, err := fileSaveKey(name); err == nil {
+		if client.saveStore != nil {
+			if data, ok := client.loadSave(key); ok {
+				return data, true
+			}
+		}
+		if data, kept := client.sessionFiles[key]; kept {
+			return bytes.Clone(data), true
 		}
 	}
 	return client.archive.Resource(name)
@@ -696,6 +704,7 @@ func (client *Client) renameFile(oldName, newName string) int32 {
 	if moved {
 		client.markFileRemoved(oldName, true)
 		client.bumpFileEpoch(oldName)
+		client.forgetSessionFile(oldName)
 	}
 	// A handle open on the file is on the file, not on its old name: its next
 	// store goes under the new one rather than bringing the old one back. A
@@ -769,29 +778,30 @@ func (client *Client) flushOpenFiles() {
 	}
 }
 
-// writeFile persists what the session can make again if the store refuses it:
-// the database index. A failure is a diagnostic. A write that is the title's
-// own goes through storeFile, whose refusal its caller keeps.
-func (client *Client) writeFile(name string, data []byte) {
-	_ = client.storeFile(name, data)
-}
-
-// storeFile is writeFile with the store's answer: nil when the store took the
-// file, and when there was nothing to give it to — no store, a session whose
-// writes are held back by a failed read, a path that is not a save key. It is
-// what a quick save and a quick load call, because neither may go on past a
-// write the store refused; the two path lists report through their own bits.
+// storeFile gives the store a guest path's bytes, with the store's answer:
+// nil when the store took the file, and when there was nothing to give it to
+// — a session whose writes are held back by a failed read, a path that is not
+// a save key. It is what a close, the ending, a quick save and a quick load
+// call, because none may drop a write the store refused; the two path lists
+// report through their own bits.
+//
+// A session with no store keeps the file in sessionFiles as well, which is its
+// store for as long as it runs.
 func (client *Client) storeFile(name string, data []byte) error {
-	if client.saveStore != nil && client.saveReadError == nil {
-		if key, err := fileSaveKey(name); err == nil {
-			if err := client.saveStore.StoreSave(key, data); err != nil {
-				if client.logger != nil {
-					client.logger.Debug("LGT save store failed", "name", name, "error", err)
-				}
-				return err
+	key, err := fileSaveKey(name)
+	if err != nil {
+		// A name with no save key is no file the store or a path list can
+		// hold. See fileSaveKey.
+		return nil
+	}
+	if client.saveReadError == nil {
+		if err := client.storeSessionSave(key, data); err != nil {
+			if client.logger != nil {
+				client.logger.Debug("LGT save store failed", "name", name, "error", err)
 			}
-			client.bumpFileEpoch(name)
+			return err
 		}
+		client.bumpFileEpoch(name)
 	}
 	// Writing a path brings it back. The removal comes off the list only now
 	// that the store has the bytes: taken off first, a write the store then
@@ -800,6 +810,83 @@ func (client *Client) storeFile(name string, data []byte) error {
 	client.markFileRemoved(name, false)
 	client.markFileCreated(name)
 	return nil
+}
+
+// storeSessionSave gives one save key to the store the session writes
+// through, and to sessionFiles when there is no store beneath it. A write
+// held back by a failed read is its caller's to skip.
+func (client *Client) storeSessionSave(key string, data []byte) error {
+	if client.saveStore != nil {
+		if err := client.saveStore.StoreSave(key, data); err != nil {
+			return err
+		}
+	}
+	if client.storeless() {
+		return client.keepSessionFile(key, data)
+	}
+	return nil
+}
+
+// storeless reports whether the session has no save store: none at all, or
+// none beneath its authentication adapter, which keeps what it rewrites and
+// lets everything else go.
+func (client *Client) storeless() bool {
+	switch store := client.saveStore.(type) {
+	case nil:
+		return true
+	case *authenticationOptionStore:
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.base == nil
+	case *authenticationCertificate58Store:
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.base == nil
+	case *authenticationCertificate100Store:
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.base == nil
+	}
+	return false
+}
+
+// maxSessionFileBytes bounds what a session with no store keeps of the files
+// its title wrote. The names and the lengths are the guest's, and the files
+// stay for the whole session. Past it a store is refused, as a full store
+// refuses one: the write waits in its buffer, where every read sees it.
+const maxSessionFileBytes = 64 << 20
+
+// keepSessionFile is the store of a session that has none. **A write is seen
+// at once and after its close**, which is the first part of the save rule, and
+// a session without a store keeps it the only way it can: in memory, for as
+// long as the session runs. Nothing of it reaches a store or the next session,
+// and a quick step does not carry it, because such a session takes none. An
+// authentication adapter over no store answers first for the keys it keeps;
+// see readFile.
+func (client *Client) keepSessionFile(key string, data []byte) error {
+	held := client.sessionFileBytes - len(client.sessionFiles[key]) + len(data)
+	if held > maxSessionFileBytes {
+		return fmt.Errorf("a session without a store keeps at most %d bytes of files", maxSessionFileBytes)
+	}
+	if client.sessionFiles == nil {
+		client.sessionFiles = make(map[string][]byte)
+	}
+	client.sessionFiles[key], client.sessionFileBytes = bytes.Clone(data), held
+	return nil
+}
+
+// forgetSessionFile drops what a session with no store kept of a path the
+// title removed or renamed: the removal list answers for it from here on, and
+// a later write keeps it again.
+func (client *Client) forgetSessionFile(name string) {
+	key, err := fileSaveKey(name)
+	if err != nil {
+		return
+	}
+	if data, kept := client.sessionFiles[key]; kept {
+		client.sessionFileBytes -= len(data)
+		delete(client.sessionFiles, key)
+	}
 }
 
 // removeFile deletes a guest path. The stored bytes stay where they are —
@@ -814,6 +901,7 @@ func (client *Client) storeFile(name string, data []byte) error {
 func (client *Client) removeFile(name string) {
 	client.markFileRemoved(name, true)
 	client.bumpFileEpoch(name)
+	client.forgetSessionFile(name)
 	if content := client.openContent(name); content != nil {
 		content.data, content.dirty, content.synced = nil, false, client.fileEpoch(name)
 	}
@@ -835,9 +923,9 @@ const fileListMarker = "#Case-sensitive paths follow"
 
 // createdFiles is the set of paths a title has written, read from the store
 // once per session and kept in memory after that. A path the archive packages
-// is not in it: the listing finds those anyway, and recording them would grow
-// the index by every file a title ever rewrote. What an earlier build recorded
-// is kept beside it, in createdLegacy.
+// under that spelling is not in it: the listing finds those anyway, and
+// recording them would grow the index by every file a title ever rewrote. What
+// an earlier build recorded is kept beside it, in createdLegacy.
 func (client *Client) createdFiles() map[string]bool {
 	if client.created == nil {
 		client.created, client.createdLegacy = client.loadFileList(fileCreatedKey)
@@ -871,22 +959,35 @@ func (client *Client) loadFileList(key string) (exact, legacy map[string]bool) {
 
 // parseFileList reads a stored path list into this build's entries and an
 // earlier build's. See fileListMarker.
+//
+// **An entry that names no save is not read.** The lists say what the store
+// holds and what it hides, so a path the store has no key for has no place in
+// either; the builds before this one recorded such paths all the same — the
+// database index among them, and a title's own "/.created" — which a listing
+// then showed as files that were not there. The next store of the list leaves
+// them out.
 func parseFileList(data []byte, exact, legacy map[string]bool) {
 	marked := false
 	for _, line := range strings.Split(string(data), "\n") {
 		switch {
 		case marked:
-			if line != "" {
+			if line != "" && hasSaveKey(line) {
 				exact[line] = true
 			}
 		case strings.TrimSpace(line) == fileListMarker:
 			marked = true
 		default:
-			if line = strings.TrimSpace(line); line != "" {
+			if line = strings.TrimSpace(line); line != "" && hasSaveKey(line) {
 				legacy[line] = true
 			}
 		}
 	}
+}
+
+// hasSaveKey reports whether a guest path has a save. See fileSaveKey.
+func hasSaveKey(name string) bool {
+	_, err := fileSaveKey(name)
+	return err == nil
 }
 
 // formatFileList lays a path list out the way parseFileList reads it. A path
@@ -905,14 +1006,16 @@ func formatFileList(exact, legacy map[string]bool) []byte {
 	return []byte(strings.Join(lines, "\n"))
 }
 
-// markFileCreated records one written path and writes the list back.
+// markFileCreated records one written path and writes the list back. A path
+// with no save is not recorded, and neither is one the listing shows as
+// packaged already; see packagedAs.
 func (client *Client) markFileCreated(name string) {
-	if _, packaged := client.archive.Resource(name); packaged {
+	if !hasSaveKey(name) {
 		return
 	}
 	set := client.createdFiles()
 	key := fileListKey(name)
-	if set[key] {
+	if set[key] || client.packagedAs(name) {
 		return
 	}
 	set[key] = true
@@ -922,6 +1025,29 @@ func (client *Client) markFileCreated(name string) {
 	if err := client.storeFileList(fileCreatedKey); err != nil && client.logger != nil {
 		client.logger.Debug("LGT created list store failed", "name", name, "error", err)
 	}
+}
+
+// packagedAs reports whether the archive packages a file at exactly the path a
+// name is, in the name's own case: one the listing shows under that name
+// without the created list.
+//
+// **A packaged file found only without regard to case is not one.** A read
+// finds "data/hello.txt" when a title asks for "data/HELLO.TXT", but a save
+// the title writes under "data/HELLO.TXT" is a file of its own, beside the
+// packaged one, and the listing shows the packaged file in the archive's
+// spelling. Asking the case-blind lookup left that save out of the list, so a
+// title listing the directory to find its saves did not find it.
+func (client *Client) packagedAs(name string) bool {
+	if client.archive == nil {
+		return false
+	}
+	path := fileListKey(name)
+	for _, files := range []map[string][]byte{client.archive.Resources, client.archive.Packaged, client.archive.supplemental} {
+		if _, packaged := files[path]; packaged {
+			return true
+		}
+	}
+	return false
 }
 
 // storeFileList writes one of the two path lists as this session holds it,
@@ -1084,8 +1210,12 @@ func (client *Client) fileRemoved(name string) bool {
 // markFileRemoved records or clears one path and writes the list back. A
 // clear takes this build's entry for the path, and every entry an earlier
 // build wrote for the file under any case and any spelling: once written, the
-// file is there under all of them, as that build's own write made it.
+// file is there under all of them, as that build's own write made it. A path
+// with no save is not recorded, as it is not read; see parseFileList.
 func (client *Client) markFileRemoved(name string, removed bool) {
+	if !hasSaveKey(name) {
+		return
+	}
 	set := client.removedFiles()
 	key := fileListKey(name)
 	if removed {
@@ -1119,14 +1249,16 @@ func (client *Client) markFileRemoved(name string, removed bool) {
 
 // fileSaveKey is the save key a guest path is stored under.
 //
-// **The scope itself and the two path lists are not guest files.** The lists
-// live under the same scope, at the keys a title's "/.removed" and "/.created"
-// would have, and the scope is the directory every other key sits in. A title
-// that wrote one of those names would put its bytes where the platform keeps
-// its list, which the next session parses as paths, or a file where the
-// directory has to be. So those names have no save key, as a path with ".."
-// has none: the title's handle works and nothing reaches the store. Case is
-// folded because a Host's filesystem may fold it.
+// **The scope itself, the two path lists and the database index are not guest
+// files.** The lists live under the same scope, at the keys a title's
+// "/.removed" and "/.created" would have, the index of database names at the
+// key "/__databases__.db" would have, and the scope is the directory every
+// other key sits in. A title that wrote one of those names would put its bytes
+// where the platform keeps its list, which the next session parses as paths,
+// or a file where the directory has to be. So those names, and anything
+// beneath them, have no save key, as a path with ".." has none: the title's
+// handle works and nothing reaches the store. Case is folded because a Host's
+// filesystem may fold it.
 func fileSaveKey(name string) (string, error) {
 	key, err := backend.NormalizeSaveKey(fileSaveScope + strings.TrimPrefix(name, "/"))
 	if err != nil {
@@ -1135,7 +1267,8 @@ func fileSaveKey(name string) (string, error) {
 	path, scoped := strings.CutPrefix(key, fileSaveScope)
 	first, _, _ := strings.Cut(path, "/")
 	if !scoped || strings.EqualFold(first, strings.TrimPrefix(fileRemovedKey, fileSaveScope)) ||
-		strings.EqualFold(first, strings.TrimPrefix(fileCreatedKey, fileSaveScope)) {
+		strings.EqualFold(first, strings.TrimPrefix(fileCreatedKey, fileSaveScope)) ||
+		strings.EqualFold(first, databaseIndexName) {
 		return "", fmt.Errorf("%q names a key the platform keeps for itself", name)
 	}
 	return key, nil

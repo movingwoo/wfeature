@@ -101,6 +101,36 @@
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
+    <!-- The save backup the page exports and its 세이브 가져오기 input accepts.
+         Undeclared, `.wfs` is an extension nothing on the phone knows, and the
+         system gives such a file a made-up dynamic type and no name; declared,
+         a backup is a type of its own wherever it is looked up by extension.
+         It deliberately has no MIME type: the web view's picker maps an
+         accepted extension through its MIME type and, finding none, offers
+         every file. A MIME type would narrow the picker to this type, and a
+         file provider that typed a backup some other way would then show it
+         greyed out. No CFBundleDocumentTypes either: a backup comes in through
+         the page, not through Files' Open In. -->
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.movingwoo.wfeature.save-backup</string>
+            <key>UTTypeDescription</key>
+            <string>W-Feature save backup</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>wfs</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
     <!-- The server this app talks to is itself, on loopback. Arbitrary
          cleartext stays off; this is the exception for the one address that is
          never on a network. -->

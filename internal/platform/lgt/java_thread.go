@@ -31,9 +31,14 @@ const (
 	// Clet stack and below the sentinel return address.
 	javaThreadStackBase uint32 = 0x41000000
 	javaThreadStackSize uint64 = 1 << 20
-	// maxJavaThreads bounds how many a title may start. A title here starts
-	// one; a title that starts hundreds is looping, not threading.
+	// maxJavaThreads bounds how many guest threads run at once, and so how
+	// many stacks are ever mapped for them, which is also the most a
+	// checkpoint may hold. The local Java titles run one or two at once; a
+	// title running hundreds is looping, not threading. See startJavaWorker.
 	maxJavaThreads = 16
+	// javaOutOfMemoryClass is what a start past maxJavaThreads throws: the
+	// thread could not be given the memory it runs on.
+	javaOutOfMemoryClass = "java/lang/OutOfMemoryError"
 	// javaThreadSliceSteps is how far one thread runs in a tick before it is
 	// parked. A loop that sleeps parks sooner; one that never sleeps still
 	// yields, so a runaway thread cannot hold the frame.
@@ -43,7 +48,12 @@ const (
 	javaThreadRunMethod = "run"
 )
 
-var errJavaThreadsStopped = errors.New("LGT guest threads are stopped")
+var (
+	errJavaThreadsStopped = errors.New("LGT guest threads are stopped")
+	// errJavaThreadLimit is startJavaWorker finding every stack taken and no
+	// room for another; javaThreadStart turns it into the title's exception.
+	errJavaThreadLimit = fmt.Errorf("%d guest threads are already running", maxJavaThreads)
+)
 
 // javaThread is one guest thread: the object the module allocated, what it
 // runs, and the goroutine it runs on once started.
@@ -111,23 +121,15 @@ type javaWorkerEvent struct {
 }
 
 // javaThreadConstructor is `Thread(Runnable)`. Nothing starts here: the
-// specification's constructor only records what the thread will run.
+// specification's constructor only records what the thread will run. **It is
+// not counted against maxJavaThreads**, because a thread built and not started
+// takes no stack; the bound is at the start, the one place a stack is handed
+// out, which a Thread subclass the module builds without this constructor also
+// goes through.
 func javaThreadConstructor(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	runtime := client.javaRuntimeState()
-	// A finished thread keeps its entry until the collector frees its object,
-	// and it is not one more thread running: a title that builds a thread per
-	// scene would otherwise stop at the seventeenth scene.
-	alive := 0
-	for _, thread := range runtime.threads {
-		if thread != nil && (thread.worker == nil || !thread.worker.done) {
-			alive++
-		}
-	}
-	if alive >= maxJavaThreads {
-		return 0, fmt.Errorf("a title started more than %d threads", maxJavaThreads)
-	}
 	runnable := arguments[0]
 	if len(arguments) > 1 && arguments[1] != 0 {
 		runnable = arguments[1]
@@ -141,8 +143,16 @@ func javaThreadConstructor(
 
 // javaThreadStart is `Thread.start()`: the thread becomes live and its `run`
 // is entered on the next slice the session grants.
+//
+// **A start past maxJavaThreads throws `OutOfMemoryError`** rather than ending
+// the session. The specification gives `start` no bound and no failure of its
+// own, so running out of threads is the machine running out of the memory a
+// thread runs on, which is the error the language has for that. A title that
+// catches it carries on without the thread; uncaught, it goes the way of any
+// other exception (see uncaught.go), and the threads already running go on.
+// The thread is left unstarted, so a later start can still succeed.
 func javaThreadStart(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, armThread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	runtime := client.javaRuntimeState()
 	thread, known := runtime.threads[arguments[0]]
@@ -150,16 +160,22 @@ func javaThreadStart(
 		// A Thread subclass the module built without the constructor this
 		// platform sees runs itself, which is what `Thread.run` does.
 		thread = &javaThread{object: arguments[0], runnable: arguments[0]}
-		runtime.threads[arguments[0]] = thread
 	}
 	if thread.worker != nil {
 		return 0, fmt.Errorf("the thread at %#x is already started", arguments[0])
 	}
 	worker, err := client.startJavaWorker(thread)
+	if errors.Is(err, errJavaThreadLimit) {
+		if client.logger != nil {
+			client.logger.Debug("LGT java thread start refused", "thread", arguments[0], "running", maxJavaThreads)
+		}
+		return 0, client.throwJavaPlatform(armThread, javaOutOfMemoryClass, ": "+err.Error())
+	}
 	if err != nil {
 		return 0, err
 	}
 	thread.worker = worker
+	runtime.threads[arguments[0]] = thread
 	return 0, nil
 }
 
@@ -353,6 +369,14 @@ func javaCurrentThread(
 // it; it is cleared on reuse, so the thread finds the zeros a fresh mapping
 // has rather than the words the last one left, which the collector would also
 // read as references.
+//
+// **maxJavaThreads is enforced here and nowhere else**, as a bound on stacks:
+// with none free and that many mapped, the start is refused with
+// errJavaThreadLimit. Every start comes through here whatever built the
+// thread, and a checkpoint records the stacks mapped, so the number a title
+// can reach is by construction one a checkpoint restores. A thread the round
+// has seen finish gives its stack back when the round drops it, so a stack is
+// counted from the start until then rather than until the run returns.
 func (client *Client) startJavaWorker(thread *javaThread) (*javaWorker, error) {
 	runtime := client.javaRuntimeState()
 	stack, reused := runtime.threadStacks, false
@@ -368,6 +392,9 @@ func (client *Client) startJavaWorker(thread *javaThread) (*javaWorker, error) {
 		if !taken {
 			stack, reused = index, true
 		}
+	}
+	if !reused && runtime.threadStacks >= maxJavaThreads {
+		return nil, errJavaThreadLimit
 	}
 	base := javaThreadStackBase + uint32(stack)*uint32(javaThreadStackSize)
 	if reused {

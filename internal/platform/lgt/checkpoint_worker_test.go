@@ -374,6 +374,41 @@ func TestCheckpointRestoresParkedJavaThreads(t *testing.T) {
 	}
 }
 
+// Every thread a title can have running at once is one a checkpoint holds.
+// maxJavaThreads threads save and load, and one more start — on a Thread
+// subclass the start sees first, which the constructor never counted — throws
+// instead of mapping a stack the record could not carry.
+func TestCheckpointHoldsEveryThreadATitleCanRun(t *testing.T) {
+	store, _ := backend.NewMemorySaveStore(nil)
+	fixture := newJavaThreadFixture(t, store)
+	client := fixture.client
+	run := fixture.install(func(a *assembler) {
+		top := a.here()
+		fixture.increment(a, 0)
+		fixture.call(a, "sleep", 30, 0)
+		fixture.loop(a, top)
+	})
+	for index := range maxJavaThreads {
+		fixture.start("Sleeper"+string(rune('A'+index)), run)
+	}
+	_, extra := fixture.newClass("Extra", run)
+	var throw *javaUncaughtThrow
+	if _, err := javaThreadStart(client, context.Background(), client.thread, []uint32{extra}); !errors.As(err, &throw) ||
+		throw.Class != javaOutOfMemoryClass {
+		t.Fatalf("a start past %d running threads: %v, want %s", maxJavaThreads, err, javaOutOfMemoryClass)
+	}
+	fixture.settle()
+	tickSession(t, fixture.session, 2)
+	checkpoint := roundTripCheckpoint(t, fixture.archive, fixture.session)
+	if java := decodeRuntime(t, checkpoint).Client.Java; java.ThreadStacks != maxJavaThreads || len(java.Workers) != maxJavaThreads {
+		t.Fatalf("the record holds %d threads on %d stacks, want %d", len(java.Workers), java.ThreadStacks, maxJavaThreads)
+	}
+	fixture.compare(fixture.restore(checkpoint), 4)
+	if words := fixture.words(fixture.session); words[0] < 2*maxJavaThreads {
+		t.Fatalf("the threads counted %d, want every one of them to have run", words[0])
+	}
+}
+
 // A thread that never sleeps is parked where its budget ran out, in the middle
 // of its own code with nothing of the platform's above it. It is restored at
 // that instruction with a fresh budget, which is what the park would have

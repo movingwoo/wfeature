@@ -71,6 +71,112 @@ func TestGetRGBPixelsFillsTheCallersArray(t *testing.T) {
 	}
 }
 
+// A scan length shorter than the width overlaps the rows in the caller's
+// array, so a tall rectangle names far more pixels than the array holds. The
+// work is bounded by the array: a 2^16-wide, 2^16+1-tall read into a 2^17-int
+// array writes each element once instead of 2^32 times.
+func TestGetRGBPixelsWithOverlappingRowsIsBoundedByTheArray(t *testing.T) {
+	vm := jvm.New(nil, jvm.Options{})
+	session := &Runtime{}
+	const length = 1 << 17
+	buffer, err := vm.NewArray(jvm.Type{Kind: jvm.TypeInt}, length)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, arguments := range map[string][]jvm.Value{
+		"scan 1":  rgbPixelArguments(reviewContext(4, 4), 0, 0, length/2, length/2+1, buffer, 0, 1),
+		"scan -1": rgbPixelArguments(reviewContext(4, 4), 0, 0, length/2, length/2+1, buffer, length/2, -1),
+	} {
+		done := make(chan error, 1)
+		go func() {
+			_, err := session.getGraphicsRGBPixels(vm, arguments)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("%s: getRGBPixels() error = %v", name, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: getRGBPixels with overlapping rows did not return", name)
+		}
+	}
+}
+
+// Bounding the overlapping walk changes how often an element is written, not
+// what it ends up holding: for every scan length, overlapping, gapped and
+// negative, the array matches the row-by-row walk in which a later row
+// overwrites an earlier one, and elements outside every row keep their value.
+func TestGetRGBPixelsMatchesTheRowByRowWalk(t *testing.T) {
+	vm := jvm.New(nil, jvm.Options{})
+	session := &Runtime{}
+	random := rand.New(rand.NewSource(11))
+	overlapping, negative := 0, 0
+	for round := 0; round < 2000; round++ {
+		context := reviewClippedContext(random)
+		x, y := int32(random.Intn(30)-10), int32(random.Intn(24)-8)
+		width, height := int32(random.Intn(12)), int32(random.Intn(12))
+		scan, offset := int32(random.Intn(31)-15), int32(random.Intn(80))
+		length := int32(random.Intn(120))
+		array, err := vm.NewArray(jvm.Type{Kind: jvm.TypeInt}, length)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fill := make([]jvm.Value, length)
+		for index := range fill {
+			fill[index] = jvm.IntValue(int32(random.Uint32()))
+		}
+		if err := jvm.SetArrayRange(array, 0, fill); err != nil {
+			t.Fatal(err)
+		}
+		want := append([]jvm.Value(nil), fill...)
+		_, err = session.getGraphicsRGBPixels(vm, rgbPixelArguments(context, x, y, width, height, array, offset, scan))
+		if err != nil {
+			assertGuestExceptionClass(t, err, "java/lang/ArrayIndexOutOfBoundsException")
+		} else {
+			if scan == 0 {
+				scan = width
+			}
+			rowByRowGetRGBPixels(context, want, x, y, width, height, offset, scan)
+			if height > 1 && scan > -width && scan < width {
+				overlapping++
+				if scan < 0 {
+					negative++
+				}
+			}
+		}
+		_, got, snapshotErr := jvm.ArraySnapshot(array)
+		if snapshotErr != nil {
+			t.Fatal(snapshotErr)
+		}
+		for index := range want {
+			if got[index] != want[index] {
+				t.Fatalf("round %d (x=%d y=%d w=%d h=%d offset=%d scan=%d length=%d): element %d = %v, want %v",
+					round, x, y, width, height, offset, scan, length, index, got[index], want[index])
+			}
+		}
+	}
+	if overlapping < 100 || negative < 30 {
+		t.Fatalf("only %d accepted calls had overlapping rows, %d of them scanning upwards", overlapping, negative)
+	}
+}
+
+// rowByRowGetRGBPixels is getRGBPixels as every row in order, each writing
+// its whole width; a refused call writes nothing, so the caller skips it.
+func rowByRowGetRGBPixels(context *graphicsContext, values []jvm.Value, x, y, width, height, offset, scanLength int32) {
+	for row := int32(0); row < height; row++ {
+		for column := int32(0); column < width; column++ {
+			pixel := jvm.IntValue(0)
+			if index, ok := contextPixelIndexUnclipped(context, x+column, y+row); ok {
+				pixel = jvm.IntValue(int32(uint32(context.pixels[index+3])<<24 |
+					uint32(context.pixels[index])<<16 | uint32(context.pixels[index+1])<<8 |
+					uint32(context.pixels[index+2])))
+			}
+			values[int(offset)+int(row)*int(scanLength)+int(column)] = pixel
+		}
+	}
+}
+
 // A rectangle far larger than the caller's array is refused before anything
 // the size of the rectangle is allocated.
 func TestGetRGBPixelsRefusesASmallArrayBeforeAllocating(t *testing.T) {

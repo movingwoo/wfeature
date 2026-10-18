@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/png"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/wsproto"
 )
@@ -576,20 +578,58 @@ func TestSessionCheatSearchesAMIDletsObjectGraph(t *testing.T) {
 	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
 	expectMessage(t, connection, serverStarted)
 
-	send(t, connection, clientMessage{Kind: clientCheat, ID: 3, Command: "regions"})
-	result := expectMessage(t, connection, serverResult)
-	if result.ID != 3 || result.Cheat == nil || !result.Cheat.Searchable {
-		t.Fatalf("cheat answer = %+v", result)
-	}
-	if !strings.Contains(result.Message, "region(s)") {
-		t.Fatalf("regions listing = %q, want the map of the object graph", result.Message)
-	}
-
 	send(t, connection, clientMessage{Kind: clientCheat, ID: 4, Op: "scan", Type: "u32", Filter: "unknown"})
 	scan := expectMessage(t, connection, serverResult)
-	if scan.Cheat == nil || scan.Cheat.Count == 0 {
+	if scan.ID != 4 || scan.Cheat == nil || !scan.Cheat.Searchable || scan.Cheat.Count == 0 {
 		t.Fatalf("a first scan over a MIDlet's graph found %+v", scan.Cheat)
 	}
+}
+
+// The page sends the panel's operations and nothing else, so a line of the
+// text console is not one of them: its vocabulary reaches further than the
+// panel's, and a served page never needs it.
+func TestSessionCheatRefusesATextConsoleLine(t *testing.T) {
+	connection, _ := sessionFixture(t)
+	expectMessage(t, connection, serverReady)
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
+	expectMessage(t, connection, serverStarted)
+
+	for id, message := range []clientMessage{
+		{Kind: clientCheat, ID: 10, Command: "regions"},
+		{Kind: clientCheat, ID: 11, Op: "console", Command: "regions"},
+	} {
+		send(t, connection, message)
+		reply := expectMessage(t, connection, serverError)
+		if reply.ID != message.ID || !strings.Contains(reply.Message, "unknown cheat operation") {
+			t.Fatalf("console line %d answered %+v", id, reply)
+		}
+	}
+}
+
+// A first unknown-value search the scanner refuses for its size reaches the
+// page as an error in the panel's own words, which the page shows as it
+// shows every failed request.
+func TestCheatScanRefusalCarriesThePanelsWords(t *testing.T) {
+	engine := cheat.NewSession(wideCheatMemory{size: 1<<22 + 1})
+	_, err := runCheatOperation(engine, "game", clientMessage{Kind: clientCheat, Op: "scan", Type: "u8", Filter: "unknown"})
+	if !errors.Is(err, cheat.ErrPanelTooManyCandidates) {
+		t.Fatalf("refused scan answered %v, want the panel's words", err)
+	}
+}
+
+// wideCheatMemory is one writable region of zeros, wide enough that an
+// unknown-value search over it is refused.
+type wideCheatMemory struct{ size uint32 }
+
+func (memory wideCheatMemory) ReadMemory(address uint32, destination []byte) error {
+	clear(destination)
+	return nil
+}
+
+func (memory wideCheatMemory) WriteMemory(address uint32, data []byte) error { return nil }
+
+func (memory wideCheatMemory) Regions() []cheat.Region {
+	return []cheat.Region{{Base: 0x1000, Size: memory.size, Label: "heap"}}
 }
 
 func TestSessionStopEndsTheGameWithoutClosingTheConnection(t *testing.T) {

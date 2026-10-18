@@ -337,10 +337,6 @@ export class GameSession {
     this.#send({ kind: "scale", value: scale });
   }
 
-  cheat(command) {
-    return this.ask({ kind: "cheat", command });
-  }
-
   report(label) {
     return this.ask({ kind: "report", label }, 60000);
   }

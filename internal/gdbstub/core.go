@@ -157,6 +157,13 @@ func (target *CoreTarget) release() {
 	close(wakeup)
 }
 
+// parked reports whether the guest is stopped and waiting for a client.
+func (target *CoreTarget) parked() bool {
+	target.mu.Lock()
+	defer target.mu.Unlock()
+	return target.wakeup != nil
+}
+
 // context reads the parked guest's registers.
 func (target *CoreTarget) context() armcore.Context {
 	if thread := target.thread.Load(); thread != nil {

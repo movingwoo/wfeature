@@ -181,7 +181,8 @@ func TestAWriteTheStoreRefusesAtCloseIsKept(t *testing.T) {
 		t.Fatal("a rename the store refused removed the old name or made the new one")
 	}
 
-	// A Java File closed over a refusing store stays open with its write.
+	// A Java File closed over a refusing store stays open with its write, and
+	// the title is thrown the IOException the close declares.
 	fixture := newJavaThreadFixture(t, store)
 	java := fixture.client
 	object := openJavaFile(t, java, "java.dat", 4)
@@ -189,8 +190,8 @@ func TestAWriteTheStoreRefusesAtCloseIsKept(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.refuse = true
-	if _, err := javaFileClose(java, context.Background(), java.thread, []uint32{object}); err != nil {
-		t.Fatal(err)
+	if _, err := javaFileClose(java, context.Background(), java.thread, []uint32{object}); thrownClass(err) != javaIOExceptionClass {
+		t.Fatalf("a File close the store refused answered %v", err)
 	}
 	if _, open, err := java.javaFileHandle(object); err != nil || !open.dirty {
 		t.Fatalf("a File close the store refused dropped the write: %v", err)

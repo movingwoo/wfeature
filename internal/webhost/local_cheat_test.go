@@ -46,6 +46,7 @@ func TestLocalCheatProbe(t *testing.T) {
 		SaveRoot: filepath.Join(root, "savedata"),
 		LogRoot:  filepath.Join(root, "logs"),
 	})
+	server.textConsole = true
 	httpServer := httptest.NewServer(server)
 	t.Cleanup(httpServer.Close)
 	connection, _, err := wsproto.Dial("ws://"+strings.TrimPrefix(httpServer.URL, "http://")+"/api/session", nil)

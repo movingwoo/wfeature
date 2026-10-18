@@ -34,9 +34,9 @@ func (vm *VM) registerBuiltins() {
 			return VoidValue(), err
 		}
 		if object == nil {
-			return ReferenceValue(nativeStringValue("null")), nil
+			return vm.stringResult("null")
 		}
-		return ReferenceValue(nativeStringValue(fmt.Sprintf("%s@%x", object.ClassName, vm.objectIdentity(object)))), nil
+		return vm.stringResult(fmt.Sprintf("%s@%x", object.ClassName, vm.objectIdentity(object)))
 	})
 	vm.builtin("java/lang/Object", "equals", "(Ljava/lang/Object;)Z", func(_ *VM, arguments []Value) (Value, error) {
 		left, err := nativeReference(arguments, 0)
@@ -67,14 +67,14 @@ func (vm *VM) registerBuiltins() {
 			return VoidValue(), err
 		}
 		// Class.getName answers in source form; internal names use slashes.
-		return ReferenceValue(nativeStringValue(strings.ReplaceAll(name, "/", "."))), nil
+		return vm.stringResult(strings.ReplaceAll(name, "/", "."))
 	})
 	vm.builtin(ClassClass, "toString", "()Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		name, err := classObjectName(arguments)
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue("class " + strings.ReplaceAll(name, "/", "."))), nil
+		return vm.stringResult("class " + strings.ReplaceAll(name, "/", "."))
 	})
 
 	vm.builtin("java/lang/System", "currentTimeMillis", "()J", func(vm *VM, _ []Value) (Value, error) {
@@ -340,7 +340,7 @@ func (vm *VM) registerDataInputBuiltins() {
 		if err != nil {
 			return VoidValue(), guestException(IOExceptionClass, err.Error())
 		}
-		return ReferenceValue(&Object{ClassName: "java/lang/String", Native: text}), nil
+		return vm.stringResult(text)
 	})
 }
 
@@ -483,7 +483,10 @@ func (vm *VM) registerUtilityBuiltins() {
 	})
 	vm.builtin("java/lang/Integer", "toString", "(I)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeInt(arguments, 0)
-		return ReferenceValue(nativeStringValue(strconv.FormatInt(int64(value), 10))), err
+		if err != nil {
+			return VoidValue(), err
+		}
+		return vm.stringResult(strconv.FormatInt(int64(value), 10))
 	})
 	vm.builtin("java/lang/Integer", "valueOf", "(Ljava/lang/String;)Ljava/lang/Integer;", func(_ *VM, arguments []Value) (Value, error) {
 		text, err := parsedText(arguments)
@@ -494,7 +497,7 @@ func (vm *VM) registerUtilityBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(&Object{ClassName: "java/lang/Integer", Native: int32(value)}), nil
+		return vm.libraryObject("java/lang/Integer", int32(value))
 	})
 	// The narrowing accessors are the same value read at another width, which
 	// is what a title asks for when it keeps small numbers boxed.
@@ -530,10 +533,10 @@ func (vm *VM) registerUtilityBuiltins() {
 		if !ok {
 			return VoidValue(), fmt.Errorf("receiver is not an Integer")
 		}
-		return ReferenceValue(nativeStringValue(strconv.FormatInt(int64(value), 10))), nil
+		return vm.stringResult(strconv.FormatInt(int64(value), 10))
 	})
 	vm.builtin("java/util/Calendar", "getInstance", "()Ljava/util/Calendar;", func(vm *VM, _ []Value) (Value, error) {
-		return ReferenceValue(&Object{ClassName: "java/util/Calendar", Native: &calendarData{time: time.UnixMilli(vm.nowMilliseconds())}}), nil
+		return vm.libraryObject("java/util/Calendar", &calendarData{time: time.UnixMilli(vm.nowMilliseconds())})
 	})
 	// The zone form is how a title that stores a stamp reads it back somewhere
 	// other than where the handset stands — a daily reset at GMT midnight, a
@@ -555,7 +558,7 @@ func (vm *VM) registerUtilityBuiltins() {
 		}
 		instant := time.UnixMilli(vm.nowMilliseconds())
 		instant = instant.In(timeZoneLocation(data, instant))
-		return ReferenceValue(&Object{ClassName: "java/util/Calendar", Native: &calendarData{time: instant}}), nil
+		return vm.libraryObject("java/util/Calendar", &calendarData{time: instant})
 	})
 	// setTimeZone moves a calendar that already exists into a zone, which is
 	// the other half of the pair above: a title takes the default calendar and
@@ -779,7 +782,7 @@ func (vm *VM) registerUtilityBuiltins() {
 		if !ok {
 			return VoidValue(), fmt.Errorf("receiver is not a Calendar")
 		}
-		return ReferenceValue(&Object{ClassName: "java/util/Date", Native: calendar.time.UnixMilli()}), nil
+		return vm.libraryObject("java/util/Date", calendar.time.UnixMilli())
 	})
 	vm.builtin("java/util/Calendar", "setTime", "(Ljava/util/Date;)V", func(_ *VM, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
@@ -811,7 +814,7 @@ func (vm *VM) registerUtilityBuiltins() {
 		return VoidValue(), nil
 	})
 	vm.builtin("java/lang/Runtime", "getRuntime", "()Ljava/lang/Runtime;", func(_ *VM, _ []Value) (Value, error) {
-		return ReferenceValue(&Object{ClassName: "java/lang/Runtime"}), nil
+		return vm.libraryObject("java/lang/Runtime", nil)
 	})
 	vm.builtin("java/lang/Runtime", "gc", "()V", func(_ *VM, _ []Value) (Value, error) {
 		runtime.GC()
@@ -1221,14 +1224,14 @@ func (vm *VM) registerStringBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(left + right)), nil
+		return vm.stringResult(left + right)
 	})
 	vm.builtin(StringClass, "getBytes", "()[B", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeString(arguments, 0)
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(NewByteArray(vm.encodePlatformString(value))), nil
+		return vm.byteArrayResult(vm.encodePlatformString(value))
 	})
 	vm.builtin(StringClass, "toCharArray", "()[C", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeString(arguments, 0)
@@ -1236,17 +1239,23 @@ func (vm *VM) registerStringBuiltins() {
 			return VoidValue(), err
 		}
 		units := utf16.Encode([]rune(value))
+		weight, err := vm.chargeHeap(arrayHeapBytes + int64(len(units))*valueHeapBytes)
+		if err != nil {
+			return VoidValue(), err
+		}
 		values := make([]Value, len(units))
 		for index, unit := range units {
 			values[index] = IntValue(int32(unit))
 		}
-		return ReferenceValue(&Object{
+		object := &Object{
 			ClassName: "[C",
 			Native: &Array{
 				Component: Type{Kind: TypeChar},
 				storage:   valueStorage(values),
 			},
-		}), nil
+		}
+		vm.recordHeapArray(weight, object, values)
+		return ReferenceValue(object), nil
 	})
 	vm.builtin(StringClass, "getChars", "(II[CI)V", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeString(arguments, 0)
@@ -1350,7 +1359,7 @@ func (vm *VM) registerStringBuiltins() {
 				return VoidValue(), guestException("java/lang/StringIndexOutOfBoundsException",
 					fmt.Sprintf("substring range %d..%d of a %d character string", begin, end, len(units)))
 			}
-			return ReferenceValue(nativeStringValue(string(utf16.Decode(units[begin:end])))), nil
+			return vm.stringResult(string(utf16.Decode(units[begin:end])))
 		})
 	}
 	// compareTo orders by UTF-16 unit, which is what the language defines and
@@ -1407,11 +1416,17 @@ func (vm *VM) registerStringBuiltins() {
 	})
 	vm.builtin(StringClass, "toUpperCase", "()Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeString(arguments, 0)
-		return ReferenceValue(nativeStringValue(strings.ToUpper(value))), err
+		if err != nil {
+			return VoidValue(), err
+		}
+		return vm.stringResult(strings.ToUpper(value))
 	})
 	vm.builtin(StringClass, "toLowerCase", "()Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeString(arguments, 0)
-		return ReferenceValue(nativeStringValue(strings.ToLower(value))), err
+		if err != nil {
+			return VoidValue(), err
+		}
+		return vm.stringResult(strings.ToLower(value))
 	})
 	vm.builtin(StringClass, "trim", "()Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeString(arguments, 0)
@@ -1419,7 +1434,7 @@ func (vm *VM) registerStringBuiltins() {
 			return VoidValue(), err
 		}
 		value = strings.TrimFunc(value, func(r rune) bool { return r <= 0x20 })
-		return ReferenceValue(nativeStringValue(value)), nil
+		return vm.stringResult(value)
 	})
 	vm.builtin(StringClass, "toString", "()Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
@@ -1427,15 +1442,24 @@ func (vm *VM) registerStringBuiltins() {
 	})
 	vm.builtin(StringClass, "valueOf", "(C)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeInt(arguments, 0)
-		return ReferenceValue(nativeStringValue(string(utf16.Decode([]uint16{uint16(value)})))), err
+		if err != nil {
+			return VoidValue(), err
+		}
+		return vm.stringResult(string(utf16.Decode([]uint16{uint16(value)})))
 	})
 	vm.builtin(StringClass, "valueOf", "(I)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeInt(arguments, 0)
-		return ReferenceValue(nativeStringValue(strconv.FormatInt(int64(value), 10))), err
+		if err != nil {
+			return VoidValue(), err
+		}
+		return vm.stringResult(strconv.FormatInt(int64(value), 10))
 	})
 	vm.builtin(StringClass, "valueOf", "(J)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
 		value, err := nativeLong(arguments, 0)
-		return ReferenceValue(nativeStringValue(strconv.FormatInt(value, 10))), err
+		if err != nil {
+			return VoidValue(), err
+		}
+		return vm.stringResult(strconv.FormatInt(value, 10))
 	})
 	vm.contextBuiltin(StringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;", func(vm *VM, state *execution, arguments []Value) (Value, error) {
 		object, err := nativeReference(arguments, 0)
@@ -1446,7 +1470,7 @@ func (vm *VM) registerStringBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		return ReferenceValue(nativeStringValue(text)), nil
+		return vm.stringResult(text)
 	})
 }
 
@@ -1463,7 +1487,7 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 	self := "L" + class + ";"
 	for _, descriptor := range []string{"()V", "(I)V", "(Ljava/lang/String;)V"} {
 		descriptor := descriptor
-		vm.builtin(class, "<init>", descriptor, func(_ *VM, arguments []Value) (Value, error) {
+		vm.builtin(class, "<init>", descriptor, func(vm *VM, arguments []Value) (Value, error) {
 			object, err := nativeReference(arguments, 0)
 			if err != nil {
 				return VoidValue(), err
@@ -1484,7 +1508,9 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 				if valueErr != nil {
 					return VoidValue(), valueErr
 				}
-				data.units = utf16.Encode([]rune(value))
+				if data.units, err = vm.appendUnits(nil, value); err != nil {
+					return VoidValue(), err
+				}
 			}
 			object.Native = data
 			return VoidValue(), nil
@@ -1689,7 +1715,12 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 			if offset < 0 || int(offset) > len(data.units) {
 				return VoidValue(), guestException("java/lang/StringIndexOutOfBoundsException", "StringBuffer.insert offset")
 			}
-			data.units = slices.Insert(data.units, int(offset), utf16.Encode([]rune(value))...)
+			inserted := utf16.Encode([]rune(value))
+			units, err := vm.unitsWithRoom(data.units, len(inserted))
+			if err != nil {
+				return VoidValue(), err
+			}
+			data.units = slices.Insert(units, int(offset), inserted...)
 			return ReferenceValue(object), nil
 		})
 	}
@@ -1713,14 +1744,20 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 			return VoidValue(), fmt.Errorf("StringBuffer length %d exceeds limit %d", length, vm.config.MaxArrayLength)
 		}
 		data.mu.Lock()
+		defer data.mu.Unlock()
 		if int(length) <= len(data.units) {
 			data.units = data.units[:length]
-		} else {
-			grown := make([]uint16, length)
-			copy(grown, data.units)
-			data.units = grown
+			return VoidValue(), nil
 		}
-		data.mu.Unlock()
+		grown, err := vm.unitsWithRoom(data.units, int(length)-len(data.units))
+		if err != nil {
+			return VoidValue(), err
+		}
+		// The room past the old length may hold characters a shorter
+		// setLength cut off, and the new ones are '\u0000'.
+		grown = grown[:length]
+		clear(grown[len(data.units):])
+		data.units = grown
 		return VoidValue(), nil
 	})
 	vm.builtin(class, "length", "()I", func(_ *VM, arguments []Value) (Value, error) {
@@ -1741,12 +1778,12 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 		data.mu.Lock()
 		value := string(utf16.Decode(append([]uint16(nil), data.units...)))
 		data.mu.Unlock()
-		return ReferenceValue(nativeStringValue(value)), nil
+		return vm.stringResult(value)
 	})
 }
 
 func appendStringBuffer(value func([]Value) (string, error)) NativeMethod {
-	return func(_ *VM, arguments []Value) (Value, error) {
+	return func(vm *VM, arguments []Value) (Value, error) {
 		object, data, err := stringBufferArgument(arguments)
 		if err != nil {
 			return VoidValue(), err
@@ -1756,8 +1793,12 @@ func appendStringBuffer(value func([]Value) (string, error)) NativeMethod {
 			return VoidValue(), err
 		}
 		data.mu.Lock()
-		data.units = append(data.units, utf16.Encode([]rune(text))...)
-		data.mu.Unlock()
+		defer data.mu.Unlock()
+		units, err := vm.appendUnits(data.units, text)
+		if err != nil {
+			return VoidValue(), err
+		}
+		data.units = units
 		return ReferenceValue(object), nil
 	}
 }

@@ -175,12 +175,6 @@ func waitFor(t *testing.T, what string, condition func() bool) {
 	}
 }
 
-func (target *CoreTarget) parked() bool {
-	target.mu.Lock()
-	defer target.mu.Unlock()
-	return target.wakeup != nil
-}
-
 // A counted loop: r0 counts to 200 and the function returns.
 var countedLoop = []uint32{
 	0xe3a00000, // mov r0, #0
@@ -295,6 +289,46 @@ func TestARunningTargetHearsItsClient(t *testing.T) {
 		cancel()
 		<-done
 	})
+}
+
+// A client that connects to a running guest asks '?' and takes the answer as
+// a stopped target, so the guest stops: its registers are where it stopped,
+// not an empty file. The same holds for the next client after one detached.
+func TestAConnectingClientStopsARunningGuest(t *testing.T) {
+	core := reviewCore(t, false, endlessLoop...)
+	target := NewCoreTarget(core)
+	defer target.Detach()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := runGuest(ctx, core, target, false)
+	for _, client := range []string{"first", "after a detach"} {
+		peer, served := serve(target)
+		c := newClient(t, peer)
+		if got := c.exchange("?"); got != "S05" {
+			t.Fatalf("%s: ? reply = %q, want a stop", client, got)
+		}
+		if !target.parked() {
+			t.Fatalf("%s: the guest was still running after '?' answered a stop", client)
+		}
+		if got := c.exchange("p0f"); got != hexWord(reviewBase) {
+			t.Fatalf("%s: pc = %s, want inside the loop at %s", client, got, hexWord(reviewBase))
+		}
+		if got := c.exchange("?"); got != "S05" {
+			t.Fatalf("%s: a second ? reply = %q", client, got)
+		}
+		if got := c.exchange("D"); got != "OK" {
+			t.Fatalf("%s: D reply = %q", client, got)
+		}
+		peer.Close()
+		<-served
+		waitFor(t, "the guest to run on after the detach", func() bool { return !target.parked() })
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the guest did not run on after its last client detached")
+	}
 }
 
 // fakeListener hands out the connections it is given, then reports closed.

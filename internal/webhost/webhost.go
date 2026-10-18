@@ -120,6 +120,11 @@ type Server struct {
 	// button and no console capture behind it, so the route that receives one
 	// is not served either. See debuglog.go.
 	diagnostics bool
+	// textConsole lets a cheat message with no operation run a line of the
+	// text console. Only tests set it, to read and write guest memory by
+	// address; New never does, so a served page reaches the panel's
+	// operations and nothing else.
+	textConsole bool
 	// debugLogMu guards debugLogPosts, the times of the reports accepted in
 	// the last window; see allowDebugReport.
 	debugLogMu    sync.Mutex

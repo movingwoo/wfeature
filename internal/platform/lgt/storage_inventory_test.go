@@ -290,7 +290,12 @@ func TestStorageInventoryCountsJavaStorage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	boundary("every File closed", map[int]int{storageLedgersLoaded: 2})
+	// The output stream is still open, and holds its file open under it.
+	boundary("every File closed", map[int]int{storageHandles: 1, storageWritable: 1, storageLedgersLoaded: 2})
+	if err := closeJavaSink(client, sink); err != nil {
+		t.Fatal(err)
+	}
+	boundary("the output stream closed", map[int]int{storageLedgersLoaded: 2})
 
 	for column, want := range map[int]string{storageSharedDatabases: "save", storageFileStreams: "stream.dat"} {
 		if !slices.Contains(notes[column], want) {

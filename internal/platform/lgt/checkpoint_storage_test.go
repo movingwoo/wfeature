@@ -1323,8 +1323,9 @@ func TestCheckpointRebuildsFileStreamsFromTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.javaRun.sinks[sink] = []byte("MARKER-pending")
-	// A stream whose File the title closed first, and one over a file that
-	// will be shorter than the stream has read.
+	// A stream whose File the title closed first, which holds the file open
+	// with its window starting where the File's close left the reading, and
+	// one over a file that will be shorter than the stream has read.
 	closedFile := openFile("kept.dat")
 	orphan := openStream(closedFile, 4, 1)
 	if _, err := javaFileClose(client, ctx, client.thread, []uint32{closedFile}); err != nil {
@@ -1365,7 +1366,7 @@ func TestCheckpointRebuildsFileStreamsFromTheStore(t *testing.T) {
 	if value, err := javaStreamRead(copied, ctx, copied.thread, []uint32{stream}); err != nil || value != 'K' {
 		t.Fatalf("the stream reads %d on from where it was, %v", value, err)
 	}
-	if held := copied.javaRun.streams[orphan]; string(held.Data) != "efghij" || held.Read != 1 {
+	if held := copied.javaRun.streams[orphan]; string(held.Data) != "fghij" || held.Read != 0 || held.Offset != 5 {
 		t.Fatalf("the stream whose File was closed came back as %+v", held)
 	}
 	// What was read of a longer window is all of a shorter one.

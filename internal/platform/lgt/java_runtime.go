@@ -125,6 +125,11 @@ type javaRuntime struct {
 	// one and is bound to nothing. See java_file.go.
 	sinkFiles   map[uint32]uint32
 	streamFiles map[uint32]uint32
+	// collectedDatabases are the records of DataBase objects the collector
+	// reclaimed while they held a write the store refused: what the ending, a
+	// quick step and the next open of the database still have to give the
+	// store. See keepCollectedDatabases.
+	collectedDatabases []*javaDatabase
 	// decodedImages is the surface each picture was decoded into, by what it
 	// was decoded from: the resource name for a picture loaded by name, and
 	// the digest of the bytes for one built from an array. Both forms answer

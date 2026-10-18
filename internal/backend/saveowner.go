@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 )
 
@@ -120,17 +121,20 @@ func EarlierSaveOwner(raw string) string {
 // that holds either leaves it for the next start, and no session can make the
 // current owner's directory between the look that found it absent and the
 // move.
+//
+// An earlier build's quick load that stopped between its two renames left no
+// directory under the earlier name: the saves are in the reserved directory,
+// set aside, and the store puts them back on its first operation. So such a
+// load is settled first, as it is when the directory is there, and the saves
+// it brings back move like any others.
 func MigrateSaveOwner(root, earlier, owner string) error {
 	if root == "" || earlier == "" || owner == "" || earlier == owner || EarlierSaveOwner(earlier) != earlier || SaveOwnerRefused(owner) {
 		return nil
 	}
 	source, target := filepath.Join(root, earlier), filepath.Join(root, owner)
-	if info, err := os.Lstat(source); errors.Is(err, fs.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("save owner %q: %w", earlier, err)
-	} else if !info.IsDir() {
-		return nil
+	present, err := earlierSaveOwnerPresent(root, earlier)
+	if err != nil || !present {
+		return err
 	}
 	release, err := ClaimSaveDirectory(source)
 	if err != nil {
@@ -151,6 +155,14 @@ func MigrateSaveOwner(root, earlier, owner string) error {
 	// moves is the tree it left rather than half of a replacement.
 	if _, err := NewDirectorySaveStore(source).DisplacedGeneration(); err != nil {
 		return fmt.Errorf("save owner %q: %w", earlier, err)
+	}
+	// Whatever settling left, only a directory under the old name moves.
+	if info, err := os.Lstat(source); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("save owner %q: %w", earlier, err)
+	} else if !info.IsDir() {
+		return nil
 	}
 	// The reserved entries move before the saves: until the saves have moved,
 	// a later start finds the old owner again and finishes the move.
@@ -182,10 +194,35 @@ func MigrateSaveOwner(root, earlier, owner string) error {
 	return nil
 }
 
+// earlierSaveOwnerPresent reports whether there are saves under an earlier
+// owner's name for MigrateSaveOwner to move: its directory, or the directory a
+// quick load an earlier build stopped there set aside, beside the record that
+// says the load did not finish.
+func earlierSaveOwnerPresent(root, earlier string) (bool, error) {
+	info, err := os.Lstat(filepath.Join(root, earlier))
+	if err == nil {
+		return info.IsDir(), nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return false, fmt.Errorf("save owner %q: %w", earlier, err)
+	}
+	reserved := filepath.Join(root, saveReservedName, "owners", earlier)
+	for _, name := range []string{"intent", "previous"} {
+		if _, err := os.Lstat(filepath.Join(reserved, name)); errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return false, nil
+		} else if err != nil {
+			return false, fmt.Errorf("save owner %q: %w", earlier, err)
+		}
+	}
+	return true, nil
+}
+
 // SaveOwnerDirectory answers the directory below a platform root a game's
 // saves are read from before MigrateSaveOwner has run: the current owner's,
-// unless only the earlier owner's directory is there. It only looks, so a Host
-// can answer a question about the saves without moving them.
+// unless only the earlier owner's is there, or only the saves a quick load an
+// earlier build stopped under the earlier name set aside, which the store puts
+// back on its first operation there. It only looks, so a Host can answer a
+// question about the saves without moving them.
 func SaveOwnerDirectory(root, earlier, owner string) string {
 	target := filepath.Join(root, owner)
 	if earlier == "" || EarlierSaveOwner(earlier) != earlier {
@@ -194,9 +231,8 @@ func SaveOwnerDirectory(root, earlier, owner string) string {
 	if _, err := os.Lstat(target); !errors.Is(err, fs.ErrNotExist) {
 		return target
 	}
-	source := filepath.Join(root, earlier)
-	if info, err := os.Lstat(source); err == nil && info.IsDir() {
-		return source
+	if present, err := earlierSaveOwnerPresent(root, earlier); err == nil && present {
+		return filepath.Join(root, earlier)
 	}
 	return target
 }

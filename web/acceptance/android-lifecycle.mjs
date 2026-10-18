@@ -1,7 +1,8 @@
 // Opt-in check of the Android app across configuration changes and its end,
 // on an emulator. It force-stops the app, which ends a game in progress; adds
 // two test games to the library for the run and takes them off again, while
-// what they save stays in the app's saves; and changes the display's rotation,
+// what they save stays in the app's saves; goes to the home screen and taps
+// the app's icon there or in the app list; and changes the display's rotation,
 // its handling of the app's orientation request, its density and size, the
 // night mode and the font scale, putting each back as it found it whether the
 // checks pass or not. So it is not for a phone somebody plays on.
@@ -22,16 +23,29 @@
 //   density change is the one an activity that does not declare it fails.
 // - A change it does not declare (the font scale) rebuilds the activity in
 //   the same app process: the server keeps its pid, no second one starts, and
-//   the new page resumes the game the server kept for it.
+//   the new page resumes the game the server kept for it. The old activity's
+//   web view is destroyed, so only the new page is left.
 // - Finishing the activity (BACK until it finishes) ends the server within a
 //   few seconds, and the server's drain closes the game on the way out. The
 //   game for that is the repository's destroy-save MIDlet, which writes its
 //   record store only from destroyApp; it is finished three times, because
 //   whether the drain gets that far can depend on a race. The same drain asked
 //   for with POST /api/shutdown is the control. The app is started with
-//   `am start`, and Android finishes such a task on BACK. Since Android 12 a
-//   root activity started from the home screen is moved to the back on BACK
-//   instead of being finished; that path is not exercised here.
+//   `am start`, and Android finishes such a task on BACK.
+// - Since Android 12 a root activity started from the home screen is moved to
+//   the back on BACK instead of being finished. Started by a tap on its icon
+//   (the launcher's own start; one from `am start` does not count, whatever
+//   its intent), the app only stops: the server keeps the game parked and
+//   writes nothing, also once Android has frozen the cached app, server and
+//   all; and opened again from the icon the same activity, page and server
+//   resume the game, which still writes its destroyApp record when the server
+//   ends.
+// - Opened again right after it was finished, while the server it ended is
+//   still draining (the BACK, the wait for onDestroy and the new start are one
+//   command on the device, and an upload left in flight holds the old drain
+//   to its ten-second deadline), the app starts the next server only once the
+//   old one has ended, the old game's destroyApp record is written, and the
+//   page is the new server's. Three times, as for the finish.
 //
 // The pages are read through the web view's DevTools socket, one page at a
 // time, and no DevTools client is attached while a change is made. Playwright
@@ -52,6 +66,7 @@
 // through the same configChanges entries.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { join, resolve } from "node:path";
 import { crc32 } from "node:zlib";
 
@@ -230,11 +245,24 @@ const deviceNow = () => tryAdb("shell", "date", "+%s.%3N");
 const serverLog = since => tryAdb("logcat", "-d", "-v", "epoch", "-t", since, "-s", "wfeature").split("\n")
   .map(line => / I wfeature: starting /.test(line) ? "(the app starts a server)" : /msg="([^"]*)"/.exec(line)?.[1])
   .filter(line => line && /^session |^parked |^\(the app starts|^serving|^shutting/.test(line));
+// The app's own lines (not the server's), with the device's time of each: it
+// says when it starts a server and when it waits for one a finished activity
+// ended.
+const appLog = since => tryAdb("logcat", "-d", "-v", "epoch", "-t", since, "-s", "wfeature").split("\n")
+  .map(line => /^\s*([\d.]+)\s+\d+\s+\d+\s+\w\s+wfeature: (.*)$/.exec(line))
+  .filter(match => match && !/msg=/.test(match[2]))
+  .map(([, at, text]) => ({ at: Number(at), text: text.startsWith("starting ") ? "starting a server" : text }));
 const lifecycleEvents = since => tryAdb("logcat", "-d", "-b", "events", "-v", "epoch", "-t", since).split("\n")
   .filter(line => line.includes(`${app}/.MainActivity`) || line.includes(`${app}.MainActivity`))
   .map(line => /^\s*([\d.]+)\s+\d+\s+\d+\s+\w\s+(\w+):/.exec(line))
   .filter(Boolean)
   .map(([, at, event]) => ({ at: Number(at), event }));
+// Android freezes a cached app's processes — the server is one of them — and
+// thaws them when the app comes back; the event log says when.
+const freezes = since => tryAdb("logcat", "-d", "-b", "events", "-v", "epoch", "-t", since).split("\n")
+  .map(line => new RegExp(`^\\s*([\\d.]+)\\s+\\d+\\s+\\d+\\s+\\w\\s+(am_freeze|am_unfreeze): \\[(\\d+),${app.replaceAll(".", "\\.")}\\]`).exec(line))
+  .filter(Boolean)
+  .map(([, at, event, pid]) => ({ at: Number(at), event, pid: Number(pid) }));
 
 let serverForward = null;
 const status = async () => {
@@ -403,18 +431,55 @@ const start = game => `(() => {
   return select.value;
 })()`;
 
-const launch = async () => {
+// The app started the way a player starts it: a tap on its icon on the home
+// screen, or in the app list when the home screen does not show it. Android 12
+// and later move a task to the back on BACK only when the home screen started
+// it; a task `am start` makes is finished, even with the launcher's own
+// intent, because the launch did not come from the home process.
+const label = /<string name="app_name">([^<]*)<\/string>/
+  .exec(readFileSync("mobile/android/res/values/strings.xml", "utf8"))?.[1] ?? "W-Feature";
+const icon = new RegExp(`<node [^>]*text="${label.replace(/[.*+?^$|()[\]{}\\]/g, "\\$&")}"[^>]*` +
+  "bounds=\"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]\"");
+const iconOnScreen = () => {
+  const dump = "/data/local/tmp/android-lifecycle-ui.xml";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    tryAdb("shell", "uiautomator", "dump", dump);
+    const xml = tryAdb("shell", "cat", dump);
+    tryAdb("shell", "rm", "-f", dump);
+    const node = icon.exec(xml);
+    if (node) return [Math.round((Number(node[1]) + Number(node[3])) / 2), Math.round((Number(node[2]) + Number(node[4])) / 2)];
+    if (xml.includes("<hierarchy")) return null;
+  }
+  return null;
+};
+const tapIcon = async () => {
+  adb("shell", "input", "keyevent", "KEYCODE_HOME");
+  await pause(1500);
+  let at = iconOnScreen();
+  if (!at) {
+    adb("shell", "input", "keyevent", "KEYCODE_ALL_APPS");
+    await pause(1500);
+    at = iconOnScreen();
+  }
+  if (!at) throw new Error(`the launcher shows no ${label} icon`);
+  adb("shell", "input", "tap", String(at[0]), String(at[1]));
+};
+const launch = async (home = false) => {
   adb("shell", "am", "force-stop", app);
-  adb("shell", "am", "start", "-W", "-n", `${app}/.MainActivity`);
+  if (home) await tapIcon();
+  else adb("shell", "am", "start", "-W", "-n", `${app}/.MainActivity`);
   for (let i = 0; i < 80 && !(await status()); i++) await pause(250);
 };
 // A page playing the game, with the socket counter in it, made the way a
 // player makes one: the page loaded, the game picked and started inside it.
-const prepare = async game => {
+const prepare = async (game, home = false) => {
   for (let attempt = 0; ; attempt++) {
     let page = null;
     try {
       page = await shown();
+      // A tap on the icon returns before the page has loaded, where
+      // `am start -W` waits for the first frame.
+      await page.until(`document.readyState === "complete" && !!document.getElementById("restart")`);
       const now = await page.evaluate(state);
       if (now.sockets && now.playing) return page;
       await page.send("Page.enable");
@@ -434,7 +499,7 @@ const prepare = async game => {
       // goes on from a fresh start rather than ending there.
       if (attempt > 0) throw error;
       result.notes.push(`started the app again before a check: ${String(error.message ?? error).split("\n")[0]}`);
-      await launch();
+      await launch(home);
     }
   }
 };
@@ -562,13 +627,16 @@ try {
     const is = await after(since);
     const server = sameServer(was, is);
     const resumed = Boolean(is.page?.playing) && !is.page?.occupied && is.log.includes("session resumed");
-    check(`B ${step}: the activity is rebuilt, the server stays and the new page resumes the game`,
-      Boolean(rebuilt) && server && resumed, {
+    // The old activity's web view was destroyed with it: its page is gone
+    // from the app's pages, not left loaded behind the new one.
+    const onlyNewPage = is.targets.length === 1 && is.targets[0].attached;
+    check(`B ${step}: the activity is rebuilt, the server stays, the old page is gone and the new page resumes the game`,
+      Boolean(rebuilt) && server && resumed && onlyNewPage, {
         activity: [`${was.activity?.instance} ${was.activity?.summary}`, `${is.activity?.instance} ${is.activity?.summary}`],
         rebuilt: Boolean(rebuilt), newDocument: is.page ? is.page.marker !== was.marker : null,
         server: [was.status?.pid ?? null, is.status?.pid ?? null], servers: is.servers, sameServer: server,
         page: is.page && { playing: is.page.playing, occupied: is.page.occupied },
-        resumed, pages: is.targets, serverLog: is.log, events: is.events,
+        resumed, onlyNewPage, pages: is.targets, serverLog: is.log, events: is.events,
       });
   }
 
@@ -625,6 +693,180 @@ try {
       drained: `${finished.filter(drains).length} of ${finished.length}`,
       saved: finished.map(run => run.saved), serverLog: finished.map(run => run.serverLog),
       established: drains(control),
+    });
+
+  // D: BACK on a task started from the home screen, which Android 12 and later
+  // move to the back rather than finish. The activity only stops: the page is
+  // hidden and parks its game, the server keeps running (frozen with the rest
+  // of the app once it is cached), and nothing is saved because the app left
+  // the screen. Opened again from the icon, the same activity, page and server
+  // carry on with the same game, and that game still drains when the server
+  // ends.
+  {
+    await launch(true);
+    const page = await prepare(drain, true);
+    const was = await before(page);
+    page.close();
+    const saved = drainSaves();
+    const since = deviceNow();
+    const events = () => lifecycleEvents(since).map(({ event }) => event);
+    const left = () => events().some(event => event === "wm_on_stop_called" || event === "wm_on_destroy_called");
+    let presses = 0;
+    while (presses < 3 && !left()) {
+      adb("shell", "input", "keyevent", "KEYCODE_BACK");
+      presses++;
+      for (let i = 0; i < 20 && !left(); i++) await pause(500);
+    }
+    // Away until Android freezes the cached app, as it does to one left in the
+    // background, or 90 s at most. The server is the app's child, in the
+    // app's cgroup, and is frozen with it: it holds its port and answers
+    // nothing until the app is back.
+    for (const until = Date.now() + 90000; Date.now() < until && !freezes(since).some(({ event }) => event === "am_freeze");) {
+      await pause(2000);
+    }
+    await pause(3000);
+    const away = {
+      presses, events: events(), servers: servers(), serverAlive: alive(was.status?.pid),
+      status: await status(), saved: drainSaves(), serverLog: serverLog(since),
+    };
+    const back = deviceNow();
+    await tapIcon();
+    const asked = await shown().catch(() => null);
+    await asked?.until(`(${playing}) || !document.getElementById("session-return").classList.contains("hidden")`);
+    // Two reads apart: the game's frames are reaching the page again.
+    const first = asked ? await asked.evaluate(state).catch(() => null) : null;
+    await pause(2000);
+    asked?.close();
+    const is = await after(since);
+    const socket = current(is.page?.sockets);
+    const flowing = socket >= 0 && first?.sockets?.[socket] && is.page.sockets[socket].binary > first.sockets[socket].binary;
+    const leftOk = away.events.includes("wm_on_stop_called") && !away.events.includes("wm_finish_activity") &&
+      !away.events.includes("wm_on_destroy_called") && away.serverAlive && away.servers.length === 1 &&
+      away.servers[0] === String(was.status?.pid) && away.serverLog.includes("session parked") && away.saved === saved;
+    check("D BACK on a task started from the home screen moves it to the back: the activity only stops, the server keeps the game parked and nothing is saved",
+      leftOk, {
+        presses, events: away.events, server: was.status?.pid ?? null, servers: away.servers, serverAlive: away.serverAlive,
+        answeredWhileAway: Boolean(away.status), saved: [saved, away.saved], serverLog: away.serverLog,
+        freezes: freezes(since).filter(entry => entry.at < Number(back)),
+      });
+    const log = is.log;
+    const parkedAt = log.indexOf("session parked");
+    const resumedAt = log.lastIndexOf("session resumed");
+    const sameActivity = Boolean(is.activity) && is.activity.instance === was.activity?.instance;
+    const sameDocument = is.target === was.target && is.page?.marker === was.marker && is.page?.document === was.page.document;
+    const server = sameServer(was, is);
+    check("D opened again from the icon: the same activity, page and server, and the game resumes",
+      sameActivity && sameDocument && server && parkedAt >= 0 && resumedAt > parkedAt &&
+        Boolean(is.page?.playing) && !is.page?.occupied && flowing, {
+        activity: [`${was.activity?.instance} ${was.activity?.summary}`, `${is.activity?.instance} ${is.activity?.summary}`],
+        sameActivity, sameDocument, server: [was.status?.pid ?? null, is.status?.pid ?? null], servers: is.servers,
+        sameServer: server, playing: is.page?.playing ?? null, occupied: is.page?.occupied ?? null, flowing,
+        socket: [first?.sockets?.[socket] ?? null, is.page?.sockets?.[socket] ?? null], pages: is.targets,
+        serverLog: log, events: is.events, freezes: freezes(since),
+      });
+    // The game that came back is the one that was running: ending the server
+    // now closes it, and its destroyApp record is written then and only then.
+    const ending = deviceNow();
+    const control = await shown();
+    await control.evaluate(`fetch("api/shutdown", { method: "POST" }).then(response => response.status)`);
+    control.close();
+    tryAdb("shell", `i=0; while [ -e /proc/${was.status?.pid} ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done`);
+    await pause(1500);
+    const ended = !alive(was.status?.pid);
+    const end = drainSaves();
+    check("D the game that came back drains when the server ends (its destroyApp save is written once)",
+      ended && away.saved === saved && end === saved + 1, {
+        ended, saved: [saved, away.saved, end], serverLog: serverLog(ending),
+      });
+  }
+
+  // E: the app opened again right after it was finished, while the server it
+  // ended is still draining. The new activity waits for that server to end
+  // before it starts the next one, so the old game's drain is not raced for
+  // the port or the save directory, and the page it shows is the new
+  // server's. The BACK, the wait for onDestroy and the new start are one
+  // command on the device, so the start comes within moments of onDestroy.
+  // A drain with nothing in flight ends in a fraction of a second, sooner
+  // than the new activity gets as far as starting a server, so the old server
+  // is given a request in flight to wait for, as a game upload that stopped
+  // halfway would be: the drain waits for it until its own ten-second
+  // deadline. The body never arrives in full, so nothing is written.
+  const inFlight = () => new Promise(done => {
+    const socket = connect({ host: "127.0.0.1", port: Number(serverForward) }, () => {
+      socket.write("POST /api/games?name=android-lifecycle-in-flight.zip HTTP/1.1\r\nHost: 127.0.0.1:11541\r\n" +
+        "Content-Length: 1048576\r\n\r\nPK");
+      done(socket);
+    });
+    socket.on("error", () => done(socket));
+  });
+  const relaunch = async () => {
+    await launch();
+    const page = await shown();
+    if (!(await page.until(ready))) throw new Error("the page did not come up ready");
+    await page.evaluate(start(drain));
+    if (!(await page.until(playing))) throw new Error("the drain fixture did not start");
+    await pause(1500);
+    const saved = drainSaves();
+    const old = (await status())?.pid;
+    page.close();
+    const held = await inFlight();
+    await pause(500);
+    const since = deviceNow();
+    const [, destroyedAt, relaunchedAt, goneAt] = tryAdb("shell", [
+      `since=$(date +%s.%3N)`,
+      `input keyevent KEYCODE_BACK`,
+      `i=0; until logcat -b events -d -v epoch -t "$since" | grep -q 'wm_on_destroy_called.*${app}.MainActivity'; do i=$((i+1)); [ $i -ge 200 ] && break; sleep 0.02; done`,
+      `destroyed=$(date +%s.%3N)`,
+      `am start -n ${app}/.MainActivity >/dev/null 2>&1`,
+      `relaunched=$(date +%s.%3N)`,
+      `i=0; while [ -e /proc/${old} ] && [ $i -lt 3000 ]; do sleep 0.01; i=$((i+1)); done`,
+      `echo "$since $destroyed $relaunched $(date +%s.%3N)"`,
+    ].join("; ")).split(/\s+/).map(Number);
+    held.destroy();
+    let now = null;
+    for (let i = 0; i < 120; i++) {
+      now = await status();
+      if (now?.pid > 0 && now.pid !== old) break;
+      await pause(250);
+    }
+    const shownPage = await shown().catch(() => null);
+    const pageReady = Boolean(await shownPage?.until(`(${ready}) || (${playing})`, 15000));
+    shownPage?.close();
+    await pause(1000);
+    const events = lifecycleEvents(since).map(({ event }) => event);
+    const own = appLog(since);
+    const started = own.find(line => line.text === "starting a server")?.at ?? null;
+    const waited = own.some(line => line.text.startsWith("waiting for the server a finished activity ended"));
+    const ended = own.find(line => line.text.startsWith("the earlier server ended"))?.at ?? null;
+    const destroyed = events.includes("wm_on_destroy_called");
+    return {
+      old, new: now?.pid ?? null, servers: servers(), saved: [saved, drainSaves()], pageReady,
+      destroyed, exercised: destroyed && relaunchedAt < goneAt, waited,
+      // The device's clock: onDestroy seen, the start sent, the old pid gone,
+      // and the app's line for the new server, each after BACK.
+      timesMs: {
+        destroyed: Math.round((destroyedAt - Number(since)) * 1000),
+        relaunched: Math.round((relaunchedAt - Number(since)) * 1000),
+        oldGone: Math.round((goneAt - Number(since)) * 1000),
+        newStarted: started && Math.round((started - Number(since)) * 1000),
+      },
+      // The device sees the old pid gone only at its next look, some tens of
+      // milliseconds late under load, so the app's own order says the rest.
+      startedAfterOldEnded: started !== null && started >= goneAt - 0.25 && (!waited || (ended !== null && ended <= started)),
+      appLog: own.map(line => `${Math.round((line.at - Number(since)) * 1000)} ${line.text}`),
+      serverLog: serverLog(since), events,
+    };
+  };
+  const relaunched = [];
+  for (let i = 0; i < finishes; i++) relaunched.push(await relaunch());
+  // Exercised means the start was sent while the old server was still there,
+  // and waited that the app said it was waiting for it.
+  const relaunchOk = run => run.exercised && run.waited && run.startedAfterOldEnded &&
+    run.saved[1] === run.saved[0] + 1 && run.new > 0 && run.new !== run.old &&
+    run.servers.length === 1 && run.servers[0] === String(run.new) && run.pageReady;
+  check("E opened again while the finished server drains: the next server starts after it ends, its destroyApp save is written, and the page is the new server's",
+    relaunched.every(relaunchOk), {
+      passed: `${relaunched.filter(relaunchOk).length} of ${relaunched.length}`, runs: relaunched,
     });
 } catch (error) {
   result.notes.push(`stopped: ${String(error.stack ?? error)}`);

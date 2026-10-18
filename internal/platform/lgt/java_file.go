@@ -1,7 +1,6 @@
 package lgt
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 
@@ -317,7 +316,9 @@ func (client *Client) openJavaFileInputStream(thread *armcore.Thread, file uint3
 // any handle on the path is then what the stream reads next, as it is on the
 // handset, where the stream reads the file. What was read stays read, and a
 // file that is shorter now ends the window where it ends. A stream whose File
-// has been closed keeps the window it had then.
+// has been closed holds the file open itself and follows it the same way; see
+// javaFileClose. One a record an earlier build took restores without its File
+// and keeps the window it was given.
 func (client *Client) followJavaFileStream(object uint32, stream *javaStream) {
 	runtime := client.javaRun
 	file, bound := runtime.streamFiles[object]
@@ -372,20 +373,25 @@ func (client *Client) putJavaSink(sink uint32, held []byte) error {
 // storeJavaSinkFile is a flush or a close of a stream opened on a File: the
 // File is given to the store, with what was written through the stream in
 // it. A store that refuses keeps the write waiting in the File, as a refused
-// File.close does, for the File's close, the ending and a quick step to give
-// again; the title is not thrown at for a fault of the Host's storage.
-func (client *Client) storeJavaSinkFile(sink uint32) {
+// File.close does, for the next flush, the File's close, the ending and a
+// quick step to give again, and the refusal is answered for the caller to
+// throw: OutputStream's flush and close declare IOException.
+func (client *Client) storeJavaSinkFile(sink uint32) error {
 	file, bound := client.javaRuntimeState().sinkFiles[sink]
 	if !bound {
-		return
+		return nil
 	}
 	_, open, err := client.javaFileHandle(file)
 	if err != nil || !open.dirty {
-		return
+		return nil
 	}
-	if err := client.storeContent(open.name, open.fileContent); err != nil && client.logger != nil {
-		client.logger.Debug("LGT java file stream flush kept a write the store refused", "name", open.name, "stream", sink)
+	if err := client.storeContent(open.name, open.fileContent); err != nil {
+		if client.logger != nil {
+			client.logger.Debug("LGT java file stream flush kept a write the store refused", "name", open.name, "stream", sink)
+		}
+		return fmt.Errorf("%s could not be stored", open.name)
 	}
+	return nil
 }
 
 // drainJavaSinkToFile moves what a bound sink holds into the file behind it.
@@ -427,51 +433,114 @@ func (client *Client) drainJavaSinkToFile(sink uint32) error {
 
 // javaFileClose is `close()`, which is where a write reaches the store: the C
 // path writes a dirty file back on its own close, and this is the same close.
+//
+// **A write the store refuses is thrown at the title, and the File stays
+// open with it.** The specification declares IOException for a file that
+// cannot be closed properly, and the language makes every caller handle it,
+// so the title is told what a refused C close tells a Clet (see
+// closeFileHandle), and nothing of the File changes: its streams stay bound,
+// and the next close, the ending and a quick step give the store the write
+// again. Closing a File that is already closed is nothing, which the
+// specification also says.
+//
+// **A stream opened on the File holds the file open after the File closes.**
+// File is a StreamConnection, and closing a connection whose streams are open
+// leaves them usable and the connection open under them until they close. So
+// each open stream takes the File's handle as its own: an input stream goes on
+// reading the file as it is now and an output stream writing it, and the
+// stream's close, or the collector reclaiming it, closes the handle as the
+// File's close would have. The File itself is closed. A stream left with a
+// copy of what it had read stale bytes, and an output stream left with no
+// file wrote what the title saved through it into nothing.
 func javaFileClose(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	handle, file, err := client.javaFileHandle(arguments[0])
+	object := arguments[0]
+	handle, file, err := client.javaFileHandle(object)
 	if err != nil {
+		if client.javaFileClosed(object) {
+			return 0, nil
+		}
 		return 0, err
 	}
 	// A stream opened on this file has nothing left to drain, since every
 	// write reached the file as it was made; the drain stays as the last
-	// place a byte left in a stream could go before the binding does.
+	// place a byte left in a stream could go before the close.
 	runtime := client.javaRuntimeState()
 	for sink, owner := range runtime.sinkFiles {
-		if owner != arguments[0] {
+		if owner != object {
 			continue
 		}
 		if err := client.drainJavaSinkToFile(sink); err != nil {
 			return 0, err
 		}
-		delete(runtime.sinkFiles, sink)
+	}
+	if file.dirty && client.storeContent(file.name, file.fileContent) != nil {
+		if client.logger != nil {
+			client.logger.Debug("LGT java file close kept a write the store refused", "name", file.name, "file", object)
+		}
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, fmt.Sprintf(": %s could not be stored", file.name))
+	}
+	for sink, owner := range runtime.sinkFiles {
+		if owner == object {
+			runtime.sinkFiles[sink], runtime.files[sink] = sink, handle
+		}
 	}
 	for stream, owner := range runtime.streamFiles {
-		if owner != arguments[0] {
+		if owner != object {
 			continue
 		}
 		if err := client.syncJavaStreamToFile(stream); err != nil {
 			return 0, err
 		}
-		delete(runtime.streamFiles, stream)
-		// The window stops following the file here; it keeps its own copy of
-		// what it had rather than the buffer other handles may still write.
-		if held := runtime.streams[stream]; held != nil {
-			held.Data = bytes.Clone(held.Data)
+		held := runtime.streams[stream]
+		if held == nil || held.Closed {
+			delete(runtime.streamFiles, stream)
+			continue
 		}
+		// The File's position has taken what the stream read, so the
+		// stream's window starts there now: its own close then hands the
+		// handle only what it reads from here on.
+		held.Offset += held.Read
+		held.Data, held.Read, held.Mark = held.Data[held.Read:], 0, max(held.Mark-held.Read, 0)
+		runtime.streamFiles[stream], runtime.files[stream] = stream, handle
 	}
-	// A write the store refuses keeps the File open with it, as a refused C
-	// close does (see closeFileHandle): the next close, the ending and a quick
-	// step try again. The title is not thrown at for a fault of the Host's
-	// storage, which would end a game that has nothing wrong with it.
-	if file.dirty && client.storeContent(file.name, file.fileContent) != nil {
-		if client.logger != nil {
-			client.logger.Debug("LGT java file close kept a write the store refused", "name", file.name, "file", arguments[0])
-		}
-		return 0, nil
+	delete(runtime.files, object)
+	if !client.javaFileHeld(handle) {
+		delete(client.files, handle)
 	}
-	delete(client.files, handle)
-	delete(runtime.files, arguments[0])
 	return 0, nil
+}
+
+// javaFileClosed reports whether an object is a File that is not open: one
+// the title has closed. The table forgets a File at its close, and the object
+// is still one by its class.
+func (client *Client) javaFileClosed(object uint32) bool {
+	if _, open := client.javaRuntimeState().files[object]; open {
+		return false
+	}
+	class, known := client.javaClassOfObject(object)
+	for ; known && class != nil; class = class.Super {
+		if class.Name == javaFileClass {
+			return true
+		}
+	}
+	return false
+}
+
+// releaseJavaFileStream closes the handle a stream holds open after its File
+// closed (see javaFileClose), at the stream's own close; the collector closes
+// it the same way when it reclaims the stream. What waits in the handle is
+// stored as a File's close stores it; a store that refuses leaves the handle
+// open, with nothing holding it, for the ending and a quick step.
+func (client *Client) releaseJavaFileStream(stream uint32) {
+	runtime := client.javaRuntimeState()
+	handle, held := runtime.files[stream]
+	if !held {
+		return
+	}
+	delete(runtime.files, stream)
+	if !client.javaFileHeld(handle) {
+		client.closeFileHandle(handle)
+	}
 }

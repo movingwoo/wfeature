@@ -89,6 +89,16 @@ exception; a legacy profile string alone cannot. The selected correction does
 not change WIPI Graphics, `clipRect`, fills, or image dimensions. See
 [compatibility registry](platform-compatibility.md).
 
+WIPI `Graphics.getRGBPixels` and `setRGBPixels` read their last argument as
+the element stride between rows, 0 meaning the width. The specification calls
+it bytes per line, and the KTF platform reads it that way (a pitch of a quarter
+of it, nothing copied when that is shorter than the width). The one local SKT
+title that has them passes 1 with a `w*h` array, which neither reading copies
+as a packed picture, from a method nothing in the title calls; what the handset
+did is not settled, and no reachable code depends on it. A stride shorter than
+the width overlaps the rows in the array, a later row overwriting an earlier
+one; the read writes each element once, so its work is bounded by the array.
+
 `Canvas.getHeight()` reports the display less 16 rows (`canvasReservedRows`),
 because the corpus adds those rows back; the framebuffer and the `XDisplay`
 `width`, `height` and `height2` fields still answer the whole display, and
@@ -188,15 +198,26 @@ of the same name included. Opening the path for writing again brings it back as
 an empty file, and a write through a handle left open on it brings it back
 holding what was written; the store that writes it takes the name off the list
 in the same batch as its bytes. Removing a name that does not exist changes and
-stores nothing: `unlink` answers 0, as it always did, and `remove` throws
-nothing, where the specification has it throw `IOException`; no title has been
-seen to depend on either answer. Removing a file made or written in this
-session that never reached the store, and that the archive does not package,
-stores nothing either, since a later session would not find it. A name with a
-line break cannot go on the list, so `unlink` answers -1 for it and nothing is
-removed. An empty file an earlier build's `unlink` left behind is a present
-empty file: nothing records which empty files were removals. `/.removed` and
-paths below it are refused, as the list's own key.
+stores nothing: `unlink` answers 0, as it always did, and `remove` throws the
+`IOException` the specification gives a missing file. Removing a file made or
+written in this session that never reached the store, and that the archive does
+not package, stores nothing either, since a later session would not find it. A
+name with a line break cannot go on the list, so nothing is removed: `unlink`
+answers -1 for it and `remove` throws `IOException`, the specification's answer
+for a file it could not remove. An empty file an earlier build's `unlink` left
+behind is a present empty file: nothing records which empty files were
+removals. `/.removed` and paths below it are refused, as the list's own key.
+
+The missing-name answers rest on the local corpus rather than a handset. A
+2026-10-17 scan of its 91 distinct SKT archives (79 Java, 12 SGS) found 3
+`FileSystem.remove` call sites, all in one title, each behind the title's own
+`isFile` check and inside a handler that catches `Exception`, so throwing for a
+missing name changes nothing a title does. It found 44 `XFile.unlink` call
+sites in 17 titles, every one discarding the answer; 41 sit inside a handler
+and the other 3 in methods whose callers catch `Exception`. The specification
+does not describe `XFile`, so `unlink` keeps its answer. The scan covers SKT
+alone: KTF's and LGT's `FileSystem.remove` still throw nothing for a missing
+name.
 
 An SGS save load that cannot read `nv/data` stops the script with the error
 rather than handing the title zeros it would save over its progress.

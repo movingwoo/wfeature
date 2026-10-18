@@ -595,6 +595,7 @@ func (client *Client) releaseJavaPayloads(dead []uint32, stats *CollectionStats)
 	runtime := client.javaRun
 	surfaces := make([]uint32, 0, 4)
 	files := make([]uint32, 0, 4)
+	var databases []*javaDatabase
 	for _, object := range dead {
 		if clip := client.clips[object]; clip != nil && clip.java {
 			client.releaseClipSound(clip)
@@ -608,6 +609,9 @@ func (client *Client) releaseJavaPayloads(dead []uint32, stats *CollectionStats)
 		}
 		if handle, ok := runtime.files[object]; ok {
 			files = append(files, handle)
+		}
+		if database := runtime.databases[object]; database != nil && database.unsaved {
+			databases = append(databases, database)
 		}
 		delete(runtime.strings, object)
 		delete(runtime.random, object)
@@ -638,6 +642,10 @@ func (client *Client) releaseJavaPayloads(dead []uint32, stats *CollectionStats)
 		client.releaseSurface(buffer)
 		stats.Surfaces++
 	}
+	// A File's close stores what waits in its buffer, and a close the store
+	// refuses leaves the handle open with it, so the ending and a quick step
+	// still have it. A DataBase holding a write the store refused is closed
+	// the same way; see keepCollectedDatabases.
 	for _, handle := range files {
 		if client.javaFileHeld(handle) {
 			continue
@@ -645,6 +653,9 @@ func (client *Client) releaseJavaPayloads(dead []uint32, stats *CollectionStats)
 		if client.closeFileHandle(handle) {
 			stats.Files++
 		}
+	}
+	if len(databases) != 0 {
+		client.keepCollectedDatabases(databases)
 	}
 }
 

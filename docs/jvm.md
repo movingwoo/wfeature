@@ -28,8 +28,15 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
   class or interface and nothing else (JVMS 5.5): an interface's array constant
   read inside an implementing class runs the interface's initializer, and an
   inherited static read through a subclass does not run the subclass's.
-  Initializing a class initializes its superclasses and not its
-  superinterfaces, which is the rule for class files without default methods
+  Initializing a class initializes its superclass and then each superinterface
+  that declares a default method, an interface's own superinterfaces first
+  (JVMS 5.5); an interface with only abstract or static methods is not
+  initialized, and one the loader cannot find is passed over. Only a class file
+  of version 52 or later can declare a default method. The local corpus's 2,232
+  class files are versions 45.3 to 47.0 and its 27 interfaces declare none, so
+  for every title the walk initializes nothing. Selecting a default method in
+  a call is not implemented (see
+  [Deliberately incomplete](#deliberately-incomplete))
 - static, virtual, special and interface dispatch, and explicit `InvokeSpecial`
   for runtime-owned superclass methods invoked with an AOT subclass receiver
 - object creation and primitive, reference and multidimensional arrays
@@ -84,6 +91,7 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
 | `MaxSteps` | 1,000,000 | instructions one execution may spend; `ErrStepLimit` when exhausted and not renewed |
 | `MaxFrames` | 1,024 | frame depth across nested calls (`ErrFrameLimit`); also bounds type loads per assignability query |
 | `MaxArrayLength` | 16,777,216 elements | largest array a guest can allocate; a larger request fails with the limit rather than `OutOfMemoryError`. One `multianewarray` is held to the same total, each array it creates counting as 16 elements beside its own, and `StringBuffer.setLength` to the same length |
+| `MaxHeapBytes` | 256 MiB (`DefaultMaxHeapBytes`) | what the guest may keep alive, in the bytes this runtime spends on its objects; an allocation past it raises a catchable `OutOfMemoryError` once a collection has not made room. See [The heap budget](#the-heap-budget) |
 | `RenewSteps` | unset | makes `MaxSteps` a window; see [below](#the-step-limit-is-a-ceiling-or-a-window) |
 | `Clock` | wall clock | the guest clock every date-shaped builtin reads |
 | `Speed` | game speed | scales `Thread.sleep` and timed `Object.wait`; a platform scales `Clock` by the same factor |
@@ -577,8 +585,13 @@ identity form.
 - half a surrogate pair inside a string. Strings are held as Go text, which
   cannot carry one, so a lone surrogate from a class constant, `String(char[])`,
   `valueOf(char)` or `append(char)` reads back as U+FFFD; a proper pair is kept
-- a heap budget. `MaxArrayLength` bounds one array and one `multianewarray`;
-  a guest allocating in a loop is bounded only by the host
+- calling a default method. Method selection walks the superclass chain and
+  not the superinterfaces, so a call that only an interface's default method
+  answers fails resolution. Only a class file of version 52 or later can
+  declare one, and none in the local corpus is above 47.0
+- charging what a platform allocates for itself to the
+  [heap budget](#the-heap-budget): images, its own records and the byte arrays
+  it builds with `NewByteArray` are bounded by the platform, not by the budget
 - `Float` and `Double`, and with them `StringBuffer.append(float)`. Java's
   shortest-representation float printing is not Go's, so a title formatting a
   number would draw text subtly different from the handset's, and nothing local
@@ -651,6 +664,72 @@ running, so destroying the MIDlet is what stops a runaway guest thread. The
 WIPI platforms use the same shape for ARM guests, where one window's exhaustion
 is a renewal request and cancelling the context is the only stop
 ([`ktf.md`](ktf.md)).
+
+## The heap budget
+
+`MaxArrayLength` bounds one array and one `multianewarray`, but nothing bounded
+the total: a guest that kept allocating in a loop grew until the host ran out of
+memory, and every session on a server went with it. `Options.MaxHeapBytes`
+(`DefaultMaxHeapBytes`, 256 MiB) bounds what one VM's guest keeps alive. An
+allocation past it raises `java/lang/OutOfMemoryError`, which the guest can
+catch, as it could on a handset. The first refusal is logged as a warning and
+the rest at debug level.
+
+**The budget counts the bytes this runtime spends, not what the handset
+spent.** An array element is a 24-byte `Value` whatever its type, an object is
+about 550 bytes with its field table, and a String is its text plus about 190.
+What is charged and may be refused: every object `new` makes, every array
+(`newarray`, `anewarray`, `multianewarray`, `NewArray`, and the arrays the class
+library makes, so `Vector`, `Hashtable` and `ByteArrayOutputStream` growth too),
+the Strings and the byte and char arrays library methods hand back, the small
+`Integer`, `Calendar`, `Date` and `Runtime` objects they return, and a
+`StringBuffer`'s characters as they grow. Charged and never refused, because
+the caller has no way to fail with a guest exception: a Host's `NewString`, the
+text of a caught exception (a title reads it in the handler for this very
+error), and a platform's AOT instances and arrays (`NewAOTInstance`,
+`NewAOTArray`), which its own arena already bounds. Not charged: the exceptions
+the runtime raises, interned literals and constants (the pool has its own
+bounds), `Class` and `TimeZone` objects, what a platform builds for itself, and
+a restored heap.
+
+**Whether an object is still alive is Go's answer, asked of a sample.** There is
+no collector of this runtime's own, and a weak pointer per object would cost
+more than the allocation. So allocations are charged as a stream of bytes, and
+the one that crosses each sampling point, drawn from an exponential
+distribution with a mean of 256 KiB, is recorded with a weak pointer and a
+weight that makes the live weights an unbiased estimate of the live bytes (the
+method Go's own heap profile uses). An allocation of 256 KiB or more is always
+recorded at its exact size, so a large array is counted exactly and refused
+before the host commits it. When a sample would pass the limit, samples whose
+objects have died are dropped; if that is not enough, the budget runs
+`runtime.GC` and drops again, and only then refuses. Nothing is checked between
+samples, so a guest can pass the limit by about 256 KiB before it is told. The
+seed is fixed, so the same allocations reach the limit at the same one.
+`VM.HeapUsage` reports the current estimate and the limit.
+
+**A restore is never refused for size.** Restored objects are not charged, so a
+checkpoint loads whatever heap it carries, and the budget bounds what the guest
+allocates afterwards. The budget is not part of the heap state, whose format is
+unchanged.
+
+**256 MiB is about twenty-five times the largest heap measured.** On 2026-10-17
+every local Java archive that starts was run with a fixed key cycle (fire, 5,
+the four directions, 1 and 2, one press every 20 or 30 ticks), sampling
+`HeapUsage` after a collection every 60 or 100 ticks: SKT archives for 1,500
+paced ticks, 93 runs, and KTF archives for 3,000 manual-clock ticks, 294 runs.
+The largest SKT peak was 4.5 MB and the largest KTF one 10.1 MB, both measured
+again with every allocation recorded; the medians were 0.9 MB and 0.3 MB. A
+handset gave a MIDlet 512 KiB to 2 MiB, and a full 2 MiB costs about 50 MB in
+this runtime's representation, so the budget is also five times the most a
+handset-sized heap could reach. One SKT archive that spent over a minute in a
+single paint under the key cycle, with or without this change, was left out.
+
+**What it costs.** An allocation that is not a sample pays one atomic
+subtraction. Measured against the previous build on 2026-10-17:
+`BenchmarkGuestCallLoopAllocating` 1,107 against 1,110 ns a call (two more
+allocations per thousand calls, the samples), a 64-element `int` array
+(`BenchmarkHeapBudgetSmallArray`) 342 against 354 ns, and a library String
+(`BenchmarkHeapBudgetLibraryString`) 49 against 53 ns.
 
 ## What a guest instruction cost, and the two things that were not emulation
 

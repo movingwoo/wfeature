@@ -44,6 +44,28 @@ public final class JVMContractsMIDlet extends MIDlet {
         }
     }
 
+    private static int defaultedMarks;
+
+    static int markDefaulted() {
+        return ++defaultedMarks;
+    }
+
+    /** An interface with a default method and an initializer of its own. */
+    interface Defaulted {
+        int MARK = JVMContractsMIDlet.markDefaulted();
+
+        default int value() {
+            return 1;
+        }
+    }
+
+    /** Initializing this class initializes Defaulted. */
+    static final class Implementing implements Defaulted {
+        static int touch() {
+            return 0;
+        }
+    }
+
     protected void startApp() {
     }
 
@@ -138,6 +160,20 @@ public final class JVMContractsMIDlet extends MIDlet {
             check(8, ClassLocked.notifyThroughLiteral(), "static synchronized lock");
         } catch (IllegalMonitorStateException e) {
             check(8, false, "static synchronized lock: " + e);
+        }
+
+        // Initializing a class initializes a superinterface that declares a
+        // default method.
+        Implementing.touch();
+        check(9, defaultedMarks == 1, "default-method interface initialization");
+
+        // An allocation past the heap budget is an OutOfMemoryError the
+        // MIDlet catches, and the next allocation succeeds.
+        try {
+            int[] huge = new int[12000000];
+            check(10, false, "heap budget: allocated " + huge.length);
+        } catch (OutOfMemoryError e) {
+            check(10, new int[16].length == 16, "heap budget recovery");
         }
         return flags;
     }

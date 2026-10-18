@@ -48,7 +48,7 @@ the page can match it to its request:
 | `text` | `action` (`open`, `commit`, `cancel`), `edit`, `text` | Native text editing; see [native text input](native-text-input.md). |
 | `quickSave` / `quickLoad` | — | Save the running game's execution state to the archive's slot, or bring the game back to it. Ordinary saves are not reverted. |
 | `audioResume` | — | Ask, within the current epoch, for an `allOff` followed by the reconstructed current audio output. |
-| `cheat` | `op`, `command`, `type`, `filter`, `operand`, `address`, `all`, `table` | One cheat panel operation or console line. |
+| `cheat` | `op`, `type`, `filter`, `operand`, `address`, `all`, `table` | One cheat panel operation. The text console is the CLI's (`-cheat`); a line of it sent here is refused as an unknown operation. A refused search answers an `error` in the panel's words, such as an unknown-value search over more than 4,194,304 addresses. |
 | `report` | `label` | Write the session's diagnostics report. A debug build only, and within the rate `/api/debug-log` keeps (10 a minute, shared with it); a release answers with an error and writes nothing. |
 | `ping` | — | Check connection liveness; answered from the reader without waiting for guest execution. |
 
@@ -501,27 +501,75 @@ formats and canonical paths are the same in debug and release.
 A save key is the name a platform gives an entry (`rms/<store>`, `fs/<path>`,
 `db/<name>`), and keys are what everything carries: the platforms, the save API
 and `.wfs` packs. Only `DirectorySaveStore` turns a key into a path below the
-game's save folder, and it spells case out, so a name means the same file on
-every host and names that differ only by case are different files. Before,
-`Save` and `save` were two files on Linux and one shared file on the
-case-insensitive file systems of macOS, iOS and Windows.
+game's save folder, and it spells out what a host file system would fold or
+refuse, so a name means the same file on every host and two keys are two
+files. Before, `Save` and `save` were two files on Linux and one shared file on
+the case-insensitive file systems of macOS, iOS and Windows; `é` and `e` with a
+combining accent were one file on macOS and iOS, which ignore Unicode
+normalization; and Windows refused `slot:1` and stored `save.` as `save`.
 
 In each segment of a key, an upper-case letter that is the upper case of its own
-lower case is written `#` followed by the letter, and `#` is written `##`. Any
-other letter outside ASCII that has case is written by its number, `#+` and six
-lower-case hex digits: `é` is `#+0000e9`, `ß` is `#+0000df`. A file system that
-ignores case folds such letters in more ways than upper to lower (APFS takes
-`ß` for `ss`, `ﬁ` for `fi`, the Kelvin sign for `k` and `ς` for `σ`), and what is
-written as it is has no case at all or is ASCII. Everything else, bytes that are
-not UTF-8 included, is written as it is. `rms/Option` is stored at `rms/#Option`
-and `fs/save#1` at `fs/save##1`; a key with no upper-case letter, no `#` and no
-other letter with case outside ASCII keeps the path it always had, which is
-every ASCII or Korean key without an upper-case letter. Keys do not
-change. The owner folder is the Host's name for a game, not a key, and is not
-encoded, and neither are the quick-save slots and lock files in
-`.wfeature-quicksave/`. The earlier KTF native package lowercases its file
-names on purpose, so its keys never differ by case. `internal/backend/save_names.go`
-holds the encoding.
+lower case is written `#` followed by the letter, and `#` is written `##`. What
+a host would take for another character, or refuse, is written by its number,
+`#+` and six lower-case hex digits:
+
+- Any other letter outside ASCII that has case: `é` is `#+0000e9`, `ß` is
+  `#+0000df`. A file system that ignores case folds such letters in more ways
+  than upper to lower (APFS takes `ß` for `ss`, `ﬁ` for `fi`, the Kelvin sign
+  for `k` and `ς` for `σ`).
+- A character outside ASCII that Unicode normalization changes or joins to the
+  character before it: a combining mark (`e` and U+0301 is `e#+000301`), a
+  Hangul vowel or final consonant jamo, a kana voicing mark, a character that is
+  another one's canonical spelling (the Greek question mark U+037E, the ohm sign,
+  a CJK compatibility ideograph), and the seven Greek capitals with an accent
+  that normalization turns into others, which therefore have no `#` form. What is
+  left is its own NFC form wherever it stands, so every encoded name is its own
+  NFC form, and two keys never meet on a file system that ignores
+  normalization. On the APFS volume of the development Mac, each of `é` and
+  `e`+U+0301, `;` and U+037E, U+F900 and U+8C48, `가` and its two jamo, `が` and
+  `か`+U+3099, U+0386 and U+1FBB was one file, and each pair of their encoded
+  names two. APFS normalizes by an older Unicode table than the encoder's, which
+  can only make the encoder number a character APFS would have left alone.
+- What Windows refuses or changes in a name: the controls below 0x20 and
+  `<>:"\|?*` anywhere (`slot:1` is `slot#+00003a1`), a `.` or space at the end
+  of a segment, which Windows drops (`save.` is `save#+00002e`), and the first
+  letter of a device name — `con`, `prn`, `aux`, `nul`, `conin$`, `conout$`,
+  `com0` to `com9`, `lpt0` to `lpt9`, and `com` or `lpt` with `¹`, `²` or `³`,
+  in any case, alone or before a `.` (`con.txt` is `#+000063on.txt`; `CON` is
+  `#C#O#N` already).
+
+Everything else, bytes that are not UTF-8 included, is written as it is: lower-case
+ASCII letters, digits, the rest of ASCII, and characters with no case that
+normalization leaves alone, Hangul syllables, CJK ideographs and kana among
+them. `rms/Option` is stored at `rms/#Option` and `fs/save#1` at `fs/save##1`; a
+key none of whose characters is changed keeps the path it always had, which is
+every key of lower-case ASCII letters, digits, Korean syllables and punctuation
+other than the eight above whose segments are no device names and do not end in
+`.` or a space. A name reads back as a key only when that key is
+written as exactly that name again, so a key has one name and a name at most
+one key. Keys do not change. The owner folder is the Host's name for a game, not
+a key, and is not encoded, and neither are the quick-save slots and lock files
+in `.wfeature-quicksave/`. The earlier KTF native package lowercases its file
+names on purpose, so its keys never differ by case.
+`internal/backend/save_names.go` holds the encoding.
+
+A key one of whose segments, written out, is longer than 255 bytes — the name
+limit of ext4, and within that of APFS and NTFS — has no save and cannot have
+one: a read or an existence check finds none, and a write, or a batch or a
+restore that holds the key, is refused with an error that names the limit,
+before anything is written. A platform answers that refusal as it answers a
+store that failed, as a failed file or record write, and the session goes on.
+Before, the file system's error reached the platform as a failed read, and a
+KTF title that asked for such a name could not save again for the rest of the
+session. A key is at most 512 bytes, and a segment written out is at most eight
+times as long (`#+` and six digits for one ASCII character). KTF record
+databases (at most 31 bytes, 248 written out) never reach the limit. An SKT
+record store name (at most 32 characters) reaches it only when each of its 32
+characters is written by its number (256 bytes), and an LGT Java database (at
+most 128 bytes, then `.db`) once its name written out passes 252 bytes, 32
+numbered characters or 127 upper-case letters. Files on every platform (KTF C
+and Java files and databases, SKT `XFile`, LGT files) are bounded only by the
+key; a segment of more than 255 bytes failed before the encoding too.
 
 A folder whose names are encoded holds the file `.wfeature-names#1`, written
 before its first name with a `#`. No key is ever stored under that name, in any
@@ -531,6 +579,13 @@ build wrote, or the key `Top` this build wrote. In a folder without the file
 every name is its own key. The file belongs with the saves and moves with the
 folder: without it, the next operation would take every name with a `#` for an
 earlier build's key and convert it again.
+
+The encoding first numbered only letters with case; that form was never
+released. A folder it converted holds the same file, which says the same thing
+of both forms, and its names that the encoding now writes otherwise (`#Slot:1`
+for the key `Slot:1`, `con` for `con`) read as the keys they were written for
+and move to their current names when they are read, as names an earlier build
+wrote there do.
 
 A folder an earlier build wrote is converted in place by the first operation on
 it — a game reading its saves, a listing, an export — before anything else
@@ -543,16 +598,16 @@ stored. A folder that cannot be converted, because it cannot be
 written or not all of it can be listed, is read as the earlier build left it,
 each name by its exact spelling, and writing to it is refused until it can be
 converted. An earlier name whose encoded name would be longer than a file
-system stores stays as it is and still reads as its own key.
+system stores stays as it is, still reads as its own key and is written there.
 
 An earlier build can write into a converted folder too, when a player goes back
 to it: it does not know `#Save` and writes its key `Save` under that name. When
 both are there, the one written later is the save. A read moves a later earlier
 name over the encoded file it continued from, and a listing or an export
 chooses it the same way; an earlier name older than the encoded file is left
-where it is and not read. A folder's names record is read once and then known
-by its identity, and a listing made to tell `Save` from `save` is kept until
-its folder changes.
+where it is and not read. Of two earlier names of one key, the later one
+counts. A folder's names record is read once and then known by its identity,
+and a listing made to tell `Save` from `save` is kept until its folder changes.
 
 On a host that ignores case, an earlier build kept one file for `Save` and
 `save`, holding whichever was written last. The file belongs to the key its
@@ -566,11 +621,11 @@ earlier build made of the same saves.
 A name an earlier build writes into a converted folder afterwards — an earlier
 version run again, or files copied in by hand — reads as its own key when the
 encoding would not have written it, and moves to its encoded name when it is
-read; where the encoded file is already there, it is the save and the other one
-is left alone. A name like `#Top` written that way reads as encoded. Until it
-moves, such a leftover can also answer, on a host that ignores case, for the
+read, unless the encoded file is there and newer. A name like `#Top` written that
+way reads as encoded. Until it moves, such a leftover, or a name of the first
+form, can also answer, on a host that ignores case or normalization, for the
 name it folds to. An earlier version run on a converted folder does not find the
-keys that have an upper-case letter or a `#`; their files stay under their
+keys that have a character the encoding changes; their files stay under their
 encoded names.
 
 ## Input, compatibility, and limits

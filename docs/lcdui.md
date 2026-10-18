@@ -30,11 +30,11 @@ and `Command` constructors are native, so their state hangs off the object.
 method supplies the kind. A game subclasses these classes freely, so the class
 name does not reliably tell a `Form` from a `List`.
 
-A title edits a `List`, `ChoiceGroup`, `Form`, `Item` or `Alert` from its own
-threads as freely as from a callback, while the Host paints that content and
-moves through it on a key. The natives that read or change it therefore run
-under the same lock (`textMu`) the painter and the key handlers hold, and the
-key handlers release it before calling back into the title.
+A title edits a `List`, `ChoiceGroup`, `Form`, `Item`, `Alert` or `Ticker` from
+its own threads as freely as from a callback, while the Host paints that
+content and moves through it on a key. The natives that read or change it
+therefore run under the same lock (`textMu`) the painter and the key handlers
+hold, and the key handlers release it before calling back into the title.
 
 ## Commands, soft keys, and the menu
 

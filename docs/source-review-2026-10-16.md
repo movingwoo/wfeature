@@ -51,7 +51,9 @@ was checked on a copy of 372 real debug save folders with no difference in any
 key or byte.
 
 The review of PR #234 found 15 more defects in that work, all fixed on the same
-branch; see [Review of PR #234](#review-of-pr-234-2026-10-17).
+branch; see [Review of PR #234](#review-of-pr-234-2026-10-17). The limits the
+fixes left were taken up on 2026-10-17; see [Follow-up of the remaining
+limits](#follow-up-of-the-remaining-limits-2026-10-17).
 
 Real-game acceptance over the local corpus of 532 archives: after the first
 round every archive reached the same rung as on `dcb8c27` except three SKT
@@ -5590,7 +5592,9 @@ pin the new behavior instead.
 ## Remaining limits found while fixing
 
 The fixes surfaced these limits, none of them a reviewed finding. Each is a
-candidate for later work, and the TODO lists them.
+candidate for later work, and the TODO lists them. The ones the TODO listed were
+taken up on 2026-10-17; see [Follow-up of the remaining
+limits](#follow-up-of-the-remaining-limits-2026-10-17).
 
 - **Host names (R125).** Passed by decision. Closing DNS rebinding needs an
   operator-configured host list (for example a `-hosts` option or
@@ -5640,6 +5644,146 @@ candidate for later work, and the TODO lists them.
   event restores, and playing it marks the recorder invalid as before.
 - **gdb stub.** A manual session (break, continue, Ctrl-C, detach, reconnect)
   has not been run against a real gdb client.
+
+## Follow-up of the remaining limits (2026-10-17)
+
+The limits above that the TODO listed were taken up on 2026-10-17 on the branch
+`fix/review-followups-2026-10-17`, from `eb93831` (`main` after #234). Every
+code change came with a regression test first run against `eb93831`. Host names
+(R125), the earlier SKT quick saves and the audio leftover were not on that
+list and are unchanged.
+
+The gates pass: gofmt, go vet (default, debug and Windows), make test, make
+test-debug and go test -race ./internal/.... Every local archive (536) ran 500
+ticks with `eb93831` and with the branch: every LGT title ended on the same
+frame, and the KTF and SKT titles that did not varied as much when `eb93831`
+was run twice (an animation's phase under load). A sample of 50 archives
+through the stages of `make acceptance` reached the same rung on both.
+
+- **Case conversion (R118).** Fixed. The save store also writes by its number
+  (`#+` and six hex digits) every character a host folds or refuses: a
+  character outside ASCII that Unicode normalization changes or joins to the
+  one before it, seven Greek capitals that normalization turns into others, the
+  controls below 0x20 and `<>:"\|?*`, a `.` or space at the end of a segment,
+  and the first letter of a Windows device name (`con`, `prn`, `aux`, `nul`,
+  `conin$`, `conout$`, `com0` to `com9`, `lpt0` to `lpt9`, and `com` or `lpt`
+  with `¹`, `²` or `³`). Every encoded name is its own NFC form. On the APFS
+  volume of the development Mac each raw pair (`é` and `e`+U+0301, `;` and
+  U+037E, U+F900 and U+8C48, `가` and its jamo, `が` and `か`+U+3099, U+0386
+  and U+1FBB) was one file and each pair of their encoded names two. A name
+  reads back as a key only when that key is written as exactly that name, so
+  the encoding is a bijection. A key with a segment longer than 255 bytes once
+  written out has no save: a read finds none, and a write, a batch or a restore
+  is refused up front with the limit named, where the file system's error used
+  to reach a KTF title as a failed read that blocked every later save of the
+  session; a name an earlier build stored stays readable and writable where it
+  is. A v0.5.2 folder converts the new names on its first use; a folder the
+  first form of the encoding (`eb93831`) converted keeps its record,
+  `.wfeature-names#1`, reads that form's names as their keys and moves each one
+  when it is read. A copy of the 372 real debug save folders (1,196 keys)
+  converted from v0.5.2 and from the first form with no mismatch. An earlier
+  version opened on a converted folder still does not find names with a changed
+  character, which the release notes say.
+- **SKT file names.** `FileSystem.remove` of a missing name, or of one it cannot
+  remove, throws the specification's `IOException`; `XFile.unlink` keeps
+  answering 0 and -1. A scan of the 91 distinct local SKT archives found 3
+  `remove` call sites, each behind the title's own existence check and inside a
+  handler, and 44 `unlink` call sites in 17 titles, each discarding the answer
+  ([SKVM](skvm.md)).
+- **LGT files.** Fixed, with the on-disk layout and the record formats
+  unchanged:
+  - The database index is no guest path: `fileSaveKey` refuses
+    `__databases__.db` and anything beneath it, the index is read and written
+    by its own key, and `openDataBase` refuses the name `__databases__`.
+  - A `File.close`, a stream's flush or a stream's close that the store refuses
+    throws the `IOException` each declares, as SKT's WIPI streams do, and the
+    `File` stays open with the write waiting. Closing a closed `File` is
+    nothing, where it stopped the run.
+  - A `DataBase` the collector reclaims while it holds a write the store
+    refused is stored at once, or kept for the ending, the quick steps and the
+    next open of the database. A reclaimed `File` was already stored at its
+    close or kept its handle.
+  - The created and removed lists record and read only paths that have a save
+    key.
+  - A session with no store keeps what it stores in memory for the session, up
+    to 64 MiB, so a write is seen after its close.
+  - A save whose name differs only by case from a packaged file is recorded in
+    the created list, and `MC_fsList` shows it.
+  - A stream holds its file open after its `File` closes, reading or writing the
+    file as it is now until the stream closes.
+- **LGT threads.** Fixed. The 16-thread bound counts the stacks handed out and
+  is met at every `Thread.start`, whichever way the thread was built, so no
+  session maps more stacks than a checkpoint restores. A start past it throws
+  an `OutOfMemoryError` the title can catch, and building a `Thread` is not
+  counted. No local Java title ran more than two threads at once.
+- **iOS save import.** `Info.plist` exports `com.movingwoo.wfeature.save-backup`
+  for `.wfs`, conforming to `public.data`, with no MIME type. The WebKit of the
+  iOS 26.5 simulator maps an accepted extension through its MIME type and offers
+  every file when none maps, so a backup was not greyed out there; the picker
+  has not been looked at on a phone.
+- **Android.** Fixed. `onDestroy` removes and destroys the activity's web view,
+  whether the activity is rebuilt or finished. A finished activity's server is
+  kept until it exits, and the next activity starts a server only after that,
+  with no time limit; the start-up wait takes `/api/status` only from a wfeature
+  server that is a child of the app. BACK on a task started from the launcher
+  was exercised: it only stops the activity, and the game stays parked through
+  the app's freeze and drains once at shutdown. The lifecycle harness passed 19
+  of 19 checks three times, and `eb93831` failed its old-page and relaunch
+  checks.
+- **Cheat console.** Fixed. The web host answers only the panel's operations: a
+  text console line from a page is refused as an unknown operation, and only a
+  test server (`Server.textConsole`) runs one. A refused unknown-value search
+  already reached the page as an error in the panel's Korean words, which the
+  page shows in its message popup above the panels; a test now pins the server
+  half.
+- **SKT LCDUI.** Fixed. The Ticker natives run under `textMu`; the vendor
+  XTextField keypad path applies the constraints its constructor states, as
+  TextBox does (an UNEDITABLE field takes no key, a numeric one stays in digit
+  mode); `EventQueue.SOFT3` is declared as 92; getRGBPixels writes each array
+  element once with the same result, so overlapping rows cost at most the array.
+- **Save owner migration** (all three platforms since P07). Fixed. An earlier
+  owner whose directory a stopped quick load set aside is settled first and
+  then moved; nothing is merged into an existing owner directory.
+- **JVM.** Fixed. Initializing a class now initializes, after its superclass,
+  each superinterface that declares a default method, its own superinterfaces
+  first (JVMS 5.5). The VM accepts class files up to version 70, so a title
+  could have one; the 2,232 local class files are versions 45.3 to 47.0 and
+  none does. Calling a default method is still not implemented. Each VM has a
+  heap budget (`Options.MaxHeapBytes`, 256 MiB by default): objects, arrays,
+  library strings and StringBuffer storage are charged through sampled weak
+  pointers, an allocation that would pass it after a collection throws a
+  catchable `OutOfMemoryError`, and a restored heap is not charged, so a
+  checkpoint always loads. The largest live heap measured over 93 SKT and 294
+  KTF runs was 10 MB, and the cost per allocation is one atomic subtraction
+  outside a sample.
+- **gdb stub.** A session with lldb 2103, which speaks the GDB remote protocol,
+  ran on a KTF title: break, continue to the breakpoint, Ctrl-C (stopped in 0.17
+  s), detach with the game running on, and reconnect. It found that a client
+  connecting to a running game was told it had stopped while the game ran on,
+  and read an empty register file; `?` now stops the game at its next
+  instruction. lldb needs a target definition for the classic ARM register
+  file, which the stub does not describe ([CLI](cli.md)); gdb itself was not
+  run.
+
+These follow-ups left limits of their own:
+
+- LGT: `Thread.start` on a thread already started ends the session, because the
+  specification's `IllegalThreadStateException` is not in the platform's class
+  set. `DataBase` insert, update and close still take a refused store without an
+  exception, since a title that retries an insert would add the record twice. A
+  refused emptying or creation at an open is not reported to the title. A
+  title's own `DataInputStream` around `File.openInputStream()` does not follow
+  the file.
+- KTF's and LGT's `FileSystem.remove` of a missing name throw nothing.
+- SKT `getRGBPixels` and `setRGBPixels` read their last argument as an element
+  stride where the specification says bytes per line; the one local title that
+  has them passes 1, from a method nothing calls. A `getstatic` of a field the
+  platform does not declare reads 0 without an error, which is how the missing
+  `SOFT3` went unnoticed.
+- A new key with a segment longer than 255 bytes once written out (more than
+  127 upper-case letters, or more than 31 characters written by their number)
+  is refused where v0.5.2 stored it under its raw name; no local key is near
+  it.
 
 ## Refuted
 

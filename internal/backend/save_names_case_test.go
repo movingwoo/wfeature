@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // The record an encoded save directory holds, in the notation of
@@ -68,9 +70,10 @@ func TestSaveNamesSpellOutCase(t *testing.T) {
 	}
 }
 
-// Every rune survives the round trip, before and after a '#', and what the
-// encoding writes holds no letter a file system that ignores case would take
-// for another without a '#' before it.
+// Every rune survives the round trip, before and after a '#' and alone, and
+// what the encoding writes holds no letter a file system that ignores case
+// would take for another without a '#' before it, is its own NFC form, and
+// holds nothing Windows refuses or drops.
 func TestEverySaveNameReadsBack(t *testing.T) {
 	for r := rune(0); r <= unicode.MaxRune; r++ {
 		if !utf8.ValidRune(r) {
@@ -81,6 +84,21 @@ func TestEverySaveNameReadsBack(t *testing.T) {
 		decoded, ok := decodeSaveName(encoded)
 		if !ok || decoded != name {
 			t.Fatalf("%q is written %q and reads back as %q (%t)", name, encoded, decoded, ok)
+		}
+		// What Windows drops from the end of a name is ASCII.
+		written := []string{encoded}
+		if r < utf8.RuneSelf {
+			alone := encodeSaveName(string(r))
+			if decoded, ok := decodeSaveName(alone); !ok || decoded != string(r) {
+				t.Fatalf("%q is written %q and reads back as %q (%t)", string(r), alone, decoded, ok)
+			}
+			written = append(written, alone)
+		}
+		for _, written := range written {
+			if !norm.NFC.IsNormalString(written) || strings.ContainsAny(written, "<>:\"\\|?*") || strings.IndexFunc(written, func(r rune) bool { return r < 0x20 }) >= 0 ||
+				strings.HasSuffix(written, ".") || strings.HasSuffix(written, " ") {
+				t.Fatalf("%q is written %q, which a host changes or refuses", string(r), written)
+			}
 		}
 		if saveNameEncodes(r) && !strings.Contains(encoded, "#"+string(r)) {
 			t.Fatalf("%q is written %q, which leaves %q bare", name, encoded, r)

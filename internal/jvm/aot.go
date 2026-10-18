@@ -207,9 +207,15 @@ func StringText(object *Object) (string, bool) {
 
 // NewString creates a fresh runtime-owned java/lang/String object. Use
 // InternString for native constants that must share bytecode literal identity.
+//
+// The string is charged to the heap budget and never refused, because a Host
+// call that builds one has no way to fail; the guest is refused at its own
+// next allocation instead.
 func (vm *VM) NewString(value string) *Object {
 	object := nativeStringValue(value)
 	if vm != nil {
+		weight, _ := vm.heap.charge(stringHeapBytes+int64(len(value)), false)
+		vm.recordHeapObject(weight, object)
 		vm.objectIdentity(object)
 	}
 	return object
@@ -241,6 +247,9 @@ func (vm *VM) NewAOTInstance(classAddress uint32) (*Object, error) {
 		return nil, fmt.Errorf("AOT class %s is an array class", metadata.Name)
 	}
 	object := &Object{ClassName: metadata.Name, Fields: make(map[string]Value)}
+	// Charged and never refused, as NewAOTArray's elements are.
+	weight, _ := vm.heap.charge(objectHeapBytes, false)
+	vm.recordHeapObject(weight, object)
 	vm.objectIdentity(object)
 	return object, nil
 }
@@ -266,7 +275,10 @@ func (vm *VM) NewAOTArray(classAddress, length uint32) (*Object, error) {
 	if length > 1<<31-1 {
 		return nil, fmt.Errorf("array size %d exceeds signed JVM length range", length)
 	}
-	return vm.newArray(*typeInfo.Component, int32(length))
+	// The heap budget charges this array and never refuses it. The platform's
+	// own arena bounds what its guest allocates, and a refusal here would reach
+	// the platform as an error rather than reach the guest as an exception.
+	return vm.makeArray(*typeInfo.Component, int32(length), false)
 }
 
 // aotBinding pairs a guest address with the Go object behind it. The strong

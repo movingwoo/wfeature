@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
@@ -158,6 +159,79 @@ func TestScreenEditsFromAGuestThreadDoNotRaceTheHost(t *testing.T) {
 	}
 }
 
+// A Ticker's text is screen content the Host paints, so its natives wait for
+// the lock the painter holds, and a title's thread changing it while the
+// screen is painted is no race.
+func TestTickerNativesTakeTheScreenLock(t *testing.T) {
+	runtime := startUIFixture(t)
+	invokeFixtureVoid(t, runtime, "UIMIDlet", "showMenu")
+	menu := fixtureStatic(t, runtime, "menu", "Ljavax/microedition/lcdui/List;")
+	value, err := runtime.VM.InvokeVirtual(menu, "getTicker", "()Ljavax/microedition/lcdui/Ticker;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticker, err := value.Reference()
+	if err != nil || ticker == nil {
+		t.Fatalf("getTicker() = %v, %v", ticker, err)
+	}
+	text := func(value string) jvm.Value { return jvm.ReferenceValue(runtime.VM.NewString(value)) }
+	for _, call := range []struct {
+		name string
+		run  func() error
+	}{
+		{"new Ticker", func() error {
+			_, err := runtime.VM.NewObject(midp.TickerClass, "(Ljava/lang/String;)V", text("new"))
+			return err
+		}},
+		{"getString", func() error {
+			_, err := runtime.VM.InvokeVirtual(ticker, "getString", "()Ljava/lang/String;")
+			return err
+		}},
+		{"setString", func() error {
+			_, err := runtime.VM.InvokeVirtual(ticker, "setString", "(Ljava/lang/String;)V", text("set"))
+			return err
+		}},
+	} {
+		runtime.textMu.Lock()
+		done := make(chan error, 1)
+		go func() { done <- call.run() }()
+		select {
+		case err := <-done:
+			runtime.textMu.Unlock()
+			t.Fatalf("%s returned (%v) while the screen lock was held", call.name, err)
+		case <-time.After(50 * time.Millisecond):
+		}
+		runtime.textMu.Unlock()
+		if err := <-done; err != nil {
+			t.Fatalf("%s error = %v", call.name, err)
+		}
+	}
+
+	var guest sync.WaitGroup
+	guest.Add(1)
+	failures := make(chan error, 1)
+	go func() {
+		defer guest.Done()
+		for round := 0; round < 200; round++ {
+			if _, err := runtime.VM.InvokeVirtual(ticker, "setString", "(Ljava/lang/String;)V", text(strings.Repeat("t", round%7))); err != nil {
+				failures <- err
+				return
+			}
+		}
+	}()
+	for round := 0; round < 200; round++ {
+		if err := runtime.RunPending(); err != nil {
+			t.Fatalf("RunPending() error = %v", err)
+		}
+	}
+	guest.Wait()
+	select {
+	case err := <-failures:
+		t.Fatalf("setString error = %v", err)
+	default:
+	}
+}
+
 // The keypad types what a TextBox's constraint allows: digits in a NUMERIC
 // box rather than the letters on the key, and nothing in an UNEDITABLE one.
 func TestKeypadHonoursTextBoxConstraints(t *testing.T) {
@@ -179,6 +253,48 @@ func TestKeypadHonoursTextBoxConstraints(t *testing.T) {
 	pressKey(t, runtime, '#')
 	if text := fixtureString(t, runtime, "UIMIDlet", "typedText"); text != "225" {
 		t.Fatalf("UNEDITABLE typedText() = %q, want it unchanged", text)
+	}
+}
+
+// The vendor XTextField's keypad follows the constraint its constructor
+// states, as a TextBox does: a numeric field types the digit on the key even
+// after the mode key, and an UNEDITABLE one takes no edit and no caret move.
+func TestKeypadHonoursXTextFieldConstraints(t *testing.T) {
+	runtime := startUIFixture(t)
+	invokeFixtureVoid(t, runtime, "UIMIDlet", "showBuffer")
+	owner := runtime.currentDisplayable
+	press := func(field *jvm.Object, keys ...int32) string {
+		t.Helper()
+		for _, key := range keys {
+			if _, err := runtime.VM.InvokeVirtual(field, "keyPressed", "(I)V", jvm.IntValue(key)); err != nil {
+				t.Fatalf("keyPressed(%d) error = %v", key, err)
+			}
+		}
+		data, _ := nativeXTextField(field)
+		runtime.textMu.Lock()
+		defer runtime.textMu.Unlock()
+		return string(data.text)
+	}
+
+	for _, constraint := range []int32{textFieldNumeric, textFieldPhoneNumber, textFieldDecimal, textFieldNumeric | midpTextFieldPassword} {
+		field := newXTextField(t, runtime, owner, "", 8, constraint)
+		if text := press(field, '2', '2', '5', '*', '3'); text != "2253" {
+			t.Fatalf("constraint %#x typed %q, want %q", constraint, text, "2253")
+		}
+	}
+
+	field := newXTextField(t, runtime, owner, "ro", 8, textFieldUneditable)
+	if text := press(field, '7', '#', KeyCodeClear, KeyCodeLeft, '2'); text != "ro" {
+		t.Fatalf("UNEDITABLE field typed %q, want it unchanged", text)
+	}
+	if data, _ := nativeXTextField(field); data.textRevision != 0 {
+		t.Fatalf("UNEDITABLE field revision = %d, want no edit recorded", data.textRevision)
+	}
+
+	// A field with no constraint still types letters.
+	field = newXTextField(t, runtime, owner, "", 8, 0)
+	if text := press(field, '2'); text != "a" {
+		t.Fatalf("ANY field typed %q, want %q", text, "a")
 	}
 }
 

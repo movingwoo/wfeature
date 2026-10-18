@@ -53,7 +53,12 @@ and set-aside generation the save store keeps for that name in
 leaves a directory a session or tool has claimed for the next start, and it
 does so only when the mapped directory does not exist yet, never merges into
 or replaces one that does, and never follows a raw name that is not one
-directory directly below the root (`.` and `..` included). A Host calls it,
+directory directly below the root (`.` and `..` included). An earlier build's
+quick load that stopped under the raw name between its two renames left no
+directory there, only the saves it set aside and its record in
+`.wfeature-quicksave/owners/<raw>/`; the move puts them back first, as the save
+store does on its first operation, and then moves them, and the raw name is
+where saves are read from until it has. A Host calls it,
 with the earlier owner `session.Inspect` already found, before it claims the
 title's save directory; a quick-load check, which runs before a start and
 without the claim, only reads the slot where it is.
