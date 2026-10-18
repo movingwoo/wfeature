@@ -49,17 +49,17 @@ each entry is the authoritative index; this table groups them by fix.
 
 | Fix | Entries | Effect | Evidence |
 | --- | --- | --- | --- |
-| `skt.inclusive_set_clip` | 2 | MIDP `Graphics.setClip` treats extents as inclusive | [below](#skt-skt-original-specific-clip-compatibility), [SKT QA](skt-qa-2026-09-29.md#inclusive-tile-clipping) |
-| `skt.resume_without_start` | 2 | Preserves a live game whose start callback would recreate it | [SKT resume](skt-resume-2026-09-30.md), [SKT QA](skt-qa-2026-09-29.md) |
-| `skt.tutorial_name_cache` | 1 | Clears a stale item-name cache at a tutorial transition | [tutorial reproduction](gameplay-qa-2026-09-20.md#skt-tutorial-reproduction) |
+| `skt.inclusive_set_clip` | 2 | MIDP `Graphics.setClip` treats extents as inclusive | [below](#skt-skt-original-specific-clip-compatibility), [SKT QA](history/skt.md#skt-qa-2026-09-29-inclusive-tile-clipping) |
+| `skt.resume_without_start` | 2 | Preserves a live game whose start callback would recreate it | [SKT resume](history/skt.md#skt-resume-2026-09-30), [SKT QA](history/skt.md#skt-qa-2026-09-29) |
+| `skt.tutorial_name_cache` | 1 | Clears a stale item-name cache at a tutorial transition | [tutorial reproduction](history/skt.md#gameplay-qa-2026-09-20-skt-tutorial-reproduction) |
 | `lgt.visible_framebuffer_origin` | 1 | Removes a Clet's 24-row display-strip addition in initialization code | [below](#lgt-lgt-visible-framebuffer-origin-2026-09-15) |
-| `lgt.direct_framebuffer_origin` | 1 | Removes the strip offset used by direct pixel writers | [LGT QA](lgt-qa-2026-09-21.md#direct-framebuffer-origin) |
-| `lgt.image_framebuffer_origin` | 1 | Removes the strip offset from a native image path | [LGT QA](lgt-qa-2026-09-21.md#image-path-origin) |
-| `lgt.color_key_sample_origin` | 1 | Aligns a native transparency calibration sample | [LGT QA](lgt-qa-2026-09-21.md#transparency-calibration-origin) |
+| `lgt.direct_framebuffer_origin` | 1 | Removes the strip offset used by direct pixel writers | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-direct-framebuffer-origin) |
+| `lgt.image_framebuffer_origin` | 1 | Removes the strip offset from a native image path | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-image-path-origin) |
+| `lgt.color_key_sample_origin` | 1 | Aligns a native transparency calibration sample | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-transparency-calibration-origin) |
 | `lgt.wide_graphics_context` | 4 | Selects the 56-byte graphics context ABI instead of the compact default | [below](#lgt-wide-graphics-context) |
-| `lgt.wide_exclusive_clip` | 1 | Keeps the wide context's clip ends exclusive | [LGT QA](lgt-qa-2026-09-21.md#second-color-report-wide-context-proof) |
-| `lgt.save_subscriber_identity` | 1 | Lets a recognized save reader accept a foreign subscriber identity | [LGT QA](lgt-qa-2026-09-21.md#save-subscriber-comparison) |
-| `lgt.certificate_message` | 1 | Selects the recognized two-stage local certificate exchange | [LGT QA](lgt-qa-2026-09-21.md#certificate-message-compatibility) |
+| `lgt.wide_exclusive_clip` | 1 | Keeps the wide context's clip ends exclusive | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-second-color-report-wide-context-proof) |
+| `lgt.save_subscriber_identity` | 1 | Lets a recognized save reader accept a foreign subscriber identity | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison) |
+| `lgt.certificate_message` | 1 | Selects the recognized two-stage local certificate exchange | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility) |
 
 `skt.tutorial_name_cache` replaces a redundant phase assignment in an in-memory
 class copy when one verified code revision returns from its tutorial equipment
@@ -270,6 +270,6 @@ setter computes `x + width` and `y + height` and its direct blitter treats them
 as exclusive ends, while the earlier wide revisions keep their evidenced
 inclusive convention. Field offsets,
 direct callbacks, selection boundaries and acceptance status are in the
-[first layout evidence](lgt-qa-2026-09-20.md#wide-graphics-context), the
-[third revision](lgt-qa-2026-09-21.md#blank-rendering-and-context-layout) and the
-[exclusive-clip proof](lgt-qa-2026-09-21.md#second-color-report-wide-context-proof).
+[first layout evidence](history/lgt.md#lgt-qa-2026-09-20-wide-graphics-context), the
+[third revision](history/lgt.md#lgt-qa-2026-09-21-blank-rendering-and-context-layout) and the
+[exclusive-clip proof](history/lgt.md#lgt-qa-2026-09-21-second-color-report-wide-context-proof).

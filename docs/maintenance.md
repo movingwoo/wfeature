@@ -44,13 +44,13 @@ Three questions are open only in dated records and have not been rechecked:
   guest speed at 4.4 fps and 57.1 ms per tick) and a later severe window down to
   0.06x (635.6 ms per tick) before recovering; a CLI replay and a WebSocket
   replay did not reproduce it
-  ([gameplay QA](gameplay-qa-2026-09-20.md#outstanding-investigation)).
+  ([gameplay QA](history/skt.md#gameplay-qa-2026-09-20-outstanding-investigation)).
 - A KTF C title advances gameplay faster than expected; extra card paints were
   excluded as the cause, and its timer and update loop were not investigated
-  ([KTF QA](ktf-qa-2026-09-21.md#speed-and-text-evidence-still-open)).
+  ([KTF QA](history/ktf.md#ktf-qa-2026-09-21-speed-and-text-evidence-still-open)).
 - A guest callback that blocks has no out-of-band way to export a report; the
   one evidenced key-callback wait was fixed separately
-  ([LGT key callback hang](lgt-key-callback-hang-2026-09-23.md)).
+  ([LGT key callback hang](history/lgt.md#lgt-key-callback-hang-2026-09-23)).
 
 Questions that wait for evidence rather than work:
 
@@ -66,7 +66,7 @@ Questions that wait for evidence rather than work:
 - The alternative LGT 52-byte graphics context needs field offsets and a
   discriminator. The KTF native environment return is established for tag-2
   word results only
-  ([KTF QA](ktf-qa-2026-09-21.md#native-environment-return-and-the-slow-case));
+  ([KTF QA](history/ktf.md#ktf-qa-2026-09-21-native-environment-return-and-the-slow-case));
   other tags and wide returns need address, width, initialization and validity
   rules. Neither is a reproduced defect with a known repair. See [KTF](ktf.md),
   [LGT](lgt.md) and [runtime validation](testing.md#runtime-boundary-regressions).

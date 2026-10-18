@@ -34,7 +34,7 @@ Two recognized class sets recreate their Canvas and workers on every
 `startApp`, despite leaving the previous workers alive on pause. Their resume
 correction (`skt.resume_without_start`) retains a successful initial start;
 ordinary MIDP reactivation and deferred initial starts still invoke the
-callback. See the [retained-session investigation](skt-resume-2026-09-30.md).
+callback. See the [retained-session investigation](history/skt.md#skt-resume-2026-09-30).
 
 Thread state belongs to the Thread object. Only active threads and the main
 thread remain roots; completion and failed starts preserve restart prohibition
@@ -83,7 +83,7 @@ font, repaint, clipping, and input contracts. Normal clipping is count-based.
 limits producer loops to 60 refreshes per guest second, scaled by the selected
 speed. This supplies pacing for loops without sleeps; slower drawing already
 counts toward the interval. See the
-[gameplay QA evidence](gameplay-qa-2026-09-20.md#skt-refresh-driven-speed).
+[gameplay QA evidence](history/skt.md#gameplay-qa-2026-09-20-skt-refresh-driven-speed).
 An exact Java-class fingerprint can enable the recorded inclusive `setClip`
 exception; a legacy profile string alone cannot. The selected correction does
 not change WIPI Graphics, `clipRect`, fills, or image dimensions. See
@@ -113,9 +113,9 @@ Repaints requested from a serial Runnable wait for the next Host pass and run
 before the next Runnable. This lets paint consume input arriving between
 animation updates. MIDP Canvas callbacks receive handset code `190` for the
 Host's Call key (`10`); WIPI Cards receive `-10`. See the
-[input and tile investigation](skt-qa-2026-09-29.md) for reproduction and tests.
+[input and tile investigation](history/skt.md#skt-qa-2026-09-29) for reproduction and tests.
 The Call mapping was also exercised in two additional games; the
-[cross-archive audit](skt-qa-2026-09-29.md#cross-archive-call-verification)
+[cross-archive audit](history/skt.md#skt-qa-2026-09-29-cross-archive-call-verification)
 records the evidence and its limits. It is an observed handset mapping, not a
 universal MIDP Call constant. A Canvas without MIDP commands receives the first
 soft key as menu code `129`. A Jlet session translates Host keys once into the

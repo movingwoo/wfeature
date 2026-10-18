@@ -11,7 +11,7 @@
       "fixes": [
         "skt.resume_without_start"
       ],
-      "evidence": "docs/skt-resume-2026-09-30.md"
+      "evidence": "docs/history/skt.md#skt-resume-2026-09-30"
     },
     {
       "id": "skt-inclusive-clip-002",
@@ -24,7 +24,7 @@
         "skt.inclusive_set_clip",
         "skt.resume_without_start"
       ],
-      "evidence": "docs/skt-qa-2026-09-29.md"
+      "evidence": "docs/history/skt.md#skt-qa-2026-09-29"
     },
     {
       "id": "skt-inclusive-clip-001",
@@ -60,7 +60,7 @@
       "fixes": [
         "skt.tutorial_name_cache"
       ],
-      "evidence": "docs/gameplay-qa-2026-09-20.md#skt-tutorial-reproduction"
+      "evidence": "docs/history/skt.md#gameplay-qa-2026-09-20-skt-tutorial-reproduction"
     },
     {
       "id": "lgt-wide-context-001",
@@ -72,7 +72,7 @@
       "fixes": [
         "lgt.wide_graphics_context"
       ],
-      "evidence": "docs/lgt-qa-2026-09-20.md#wide-graphics-context"
+      "evidence": "docs/history/lgt.md#lgt-qa-2026-09-20-wide-graphics-context"
     },
     {
       "id": "lgt-wide-context-002",
@@ -84,7 +84,7 @@
       "fixes": [
         "lgt.wide_graphics_context"
       ],
-      "evidence": "docs/lgt-qa-2026-09-20.md#wide-graphics-context"
+      "evidence": "docs/history/lgt.md#lgt-qa-2026-09-20-wide-graphics-context"
     },
     {
       "id": "lgt-wide-context-003",
@@ -96,7 +96,7 @@
       "fixes": [
         "lgt.wide_graphics_context"
       ],
-      "evidence": "docs/lgt-qa-2026-09-21.md#blank-rendering-and-context-layout"
+      "evidence": "docs/history/lgt.md#lgt-qa-2026-09-21-blank-rendering-and-context-layout"
     },
     {
       "id": "lgt-direct-origin-001",
@@ -108,7 +108,7 @@
       "fixes": [
         "lgt.direct_framebuffer_origin"
       ],
-      "evidence": "docs/lgt-qa-2026-09-21.md#direct-framebuffer-origin"
+      "evidence": "docs/history/lgt.md#lgt-qa-2026-09-21-direct-framebuffer-origin"
     },
     {
       "id": "lgt-image-origin-001",
@@ -120,7 +120,7 @@
       "fixes": [
         "lgt.image_framebuffer_origin"
       ],
-      "evidence": "docs/lgt-qa-2026-09-21.md#image-path-origin"
+      "evidence": "docs/history/lgt.md#lgt-qa-2026-09-21-image-path-origin"
     },
     {
       "id": "lgt-color-key-origin-001",
@@ -132,7 +132,7 @@
       "fixes": [
         "lgt.color_key_sample_origin"
       ],
-      "evidence": "docs/lgt-qa-2026-09-21.md#transparency-calibration-origin"
+      "evidence": "docs/history/lgt.md#lgt-qa-2026-09-21-transparency-calibration-origin"
     },
     {
       "id": "lgt-wide-context-004",
@@ -145,7 +145,7 @@
         "lgt.wide_graphics_context",
         "lgt.wide_exclusive_clip"
       ],
-      "evidence": "docs/lgt-qa-2026-09-21.md#second-color-report-wide-context-proof"
+      "evidence": "docs/history/lgt.md#lgt-qa-2026-09-21-second-color-report-wide-context-proof"
     },
     {
       "id": "lgt-save-subscriber-001",
@@ -157,7 +157,7 @@
       "fixes": [
         "lgt.save_subscriber_identity"
       ],
-      "evidence": "docs/lgt-qa-2026-09-21.md#save-subscriber-comparison"
+      "evidence": "docs/history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison"
     },
     {
       "id": "lgt-certificate-message-001",
@@ -169,7 +169,7 @@
       "fixes": [
         "lgt.certificate_message"
       ],
-      "evidence": "docs/lgt-qa-2026-09-21.md#certificate-message-compatibility"
+      "evidence": "docs/history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility"
     }
   ]
 }

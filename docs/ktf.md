@@ -40,7 +40,7 @@ start-up filled and that nothing later writes
 The JVM context sits beside an ordinary image so representable object-header
 displacements retain canonical image class addresses during compiled access
 checks. Runtime aliases and inherited field payloads are described in the
-[startup compatibility investigation](startup-compatibility-2026-09-19.md#ktf-startup-exception-1379b56de66e).
+[startup compatibility investigation](history/ktf.md#startup-compatibility-2026-09-19-ktf-startup-exception-1379b56de66e).
 
 Guest workers can park with nested Go/ARM calls intact. Host callbacks and
 worker execution use bounded instruction windows. AOT nesting is bounded per
@@ -56,7 +56,7 @@ environment instead of `r0`: it writes the value at offset 40, then tag 2 at
 offset 36 (`native_return.go`). The tag is cleared on entry, a nested scope
 restores its caller's tag and value, and older modules, absent tags and other
 tags keep the register return. Other tags and a wide environment return remain
-unconfirmed ([evidence](ktf-qa-2026-09-21.md#native-environment-return-and-the-slow-case)).
+unconfirmed ([evidence](history/ktf.md#ktf-qa-2026-09-21-native-environment-return-and-the-slow-case)).
 Existing helper stacks retain their arena lifetime. The argument container of
 a native-form call — the Host's call into a native body and an older module's
 native invoke — is cleared and returned to the arena when that call returns,
@@ -173,7 +173,7 @@ copy returns ([history](history/ktf.md#implementation-a-packaged-database-is-pac
 A saved file can share its name with a packaged resource directory. A lookup
 below that saved file falls through to the archive without recording a storage
 failure. The bounded local slot service also accepts the first, zero-based
-slot ([evidence](ktf-save-slots-2026-09-23.md)). The service answers the
+slot ([evidence](history/ktf.md#ktf-save-slots-2026-09-23)). The service answers the
 creation receipt with "no character yet", so the title asks the player for a
 name and registers it with one more request; see
 [A name the title asks for](history/ktf.md#implementation-a-name-the-title-asks-for).

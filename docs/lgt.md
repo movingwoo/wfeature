@@ -26,7 +26,7 @@ rejected.
 A unique outer `wrapper/<AID>/` directory is also exposed at the application
 root, after canonical packaged paths. Unrelated AIDs are excluded and ambiguous
 matching roots are rejected. These supplemental files keep the normal save
-override and deletion rules. See [supplemental-data QA](lgt-qa-2026-09-21.md#supplemental-directory-mounting).
+override and deletion rules. See [supplemental-data QA](history/lgt.md#lgt-qa-2026-09-21-supplemental-directory-mounting).
 
 The module parser accepts ELF32 little-endian ARM executables. Addressed
 sections share a bounded mapping that must end below the platform heap, and
@@ -54,7 +54,7 @@ references), the largest array the platform builds, and Java `putData` fills a
 clip to at most 4 MiB, answering the bytes taken. Checkpoint class records must
 carry an element width of 0, 1, 2, 4 or 8.
 The long-array store interface takes high then low words; long results and
-array storage are low-first. [ABI evidence](lgt-qa-2026-09-21.md#long-array-store-word-order)
+array storage are low-first. [ABI evidence](history/lgt.md#lgt-qa-2026-09-21-long-array-store-word-order)
 records the restored timed logo transition.
 
 A guest thread runs on a 1 MiB stack of its own, and a finished thread's stack
@@ -81,7 +81,7 @@ every 150, no title ran more than two threads at once or built more than four.
 
 Under allocation pressure, the decoded-image cache releases surfaces that no
 Image or Graphics object owns. Live owners and the existing memory limit are
-preserved. [Startup QA](lgt-qa-2026-09-21.md) records the regression and replay.
+preserved. [Startup QA](history/lgt.md#lgt-qa-2026-09-21) records the regression and replay.
 
 String indexing, lengths, substrings, char arrays, and StringBuffer mutations
 use UTF-16 units. Isolated surrogates survive through an internal WTF-8
@@ -107,7 +107,7 @@ unsupported methods. The Java library remains partial.
 Vector slot 26 implements `setElementAt(Object, int)`: it replaces one reference
 without resizing or shifting the list, permits null, and throws
 `ArrayIndexOutOfBoundsException` for an invalid index. See the
-[crash investigation](lgt-qa-2026-09-20.md#vector-replacement-crash).
+[crash investigation](history/lgt.md#lgt-qa-2026-09-20-vector-replacement-crash).
 
 ### Key callbacks waiting on workers
 
@@ -116,7 +116,7 @@ receive a slice at bounded compiler checkpoints inside such callbacks, except
 while the platform holds a monitor. Exception regions, jump buffers and native
 call depth belong to each worker across scheduling boundaries. The original
 instruction ceiling still bounds the callback. See the
-[gameplay hang investigation](lgt-key-callback-hang-2026-09-23.md) for the live
+[gameplay hang investigation](history/lgt.md#lgt-key-callback-hang-2026-09-23) for the live
 server evidence, failing input replay and corrected path.
 
 ## Display and input
@@ -131,10 +131,10 @@ Graphics contexts belong to guest memory. Supported drawing honors compact
 context origins, clips, overlapping self-blits, and nested pixel callbacks.
 Callback errors restore the client lock. Verified native revisions use a
 56-byte context with direct callbacks; the compatibility registry selects that
-ABI explicitly. See [rendering evidence](lgt-qa-2026-09-20.md#wide-graphics-context).
-The [later blank-screen investigation](lgt-qa-2026-09-21.md#blank-rendering-and-context-layout)
+ABI explicitly. See [rendering evidence](history/lgt.md#lgt-qa-2026-09-20-wide-graphics-context).
+The [later blank-screen investigation](history/lgt.md#lgt-qa-2026-09-21-blank-rendering-and-context-layout)
 adds another measured revision to that registry. One further
-[wide-context revision](lgt-qa-2026-09-21.md#second-color-report-wide-context-proof)
+[wide-context revision](history/lgt.md#lgt-qa-2026-09-21-second-color-report-wide-context-proof)
 uses exclusive clip ends in its direct image blitter; its exact fingerprint
 selects that convention, and earlier wide contexts retain inclusive stored
 ends. Arbitrary mixed compact/direct contexts and the previously proposed
@@ -143,10 +143,10 @@ alternate 52-byte layout remain unverified.
 The panel image follows the supported flush path. A revision-specific
 initialization correction removes verified 24-row strip offsets for exact
 native-module fingerprints, including direct-pixel and image-path revisions.
-The [direct-pixel investigation](lgt-qa-2026-09-21.md#direct-framebuffer-origin)
+The [direct-pixel investigation](history/lgt.md#lgt-qa-2026-09-21-direct-framebuffer-origin)
 records the restored dialogue bounds. It is not a platform-wide coordinate
 shift. A fingerprint-scoped
-[transparency calibration correction](lgt-qa-2026-09-21.md#transparency-calibration-origin)
+[transparency calibration correction](history/lgt.md#lgt-qa-2026-09-21-transparency-calibration-origin)
 aligns one native blitter's sample write with its 24-row-adjusted read, which
 prevents a black transparency key from copying magenta backgrounds into the
 field without changing the shared framebuffer origin.
@@ -330,7 +330,7 @@ from another handset when automatic authentication compatibility is enabled.
 The original length and checksum checks still run, and original files and the
 configured subscriber number remain unchanged. The CLI diagnostic opt-out
 (`-no-auth`) retains the original identity check. See the
-[save-reader evidence](lgt-qa-2026-09-21.md#save-subscriber-comparison).
+[save-reader evidence](history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison).
 
 One recognized native revision completes its two-stage certificate exchange
 through the same bounded local socket service. Requests must match the session
@@ -338,7 +338,7 @@ identity, model and observed protocol fields. The nonempty local message lets
 the guest set and save its own certificate-present flag. Responses are deferred
 to a service boundary; no external connection or carrier credential is created.
 Unknown exchanges still fail, and the authentication diagnostic opt-out disables
-this behavior. See the [protocol evidence](lgt-qa-2026-09-21.md#certificate-message-compatibility).
+this behavior. See the [protocol evidence](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility).
 
 MC_mdaClipFree returns a C clip's record to the platform arena. A clip keeps at
 most 64 undelivered callback transitions; a full queue drops the oldest. The C

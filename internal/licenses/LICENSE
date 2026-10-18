@@ -19,11 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This license covers this project's own source. It does not cover the
-third-party components this project bundles, each of which keeps its own
-license. `THIRD-PARTY-NOTICES.md` lists them and reproduces those licenses in
-full; the same file travels inside every release binary and is served at
-`/licenses`.

@@ -44,6 +44,9 @@ This consolidation adds no execution or acceptance evidence.
 - [Save and menu evidence](#followup-save-and-menu-evidence)
 - [Screen orientation evidence](#followup-screen-orientation-evidence)
 - [Native text input boundary](#followup-native-text-input-boundary)
+- [LGT rendering, input and pacing QA — 2026-09-20](#lgt-qa-2026-09-20)
+- [LGT startup, rendering, and media QA — 2026-09-21](#lgt-qa-2026-09-21)
+- [LGT key callback hang — 2026-09-23](#lgt-key-callback-hang-2026-09-23)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -1978,7 +1981,7 @@ fix both (`MC_grpDrawImage` at `0xd5`, `MC_grpDrawString` at `0xda`,
 A later caller identifies `MC_grpEncodeImage` at `0xed`: six arguments encode a
 framebuffer crop into an owned BMP buffer, immediately consumed by
 `CreateImage`. The second gap is therefore before that encoder, not between it
-and `PostEvent`. [Follow-up evidence](../startup-compatibility-2026-09-19.md#follow-up-entering-a-campaign).
+and `PostEvent`. [Follow-up evidence](ktf.md#startup-compatibility-2026-09-19-follow-up-entering-a-campaign).
 
 The call settles it without trusting the arithmetic:
 
@@ -6106,3 +6109,1367 @@ field or whole string for a later Host commit. Text drawn and edited by
 application code is opaque guest state. These paths report no supported active
 editor and need an established guest editing contract before support can be
 added.
+
+<a id="lgt-qa-2026-09-20"></a>
+
+## LGT rendering, input and pacing QA — 2026-09-20
+
+This investigation covers five reported archives. Local filenames are mapped to
+case numbers in ignored `build/qa-lgt-paths.json`; tracked evidence uses
+archive SHA-256 prefixes only. Original archives and user saves are preserved.
+Replay saves are under `var/savedata/qa-lgt-20260920/`.
+
+| Case | Archive SHA-256 prefix | Reported behavior | Final evidence |
+| --- | --- | --- | --- |
+| 1 | `6b515884dbc13ed8` | Black text backgrounds, map and status bars | Production wide-context replay restores town map, lettering and HP/MP bars. |
+| 2 | `34c48bbae783f11b` | Missing lettering and black lower-right area | Production replay restores both initial logos, title lettering and menu without the black corner. |
+| 3 | `442a4f59997e7574` | Magenta sprite edges and no sound | Battle replay reproduces mirrored magenta silhouettes; color-key fix removes them. Media-device advertisement restores audio events; Chromium receives them and produces a nonzero Web Audio output signal. |
+| 4 | `619d98bc8f64c3d4` | Name editor restricts Host entry to digits | Numeric-mode inference and output-only buffer convention identified and corrected; acceptance below. |
+| 5 | `735a579d82ac53bb` | Normal speed only while attacking; no sound | File-mode correction restores settings and music; removing unsolicited key paints gives 50 frames per 5 seconds both idle and attacking. |
+
+<a id="lgt-qa-2026-09-20-name-editor"></a>
+
+### Name editor
+
+The game enters its editor with a Korean default name, then calls
+`imSetCurrentMode(3)` from `0x3c227`, which selects `N123` in the returned
+mode table. The Host treated the keypad automaton as a field constraint,
+selected a numeric keyboard, and rejected Korean before calling the guest. The
+[WIPI input-method API](https://mirusu400.github.io/wipi-wiki/c-api/graphics.md)
+defines this mode as an index into the automaton's languages, not a widget
+validation rule. Host-composed text now bypasses the keypad restriction;
+ordinary numeric keypad events keep their behavior.
+
+That alone does not fix this archive. Its caller at `0x3c4ce..0x3c4f6`
+initializes two local five-byte strings, passes them at `sp+0x124` and
+`sp+0x11c`, and reads returned lengths at `sp+0x18` and `sp+0x14`, without
+initializing those lengths as capacities. This differs from the published
+input-capacity annotation and from the existing capacity-taking fixture;
+reading the uninitialized size as a capacity rejects even one Korean character
+in the observed run.
+
+The compatibility path recognizes that caller's complete argument setup and
+checks the live stack pointers. It supplies only the five bytes the caller's
+initialization evidences, independent of residual size values, and delivers at
+most four EUC-KR bytes per callback, keeping characters intact; further
+characters use successive callbacks through the same widget. Unrecognized
+callers still use their declared capacities, including zero. No archive name,
+module hash, fixed guest address, or blanket zero-size fallback selects this
+behavior, and the widget keeps its field-length and validation policy.
+
+Authored tests cover composition in every keypad mode, strict encoding,
+unchanged numeric key behavior, stale snapshots and atomic rejection for
+ordinary capacity-taking widgets. The output-only caller fixture also checks
+instruction mutations, mismatched stack arguments, ARM return addresses, large
+residual length words, character boundaries and a byte guard after each
+five-byte buffer.
+
+<a id="lgt-qa-2026-09-20-initial-graphics-investigation-superseded-by-the-wide-context-fix"></a>
+
+### Initial graphics investigation (superseded by the wide-context fix)
+
+Case 2's missing text is already visible in its initial connection-error
+dialog. The source glyph surface contains ink (163 pixels of RGB565 `0xfe4e`
+in the first diagnostic copy). Its destination context at `0x1500360` holds
+`0x6ea1` at byte offset 28, which the runtime read as an x translation of
+28,321 pixels, drawing outside the display.
+
+Disassembly shows `0x6ea1` is a color-key pixel callback: it compares the
+incoming second argument against a key read from guest globals and returns the
+first or the second argument. Several engine helpers store callback addresses
+directly at context offset 28 rather than through `MC_grpSetContext`, while
+the runtime expected an offset there and required callbacks at offset 32
+registered through that API.
+
+An ignored diagnostic overlay treating the observed word as a callback removed
+the bogus translation, and case 2's initial dialog then displayed its text and
+button label (`build/qa-lgt-2-baseline.png`, `build/qa-lgt-2-direct.png`;
+context values and disassembly in `build/qa-lgt-2-context.log`,
+`qa-lgt-2-disasm.txt` and `qa-lgt-2-helpers.txt`). That confirmed the
+mechanism, but the overlay was not merged: whether a word looks like a code
+pointer is not an unambiguous layout rule, and the specification treats
+`MC_GrpContext` as opaque. Because the callback reads mutable guest globals,
+the cache keyed only by function, parameter and pixel pair could not be
+assumed valid for it either. "Wide graphics context" below records the
+revision-selected layout that replaced it.
+
+<a id="lgt-qa-2026-09-20-mirrored-sprite-transparency"></a>
+
+### Mirrored sprite transparency
+
+Case 3 reaches a battle from an isolated copy of its existing save.
+Left-facing sprites keep their shape, while sprites the guest reflects show
+magenta silhouettes and missing ink; disabling the pixel-operation cache does
+not change this. The guest obtains an image framebuffer pointer, swaps
+two-byte RGB565 pixels horizontally through `memcpy`, draws the image, then
+reverses the swap. The runtime refreshed those pixels but kept the original
+positional alpha mask, so transparency no longer matched the reflected pixels.
+
+Decoded images now retain a color key when every transparent pixel has the
+same RGB565 value and no opaque pixel has that value, and drawing tests the
+current guest pixels against that key. Multiple transparent colors or a
+collision with opaque art, including collisions introduced by RGB565
+quantization, keep the positional mask. Opaque magenta remains visible when
+the encoding declares it so.
+
+The [graphics specification](https://mirusu400.github.io/wipi-wiki/c-api/graphics.md)
+describes an internal mask but not how it follows raw framebuffer edits. This
+follows the observed caller; it does not claim that all encoded alpha can be
+reconstructed from RGB565 memory.
+
+The authored reflection test fails before the change and passes afterward,
+including restoration of the original pixels; further tests preserve
+ambiguous masks. The same battle route loses the magenta silhouettes: compare
+`build/qa-lgt-3-cache-battle.png` with `build/qa-lgt-3-keyed-battle.png`.
+Replay commands and output are `build/qa-lgt-3-battle.commands` and
+`build/qa-lgt-3-keyed-replay.log`.
+
+<a id="lgt-qa-2026-09-20-audio-and-pacing-investigation"></a>
+
+### Audio and pacing investigation
+
+Case 3 asks for `MEDIADEVICES` before constructing its clips. The
+[WIPI system-information contract](https://mirusu400.github.io/wipi-wiki/hal/system.md)
+defines a comma-separated list that includes `Yamaha_MA3`. The runtime now
+advertises that device through both the C and Java property boundaries,
+matching the shared SMAF decoder; it does not advertise SMF/MIDI input
+support.
+
+The same isolated replay produces no notes without the property and a
+5,670-byte MIDI recording with it, over 700 ticks with fire inputs at ticks
+150, 400 and 550 (`build/qa-lgt-3-media-production.{log,png,mid}`). The later
+battle replay emits both MIDI and WAV. Authored tests read the property
+through both boundaries, check short-buffer refusal, create a clip with the
+returned device, and deliver a newly authored SMAF note to the Host audio
+sink. These establish restored audio events, not audible playback in a
+physical browser.
+
+The case 5 server report records 19.4 ticks/s, 16.098 ms average tick cost and
+0.97x guest speed. As a snapshot it neither establishes normal combat
+animation nor explains input-dependent speed; idle and attacking intervals
+have to be measured in the same combat state, and sound needs an actual
+playback path. Both are settled in the sections below.
+
+<a id="lgt-qa-2026-09-20-recorded-input-acceptance-and-gates"></a>
+
+### Recorded input acceptance and gates
+
+The debug runtime reaches case 4's first name editor from an isolated save
+root. It still observes guest mode 3 but reports Host input mode `text`. After
+the default name is cleared, submitting four Korean syllables succeeds through
+two completion callbacks; the name is visible in
+`build/qa-lgt-4-korean-editor.png`, and OK accepts it and advances to the next
+name prompt (`build/qa-lgt-4-korean-confirmed.png`). This proves name entry
+and confirmation, not campaign persistence or a physical-phone IME check. The
+probe and call log are `build/qa_lgt_cases.go` and `build/qa-lgt-4-probe.log`.
+
+After both input changes, `make test`, `make test-debug`,
+`go test -race ./internal/...` and `go vet ./...` pass, with 219 passing Node
+tests (`build/qa-lgt-input-{test,debug,race,vet}.log`); `git diff --check`
+passes. An earlier gate run picked up diagnostic overlay files with `.go`
+extensions under `build/`; they were renamed to `.txt` before the passing run.
+After the media advertisement and sprite color-key changes the same four gates
+pass (`build/qa-lgt-keyed-{test,debug,race,vet}.log`), and the reflection
+regression was observed failing before the graphics change. No user server
+restart, deployment, commit or push was performed; graphics overlays remain
+diagnostic artifacts.
+
+Case 5 reaches the first controllable cave after advancing the introduction
+with repeated fire inputs (`build/qa-lgt-5-field-entry.png`). An idle 100-tick
+interval takes 5.002 wall seconds and advances 5.000 guest seconds, with 1.691
+seconds of busy work and 5,355,349 guest steps. The thread still requests
+200 ms sleeps at return address `0x93ac4`, which rules out a slow Host clock
+for this interval without explaining the guest's frame pacing. Idle and fire
+traces are `build/qa-lgt-5-field-{idle,fire}-trace.txt`; the recording sink
+stayed empty, and no pacing patch was applied from this observation alone.
+
+<a id="lgt-qa-2026-09-20-java-file-modes-explain-the-lost-speed-and-sound-settings"></a>
+
+### Java file modes explain the lost speed and sound settings
+
+Case 5 opens its five-byte settings file in Java mode 4. `File.read` returned
+-1 although the isolated save contains `01 01 02 01 01`, because the Java
+adapter passed the value directly to `MC_fsOpen`, where 4 means truncate. The
+Java enum uses 3 for truncate and 4 for read-write. The published File API
+defines the four operations without numeric values; the observed reader and
+the reference implementation agree on this enum. No reference source code was
+copied.
+
+The settings byte at index 2 reaches the guest helper at `0x8fb68`, which maps
+0/1/2 to 200/150/100 ms and stores the result in the class data at offset
+0x38; the loop reads that value before `Thread.sleep` at `0x93ac4`. An empty
+settings read therefore selects the slowest loop and disables music, while the
+Host's extra paint after each key independently explains why input appeared to
+speed it up. This is a file-boundary defect, not evidence for changing sleep
+durations.
+
+The adapter now translates all four Java modes to the C flags. Authored tests
+fail before the fix for both truncation and read-write and pass after it;
+existing file-stream tests now use the Java mode number rather than a C flag.
+C flag behavior and the save format are unchanged.
+
+A production debug replay on another isolated save copy,
+`var/savedata/qa-lgt-20260920/file-fix-5`, reads all five bytes; the loop
+requests 100 ms, and the title constructs a Clip and starts Player playback.
+The Host emits `build/qa-lgt-5-probe-audio.mid`. The prior runtime log is
+`build/qa-lgt-5-file-baseline.log`; the new run uses
+`build/qa-lgt-5-probe.log`. All four gates pass after this change
+(`build/qa-lgt-file-{test,debug,race,vet}.log`).
+
+The fixed build reaches the same first controllable cave. An idle 100-tick
+field interval advances 5.000 guest seconds in 5.002 wall seconds and executes
+10,489,268 guest steps (5,355,349 before the fix); the room advances at the
+saved 100 ms interval without attack input instead of 200 ms, and the Host
+records both MIDI and WAV. Artifacts are `build/qa-lgt-5-file-fixed-field.png`,
+`build/qa-lgt-5-file-fixed-field-trace.txt` and
+`build/qa-lgt-5-probe-audio.{mid,wav}`. Automatic repaint after key delivery
+was still present at this point; the two sections after the next close it.
+
+<a id="lgt-qa-2026-09-20-wide-graphics-context"></a>
+
+### Wide graphics context
+
+Case 2's engine writes pixel callbacks at byte 28. A diagnostic using the
+56-byte layout corroborated by the reference implementation restores its
+agreement text, title lettering and menu. The layout holds four signed 32-bit
+inclusive clip endpoints at 0, foreground/background at 16/20, alpha at 24,
+callback/parameter at 28/32, font/style at 36/40, XOR at 44, and signed x/y
+translation at 48/52. The C API still exchanges exclusive clip endpoints;
+SetContext/GetContext translate them at the boundary.
+
+The runtime selects this ABI through the existing code-revision registry for
+the verified native-module digests of cases 1 and 2, not from a coordinate
+that resembles a function pointer. Unregistered modules keep the compact ABI.
+Arbitrary mixed layouts inside one module are not claimed. No source code was
+copied from the reference.
+
+Direct callbacks are accepted only as Thumb addresses inside the loaded
+module, and their pixel cache is discarded between draws because the observed
+callbacks read mutable guest globals. Authored tests cover the 56-byte write
+boundary, signed translations distinct from callbacks, mutable callback data,
+exclusive clip round trips, empty clips, and retention of compact behavior.
+The production debug replay restores the title and its menu
+(`build/qa-lgt-2-wide-title.png`; diagnostic capture
+`build/qa-lgt-2-full-title.png`), and `make test`, `make test-debug`,
+`go test -race ./internal/...` and `go vet ./...` pass
+(`build/qa-lgt-wide-{test,debug,race,vet}.log`). Case 1 also reproduces the
+defect and is registered; its production replay restores the town map, text,
+and HP/MP bars in `build/qa-lgt-1-wide-production-field.png`, with the input
+route and log in `build/qa-lgt-1-field.commands` and
+`build/qa-lgt-1-wide-replay.log`.
+
+<a id="lgt-qa-2026-09-20-key-input-must-not-create-unsolicited-paints"></a>
+
+### Key input must not create unsolicited paints
+
+The Java key adapter marked the card dirty after every delivered press and
+release, even when the application requested no repaint. Case 5 updates
+gameplay inside paint, so repeated input also advanced the simulation. The
+adapter now delivers `keyNotify` and preserves the existing dirty flag,
+leaving repaint scheduling to the application. The authored regression fails
+before the change and passes after it: press/release callbacks receive their
+arguments, unrequested paints stay absent, and pending repaint requests
+survive key delivery.
+
+The full production route reaches the same cave. Across 100 ticks, idle
+advances 5.000 guest seconds with 50 presentations, holding fire advances
+5.000 seconds with 50 presentations, and twenty-five press/release cycles
+advance 5.000 seconds with 50 presentations in total. Measured wall durations
+are 5.002 and 4.995 seconds for idle and held fire. MIDI and WAV are generated
+during the replay. Artifacts are `build/qa-lgt-5-pacing.commands`,
+`build/qa-lgt-5-pacing-replay.log`, and `build/qa-lgt-5-pacing-field.png`.
+The four gates pass after the repaint change
+(`build/qa-lgt-pacing-{test,debug,race,vet}.log`).
+
+<a id="lgt-qa-2026-09-20-browser-audio-and-completion-evidence"></a>
+
+### Browser audio and completion evidence
+
+A temporary debug server and a Chromium page use isolated game links and
+copied saves; pointer clicks on the actual OK keypad button advance each
+archive. The page receives 127 audio events for case 3 and 410 for case 5,
+both AudioContexts stay running, and an analyser inserted into the existing
+output connection records peak amplitudes of 0.170873 and 0.253627, with no
+page errors. This verifies audio transport and nonzero browser synthesis
+output, not physical-speaker or phone audibility. The temporary server exited
+after the check; the user's server was not restarted.
+
+The first automation attempt used Enter while focus stayed on a page control,
+so the game stayed at its notice and emitted no audio; the successful rerun
+used pointer clicks on the keypad. Results and screenshots are
+`build/qa-lgt-browser-audio-results.json`,
+`build/qa-lgt-{3,5}-browser-audio.png`, and the script
+`build/qa-lgt-browser-audio.mjs`.
+
+Case 2's production initial-logo captures `build/qa-lgt-2-logo-1.png` and
+`build/qa-lgt-2-logo-4.png` both keep their lettering, and the title and
+lower-right region are visible in `build/qa-lgt-2-logo-6.png` (route
+`build/qa-lgt-2-logo.commands`). Case 1's final field capture includes map
+detail, map-name lettering, and filled HP/MP bars; case 3's battle capture
+shows clean mirrored sprite edges; case 4's captures show the accepted Korean
+name; and case 5's field intervals show matching presentation rates under
+idle, held attack and repeated key input. These are the acceptance routes for
+the five reported defects, not a claim of complete game compatibility,
+campaign completion or physical-phone QA.
+
+All four required gates passed after the final repaint change. The second
+graphics revision was then added to the registry, and focused LGT and registry
+tests pass again (`build/qa-lgt-final-focused.log`); `git diff --check`
+passes. No game archive, original user save, reference source file, or
+third-party asset is in version control, and no commit, push, deployment, or
+user-server restart was performed.
+
+<a id="lgt-qa-2026-09-20-vector-replacement-crash"></a>
+
+### Vector replacement crash
+
+A later physical-device test ended at 2026-09-20 04:12:16 UTC while a Java
+paint callback ran after right input. The failure was the unimplemented
+`java/util/Vector` vtable slot 26, SVC slot `0x5ba301a`, called from
+`0xbb3c0`, with a Vector receiver, an object reference and index 1. The
+preceding report measured about 10 fps and normal guest speed. This was a
+guest API dispatch failure, not an audio recovery failure or a server panic.
+
+The established Vector declaration order places `setElementAt(Object, int)` at
+26, between the verified `firstElement` (24) and `removeElementAt` (27)
+anchors. The WIPI specification's CLDC Vector entry defines replacement at an
+existing index and `ArrayIndexOutOfBoundsException` for an invalid index. The
+handler replaces the reference in place, accepts null, and raises that guest
+exception for negative or out-of-range indexes; it does not grow the list.
+
+The regression fails on the missing registration before the change. After it,
+the test invokes slot 26 through the native Java dispatch boundary with
+arguments in ARM registers, checks replacement at first/middle/last indexes,
+and verifies unchanged size and neighbours and rejected empty/invalid
+accesses. This is the LGT AOT Java boundary; no JVM bytecode implementation
+changed.
+
+`make test`, `make test-debug`, `go test -race ./internal/...`, `go vet ./...`,
+and the focused Vector/Stack checks pass, and the debug server was rebuilt. A
+copied-save real-archive replay reached the field, held right for 100 ticks
+(5 guest seconds, 50 frames), and continued another 100 ticks without failure
+(`build/qa-vector-replay.log`). That route did not reach slot 26 in its trace,
+so it is a movement smoke check, not a reproduction of the reported scene; the
+slot regression is the direct proof, and confirmation at the original in-game
+position remains a physical play check. Original saves were untouched.
+
+<a id="lgt-qa-2026-09-21"></a>
+
+## LGT startup, rendering, and media QA — 2026-09-21
+
+This investigation tracks ten user-reported cases in request order. Archive
+identities are SHA-256 prefixes, not native-module compatibility keys.
+Baseline: `bb2294f`, debug CLI built from the then-current worktree, 240×320,
+fresh isolated saves under `var/savedata/qa-lgt-20260921/`. No original user
+saves were changed. Case paths and raw evidence stay in ignored
+`build/lgt-qa-20260921/`; raw logs larger than 10 MiB are losslessly
+compressed as `.log.gz`. Sections are in investigation order, and an interim
+status in an earlier section is resolved by a later one where noted.
+
+<a id="lgt-qa-2026-09-21-cases-and-current-acceptance"></a>
+
+### Cases and current acceptance
+
+| Case | Archive SHA-256 prefix | Report and final evidence |
+| --- | --- | --- |
+| 1 | `01f05f8231f4e4b2` | Traced error -1001 to a saved subscriber mismatch. Revision-scoped reader compatibility preserves length/checksum validation; production reaches and advances a match through 5,224 ticks using existing saves. Fresh authentication remains limited. |
+| 2 | `559d580bc0d758dc` | Wide context and exclusive native clip selected from code evidence. Startup pink logo fixed across 318 captured frames; 2,500-tick gameplay route passes. Party/status popups and six additional menu tabs are readable; the user confirmed the reported contrast problem is resolved. |
+| 3 | `c046d43d429b3671` | Logo stall traced to swapped long-array store words. Boundary correction restores the timed transition; production reaches the playable tutorial and accepts directional input. |
+| 4 | `2d5cada030045cfa` | Two-stage bounded local certificate exchange implemented. Production reaches menu/item screens; a new session with authentication compatibility disabled restores the guest-written certificate state and reaches the menu. Full gameplay is not established. |
+| 5 | `2c80548d61ce2451` | Image-path strip offset confirmed. Existing-save copy reaches campaign dialogue; removing the image-only 24-row addition restores the top HUD and lower dialogue border in production. |
+| 6 | `26f1bf941f2e8afd` | Typed stream, active-card removal and cache pressure fixes pass the original failure path. Production completes 5,000 ticks with 3,889 flushes and no runtime error, reaching a continuation prompt; full campaign unverified. |
+| 7 | `8f47c8601785e16e` | Supplemental data mounted: 72 files, 717,309 bytes. Original version state and additional images read successfully; campaign dialogue reached. Direct-pixel strip correction restores the lower dialog. Nine production dialogue captures, including two-line text, keep names/text inside their boxes. |
+| 8 | `6bc7f65e30221d9f` | Transparency calibration origin corrected for the exact module revision. The same 1,334-tick field route changes from 5,690 magenta pixels to zero; full campaign unverified. |
+| 9 | `0fdf45ec169ff0b1` | Full 78-second browser replay has no sampled clipping or browser errors. A confirmed percussion voice-lifetime bug is fixed and browser-verified; the user confirmed the reported sound problem is resolved. Original handset timbre fidelity is not claimed. |
+| 10 | `21819777ad5941da` | Context ABI correction restores text and images. Production confirm dismisses the server-error notice, reaches a new-game dialogue scene, and restores an existing save into its village. |
+
+Baseline probes use 120 ticks without input, then 700 ticks with fire at 20,
+250, and 500. They classify cases and are not gameplay acceptance. Files are
+`case-N-baseline.{log,png}` and `case-N-input.{log,png}`. A zero CLI exit
+status does not establish a visible or progressing game.
+
+<a id="lgt-qa-2026-09-21-typed-file-streams-and-card-removal"></a>
+
+### Typed file streams and card removal
+
+Case 6 first fails at File vtable slot 11, called from `0xb16c`, naming
+`openDataInputStream()Ljava/io/DataInputStream;`. The
+[WIPI File contract](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/io/File.md)
+requires a DataInputStream, and IOException when the file is not open or an
+input stream is already open. The adapter now shares the existing file-stream
+binding but allocates the typed DataInputStream object, whose vtable the
+existing big-endian primitive readers serve. Stream close releases the
+binding, so a second close does not advance the file cursor twice and a later
+stream can open at the consumed position. The regression first failed on the
+missing registration; it now checks the returned class, native typed read,
+current file position, duplicate-open refusal, idempotent close, reopen, and
+refusal after `File.close`.
+
+The same route then reaches the title and fails when new-game input calls
+Display slot 12 from `0x1514`, naming `removeCard(Card)Z`. The
+[Display contract](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lcdui/Display.md)
+returns whether removal succeeded. The single-card display now removes its
+active card and cancels its pending paint; a null or unrelated card returns
+false without changing either. This is not a general multi-card stack or
+notification lifecycle. The authored regression first failed on the missing
+registration and now checks those states.
+
+`case-6-stream-fix.{log,png}` records the restored title and the second
+failure; `case-6-card-fix.{log,png}` records 1,000 ticks, 737 flushes and no
+runtime error, reaching the next in-game instruction screen.
+
+<a id="lgt-qa-2026-09-21-decoded-image-cache-pressure"></a>
+
+### Decoded-image cache pressure
+
+The longer case 6 route fails at tick 1,946 with `LGT surface space exhausted`
+inside `Image.createImage`, from `0x15d04`. The allocation-failure collection
+frees seven objects and zero surfaces: the decode cache kept its surfaces
+after the last Image object was collected and had no eviction path, so a
+sequence of distinct images could exhaust the bounded 16 MiB surface region
+even after their owners disappeared.
+
+Surface allocation pressure now evicts cache-only surfaces after collection.
+Live Image and Graphics owners, including objects awaiting a grace cycle, keep
+their surfaces, and every cache alias is removed before the handle is reused.
+Ordinary collection still keeps cached images, preserving repeat-decode
+sharing, and the memory bound is unchanged. Data-arena pressure does not evict
+cached surfaces, because a cache hit can hold a surface handle in a Go local
+while allocating its new Image object; a separate regression guards that
+construction window.
+
+A regression with a deliberately small surface region fails before eviction
+and passes afterward, checking cache aliases, live Image and Graphics owners,
+and the allocation limit; another decodes an image again after eviction and
+checks every pixel. The final production debug replay, `case-6-final.{log,png}`,
+completes 5,000 ticks with 3,889 flushes and no runtime error and evicts 253
+cache-only surfaces at the former allocation failure, on a separate copy of
+the earlier isolated saves. Its final screen is an in-game continuation prompt:
+the recorded startup, card transition and allocation failures no longer stop
+that route, which is not proof of complete gameplay or progress persistence.
+
+<a id="lgt-qa-2026-09-21-supplemental-data-inventory"></a>
+
+### Supplemental data inventory
+
+Case 7 contains a nested directory ending in its AID `0002A52B/`, holding 69
+`.idam` images plus `config.z` (14 bytes), `down.z` (8 bytes), and `pver.z`
+(2 bytes), 717,309 bytes in total. The files are inside the outer archive, so
+no download is needed to establish their existence; the inventory does not
+prove they are every file the campaign requests.
+
+After the initial restart prompt, the next launch reads the isolated saved
+`config.z` and `down.z`. The longer route asks for plain `pver.z`, receives
+-12, and creates a new version file: archive lookup recognized plain, `P/`,
+and `P/<AID>/` paths, not this extra containing directory. The original
+archive and its nested files are untouched. Raw inventory and traces are
+`case-7-entries.json`, `case-7-restart.log`, and `case-7-long.log`.
+
+<a id="lgt-qa-2026-09-21-validation-status"></a>
+
+### Validation status
+
+The stream, card, and cache changes pass `make test`, `make test-debug`,
+`go test -race ./internal/...`, and `go vet ./...`
+(`gate-{test,debug,race,vet}.log`). The card regression also passes after a
+final test-only setup simplification, and `git diff --check` passes. No server
+restart, commit, or push is part of this investigation.
+
+<a id="lgt-qa-2026-09-21-supplemental-directory-mounting"></a>
+
+### Supplemental directory mounting
+
+The loader now exposes files from one outer `wrapper/<AID>/` directory at the
+application's resource root. The AID must match the descriptor, so an
+unrelated application directory is not searched, and multiple matching wrapper
+roots are rejected as ambiguous. JAR resources, canonical outer paths, and
+saved files keep their precedence. The archive bytes are shared read-only,
+normal deletion tracking applies to the mounted paths, and directory listings
+include their immediate children.
+
+Authored fixtures first failed on missing lookup and ambiguous-root acceptance.
+They cover plain and installed-prefix aliases, case-insensitive reads, JAR and
+canonical-path precedence, unrelated application isolation, traversal
+refusal, save overrides, unchanged archive contents, deletion, and directory
+listing.
+
+A fresh-save production replay (`case-7-supplement.{log,png}`) reads the
+original 14-byte config, 8-byte download state, and 2-byte `pver.z` and
+reaches the character-slot selection screen in 4,500 ticks. This closes the
+missing-version-file path; image loading and text alignment are covered under
+"Direct framebuffer origin".
+
+<a id="lgt-qa-2026-09-21-blank-rendering-and-context-layout"></a>
+
+### Blank rendering and context layout
+
+Case 10's context at `0x15000d8` holds `0x3839` at byte 28 once drawing
+starts, which the compact interpretation read as an x offset of 14,393 pixels,
+placing later images offscreen. Disassembly shows the guest storing that
+literal at context offset 28 (`0x29aa..0x29ac`). The function at `0x3838`
+compares the incoming second pixel with a key from a guest global, returns the
+old pixel for the key and otherwise the incoming pixel: a pixel operation, not
+a coordinate.
+
+The WIPI graphics specification leaves `MC_GrpContext` opaque. The existing
+56-byte implementation is supported by the previously documented runtime ABI
+and accepts the observed direct callback stores, and an isolated diagnostic on
+that path restores the notice, images, text, and title. The production
+registry now selects it only for native-module digest
+`ac4d6ce5b68c0972b39aab7dea6944dd9a1ea398eba790d95316778a038cd06d`; unknown
+modules and compact contexts keep their behavior.
+
+Artifacts: `case-10-context.log`, `case-10-callback-stores.txt`,
+`case-10-wide-diagnostic.{log,png}`. A forced-wide experiment on case 2 also
+reached its title, but without an established callback cause it was not
+registered from that visual observation (see "Second color report: wide
+context proof"); case 8 was likewise not selected without an affected
+gameplay route. The existing wide-context pixel, translation, clip, callback,
+and unregistered-module regressions remain the contract tests.
+
+<a id="lgt-qa-2026-09-21-direct-framebuffer-origin"></a>
+
+### Direct framebuffer origin
+
+Case 7 does not call `MC_grpDrawString` along the reproduced dialogue route;
+its text and artwork are written through direct framebuffer pointers. The
+specification's baseline argument therefore does not explain this symptom,
+and the C text API was not changed on that assumption.
+
+Module `e418a6186814fdd850d3de53092c1e19fb941741057a646ebfd5ce1267241389`
+sets a separate strip field to 24 at `0x12bc` (`movs r3,#24; str r3,[r7]`).
+Its visible canvas is 240×296, centered in the reported 240×320 framebuffer.
+Drawing adds both the centered y origin (12) and the strip (24) before
+multiplying by the framebuffer width (for example `0xa250..0xa270` and
+`0xaf70..0xaf86`), so direct content begins at row 36 and its last 24 rows
+fall below the screen. Platform fills use their own coordinates.
+
+An isolated diagnostic that changes only the strip initialization to zero
+shows, on the same 8,000-tick route, the complete lower dialogue border and
+SKIP indicator with the expected 12-row centering margin. This agrees with the
+documented handset-strip convention and is not evidence that all LGT modules
+need a coordinate shift. The production registry selects
+`lgt.direct_framebuffer_origin` only for this exact module; mapped code must
+match the six-byte initialization sequence before its immediate changes, and
+archive bytes and centered coordinates are kept.
+
+Authored Thumb tests execute the original and corrected initialization, verify
+the neighboring screen-handle store, and reject unmapped or unexpected code.
+An opt-in original-loader test verifies the correction, unchanged module
+bytes, selection independent of descriptor identity, and rejection after one
+changed ELF padding byte; it passes with `WFEATURE_LGT_DIRECT_ORIGIN_ARCHIVE`
+pointing to the isolated local input.
+
+The diagnostic also reads `img/tile24.idam`, `img/tile25.idam`, and later
+character images from the supplemental tree. The replay uses fresh isolated
+saves, a 20-tick fire press at ticks 20, 500, 1500, 2500, 3500, 4500, 5500,
+6500, and 7500, and ends at tick 8000. The uncorrected comparison is
+`case-7-text-trace.{log,png}`; the corrected diagnostic is
+`case-7-origin-diagnostic.{log,png}`. Both complete 2,675 flushes with
+identical instruction counts, which places the visible change at the
+coordinate correction. This verifies the supplied additional-data path and the
+observed cropping, not the entire campaign or saved progression.
+
+The supplemental mounting and case 10 registry changes pass all four required
+gates (`gate-supplement-{test,debug,race,vet}.log`). The production replay
+`case-7-origin-production.{log,png}` reproduces the full lower dialogue and
+additional-image reads at the same 8,000 ticks and 2,675 flushes, and all four
+gates pass after the origin correction (`gate-origin-{test,debug,race,vet}.log`),
+as do the local loader test and `git diff --check`.
+
+<a id="lgt-qa-2026-09-21-image-path-origin"></a>
+
+### Image path origin
+
+Case 5 has a different native drawing implementation. At `0x28a10` its
+240/320-pixel-wide display branch stores 24 in the image-strip field
+`0x151342c`. Image destination calculation (`0x251d8..0x251f2`) adds this
+field before the separate general origin at `0x1513ad4`, while platform
+primitives do not receive the image-strip addition. The result is an old
+background band above the top HUD and a dialogue image shifted below the lower
+screen edge.
+
+The diagnostic replaces only `movs r2,#24` with `movs r2,#0`; neighboring
+branches and the general origin are unchanged. The native-module digest is
+`a408002a417064d1041adf47b93436eb81b445afbc656c85bcf0127984c2106e`. The
+production fix `lgt.image_framebuffer_origin` requires that exact digest and
+verifies the six-byte instruction sequence before changing mapped code. The
+176-pixel branch keeps its original 20; narrower branches are untouched.
+
+Fresh saves repeat an authentication completion message and do not reach the
+menu in this route. A separate copy of the existing debug save does reach the
+menu, story selection, and campaign dialogue, and is used for the rendering
+acceptance without changing the user's original save. At tick 3,380 the
+baseline shows the old background above the HUD and the cropped bottom of the
+dialogue; the diagnostic shows the HUD at row zero and the full lower dialogue
+border, and the next dialogue advances in both runs.
+
+Artifacts are `case-5-saved-{baseline,origin}.png` at tick 3,900 and
+`case-5-origin-diagnostic.{log,png}` for the fresh-save comparison. The saved
+route waits 60 ticks, presses fire for 20, waits 700, then repeats fire for 20
+and waits 500 six times, reaching the next dialogue at tick 3,900. Authored
+Thumb tests execute the wide and 176-pixel branches, verify surrounding code,
+and reject unmapped/unexpected instructions. The opt-in loader test
+(`WFEATURE_LGT_IMAGE_ORIGIN_ARCHIVE`) verifies exact identity, unchanged
+archive bytes, descriptor independence, and rejection after a padding-byte
+mutation; both original-loader origin tests pass.
+
+The case 5 production replay (`case-5-origin-production.{log,png}`) completes
+3,900 ticks and 779 flushes and shows the next campaign dialogue with its full
+lower border and the aligned top HUD, on another copy of the existing save.
+The changes pass `make test` (including 226 Node tests), `make test-debug`,
+`go test -race ./internal/...`, and `go vet ./...`
+(`gate-image-origin-{test,debug,race,vet}.log`), and `git diff --check`. Case
+5's separate fresh-save authentication loop is not addressed.
+
+<a id="lgt-qa-2026-09-21-long-array-store-word-order"></a>
+
+### Long-array store word order
+
+Case 3 rendered only two frames after 5,000 ticks (50,040 guest ms). Its
+worker keeps sleeping for 10 ms and checking a timer that does not expire. At
+`0x7b40..0x7b4e` the guest sign-extends its 32-bit interval into r2 and passes
+the low word in r3 to Java interface slot `0xfd`, so the observed 1,000 ms
+interval arrives as `(array, 0, 0, 1000)`. At `0x7b70..0x7b7e` it likewise
+moves the `currentTimeMillis` high result from r1 into r2 and low r0 into r3.
+Slot `0x5b` returns the stored value low-first in r0/r1.
+
+The adapter treated the store arguments as low-first, turning 1,000 into
+`0x3e800000000` and reversing the epoch timestamp. The fix swaps only the two
+arguments at the interface boundary; array storage, long return registers, and
+the internal array helpers stay low-first. This is an observed
+compiler-helper ABI, not a WIPI public API signature.
+
+The boundary regression first fails with
+`element 0 = 0x3e800000000, want 0x3e8`; it covers a positive interval, epoch
+timestamp, asymmetric 64-bit value, and negative value through the store and
+load SVC handlers, and the internal storage and bounds regression still
+passes. The production replay `case-3-wide-array-fix.{log,png}` completes
+3,000 ticks, 30,080 guest ms, and 184 flushes, leaving the logo for a menu's
+information page. The unchanged 5,000-tick baseline is
+`case-3-extended.{log,png}`, and the caller trace is `case-3-full-trace.log`.
+No guest code or save bytes are rewritten.
+
+A later production interactive route reaches the title, main menu, character
+selection, intro, and the playable tutorial and accepts directional input
+without a runtime error (`case-3-gameplay.png`, tick 5,304). The final
+correction passes all four gates (`gate-wide-array-{test,debug,race,vet}.log`)
+and `git diff --check`.
+
+<a id="lgt-qa-2026-09-21-further-startup-and-transparency-observations"></a>
+
+### Further startup and transparency observations
+
+The case 1 boundary trace initializes the native root and screen manager,
+then posts event `0xa600` from paint on every tick. Its registered event
+handler forwards that event, but no framebuffer flush follows. The root and
+child state are non-null, and a diagnostic resume call does not change them.
+This did not reproduce the reported -1001 screen (see "Case 1: reported
+authentication error reproduced"). Artifacts: `case-1-full-trace.log`,
+`case-1-state.log`, and `case-1-resume-state.log`. No speculative lifecycle
+change was applied.
+
+Case 8's production extended route reaches an intro dialogue after 5,000
+ticks and 2,498 flushes. That scene has no magenta background and is not the
+reported gameplay scene (`case-8-extended.{log,png}`). Its heavy direct-pixel
+workload takes about 624 s of measured CLI busy time for 250 s of guest time,
+a bounded observation rather than a browser or handset timing comparison.
+
+<a id="lgt-qa-2026-09-21-gameplay-transparency-follow-up"></a>
+
+#### Gameplay transparency follow-up
+
+Case 8 has a deterministic gameplay route in the ignored `replay8.py` and
+`case-8-map-context-commands.json` diagnostics: short confirm presses followed
+by the skip key reach the first field at 1,112 ticks, and the 1,334-tick
+screenshot contains 5,690 fully magenta pixels. Replays with the compact and a
+forced wide graphics context produce the same count, so selecting the wide
+context is not a sufficient fix for this scene.
+
+The inner archive contains 766 PNG images. An in-memory scan finds no visible
+magenta pixels in them, but many contain fully transparent magenta palette
+entries; the presence of transparent magenta in an asset does not show which
+drawing operation loses its transparency.
+
+Case 4's outer archive also contains nine supplemental files in a wrapper
+whose name includes an application identifier, not the supported unique
+`wrapper/<AID>/` directory. A diagnostic run that supplied those nine files to
+an isolated save copy still reached the missing-certificate dialog at 976
+ticks, so supplemental-file availability alone does not resolve the
+certificate path. The run may rewrite supplied files, so their post-run
+contents are not evidence of the archived contents.
+
+<a id="lgt-qa-2026-09-21-transparency-calibration-origin"></a>
+
+#### Transparency calibration origin
+
+The first field's direct framebuffer blitter uses a key sampled during native
+initialization. It draws magenta with `PutPixel(dst, 0, 0, context)` at
+`0x1742`, then copies a pixel through its own framebuffer helper into
+`0x1500004`. That helper (`0x167c`) adds 24 rows for the screen, so the sample
+reads a different location from the pixel just drawn: the observed key is
+`0x0000`, while framebuffer row zero holds `0xf81f` and row 24 holds zero.
+Later native transparent copies compare against that sampled key, which loses
+black pixels and copies magenta into the map.
+
+The WIPI graphics specification defines drawing coordinates relative to the
+context's offset and initializes that offset to `(0, 0)`; it supplies no
+24-row default translation. Changing general framebuffer pointers or context
+origins would affect other rendering, so exact module SHA-256
+`a94d19252edfcee2346cd166c4d4e1f1303dbfce987b50992d51de519b3ac942` instead
+selects `lgt.color_key_sample_origin`: the calibration call alone changes its
+y argument from zero to 24, with an instruction guard, and its read and write
+then agree. Archive bytes and saves are unchanged.
+
+A diagnostic replay confirms the sampled key becomes `0xf81f`, and the
+1,334-tick gameplay route has zero magenta pixels instead of 5,690; grass,
+river edges and object backgrounds render without pink patches. The authored
+regression executes the original and corrected Thumb argument setup and the
+real PutPixel handler, then reads the native sample location; further checks
+cover unknown instructions and opt-in archive identity, descriptor
+independence and unchanged archive bytes. Full campaign progression is outside
+this bounded rendering verification.
+
+`make test`, `make test-debug`, `go test -race ./internal/...`, and
+`go vet ./...` pass after the calibration change (local `gate-color-key-*.log`),
+as does the opt-in archive calibration test. The production CLI replay
+(`case-8-map-production.{log,png}`) completes 1,334 ticks with zero magenta
+pixels and no runtime error, matching the diagnostic's field rendering.
+
+Case 2's startup trace takes a different calibration path: at `0x358f2` it
+calls GetPixelFromRGB with `(255, 0, 255)` and stores the returned `0xf81f`
+directly at object offset `0x230`, without sampling a screen pixel. The case 8
+correction is therefore not applied to case 2 without separate evidence.
+
+<a id="lgt-qa-2026-09-21-second-color-report-context-comparison"></a>
+
+#### Second color report: context comparison
+
+Case 2 writes the transparent-color parameter at context offset `0x20`
+(`0x351aa`) and screen width/height at offsets 8/12 during context
+initialization (`0x35614`, `0x3561c`), which conflicts with the compact
+runtime layout. A native context stack, however, uses a 52-byte stride
+(`0x35946`) while its copy routine requests 60 bytes (`0x35960`), so these
+facts alone do not select the existing 56-byte layout.
+
+A controlled 2,500-tick replay, with two-tick fire presses at ticks 20, 250,
+500, 750, 1000, 1250, 1500, 1750 and 2000, reaches the same dungeon scene under
+the production compact context and a forced-wide diagnostic
+(`case-2-abi-{compact,wide}.{log,png}`). The layout mismatch was a lead, not
+yet a demonstrated fix, and no case 2 compatibility entry was added from this
+comparison.
+
+Capturing every startup flush makes the reported pink logo reproducible
+between the notice and the title. With only a two-tick fire press at tick 20,
+84 of the first 700 ticks' captured frames contain magenta, the largest count
+being 5,792 pixels (for example `case-2-startup-frames/tick0578.png`), as
+magenta rectangles around the logo's individual shapes. The previously
+sampled notice, later publisher logo and title had missed this transient
+scene, which became the bounded acceptance path for the color fix.
+
+<a id="lgt-qa-2026-09-21-second-color-report-wide-context-proof"></a>
+
+#### Second color report: wide context proof
+
+A forced wide-context replay at tick 578 removes the magenta rectangles. The
+native image blitter at `0x36438` confirms the fields it consumes: clip words
+at offsets 0/4/8/12, operation at 28, key at 32, and separate signed offsets
+at 48/52. At `0x3664e` it compares each RGB565 source pixel to the key loaded
+from context offset 32, which explains how an incompatible context corrupts a
+direct blit even when no platform DrawImage call appears in the trace.
+
+The 52-byte context-stack stride is therefore not the complete layout of the
+fields the blitter consumes; its 60-byte copies and the access at offset 52
+are preserved native behavior, not grounds to truncate the runtime's wide
+fields. Only SHA-256
+`d1f59407b0101ff266a06b09c70e826c435691e0f3007ffc1612848c653aca10` selects
+this revision's wide context. The native context setter computes `x + width`
+and `y + height` at `0x355b4`/`0x355b8`, and its direct blitter treats these
+as exclusive ends, so a separate `lgt.wide_exclusive_clip` selection preserves
+those words while the earlier wide revisions keep their evidenced inclusive
+convention.
+
+The authored regression verifies native-visible clip words, the color-key
+parameter, separate signed offsets and platform foreground updates together,
+covering the direct/native and API layout boundary rather than treating a
+successful build as rendering proof.
+
+In production all 318 captured startup frames contain zero magenta pixels,
+against 84 affected frames before the change, and the 2,500-tick gameplay
+replay completes without an error (`case-2-final-logo/`,
+`case-2-final-logo.{log,png}`, `case-2-final-gameplay.{log,png}`). All four
+gates pass (`gate-context-four-*`). The broader report of indistinguishable
+colors is examined under "Case 2 contrast follow-up" and "Case 2 menu
+coverage".
+
+<a id="lgt-qa-2026-09-21-audio-event-and-browser-signal-inspection"></a>
+
+#### Audio event and browser signal inspection
+
+Case 9's 2,000-tick isolated replay uses two-tick inputs at 20 (fire), 250
+(1), 500 (1), and 750/1000/1250/1500 (fire). It progresses beyond the initial
+consent screen and switches several clips, and the observed media calls set
+clip volume to 40. `case-9-gameplay-audio.mid` records 3,423 MIDI events and
+1,547 note-ons over 77,815 ms, with no PCM wave file on this route. Note
+velocities range from 14 to 127, with programs 0, 10, 11, 13, 33, 40, 82, 84,
+87, 94, 98, 99 and 109 on twelve channels.
+
+The 30–60 s excerpt was replayed through the actual `web/audio.js` PageAudio
+in headless Chromium, with earlier controller/program state restored. This
+validates the synthesizer's handling of these events, not WebSocket delivery
+timing or a physical speaker. The measured output peak is 0.994482 and RMS
+0.039784 across 2,113,536 analyser samples, with no browser exception and no
+clipping observed in those samples.
+
+The stream briefly reaches 25 active note keys and triggers the browser's
+24-voice limit once. At that event (36,889 ms) the oldest key (channel 15,
+note 36) has its scheduled note-off at the same timestamp, so the cap event
+alone is not evidence of a lost sustain and does not justify raising the
+voice limit. Diagnostic data is in `case-9-midi-{events,summary}.json` and
+`case-9-browser-audio.json`.
+
+PageAudio uses oscillator families and filtered noise, not the handset's
+original FM voices. The measured signal neither proves sound fidelity nor
+identifies the user's subjective symptom; clarification was needed to
+distinguish timbre mismatch, clicks/dropouts and volume spikes, and no
+speculative audio-engine change was made from this run.
+
+<a id="lgt-qa-2026-09-21-certificate-path-subscriber-bound-save-encoding"></a>
+
+#### Certificate path: subscriber-bound save encoding
+
+Case 4's archived `savedata` is not identical to a fresh runtime save: both
+are 2,720 bytes, but 2,709 bytes differ when compared before launching the
+archived copy. The earlier post-run comparison had observed a rewritten file
+and could not establish the original contents.
+
+Native save I/O explains why this matters. Routine `0x832cc` copies ordinary
+state at `0x150a37c` to the work buffer at `0x150b350`, encodes it, and writes
+680 words. Routine `0x8337c` reads that buffer, decodes and checks it, and
+copies to live state only when validation succeeds. The codec at `0x83420`
+obtains `PHONENUMBER`, builds a CRC table using polynomial `0xedb88320` with
+signed right shifts, and XORs each payload byte with the sum of a lookup byte
+and a repeating subscriber-number byte. A seed byte sits at payload index
+2715, followed by four CRC bytes; encoding and decoding advance the seed for
+each byte, and the phone string participates in both paths.
+
+Supplemental availability alone therefore cannot establish that a supplied
+save is valid for this runtime's subscriber number. This is evidence for a
+subscriber-bound save contract, not permission to rewrite original saves or
+skip certificate validation. Original archives and user saves remain intact.
+
+A 2,000-tick production replay confirms the consent path calls `NetConnect`
+with callback `0x2d5c1`, and the runtime's offline failure returns the guest
+to the missing-certificate dialog. A bounded diagnostic overlay then let only
+that exact module/callback use the in-process socket machinery, without an OS
+socket and without any successful authentication reply.
+
+The first request is 73 bytes: big-endian length `0x0049`, bytes
+`00 00 00 03 f9 00 00 02 05`, version text `V.1.0.1`, padding, the emulator
+subscriber number, and zero-filled trailing fields. The native connection
+callback is `0x2d471`; the read callback at `0x2d171` first asks for two
+bytes, then derives the remaining frame length from that header. The write is
+observed at `0x2d8c5` and was rejected after capture. This binary protocol
+differs from the already-supported handshake. Artifacts:
+`case-4-network.{log,png}`, `case-4-request.log`, and the ignored
+`net4-observe.json` overlay; no diagnostic network behavior entered product
+code.
+
+<a id="lgt-qa-2026-09-21-certificate-response-dispatch-and-second-request"></a>
+
+#### Certificate response dispatch and second request
+
+At the first write, the native network route (`0x150092c`) is 8 and its
+suppression flag (`0x1503ea4`) is zero. Completed frames pass through
+`0x2d2e4`, `0x7f730` and `0x7fa74` to route 8's handler `0x74c2c`, which
+switches on response byte 3. A five-byte diagnostic frame `00 05 00 00 00`
+therefore exercises the command-zero branch, not a certificate grant, and
+triggers the native second request builder at `0x7e788`.
+
+The second request is 79 bytes: `00 4f 00 14 00 0c 04 00`, then the
+emulator's name in a 50-byte field and trailing zero fields. The response
+parser at `0x7e874` reads a result byte at offset 5, a big-endian string
+length at 6–7, and that many bytes from offset 8. The diagnostic response
+`00 08 00 14 00 00 00 00` exercises this parser with an empty string. Both
+frames are read as a separate two-byte header followed by their body.
+
+These probe responses do not establish the real service's success contract:
+the 1,700-tick replay still shows the consent/dialog path, with no
+certificate issuance, persistence or gameplay access, and empty response data
+is not an authentication implementation. The diagnostic has no external
+socket and changes only an isolated save root. Artifacts:
+`case-4-request-route.log`, `case-4-stage-two.log`, and
+`case-4-empty-reply.{log,png}`.
+
+<a id="lgt-qa-2026-09-21-case-1-reported-authentication-error-reproduced"></a>
+
+### Case 1: reported authentication error reproduced
+
+The production CLI with a copy of the existing debug save directory reaches
+the title and authentication consent dialog; the source save directory is
+unchanged. A deterministic interactive route steps 1,500 ticks, then repeats
+seven two-tick `fire` presses each followed by 250 ticks, and the fourth/fifth
+captured transitions reach the reported `Error code :: -1001` screen
+(`case-1-confirm-commands.json`, `case-1-confirm-route.log`,
+`case-1-confirm-4.png`). The same route against a fresh isolated save
+directory stays black (`case-1-fresh-confirm.log`, `case-1-fresh-confirm-6.png`),
+a separate startup condition.
+
+The guest calls `netConnect` with callback `0x6cc05` and parameter
+`0x15078e0`, and the immediate return is zero. The callback at `0x6cc04`
+tests its result and forwards a nonzero result to `0x6ca28`, which closes the
+connection and invokes the object's failure method, so the offline callback
+reaches the authentication failure path. The -1001 screen was at first
+conflated with that failure; "Save subscriber comparison" below establishes a
+separate subscriber mismatch as its cause. The ordinary WIPI asynchronous
+failure contract is unchanged.
+
+An ignored build overlay that recognizes only this module hash and dial
+callback accepts the dial and socket in the in-process service and records
+the first guest write before rejecting its unknown protocol; it opens no OS
+socket and supplies no success response. The request is 71 bytes, beginning
+`47 00 06 01`, whose first word agrees with a little-endian packet length, and
+carries identity/model/version fields and binary trailing fields. It differs
+from the existing `KP` authentication exchange and from the case 4 big-endian
+request. `net1-observe.json`, `case-1-local-request.log`, and its screenshots
+retain that diagnostic, which still ends on the error screen.
+
+A preliminary isolation probe copies each of the five nonempty original save
+files separately into an otherwise fresh directory; each produces zero flushes
+over 500 ticks without input, which does not identify the combination or
+initialization state that permits startup. No production code changed in
+this investigation.
+
+<a id="lgt-qa-2026-09-21-case-1-save-isolation-and-response-parser"></a>
+
+#### Case 1: save isolation and response parser
+
+A leave-one-file-out replay copies the existing saves, omits one file, and
+runs 800 ticks with `fire` at tick 250 held for two ticks. Omitting
+`game_o.sav` or `game_rg.sav` gives zero flushes; omitting `audio.adt`,
+`game_nr.sav`, `speed.dat`, or `.removed` gives 400. The archive also contains
+the first two files with the same lengths (2,776 and 294 bytes), but they
+differ from the existing saves in 2,602 and 273 bytes, so the fresh run reads
+packaged defaults rather than missing these files. The guest
+validation/initialization difference is unresolved
+(`case-1-save-omission.json`).
+
+The network object's vtable is `0xd2744`; its ARM adjustment thunks subtract
+`0x20` from the receiver and call the Thumb handlers. The response handler is
+`0x698f8`; `0x6cd00` reads a little-endian total length and subtracts the
+four-byte header. The handler reads the command from bytes 2–3 and a signed
+status byte at offset 4. Commands `0x101`, `0x103`, and `0x107` copy 40 bytes
+from offset 5 into the guest's certificate-writing helper `0x692e4`, and the
+flag at offset 45 selects the next UI state; command `0x201` selects state
+`0x12`. This is observed private application protocol, not a WIPI network
+API contract.
+
+An ignored diagnostic responder returning a 46-byte `0x107` frame with status
+zero, a clearly synthetic local diagnostic token, and flag zero reaches the
+privacy-consent text instead of the -1001 screen, and the guest writes the
+resulting 60-byte `audio.adt` into the isolated save directory. This is not a
+carrier certificate or production support. After scrolling down and
+confirming consent, the guest sends a second 20-byte request with command
+`0x200` on the same connection; the attempted five-byte `0x201` response still
+leaves the sampled screen on the connection message, and later state
+transitions and persistent acceptance are not established.
+
+Artifacts: `case-1-local-reply-4.png` shows the consent text;
+`case-1-local-after-commands.json` records scrolling and confirmation;
+`case-1-reply3.log` and `case-1-reply3-after-4.png` retain the unresolved
+second exchange. The latest `net1-observe.json` overlay includes both
+experimental responses. No production Go code changed during these probes.
+
+<a id="lgt-qa-2026-09-21-save-subscriber-comparison"></a>
+
+### Save subscriber comparison
+
+The guest save reader at `0x69ccc` validates the total length, decodes the
+payload, and compares a 12-byte saved subscriber field with `PHONENUMBER`.
+Only that comparison's failure at `0x69d9c` loads error -1001; the following
+checksum failure uses -1002. The production boundary trace confirms equality
+for the initial options/progress reads and nonzero comparison results at
+lines 438,695 and 438,760 before the error screen, so files loaded later can
+fail even when the startup options match the current identity. The earlier
+inference that the network refusal caused -1001 was incomplete.
+
+The diagnostic response work also found that an immediate in-process reply
+reenters the guest parser before its caller finishes setting the waiting
+state. Queuing the reply until the next service boundary lets consent finish
+but does not resolve the saved subscriber mismatch; those experimental
+responses remain ignored diagnostics and are not shipped.
+
+`lgt.save_subscriber_identity` selects the observed complete module digest.
+With automatic authentication compatibility enabled, the session verifies the
+comparison/failure instruction window and changes its conditional branch to an
+unconditional branch to the existing checksum validation. File bytes, the
+subscriber property, network behavior, and the length and checksum checks are
+unchanged; disabling authentication keeps the original branch, other module
+revisions do not match, and the session reports `lgt-save-subscriber`.
+
+An isolated diagnostic build with only that branch correction reaches an
+actual match from the existing save copy (`case-1-save-identity-after-0.png`)
+without synthetic network replies. Fresh saves leave the black startup screen
+and reach the guest's authentication-failure notice
+(`case-1-identity-fresh.png`), which is not proof of fresh gameplay. Authored
+Thumb regression tests execute both identity outcomes and both checksum
+outcomes, verify that the checksum result stays authoritative, reject
+unexpected code, and compare the surrounding bytes; the opt-in local archive
+test checks enabled/disabled session selection and original archive bytes.
+
+In production, the release CLI without any diagnostic overlay reaches and
+advances the match through 5,224 ticks from a fresh copy of the original debug
+save directory, with multiple changed frames and no runtime error
+(`case-1-production-identity.log`, `case-1-production-identity-after-4.png`).
+With an empty save directory the same route reaches the authentication-failure
+notice and the guest exits at tick 1,795: the saved subscriber mismatch and
+existing-save path are fixed, not every fresh-start authentication flow.
+
+`make test`, `make test-debug`, `go test -race ./internal/...`, and
+`go vet ./...` pass (`gate-save-identity-{test,debug,race,vet}.log`). The
+opt-in archive check passes with an absolute archive path; a relative path
+could not locate the input from the package directory. `git diff --check`
+passes, and no diagnostic network responder is in the production binary.
+
+<a id="lgt-qa-2026-09-21-case-4-deferred-replies-and-existing-save-comparison"></a>
+
+#### Case 4: deferred replies and existing-save comparison
+
+Because case 1 exposed a synchronous-response state overwrite, the case 4
+two-frame diagnostic was repeated with replies queued until the next
+socket-service boundary. The run reaches 2,288 ticks and repeats the same
+73-byte handshake and 79-byte follow-up, and the missing-certificate prompt
+and call-charge consent remain, so response timing alone does not fix the
+attempted exchange. Artifacts: `net4-deferred.json`,
+`case-4-deferred-commands.json`, `case-4-deferred.log`, and
+`case-4-deferred-2.png`/`case-4-deferred-6.png`.
+
+Production replays on isolated copies of both existing debug and release
+saves also reach the missing-certificate prompt after 1,000 ticks with confirm
+at ticks 20, 250 and 500; neither profile's save supplies a working
+certificate, and both source trees are unchanged
+(`case-4-original-{debug,release}.{log,png}`). Production code was unchanged
+for these probes.
+
+The route-8 dispatcher at `0x74c2c` recognizes commands 0, 1, 12, 20, and
+50–53. Command 0 starts the observed account/device-information request, and
+commands 12/20 parse a result and optional message before returning to UI
+state 4. Empty data through those branches was not shown to write a
+certificate.
+
+<a id="lgt-qa-2026-09-21-case-4-certificate-flag-and-nonempty-response-proof"></a>
+
+#### Case 4: certificate flag and nonempty response proof
+
+A write watch on the dialog selector `0x15116fc` identifies `0x81952` as the
+instruction selecting message 40 (the missing-certificate prompt), which is UI
+state 6. Its caller at `0x86090` reads a certificate-present word at
+`0x1509dfc`: zero selects state 6, nonzero state 5. The network response
+handler at `0x74cee` writes one to exactly this word only when the parsed
+message length is positive, which is why empty diagnostic messages could not
+pass the gate although both requests and parsers ran.
+
+The flag is initialized to zero at `0x81ef0`, restored through the 32-bit save
+field reader at `0x82664`, and serialized through the field writer at
+`0x82d96`; these are the guest's own packed-save paths, so no direct save
+rewrite is needed to exercise the protocol.
+
+An isolated diagnostic replay changes the second reply to command 20, result
+zero, and the nonempty ASCII message `Handled locally. Nothing sent.`, keeping
+big-endian frame and message lengths, the first reply, the request sequence
+and deferred delivery, with no external socket. The guest passes the
+certificate prompt, returns to the title, opens the game menu, and enters an
+item screen by 2,288 ticks (`case-4-message-6.png`, `case-4-message-8.png`,
+`case-4-message.log`). This proves the observed certificate gate can be
+completed by this local exchange.
+
+The observed socket contract uses dial callback `0x2d5c1`, connect callback
+`0x2d471`, address word `0xfa4273d3`, and port word `0x1d3b`. Production
+support had to match the known module and exact session request fields,
+enforce the two-stage sequence and fragmented-write bounds, keep unknown
+operations failing, respect the authentication opt-out, and add regression
+and real-session validation; the broad ignored probe accepted request lengths
+only. Artifacts: `cert4_watch.go`, `case-4-message-watch.log`,
+`case-4-certificate-watch.log`, and `net4-message.json` under the ignored QA
+directory. No diagnostic network code entered the tracked implementation.
+
+<a id="lgt-qa-2026-09-21-certificate-message-compatibility"></a>
+
+### Certificate message compatibility
+
+Production selects `lgt.certificate_message` only for the evidenced full
+native-module SHA-256 and matching application descriptor. The session's
+subscriber number and handset model construct two exact bounded requests;
+version, application header, command, field widths and padding must also
+match, and the socket contract additionally checks the dial/connect callbacks
+and endpoint. No OS socket is opened. Unknown revisions, reordered commands,
+changed fields, trailing bytes and uploads receive no success response. The
+ordinary authentication opt-out leaves this responder disabled; the selected
+session status is `lgt-certificate-message`.
+
+Each socket owns its request stage, fragments and pending response, and
+replies become readable only at the next socket-service boundary, so a native
+response callback cannot run inside the send routine before its UI state
+transition finishes. Closing a socket drops its pending reply and callbacks.
+The compatibility layer rewrites no original archive or save; the guest owns
+its normal packed-save writes.
+
+The first reply acknowledges the handshake; the second carries a bounded
+nonempty informational message stating local handling. The guest's parser
+sets its certificate-present field and follows its existing save path. No
+carrier credential or remote account is represented. Authored regressions
+cover every request split, changed request bytes, sequence/size rejection,
+deferred read readiness, two-part frame reads, and cancellation before
+delivery; existing local protocol tests pass unchanged.
+
+In production the release CLI without overlays reaches the menu and item
+screen by tick 2,288 (`case-4-production.log`, `case-4-production-6.png`,
+`case-4-production-8.png`), and the guest writes its ordinary save. A new
+process on a copy of that save with `-no-auth` reaches the menu by tick 776
+without the missing-certificate prompt (`case-4-restart.log`,
+`case-4-restart-2.png`). Because the responder is disabled in that run, this
+establishes guest-save persistence of the certificate state rather than a
+repeated handshake. Full gameplay and later progress saving are not claimed.
+
+All required gates pass (`gate-certificate-message-{test,debug,race,vet}.log`),
+as does the opt-in real-archive session selection/opt-out test
+(`gate-certificate-message-archive.log`) and `git diff --check`. Original
+archive and debug/release save directories were not modified, and no server
+was restarted.
+
+<a id="lgt-qa-2026-09-21-rendering-follow-up-new-game-restored-map-and-dialogue-bounds"></a>
+
+### Rendering follow-up: new game, restored map, and dialogue bounds
+
+Case 10's server-error notice does not prevent progress: the next confirm
+dismisses it. Two production routes start from empty saves and from a copy of
+the original debug saves; each advances 100 ticks, then performs nine
+two-tick confirm presses 200 ticks apart. At tick 1,918 the fresh route shows
+the opening scene with readable dialogue, and the existing-save route shows
+the restored village and player rather than a black framebuffer; the
+intermediate title screen has its lettering and menu. Evidence:
+`case-10-fresh-route.log`, `case-10-existing-route.log`,
+`case-10-fresh-8.png`, and `case-10-existing-8.png`. This verifies the
+blank-rendering path after the context correction; it does not claim that
+remote services work.
+
+Case 7's production build repeats the 8,000-tick intro route and advances
+through eight further short confirm presses. All nine captured dialogue frames
+keep speaker names inside their name boxes and text inside the lower dialogue
+border; the two-line dialogue in `case-7-dialogue-4.png` stays above the lower
+border with the SKIP indicator visible, and `case-7-dialogue-8.png` stays
+within the box. The run ends at tick 9,616 without an execution error. This is
+visual acceptance for the reported dialogue placement, without changing native
+font baselines or claiming the whole campaign. Artifacts:
+`case-7-dialogue-commands.json`, `case-7-dialogue.log`, and
+`case-7-dialogue-{0..8}.png`. No runtime code changed for these checks, and
+original archives and saves are untouched.
+
+<a id="lgt-qa-2026-09-21-case-2-contrast-follow-up"></a>
+
+#### Case 2 contrast follow-up
+
+The production release replay reaches the dungeon and opens PARTY, the
+already-equipped notice, and the selected member's status popup. White labels
+on dark panels and black labels on the light notice/status header are
+readable, and the status popup renders its HP/SP numbers and centered body
+text. This is bounded evidence, not proof that every reported low-contrast
+scene is fixed.
+
+`case-2-menu-commands.json`, `case-2-tab-commands.json`, and
+`case-2-nav-commands.json` preserve the input routes, with logs and PNGs under
+the ignored QA directory; the last route exits normally at 3,732 ticks.
+Repeated right inputs in PARTY select member slots, not the top icon bar, so
+those captures do not cover different menu tabs. Original saves are untouched.
+
+<a id="lgt-qa-2026-09-21-percussion-source-lifetime-follow-up-2026-09-23"></a>
+
+#### Percussion source lifetime follow-up (2026-09-23)
+
+A full 0–78 s browser replay of the recorded MIDI stream produced no browser
+errors, with a sampled peak of 0.975881 and RMS 0.032299 across 5,572,608
+analyser samples (`case-9-browser-audio-full.json`). Analyser polling does not
+capture every output sample, so these numbers do not prove that no transient
+clips, and they do not test WebSocket delivery or physical playback.
+
+The event stream contains 120 same-key percussion retriggers less than 200 ms
+apart. A percussion source lasts 200 ms, and its old `onended` callback
+deleted the channel/note entry unconditionally, so an old source could remove
+the newer source from voice accounting; the original browser replay observed
+24 such replacement collisions in the 30–40 s excerpt.
+
+`PageAudio` now removes the entry only if it still owns that exact voice. An
+authored test retriggers a percussion key after 46 ms, ends its older source,
+and checks that the newer voice and an unrelated key stay tracked; it fails
+before the change and passes afterwards, and completion of the newer source
+still removes its own entry. The browser replay after the change observed 35
+replacement collisions and zero lost replacements, with no browser errors
+(`case-9-browser-drum-fixed.json`). Timing and random noise differ between
+runs, so collision counts and signal peaks are not a controlled audio-quality
+comparison.
+
+This corrects voice accounting, not the oscillator/noise timbre
+approximation. Focused audio/settings tests and `make test` pass
+(`gate-drum-after.log`, `gate-drum-test.log`); no Go code changed in this
+follow-up.
+
+<a id="lgt-qa-2026-09-21-case-2-menu-coverage-2026-09-23"></a>
+
+#### Case 2 menu coverage (2026-09-23)
+
+Backing out of member selection twice permits horizontal navigation between
+menu tabs. `case-2-mainmenu-commands.json` records a production release run
+ending normally at 4,290 ticks, and captures `case-2-mainmenu-1.png` through
+`-6.png` cover ITEM, QUEST, COLLECTION, SERVER, SYSTEM and STATUS. Black text
+is rendered on light tan panels and white text on dark headers and gauges;
+quest entries, collection choices, system choices, member names and HP/SP
+numbers are visible, and the dim rank label in STATUS is distinguishable from
+the adjacent name and level. None of these captures reproduces black text on a
+black panel, and they do not identify the exact scene the user described. No
+color substitution was introduced without evidence of an incorrect color.
+
+<a id="lgt-qa-2026-09-21-requirement-audit-before-user-confirmation--2026-09-23"></a>
+
+### Requirement audit before user confirmation — 2026-09-23
+
+The scope remained all ten reports. The original startup/rendering failure
+paths for cases 1, 3, 4, 5, 6, 7, 8 and 10 had post-fix runtime evidence,
+without whole-campaign acceptance: case 1 uses an existing save, case 4 proves
+certificate persistence and menu entry, and case 6 reaches a continuation
+prompt after 5,000 ticks. Fresh remote services and untested later
+progression are outside those paths.
+
+Case 2's pink-background defect was reproduced and corrected, but its
+black-on-black report stayed unconfirmed after the dungeon, PARTY,
+status/notice popups and six other menu tabs; the exact screen or input
+sequence was missing. Case 9's browser run and percussion lifetime regression
+could not establish that the original audible complaint was gone; a scene or
+playback point distinguishing timbre mismatch, clicks/dropouts or an overly
+loud part was missing. The user was asked for these details.
+
+<a id="lgt-qa-2026-09-21-user-acceptance"></a>
+
+### User acceptance
+
+On 2026-09-23 the user confirmed that case 2's contrast and case 9's sound
+now behave normally, closing the remaining acceptance gap for the ten reported
+defects together with the runtime evidence above. The confirmation does not
+assert exact handset audio fidelity, working remote carrier services or
+full-campaign coverage. The user requested a pull request with these fixes.
+
+<a id="lgt-qa-2026-09-21-pull-request-validation"></a>
+
+#### Pull request validation
+
+After the final percussion fix and user confirmation, `make test`,
+`make test-debug`, `go test -race ./internal/...`, and `go vet ./...` pass
+again (`gate-pr-{test,debug,race,vet}.log` in the ignored QA directory).
+Changed Go files pass `gofmt -l`, and the staged diff passes
+`git diff --check`. Original saves, game archives and unrelated local
+investigation documents are excluded from the pull request.
+
+<a id="lgt-qa-2026-09-21-existing-download-state-recovery--2026-09-23"></a>
+
+### Existing download-state recovery — 2026-09-23
+
+A later user check passed the other cases but still hit case 7's
+additional-download prompt. The existing debug save had an eight-byte
+`fs/down.z` filled with zeroes, shadowing the archive's completion/count
+record (little-endian words 1 and 69). The supplemental files were present and
+mounted, and confirming the prompt attempted the discontinued remote service.
+The fresh-save acceptance had not covered this stale saved override.
+
+A copied-save replay reproduced the prompt, and restoring only `down.z` from
+the archive's unique matching AID directory let the same input route reach the
+game menu, character selection and stat allocation, with configuration and
+version files unchanged. The actual debug save directory was backed up under
+`var/savedata/qa-lgt-20260921/`, then only its eight-byte `fs/down.z` was
+restored atomically from the archive; before/after hashes confirm every other
+file is unchanged. The ignored `case-7-download-repair.json` records the
+backup location and changed path, and replay logs/PNGs use
+`case-7-{user-download,download-repaired}` prefixes.
+
+A new game session must be started after the repair so cached runtime file
+state is discarded; no server restart or online download is needed. This is a
+targeted recovery of a verified stale state record, not a rule to replace
+arbitrary saved download metadata or bypass missing archive resources.
+
+<a id="lgt-key-callback-hang-2026-09-23"></a>
+
+## LGT key callback hang — 2026-09-23
+
+A new gameplay report reopened case 3 of the
+[ten-case QA](#lgt-qa-2026-09-21) after the logo-transition fix. The debug
+server used one CPU core while its status endpoint still answered HTTP 200 in
+0.6 ms. Native sampling placed execution inside
+`deliverJavaKey -> callJavaCardMethod -> Core.Call -> handleJavaSVC`. The last
+delivered event was a key release (type 2, key -5), followed by repeated
+helper 0x55 calls that grew the server log beyond 3.7 GB.
+
+The recognized native module's key handler at 0x8e0c waits at 0x8ee6–0x8ef4
+for the class static field at offset 0x5c to clear, calling helper 0x55 in the
+loop. Event delivery precedes worker service in the session tick, so a worker
+this callback needs cannot run until the callback returns. An authored ARM key
+callback waiting on a worker reproduces an instruction-limit failure in the
+existing runtime.
+
+Debug report requests also run on the session's command loop after Tick
+returns, which is why the page could not save a report during the hang. The
+three-billion-instruction session ceiling makes this failure very slow to
+report, especially when debug logging writes every repeated call.
+
+The live process was suspended with SIGSTOP to stop log growth while
+preserving its memory; it was not terminated or restarted. Native samples, the
+bounded key-boundary excerpt and input timings are under the ignored
+`build/lgt-hang-20260923` directory. Original saves and archives are
+untouched.
+
+The fix services eligible workers after 64 compiler checkpoints inside key
+callbacks, preserving synchronized regions and the original step ceiling.
+Worker execution remains serialized. Each worker keeps its own try regions,
+jump-buffer pool and native call depth across slices, and the suspended
+callback's exception state is restored afterwards. Without that separation
+the first scheduling prototype hit a missing-try-region failure in the real
+archive, so it was not kept as a standalone fix. Current behavior:
+[LGT](../lgt.md#key-callbacks-waiting-on-workers).
+
+<a id="lgt-key-callback-hang-2026-09-23-verification"></a>
+
+### Verification
+
+The authored ARM callback regression fails before the change at the
+one-million-instruction ceiling and passes after it. Further tests preserve a
+platform-held monitor and a worker's exception region across an interleaved
+callback, checking distinct jump buffers and cleanup on completion.
+
+The 148 captured key events were replayed in isolated fresh and copied-save
+runs. Original timing did not reproduce the live hang in either build. With
+the intervals scaled to 90%, the original build hangs at event 78 in the
+actual `keyNotify` body at 0x8e0d and reaches a ten-million-instruction
+diagnostic ceiling. The fixed build completes all 148 events and 100 further
+ticks: 3,737 ticks, 37.001 guest seconds, 275 flushes, no runtime error, and a
+visible gameplay frame. Evidence: `baseline-timing-90.log`,
+`fixed-timing-90.log` and `fixed-timing-90.png` under the ignored incident
+directory.
+
+`make test`, `make test-debug`, `go test -race ./internal/...`, `go vet ./...`
+and `git diff --check` pass. The first whole-repository run encountered mixed
+packages in diagnostic overlay copies; those local files were renamed to
+non-Go inputs and the gates rerun successfully. A replacement debug server
+binary was built separately; the user's live server was not replaced or
+restarted, because a restart loses unsaved runtime progress and needs their
+confirmation.
+
+This fixes the evidenced input/worker wait. It adds no out-of-band report
+export for arbitrary blocked guest callbacks and does not claim that all later
+gameplay has been exercised.
+
+<a id="lgt-key-callback-hang-2026-09-23-user-acceptance"></a>
+
+### User acceptance
+
+After restarting the corrected debug server, the user reported that the other
+cases passed and only case 7's download prompt remained, so the key-callback
+hang is accepted on the user's gameplay route. The separate stale
+download-state recovery is recorded in the
+[ten-case QA report](#lgt-qa-2026-09-21-existing-download-state-recovery--2026-09-23).

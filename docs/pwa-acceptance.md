@@ -321,7 +321,7 @@ under ignored `build/release-0.5.1/`. The
 also passed its Ubuntu, Windows and macOS smoke checks.
 
 These runs use authored fixtures. They do not close the
-[WebKit Blob error observed during a real SKT reload](skt-resume-2026-09-30.md#validation).
+[WebKit Blob error observed during a real SKT reload](history/skt.md#skt-resume-2026-09-30-validation).
 Physical installation, audible output, native-app upgrades, real-game saved
 progression, phone heat/data use and WebP encoding cost on the intended free
 server remain outside this release check.

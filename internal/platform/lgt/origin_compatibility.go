@@ -57,7 +57,7 @@ func (client *Client) applyOriginCompatibility() error {
 
 // This revision shifts image rows but not platform primitives. Its 240/320
 // width branch adds a 24-row strip that our visible framebuffer does not have.
-// See docs/lgt-qa-2026-09-21.md#image-path-origin.
+// See docs/history/lgt.md#lgt-qa-2026-09-21-image-path-origin.
 func correctImageFramebufferOrigin(memory *armcore.Memory) error {
 	const address = 0x28a10
 	var code [6]byte
@@ -73,7 +73,7 @@ func correctImageFramebufferOrigin(memory *armcore.Memory) error {
 
 // This revision adds a separate handset strip to its centered drawing origin
 // before writing pixels directly. Keep centering and remove only the strip.
-// See docs/lgt-qa-2026-09-21.md#direct-framebuffer-origin.
+// See docs/history/lgt.md#lgt-qa-2026-09-21-direct-framebuffer-origin.
 func correctDirectFramebufferOrigin(memory *armcore.Memory) error {
 	const address = 0x12bc
 	var code [6]byte

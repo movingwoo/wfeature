@@ -245,7 +245,7 @@ that guest code did not request.
 
 Parking detaches the sink before its queue closes; resume installs the new queue
 before guest execution resumes. Intermediate frames use the same negotiated
-picture format. [The CPU investigation](cpu-saturation-investigation-2026-09-23.md)
+picture format. [The CPU investigation](history/session.md#cpu-saturation-investigation-2026-09-23)
 records component benchmarks, authored-fixture Chromium/WebKit checks and a
 bounded local KTF browser run; these do not establish all-game performance or
 physical-phone acceptance.
