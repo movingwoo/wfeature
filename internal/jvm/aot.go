@@ -247,8 +247,10 @@ func (vm *VM) NewAOTInstance(classAddress uint32) (*Object, error) {
 		return nil, fmt.Errorf("AOT class %s is an array class", metadata.Name)
 	}
 	object := &Object{ClassName: metadata.Name, Fields: make(map[string]Value)}
-	// Charged and never refused, as NewAOTArray's elements are.
-	weight, _ := vm.heap.charge(objectHeapBytes, false)
+	// Charged and never refused, as NewAOTArray's elements are, and charged
+	// what it costs here: its fields are in the platform's arena, which
+	// bounds them.
+	weight, _ := vm.heap.charge(aotObjectHeapBytes, false)
 	vm.recordHeapObject(weight, object)
 	vm.objectIdentity(object)
 	return object, nil

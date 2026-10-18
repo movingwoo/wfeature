@@ -100,30 +100,43 @@ func (s *Server) resumeSession(token string, owner *sessionRunner) (*parkedSessi
 // and not yet handed to the save store — a file it opened and did not close,
 // keys kept in memory until a frame ends.
 //
-// From here on nothing starts and nothing parks. A parked game is closed
-// where it waits, because no goroutine is inside it. A game with a page
+// From here on nothing starts and nothing parks. A parked game is closed on
+// a goroutine of its own, because no goroutine is inside it; its save
+// directory stays claimed until its close has returned. A game with a page
 // attached is not closed from here: guest code is not re-entrant and its
 // runner may be in the middle of a tick, so the runner is asked, finishes the
 // round it is in and closes the game on its own goroutine, the way it closes
 // one its page stopped. A socket with no game behind it is left alone.
 //
-// ctx bounds the wait for those runners. One that has not let go of its game
-// by then is named in the log and left behind, so that a guest call which
-// never returns cannot keep the process from ending.
+// ctx bounds the wait for both. A close that has not ended by then is named
+// in the log and left behind, so that a guest call which never returns cannot
+// keep the process from ending. A parked game used to be closed here, one
+// after another under the lock, before the wait began, so a title's
+// destroyApp that never returned kept the process from ending and an app
+// reopened behind it waiting on that process.
 func (s *Server) CloseSessions(ctx context.Context) {
 	type holder struct {
-		runner *sessionRunner
-		label  string
+		released <-chan struct{}
+		label    string
 	}
 	s.parkedMu.Lock()
 	s.sessionsClosed = true
+	var holders []holder
 	for token, parked := range s.parked {
-		s.dropLocked(token, parked, "server stopping")
+		delete(s.parked, token)
+		closed := make(chan struct{})
+		holders = append(holders, holder{released: closed, label: parked.label})
+		go func() {
+			defer close(closed)
+			parked.game.Close()
+			s.parkedMu.Lock()
+			s.releaseParkedLocked(parked, "server stopping")
+			s.parkedMu.Unlock()
+		}()
 	}
 	// Only an admitted runner has a game or is starting one, and the flag
 	// above admits no more: a start that has reserved its token and nothing
 	// else is refused by it, and nothing is left parked to resume.
-	var holders []holder
 	for _, runner := range s.attached {
 		// A runner only has the two channels once serveSession has made it;
 		// one without them has no loop to ask and nothing to wait for. A stop
@@ -139,34 +152,41 @@ func (s *Server) CloseSessions(ctx context.Context) {
 		default:
 			close(runner.stop)
 		}
-		holders = append(holders, holder{runner: runner, label: runner.admittedAs})
+		holders = append(holders, holder{released: runner.released, label: runner.admittedAs})
 	}
 	s.parkedMu.Unlock()
 
 	for _, held := range holders {
 		select {
-		case <-held.runner.released:
+		case <-held.released:
 			continue
 		case <-ctx.Done():
 		}
-		// The deadline has passed. A runner that let go in the same moment is
+		// The deadline has passed. A game that let go in the same moment is
 		// not late, so it is asked once more before it is reported.
 		select {
-		case <-held.runner.released:
+		case <-held.released:
 		default:
 			s.logger.Warn("session did not close before the shutdown deadline", "game", held.label)
 		}
 	}
 }
 
-// dropLocked closes one parked game. The caller holds the mutex.
+// dropLocked closes one parked game. The caller holds the mutex; a close is
+// bounded (see session.Session.Close).
 func (s *Server) dropLocked(token string, parked *parkedSession, reason string) {
 	parked.game.Close()
+	delete(s.parked, token)
+	s.releaseParkedLocked(parked, reason)
+}
+
+// releaseParkedLocked lets go of what a parked game held once it is closed.
+// The caller holds the mutex.
+func (s *Server) releaseParkedLocked(parked *parkedSession, reason string) {
 	s.releaseSaveDirectoryLocked(parked.saveDirectory)
 	if parked.cancel != nil {
 		parked.cancel()
 	}
-	delete(s.parked, token)
 	s.logger.Info("parked session closed", "game", parked.label, "reason", reason,
 		"parked_for", time.Since(parked.parkedAt).Round(time.Second))
 }

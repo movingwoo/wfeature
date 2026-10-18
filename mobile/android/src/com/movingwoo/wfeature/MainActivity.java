@@ -33,6 +33,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The app is the server with a WebView in front of it.
@@ -92,6 +93,23 @@ public class MainActivity extends Activity {
     private static Process ending;
 
     /**
+     * The activity the app shows now: the one created last. A start still in
+     * flight for an older one does not launch a server, and an older one's
+     * ending does not stop the server a newer one took over, as one finishing
+     * late behind a reopened app would. Guarded by the class lock.
+     */
+    private static MainActivity current;
+
+    /**
+     * How long a reopened activity waits for the server a finished one ended.
+     * The server bounds its own drain (ten seconds for its games, and a
+     * game's close is bounded too), so a process still alive past this will
+     * not end on its own, and it is ended: it can write no save any more, and
+     * the app would otherwise never show its page.
+     */
+    private static final long ENDING_WAIT_SECONDS = 30;
+
+    /**
      * Set when this activity is gone for good rather than recreated, so a
      * start still in flight does not leave a server nobody will end.
      */
@@ -115,6 +133,9 @@ public class MainActivity extends Activity {
         waiting.setPadding(48, 48, 48, 48);
         setContentView(waiting);
 
+        synchronized (MainActivity.class) {
+            current = this;
+        }
         new Thread(this::startServerAndShow).start();
     }
 
@@ -142,7 +163,7 @@ public class MainActivity extends Activity {
             while (true) {
                 Process previous;
                 synchronized (MainActivity.class) {
-                    if (finished) {
+                    if (finished || current != this) {
                         return;
                     }
                     if (ending != null && ending.isAlive()) {
@@ -156,10 +177,14 @@ public class MainActivity extends Activity {
                         break;
                     }
                 }
-                // No time limit: the drain is what writes the games' exit-time
-                // saves, and it is bounded by the server itself.
+                // The drain is what writes the games' exit-time saves, and the
+                // server bounds it; see ENDING_WAIT_SECONDS for the rest.
                 Log.i(TAG, "waiting for the server a finished activity ended");
                 showWaiting("이전 실행을 마치는 중...");
+                if (!previous.waitFor(ENDING_WAIT_SECONDS, TimeUnit.SECONDS)) {
+                    Log.w(TAG, "the earlier server did not end in " + ENDING_WAIT_SECONDS + " s; ending it");
+                    previous.destroyForcibly();
+                }
                 int exit = previous.waitFor();
                 Log.i(TAG, "the earlier server ended (exit " + exit + ")");
             }
@@ -598,6 +623,12 @@ public class MainActivity extends Activity {
         }
         synchronized (MainActivity.class) {
             finished = true;
+            // A newer activity has taken the server over: this one finished
+            // late, behind the app reopened, and the server is that one's now.
+            if (current != this) {
+                return;
+            }
+            current = null;
             if (server != null) {
                 // The session drains on its own when the process goes; what
                 // must not happen is the process outliving the app that

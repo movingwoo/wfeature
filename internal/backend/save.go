@@ -210,7 +210,8 @@ func (store *DirectorySaveStore) prepareSaveWrite(name string, names *saveNames)
 	if names.naming == namingEarlier {
 		return "", refuseEarlierSaveNames(store.root, *names)
 	}
-	if encoded := encodeSaveKey(key); names.naming == namingPlain && encoded != key && saveNamesFit(encoded) {
+	if encoded := encodeSaveKey(key); names.naming == namingPlain && encoded != key && saveNamesFit(encoded) &&
+		savePathFits(filepath.Join(store.root, filepath.FromSlash(encoded))) {
 		if err := encodeSaveNames(store.root); err != nil {
 			return "", fmt.Errorf("prepare save directory %s for the name %q: %w", store.root, key, err)
 		}

@@ -103,6 +103,99 @@ public final class HeapBudget {
         return count;
     }
 
+    /**
+     * Keeps small objects through every refusal, as a title does that catches
+     * OutOfMemoryError and goes on allocating, and answers how many it kept.
+     */
+    public static int retainThroughRefusals(int attempts) {
+        Node head = null;
+        int kept = 0;
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            try {
+                Node node = new Node();
+                node.next = head;
+                node.value = attempt;
+                head = node;
+                kept++;
+            } catch (OutOfMemoryError e) {
+                // Goes on, as such a title does.
+            }
+        }
+        return kept;
+    }
+
+    /**
+     * Keeps Strings built from one text of length characters until one is
+     * refused: from a char array (kind 0), a byte array (1), a StringBuffer
+     * (2) or a byte range in a named encoding (3).
+     */
+    public static int retainCopies(int kind, int length) {
+        char[] chars = new char[length];
+        byte[] bytes = new byte[length];
+        for (int index = 0; index < length; index++) {
+            chars[index] = (char) ('a' + index % 26);
+            bytes[index] = (byte) chars[index];
+        }
+        StringBuffer buffer = new StringBuffer(length);
+        buffer.append(chars);
+        String[] copies = new String[400];
+        int count = 0;
+        try {
+            while (count < copies.length) {
+                switch (kind) {
+                case 0:
+                    copies[count] = new String(chars);
+                    break;
+                case 1:
+                    copies[count] = new String(bytes);
+                    break;
+                case 2:
+                    copies[count] = new String(buffer);
+                    break;
+                default:
+                    copies[count] = new String(bytes, 0, length, "UTF-8");
+                    break;
+                }
+                count++;
+            }
+            return -1;
+        } catch (OutOfMemoryError e) {
+            return count;
+        } catch (java.io.UnsupportedEncodingException e) {
+            return -2;
+        }
+    }
+
+    /**
+     * Fills the budget with arrays it keeps, then asks attempts times for a
+     * small array it would also keep, and answers how many were refused.
+     */
+    public static int refusedWhileFull(int attempts) {
+        Object[] held = new Object[1024];
+        int count = 0;
+        try {
+            while (count < 256) {
+                held[count] = new int[CHUNK];
+                count++;
+            }
+        } catch (OutOfMemoryError e) {
+            // Full.
+        }
+        int refused = 0;
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            try {
+                int[] small = new int[1024];
+                if (count < held.length) {
+                    held[count] = small;
+                    count++;
+                }
+            } catch (OutOfMemoryError e) {
+                refused++;
+            }
+        }
+        return held[0] == null ? -1 : refused;
+    }
+
     /** A StringBuffer cut short and lengthened again reads zeros past the cut. */
     public static String refill() {
         StringBuffer buffer = new StringBuffer("abc");

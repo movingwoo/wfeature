@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -71,16 +70,8 @@ func TestWriteSaveTreeRefusesWhatItCannotApplyWhole(t *testing.T) {
 			live:    []string{"fs/0", "fs/b/c"},
 			entries: []SaveEntry{{Key: "fs/0", Data: []byte("new")}, {Key: "fs/b", Data: []byte("new")}},
 		},
-		{
-			name:    "a name macOS will not store",
-			live:    []string{"fs/0"},
-			entries: []SaveEntry{{Key: "fs/0", Data: []byte("new")}, {Key: "fs/\xff", Data: []byte("new")}},
-		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			if testCase.name == "a name macOS will not store" && runtime.GOOS != "darwin" && runtime.GOOS != "ios" {
-				t.Skip("only macOS refuses a name that is not UTF-8")
-			}
 			root := t.TempDir()
 			store := NewDirectorySaveStore(root)
 			for _, key := range testCase.live {

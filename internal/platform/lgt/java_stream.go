@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"maps"
+	"slices"
 	"unicode/utf16"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -419,6 +421,21 @@ func javaStreamClose(
 	// A stream opened on a File leaves that file where the reading got to,
 	// and one that held its file open after the File closed lets it go; a
 	// plain one is bound to nothing and this is nothing. See java_file.go.
+	//
+	// A wrapper is the stream it wraps (javaWrapStream), so closing either
+	// closes the one open stream: the file is let go under whichever object
+	// holds it. Closing only the object the title closed left the stream the
+	// wrapper stood on holding its file until a collection.
+	for _, object := range slices.Sorted(maps.Keys(client.javaRun.streamFiles)) {
+		if object == arguments[0] || client.javaRun.streams[object] != stream {
+			continue
+		}
+		if err := client.syncJavaStreamToFile(object); err != nil {
+			return 0, err
+		}
+		delete(client.javaRun.streamFiles, object)
+		client.releaseJavaFileStream(object)
+	}
 	if err := client.syncJavaStreamToFile(arguments[0]); err != nil {
 		return 0, err
 	}

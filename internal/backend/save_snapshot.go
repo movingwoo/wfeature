@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -193,7 +194,10 @@ func readSnapshotSaves(root string, naming saveNaming) ([]SaveEntry, error) {
 		if path == "." || path == saveNamesRecord {
 			return nil
 		}
-		key, encoded, err := saveEntryKey(path, naming)
+		if !entry.IsDir() && saveCompanionFile(filepath.Join(root, filepath.FromSlash(path))) {
+			return nil
+		}
+		key, encoded, err := saveEntryKey(composedSavePath(root, path), naming)
 		if err != nil {
 			return fmt.Errorf("save snapshot contains a noncanonical key")
 		}

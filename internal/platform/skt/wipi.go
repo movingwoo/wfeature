@@ -535,9 +535,14 @@ func (runtime *Runtime) getGraphicsRGBPixels(_ *jvm.VM, arguments []jvm.Value) (
 			}
 			length := int(span[1] - span[0])
 			first := x + int32(span[0]-start)
-			for column := range length {
-				pixels[column] = contextARGB(context, first+int32(column), y+row)
-			}
+			// The pixels are read under the lock their writers take: a
+			// title draws on the screen from its own thread while another
+			// reads it back.
+			context.withDestinationWrite(func() {
+				for column := range length {
+					pixels[column] = contextRGB(context, first+int32(column), y+row)
+				}
+			})
 			if err := jvm.SetArrayRange(array, int(span[0]), pixels[:length]); err != nil {
 				return jvm.VoidValue(), err
 			}
@@ -546,16 +551,17 @@ func (runtime *Runtime) getGraphicsRGBPixels(_ *jvm.VM, arguments []jvm.Value) (
 	return jvm.VoidValue(), nil
 }
 
-// contextARGB is one surface pixel as getRGBPixels hands it out, 0 for a point
-// off the surface.
-func contextARGB(context *graphicsContext, x, y int32) jvm.Value {
+// contextRGB is one surface pixel as getRGBPixels hands it out: 0x00RRGGBB,
+// which is the form the specification gives it, and 0 for a point off the
+// surface. An opaque pixel read with its alpha in the top byte compared
+// unequal to the colour a title had drawn.
+func contextRGB(context *graphicsContext, x, y int32) jvm.Value {
 	index, ok := contextPixelIndexUnclipped(context, x, y)
 	if !ok {
 		return jvm.IntValue(0)
 	}
-	return jvm.IntValue(int32(uint32(context.pixels[index+3])<<24 |
-		uint32(context.pixels[index])<<16 | uint32(context.pixels[index+1])<<8 |
-		uint32(context.pixels[index+2])))
+	return jvm.IntValue(int32(uint32(context.pixels[index])<<16 |
+		uint32(context.pixels[index+1])<<8 | uint32(context.pixels[index+2])))
 }
 
 func (runtime *Runtime) setGraphicsRGBPixels(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -739,6 +745,8 @@ func (runtime *Runtime) wipiFileRemove(_ *jvm.VM, arguments []jvm.Value) (jvm.Va
 		return jvm.VoidValue(), err
 	}
 	switch runtime.removeXFile(name) {
+	case xFileRemovedUnstored:
+		return jvm.VoidValue(), newGuestException("java/io/IOException", "removed, but the removal could not be stored: "+name)
 	case xFileAbsent:
 		return jvm.VoidValue(), newGuestException("java/io/IOException", "no such file: "+name)
 	case xFileUnremovable:

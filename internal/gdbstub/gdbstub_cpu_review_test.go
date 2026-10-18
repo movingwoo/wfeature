@@ -567,3 +567,326 @@ func TestAPacketBodyIsBounded(t *testing.T) {
 		t.Fatalf("a %d-byte packet: err=%v", len(payload), err)
 	}
 }
+
+// replyWithin waits up to wait for the next packet, skipping acknowledgements,
+// and reports whether one came.
+func (c *client) replyWithin(wait time.Duration) (string, bool) {
+	c.t.Helper()
+	if err := c.conn.SetReadDeadline(time.Now().Add(wait)); err != nil {
+		c.t.Fatal(err)
+	}
+	defer c.conn.SetReadDeadline(time.Time{})
+	for {
+		symbol, err := c.reader.ReadByte()
+		if err != nil {
+			return "", false
+		}
+		if symbol != '$' {
+			continue
+		}
+		body, err := c.reader.ReadString('#')
+		if err != nil {
+			return "", false
+		}
+		var digits [2]byte
+		if _, err := io.ReadFull(c.reader, digits[:]); err != nil {
+			return "", false
+		}
+		return strings.TrimSuffix(body, "#"), true
+	}
+}
+
+// waitForReply sends a request and requires its answer within a second, well
+// inside what a client allows before it gives up on the target.
+func (c *client) waitForReply(request, want string) {
+	c.t.Helper()
+	c.send(request)
+	if got, ok := c.replyWithin(time.Second); !ok || got != want {
+		c.t.Fatalf("%s reply = %q (answered: %v), want %q within a second", request, got, ok, want)
+	}
+}
+
+// hangUp serves a client that sends requests and closes its connection at
+// once, so the end of the connection is already queued behind the last
+// request, as it is when a client writes a packet and closes the socket.
+func hangUp(target Target, writer io.Writer, requests ...string) {
+	var input strings.Builder
+	for _, request := range requests {
+		input.WriteString(encodePacket(request))
+	}
+	_ = Serve(struct {
+		io.Reader
+		io.Writer
+	}{strings.NewReader(input.String()), writer}, target)
+}
+
+// resetWriter takes the acknowledgements and fails every packet, the way a
+// connection fails once the client has reset it.
+type resetWriter struct{}
+
+func (resetWriter) Write(data []byte) (int, error) {
+	if len(data) == 1 && (data[0] == '+' || data[0] == '-') {
+		return 1, nil
+	}
+	return 0, errors.New("connection reset by peer")
+}
+
+// A client that asks for a stop or a step and hangs up straight away has
+// nobody left to let the guest go, so nothing it asked for may stop the guest
+// once it has gone: a stopped guest holds the run, and the terminal's Ctrl-C
+// with it, until another client attaches.
+func TestAClientThatHangsUpLeavesTheGuestRunning(t *testing.T) {
+	const rounds = 50
+	for _, leave := range []struct {
+		name     string
+		writer   io.Writer
+		requests []string
+	}{
+		{"? then hang up", io.Discard, []string{"?"}},
+		{"s then hang up", io.Discard, []string{"s"}},
+		{"? s then hang up", io.Discard, []string{"?", "s"}},
+		{"? then reset", resetWriter{}, []string{"?"}},
+	} {
+		t.Run(leave.name, func(t *testing.T) {
+			stopped := 0
+			for round := 0; round < rounds; round++ {
+				core := reviewCore(t, false, endlessLoop...)
+				target := NewCoreTarget(core)
+				ctx, cancel := context.WithCancel(context.Background())
+				done := runGuest(ctx, core, target, false)
+				hangUp(target, leave.writer, leave.requests...)
+				// Whatever the client set going has had the time it needs to
+				// reach the guest.
+				time.Sleep(10 * time.Millisecond)
+				// With nobody attached, a cancel, which is the terminal's
+				// Ctrl-C, ends the run.
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					stopped++
+					target.Detach()
+					<-done
+				}
+				target.Detach()
+			}
+			if stopped != 0 {
+				t.Fatalf("the guest stayed stopped after %d of %d clients left", stopped, rounds)
+			}
+		})
+	}
+}
+
+// A continue that its client's hang-up overtook must not stay behind waiting
+// for a stop: the next client's stop would go to it, and that client would
+// never hear its own.
+func TestAClientThatHangsUpLeavesNothingWaiting(t *testing.T) {
+	const rounds = 50
+	unanswered := 0
+	for round := 0; round < rounds; round++ {
+		core := reviewCore(t, false, endlessLoop...)
+		target := NewCoreTarget(core)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := runGuest(ctx, core, target, false)
+		hangUp(target, io.Discard, "c")
+		time.Sleep(10 * time.Millisecond)
+		peer, served := serve(target)
+		c := newClient(t, peer)
+		c.send("?")
+		if got, ok := c.replyWithin(time.Second); !ok || got != "S05" {
+			unanswered++
+		}
+		peer.Close()
+		<-served
+		cancel()
+		target.Detach()
+		<-done
+	}
+	if unanswered != 0 {
+		t.Fatalf("the next client's ? went unanswered after %d of %d clients hung up", unanswered, rounds)
+	}
+}
+
+// A client that attaches while no guest code runs (a run waiting on its
+// driver, a title with nothing due, a guest inside a call the host is still
+// answering) is told the target stopped without waiting for an instruction
+// that may be a long way off, and the stop is armed, so the guest stops at the
+// first instruction it runs. The client then reads the place it stopped, and
+// no stop arrives later as the answer to another request.
+func TestAStopIsAnsweredWhileNoGuestCodeRuns(t *testing.T) {
+	t.Run("before the guest runs", func(t *testing.T) {
+		core := reviewCore(t, false, countedLoop...)
+		target := NewCoreTarget(core)
+		defer target.Detach()
+		peer, served := serve(target)
+		c := newClient(t, peer)
+		c.waitForReply("?", "S05")
+		done := runGuest(context.Background(), core, target, false)
+		waitFor(t, "the guest to stop at its first instruction", target.parked)
+		if got := c.exchange("p0f"); got != hexWord(reviewBase) {
+			t.Fatalf("pc = %s, want the entry at %s", got, hexWord(reviewBase))
+		}
+		// From there a continue runs the guest to its end.
+		c.waitForReply("c", "W00")
+		if err := <-done; err != nil {
+			t.Fatalf("guest run error = %v", err)
+		}
+		peer.Close()
+		<-served
+	})
+	t.Run("inside a supervisor call", func(t *testing.T) {
+		core := reviewCore(t, false,
+			0xef000000, // svc #0
+			0xeafffffe, // b .
+		)
+		target := NewCoreTarget(core)
+		defer target.Detach()
+		entered := make(chan struct{})
+		answer := make(chan struct{})
+		handler := func(context.Context, *armcore.Thread, armcore.SupervisorCall) error {
+			close(entered)
+			<-answer
+			return nil
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			initial := armcore.NewContext()
+			initial.Registers[armcore.RegisterSP] = 0x3000
+			_, err := core.Call(ctx, armcore.NewThread(initial), reviewBase, reviewEnd, nil, handler)
+			target.Finished()
+			done <- err
+		}()
+		<-entered
+		peer, served := serve(target)
+		c := newClient(t, peer)
+		c.waitForReply("?", "S05")
+		close(answer)
+		waitFor(t, "the guest to stop after the call returned", target.parked)
+		if got := c.exchange("p0f"); got != hexWord(reviewBase+4) {
+			t.Fatalf("pc = %s, want the instruction after the call at %s", got, hexWord(reviewBase+4))
+		}
+		if got := c.exchange("D"); got != "OK" {
+			t.Fatalf("D reply = %q", got)
+		}
+		peer.Close()
+		<-served
+		cancel()
+		<-done
+	})
+	t.Run("an interrupt", func(t *testing.T) {
+		core := reviewCore(t, false, countedLoop...)
+		target := NewCoreTarget(core)
+		defer target.Detach()
+		peer, served := serve(target)
+		c := newClient(t, peer)
+		c.send("c")
+		c.acknowledged()
+		go peer.Write([]byte{0x03})
+		if got, ok := c.replyWithin(time.Second); !ok || got != "S05" {
+			t.Fatalf("reply to the interrupt = %q (answered: %v), want a stop within a second", got, ok)
+		}
+		done := runGuest(context.Background(), core, target, false)
+		waitFor(t, "the guest to stop at its first instruction", target.parked)
+		if got := c.exchange("qC"); got != "QC1" {
+			t.Fatalf("qC reply = %q, want QC1 with no late stop before it", got)
+		}
+		if got := c.exchange("D"); got != "OK" {
+			t.Fatalf("D reply = %q", got)
+		}
+		peer.Close()
+		<-served
+		if err := <-done; err != nil {
+			t.Fatalf("guest run error = %v", err)
+		}
+	})
+}
+
+// A guest whose run is over is reported as exited, or as killed when its
+// client killed it, and at once: a stop reply would tell the client there is
+// still a target to continue.
+func TestAnEndedGuestIsReportedAsGone(t *testing.T) {
+	t.Run("exited", func(t *testing.T) {
+		core := reviewCore(t, false, countedLoop...)
+		target := NewCoreTarget(core)
+		defer target.Detach()
+		if err := <-runGuest(context.Background(), core, target, false); err != nil {
+			t.Fatalf("guest run error = %v", err)
+		}
+		peer, served := serve(target)
+		c := newClient(t, peer)
+		for _, request := range []string{"?", "c", "s"} {
+			c.waitForReply(request, "W00")
+		}
+		peer.Close()
+		<-served
+	})
+	t.Run("killed", func(t *testing.T) {
+		core := reviewCore(t, false, endlessLoop...)
+		target := NewCoreTarget(core)
+		defer target.Detach()
+		done := runGuest(context.Background(), core, target, false)
+		peer, served := serve(target)
+		c := newClient(t, peer)
+		if got := c.exchange("?"); got != "S05" {
+			t.Fatalf("? reply = %q", got)
+		}
+		c.send("k")
+		// A kill has no reply, and the stub ends the connection once it has
+		// taken it, so the acknowledgement is the last thing to read.
+		if err := peer.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if symbol, err := c.reader.ReadByte(); err != nil || symbol != '+' {
+			t.Fatalf("acknowledgement of k = %q, %v", symbol, err)
+		}
+		<-served
+		peer.Close()
+		if err := <-done; !errors.Is(err, ErrKilled) {
+			t.Fatalf("run error after k = %v, want ErrKilled", err)
+		}
+		peer, served = serve(target)
+		c = newClient(t, peer)
+		c.waitForReply("?", "X09")
+		peer.Close()
+		<-served
+	})
+}
+
+// The stop a client was told of while no guest code ran is the one the guest
+// then makes at its first instruction, so a continue from it runs on to the
+// breakpoint rather than reporting that first instruction as a stop of its
+// own, whether the guest reached it before the continue or not.
+func TestAContinueFromAnArmedStopRunsToTheBreakpoint(t *testing.T) {
+	for _, reached := range []bool{false, true} {
+		core := reviewCore(t, false, countedLoop...)
+		target := NewCoreTarget(core)
+		peer, served := serve(target)
+		c := newClient(t, peer)
+		c.waitForReply("?", "S05")
+		if got := c.exchange("Z0,1004,4"); got != "OK" {
+			t.Fatalf("Z0 reply = %q", got)
+		}
+		done := runGuest(context.Background(), core, target, false)
+		if reached {
+			waitFor(t, "the guest to stop at its first instruction", target.parked)
+		}
+		if got := c.exchange("c"); got != "S05" {
+			t.Fatalf("reached=%v: c reply = %q", reached, got)
+		}
+		if got := c.exchange("p0f"); got != hexWord(reviewBase+4) {
+			t.Fatalf("reached=%v: pc = %s, want the breakpoint at %s", reached, got, hexWord(reviewBase+4))
+		}
+		if got := c.exchange("z0,1004,4"); got != "OK" {
+			t.Fatalf("z0 reply = %q", got)
+		}
+		c.waitForReply("c", "W00")
+		if err := <-done; err != nil {
+			t.Fatalf("guest run error = %v", err)
+		}
+		peer.Close()
+		<-served
+		target.Detach()
+	}
+}

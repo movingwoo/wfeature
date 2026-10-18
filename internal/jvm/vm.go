@@ -491,6 +491,19 @@ func (vm *VM) InvokeSpecial(receiver *Object, className, name, descriptor string
 // that class. Class initialization and constructor execution share one set of
 // instruction and frame limits.
 func (vm *VM) NewObject(className, descriptor string, arguments ...Value) (*Object, error) {
+	return vm.constructObject(className, descriptor, true, arguments)
+}
+
+// NewHostObject is NewObject for an object the host makes for itself, where a
+// refusal would reach the host rather than a guest that can catch it: the
+// value an event carries from a tick to a listener. The object is charged to
+// the heap budget and never refused, as NewString is; what its constructor
+// allocates is charged as the guest's.
+func (vm *VM) NewHostObject(className, descriptor string, arguments ...Value) (*Object, error) {
+	return vm.constructObject(className, descriptor, false, arguments)
+}
+
+func (vm *VM) constructObject(className, descriptor string, refuse bool, arguments []Value) (*Object, error) {
 	methodType, err := ParseMethodDescriptor(descriptor)
 	if err != nil {
 		return nil, err
@@ -512,7 +525,7 @@ func (vm *VM) NewObject(className, descriptor string, arguments ...Value) (*Obje
 	}
 
 	state := vm.newExecution()
-	object, err := vm.newObject(state, className)
+	object, err := vm.allocateObject(state, className, refuse)
 	if err != nil {
 		return nil, err
 	}
@@ -909,6 +922,12 @@ func (vm *VM) setStaticValue(state *execution, reference classfile.Reference, va
 }
 
 func (vm *VM) newObject(state *execution, className string) (*Object, error) {
+	return vm.allocateObject(state, className, true)
+}
+
+// allocateObject is newObject with a choice of whether the heap budget may
+// refuse the object or only charges it.
+func (vm *VM) allocateObject(state *execution, className string, refuse bool) (*Object, error) {
 	if err := vm.ensureInitialized(state, className); err != nil {
 		return nil, err
 	}
@@ -926,8 +945,13 @@ func (vm *VM) newObject(state *execution, className string) (*Object, error) {
 		}
 	}
 	object := &Object{ClassName: className, Fields: make(map[string]Value)}
-	if err := vm.chargeObject(object, objectHeapBytes); err != nil {
-		return nil, err
+	if refuse {
+		if err := vm.chargeObject(object, objectHeapBytes); err != nil {
+			return nil, err
+		}
+	} else {
+		weight, _ := vm.heap.charge(objectHeapBytes, false)
+		vm.recordHeapObject(weight, object)
 	}
 	vm.objectIdentity(object)
 	return object, nil
@@ -1307,12 +1331,21 @@ func (vm *VM) ensureInitialized(state *execution, className string) error {
 	state.initializing[className] = true
 	err := vm.initializeClass(state, className)
 	delete(state.initializing, className)
+	// An OutOfMemoryError leaves the class uninitialized rather than in error,
+	// so its next use initializes it again from the start; JVMS 5.5 would mark
+	// it erroneous for good. The error is the heap budget's, which counts what
+	// this runtime spends rather than what a handset did, and it can now land
+	// inside an initializer a handset's built-in classes could not fail in —
+	// cached, the class failed at every later use however much the title
+	// freed, and every later quick save was refused.
+	outOfMemory := err != nil && vm.IsGuestException(err, "java/lang/OutOfMemoryError")
 
 	vm.initMu.Lock()
 	delete(vm.initializing, className)
-	if err == nil {
+	switch {
+	case err == nil:
 		vm.initialized[className] = true
-	} else {
+	case !outOfMemory:
 		vm.initErrors[className] = err
 	}
 	vm.initCond.Broadcast()
@@ -1330,6 +1363,17 @@ func (vm *VM) initializeClass(state *execution, className string) error {
 		}
 		return err
 	}
+	// The statics are prepared first, ConstantValue included (JVMS 5.4.2, and
+	// step 6 of 5.5, before step 7 initializes the superclass): a superclass's
+	// or superinterface's initializer may store into this class's statics
+	// while its initialization is under way, and the store stands. Prepared
+	// afterwards, the store was reset to zero.
+	if err := vm.initializeStaticFields(class); err != nil {
+		return err
+	}
+	if err := vm.seedDefinedConstants(className); err != nil {
+		return err
+	}
 	if class.SuperName != "" {
 		if err := vm.ensureInitialized(state, class.SuperName); err != nil {
 			return err
@@ -1339,12 +1383,6 @@ func (vm *VM) initializeClass(state *execution, className string) error {
 		if err := vm.initializeDefaultMethodInterfaces(state, class); err != nil {
 			return err
 		}
-	}
-	if err := vm.initializeStaticFields(class); err != nil {
-		return err
-	}
-	if err := vm.seedDefinedConstants(className); err != nil {
-		return err
 	}
 	initializer := class.FindMethod("<clinit>", "()V")
 	if initializer == nil {
@@ -1378,8 +1416,9 @@ func (vm *VM) initializeClass(state *execution, className string) error {
 // the CLDC-era archives this runtime runs the walk finds nothing to initialize.
 // It still visits each interface once and loads it, which is the cost of
 // asking. An interface that cannot be loaded is passed over rather than
-// failing the class: the loader resolves interfaces lazily, a title may name
-// one the platform does not declare, and nothing was initialized for it before.
+// failing the class, and is not recorded as missing: the loader resolves
+// interfaces lazily, a title may name one the platform does not declare and
+// never reach it, and nothing was initialized for it before.
 // The interface graph comes from class files, so a diamond is visited once and
 // the walk is held to MaxFrames interfaces and maxInstanceRelations edges.
 func (vm *VM) initializeDefaultMethodInterfaces(state *execution, class *classfile.Class) error {
@@ -1401,8 +1440,8 @@ func (vm *VM) initializeDefaultMethodInterfaces(state *execution, class *classfi
 				return fmt.Errorf("superinterfaces of %s exceed %d interfaces", class.Name, vm.config.MaxFrames)
 			}
 			visited[name] = true
-			declared, err := vm.loader.Load(name)
-			if err != nil || declared.AccessFlags&AccessInterface == 0 {
+			declared, found := vm.loader.Probe(name)
+			if !found || declared.AccessFlags&AccessInterface == 0 {
 				continue
 			}
 			if err := walk(declared.Interfaces); err != nil {

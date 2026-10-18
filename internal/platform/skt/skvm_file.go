@@ -790,13 +790,15 @@ func (runtime *Runtime) xFileUnlink(_ *jvm.VM, arguments []jvm.Value) (jvm.Value
 	return jvm.IntValue(0), nil
 }
 
-// xFileRemoval is what a removal found: a file it removed, no file to remove,
-// or a name it cannot remove. XFile.unlink answers -1 for the last alone;
-// FileSystem.remove throws for both of the last two.
+// xFileRemoval is what a removal found: a file it removed, one it removed for
+// the session that the store refused to remove for later ones, no file to
+// remove, or a name it cannot remove. XFile.unlink answers -1 for the last
+// alone; FileSystem.remove throws for all but the first.
 type xFileRemoval uint8
 
 const (
 	xFileRemoved xFileRemoval = iota
+	xFileRemovedUnstored
 	xFileAbsent
 	xFileUnremovable
 )
@@ -811,6 +813,11 @@ const (
 // that is not a save key, one the store could not be read for, and one the
 // removal list cannot carry, since the list is a name per line and a name with
 // a line break in it would come back as other names.
+//
+// A removal the store refuses stands for the session and waits, as a refused
+// write does, for the next store of the file or the session's end; it
+// answers xFileRemovedUnstored, which FileSystem.remove reports with the
+// IOException a refused stream close throws.
 func (runtime *Runtime) removeXFile(name string) xFileRemoval {
 	key, err := xFileKey(name)
 	if err != nil || strings.ContainsAny(key, "\n\r") {
@@ -834,8 +841,11 @@ func (runtime *Runtime) removeXFile(name string) xFileRemoval {
 	// file made or written this session and never stored leaves nothing
 	// behind.
 	node.dirty = !removed[strings.TrimPrefix(key, xFileSaveScope)] && (node.stored || node.packaged)
-	if err := runtime.storeXFileLocked(node); err != nil && runtime.logger != nil {
-		runtime.logger.Debug("XFile removal store failed", "name", name, "error", err)
+	if err := runtime.storeXFileLocked(node); err != nil {
+		if runtime.logger != nil {
+			runtime.logger.Debug("XFile removal store failed", "name", name, "error", err)
+		}
+		return xFileRemovedUnstored
 	}
 	return xFileRemoved
 }

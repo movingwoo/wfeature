@@ -739,19 +739,39 @@ func (client *Client) loadDatabaseIndex() ([]byte, bool) {
 	return bytes.Clone(data), kept
 }
 
-// storeDatabaseIndex writes the index. A refusal is a diagnostic: the index
-// is written again whole at the next create or delete.
+// storeDatabaseIndex writes the index. A refusal keeps it waiting here, so the
+// names stay what the session made them: the next create or delete starts
+// from the waiting index rather than from the store's, which did not have the
+// refused name, and the ending and a quick step write it again
+// (storeWaitingDatabaseIndex).
 func (client *Client) storeDatabaseIndex(data []byte) {
 	if client.saveReadError != nil {
 		return
 	}
-	if err := client.storeSessionSave(databaseIndexKey, data); err != nil && client.logger != nil {
-		client.logger.Debug("LGT database index store failed", "error", err)
+	if err := client.storeSessionSave(databaseIndexKey, data); err != nil {
+		if client.logger != nil {
+			client.logger.Debug("LGT database index store failed", "error", err)
+		}
+		client.databaseIndexWaiting, client.databaseIndexPending = true, bytes.Clone(data)
+		return
 	}
+	client.databaseIndexWaiting, client.databaseIndexPending = false, nil
+}
+
+// storeWaitingDatabaseIndex gives the store an index whose last write it
+// refused, and reports whether it is still waiting.
+func (client *Client) storeWaitingDatabaseIndex() bool {
+	if client.databaseIndexWaiting {
+		client.storeDatabaseIndex(client.databaseIndexPending)
+	}
+	return client.databaseIndexWaiting
 }
 
 func (client *Client) databaseNames() []string {
-	data, ok := client.loadDatabaseIndex()
+	data, ok := client.databaseIndexPending, client.databaseIndexWaiting
+	if !ok {
+		data, ok = client.loadDatabaseIndex()
+	}
 	if !ok {
 		return nil
 	}

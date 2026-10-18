@@ -836,6 +836,9 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			// The two lists are stored before a checkpoint is taken, and one
 			// the store will not take refuses it.
 			"removedUnsaved": boundary, "createdUnsaved": boundary,
+			// So is the database index, which waits here when the store
+			// refused it.
+			"databaseIndexWaiting": boundary, "databaseIndexPending": boundary,
 			// Every restored buffer is level with the store, so the counts
 			// start again from nothing.
 			"fileEpochs": rebuilt,

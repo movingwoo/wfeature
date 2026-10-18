@@ -103,6 +103,26 @@ func (l *Loader) notFound(name string) error {
 	return err
 }
 
+// Probe is Load for a lookup that only asks: a class that is not there is not
+// recorded as missing. Initializing a class looks through its superinterfaces
+// for a default method, and an interface a title names but never reaches is
+// not a gap in the platform's class surface.
+func (l *Loader) Probe(name string) (*classfile.Class, bool) {
+	l.mu.RLock()
+	known := l.classes[name] != nil || l.defined[name] != nil
+	l.mu.RUnlock()
+	if !known {
+		if l.source == nil {
+			return nil, false
+		}
+		if _, ok := l.source.ClassBytes(name); !ok {
+			return nil, false
+		}
+	}
+	class, err := l.Load(name)
+	return class, err == nil
+}
+
 // missingClassLimit bounds the remembered misses. Names can come from guest
 // memory, so their distinct count is not bounded by the class files; past the
 // limit a miss simply formats its error again.

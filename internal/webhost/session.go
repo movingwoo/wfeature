@@ -1333,11 +1333,16 @@ func (r *sessionRunner) runCheat(message clientMessage) {
 		})
 		return
 	}
-	if console := r.game.CheatConsole(); r.server.textConsole && message.Op == "" && console != nil {
-		console.SetGame(r.label)
-		text := console.Execute(message.Command)
-		r.send(serverMessage{Kind: serverResult, ID: message.ID, Message: text, Cheat: &cheatResult{Searchable: true}})
-		return
+	// Only a test server's text console asks for the console: making it binds
+	// the image's key to the session, which a table the panel saves would
+	// then carry, and the panel's operations never needed it.
+	if r.server.textConsole && message.Op == "" {
+		if console := r.game.CheatConsole(); console != nil {
+			console.SetGame(r.label)
+			text := console.Execute(message.Command)
+			r.send(serverMessage{Kind: serverResult, ID: message.ID, Message: text, Cheat: &cheatResult{Searchable: true}})
+			return
+		}
 	}
 
 	result, err := runCheatOperation(r.game.Cheat(), r.label, message)

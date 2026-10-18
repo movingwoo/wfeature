@@ -253,9 +253,17 @@ func TestAnEarlierFolderConvertsTheNamesHostsChange(t *testing.T) {
 	})
 	saves := map[string]string{
 		"fs/slot:1": "colon", "fs/con": "device", "fs/save.": "trailing dot",
-		"fs/é": "decomposed", "fs/;": "greek question mark",
+		"fs/;":           "greek question mark",
 		"fs/Dir:x/inner": "below a directory to convert", "rms/Save": "upper", "fs/plain": "plain",
 	}
+	// A decomposed name is one file with its composed one on a volume that
+	// looks names up regardless of normalization, and there it reads as the
+	// composed key; elsewhere it is a key of its own (see listedSaveName).
+	decomposed, written := "fs/e\u0301", "owner/fs/e#+000301=decomposed"
+	if normalizationInsensitive(t) {
+		decomposed, written = "fs/\u00e9", "owner/fs/#+0000e9=decomposed"
+	}
+	saves[decomposed] = "decomposed"
 	root := filepath.Join(parent, "owner")
 	listed, err := ReadSaveTree(root)
 	if err != nil {
@@ -264,9 +272,9 @@ func TestAnEarlierFolderConvertsTheNamesHostsChange(t *testing.T) {
 	wantEntries(t, listed, saves, "the listing")
 	wantSaves(t, NewDirectorySaveStore(root), saves)
 	leftoverExpect(t, parent, []string{
-		encodedRecord, leftoverReserved + "/lock=",
+		encodedRecord, leftoverReserved + "/lock=", written,
 		"owner/fs/slot#+00003a1=colon", "owner/fs/#+000063on=device", "owner/fs/save#+00002e=trailing dot",
-		"owner/fs/e#+000301=decomposed", "owner/fs/#+00037e=greek question mark",
+		"owner/fs/#+00037e=greek question mark",
 		"owner/fs/#Dir#+00003ax/inner=below a directory to convert", "owner/rms/#Save=upper", "owner/fs/plain=plain",
 	}, "after the conversion")
 }
@@ -449,6 +457,18 @@ func TestAnEarlierNameTooLongToConvertIsWrittenWhereItIs(t *testing.T) {
 // skipWhereEarlierNamesCannotBe skips a test that builds a folder an earlier
 // build wrote with names Windows refuses or changes, which no earlier build
 // could have written there.
+// normalizationInsensitive reports whether the volume tests run on takes a
+// name and its decomposed form for one file, as APFS and HFS+ do.
+func normalizationInsensitive(t *testing.T) bool {
+	t.Helper()
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "\u00e9"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := os.Lstat(filepath.Join(directory, "e\u0301"))
+	return err == nil
+}
+
 func skipWhereEarlierNamesCannotBe(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {

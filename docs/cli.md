@@ -231,7 +231,7 @@ wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 | `-serve` | drive the run a command at a time over stdin and stdout ([below](#driving-a-run-from-outside)) |
 | `-cheat` | attach the text cheat console, paced to about real time; implies `-play`. Without `-ticks` the run continues until it is interrupted |
 | `-patch table.json` | apply a cheat table's byte patches before the first tick ([below](#-patch-for-the-runs-nobody-is-sitting-in-front-of)). Repeatable; combines with every other flag, including `-serve` and `-route` |
-| `-gdb host:port` | serve a GDB stub over the ARM core. The run does not wait for a client; attach with `target remote host:port`. A client's first question (`?`) stops the game at its next instruction, so the registers it reads are where the game stopped. Detaching or dropping the connection removes that client's breakpoints and lets the game run on, and the stub accepts the next client; Ctrl-C stops a running target; a request packet over 64 KiB ends the connection. The stub sends no target description: the register file is the classic ARM layout (r0–r15, eight 12-byte FPA registers, `fps`, `cpsr`; 168 bytes), which gdb knows and lldb takes from a target definition file (`plugin.process.gdb-remote.target-definition-file`) |
+| `-gdb host:port` | serve a GDB stub over the ARM core. The run does not wait for a client; attach with `target remote host:port`. A client's first question (`?`) stops the game at its next instruction, so the registers it reads are where the game stopped. When no guest code is running (between ticks, a run waiting on its driver, a long host call), `?` and Ctrl-C are answered after 250 ms from the registers of the last stop, and the game stops at its next instruction without a second reply. Detaching or dropping the connection, at any point, removes that client's breakpoints and any stop it asked for and lets the game run on, and the stub accepts the next client; Ctrl-C stops a running target; a game whose run has ended answers `W00`, or `X09` after `k`, which has no reply; a request packet over 64 KiB ends the connection. The stub sends no target description: the register file is the classic ARM layout (r0–r15, eight 12-byte FPA registers, `fps`, `cpsr`; 168 bytes), which gdb knows and lldb takes from a target definition file (`plugin.process.gdb-remote.target-definition-file`) |
 | `-diag report.json` | write the runtime-boundary diagnostics ([below](#reading-a-diagnostics-report)) |
 | `-audio out` | write what the guest played: `out.mid` for its MIDI events, `out.wav` for its samples |
 | `-screen WxH` | the handset the game is told it runs on, 240x320 by default |
@@ -702,6 +702,8 @@ different answers and only the second means the title is running.
 **The run ends by destroying the MIDlet**, after the summary, the way closing a
 server session does, so a title that saves its progress in `destroyApp` keeps
 it when the run ends on its tick count, its route, `-serve`'s `quit` or Ctrl-C.
+A `destroyApp` still running after fifteen seconds is ended there, as a
+server's close ends it, and the run ends with what the title had stored.
 
 **A tick is a real frame.** The run is paced at one tick every 16 ms, the
 interval the server session drives the same runtime with, so 1,800 ticks take

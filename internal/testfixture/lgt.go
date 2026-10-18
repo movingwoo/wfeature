@@ -144,7 +144,13 @@ func (a *lgtAssembler) finish() []byte {
 
 // LGTCheckpointArchive is a complete app_info/JAR/module archive that starts
 // through the ordinary loader and runs through the ordinary tick.
-func LGTCheckpointArchive() ([]byte, error) {
+func LGTCheckpointArchive() ([]byte, error) { return lgtCheckpointArchive(false) }
+
+// LGTEndlessDestroyArchive is the checkpoint fixture with a destroyClet that
+// never returns, which is what a close has to end on its own.
+func LGTEndlessDestroyArchive() ([]byte, error) { return lgtCheckpointArchive(true) }
+
+func lgtCheckpointArchive(endlessDestroy bool) ([]byte, error) {
 	const always, equal = 0xe, 0x0
 	a := &lgtAssembler{base: lgtTextBase}
 	global := func(rd uint32, index int) {
@@ -241,6 +247,13 @@ func LGTCheckpointArchive() ([]byte, error) {
 	resume := a.here()
 	a.literal(3, LGTCheckpointLifecycle)
 	a.emit(lgtMovImm(0, 2), lgtStr(0, 3, 0), lgtMovImm(0, 0), lgtBXLR)
+
+	// destroyClet(): only the endless variant has one, a branch to itself.
+	destroy := uint32(0)
+	if endlessDestroy {
+		destroy = a.here()
+		a.branch(always, destroy)
+	}
 	code := a.finish()
 
 	data := make([]byte, 0x400)
@@ -250,7 +263,7 @@ func LGTCheckpointArchive() ([]byte, error) {
 		}
 	}
 	// start, pause, resume, destroy, paint, handleEvent.
-	put(lgtCletFunctions, start, pause, resume, 0, 0, event)
+	put(lgtCletFunctions, start, pause, resume, destroy, 0, event)
 	put(lgtInitStruct, 0, initialise, 0)
 	put(lgtImportRequests,
 		lgtImportTableWIPIC, lgtSlotCletRegister,

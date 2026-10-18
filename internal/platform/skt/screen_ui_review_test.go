@@ -1,6 +1,7 @@
 package skt
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -295,6 +296,37 @@ func TestKeypadHonoursXTextFieldConstraints(t *testing.T) {
 	field = newXTextField(t, runtime, owner, "", 8, 0)
 	if text := press(field, '2'); text != "a" {
 		t.Fatalf("ANY field typed %q, want %q", text, "a")
+	}
+}
+
+// The keypad holds a numeric field in digit mode, the handset's digit mode,
+// so a minus sign and a decimal point come from the page's text input, which
+// takes them where the constraint allows them.
+func TestPageTextTypesTheSignAndPointANumericXTextFieldTakes(t *testing.T) {
+	runtime := startUIFixture(t)
+	invokeFixtureVoid(t, runtime, "UIMIDlet", "showBuffer")
+	owner := runtime.currentDisplayable
+	for _, entry := range []struct {
+		constraint int32
+		text       string
+	}{
+		{textFieldNumeric, "-3"},
+		{textFieldDecimal, "1.5"},
+		{textFieldDecimal, "-0.25"},
+	} {
+		field := newXTextField(t, runtime, owner, "", 8, entry.constraint)
+		setXTextFieldFocusForTest(t, runtime, field, true)
+		edit, err := runtime.TextInput(context.Background())
+		if err != nil {
+			t.Fatalf("constraint %#x: TextInput() error = %v", entry.constraint, err)
+		}
+		if err := edit.Commit(context.Background(), entry.text); err != nil {
+			t.Fatalf("constraint %#x: Commit(%q) error = %v", entry.constraint, entry.text, err)
+		}
+		if data, _ := nativeXTextField(field); string(data.text) != entry.text {
+			t.Fatalf("constraint %#x: field holds %q after the page typed %q", entry.constraint, data.text, entry.text)
+		}
+		setXTextFieldFocusForTest(t, runtime, field, false)
 	}
 }
 

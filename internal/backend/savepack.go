@@ -9,11 +9,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 )
 
 // Moving a save between installs.
@@ -365,7 +363,7 @@ func ReadSaveTree(root string) ([]SaveEntry, error) {
 		if !entry.Type().IsRegular() {
 			return nil
 		}
-		if saveTemporaryName(entry.Name()) {
+		if saveTemporaryName(entry.Name()) || saveCompanionFile(name) {
 			return nil
 		}
 		relative, err := filepath.Rel(root, name)
@@ -376,7 +374,7 @@ func ReadSaveTree(root string) ([]SaveEntry, error) {
 		if relative == saveNamesRecord {
 			return nil
 		}
-		key, encoded, err := saveEntryKey(relative, names.naming)
+		key, encoded, err := saveEntryKey(composedSavePath(root, relative), names.naming)
 		if err != nil {
 			// A file the store did not write can sit in this tree, and it is
 			// not a reason to fail an export of the saves that are here.
@@ -542,15 +540,11 @@ func WriteSaveTree(root string, entries []SaveEntry) (written int, removed int, 
 // file where the entry needs a directory, or a directory where it needs a
 // file. The entries are judged at their encoded paths, and the file system
 // answers, so a name it folds to another by Unicode normalization is judged
-// the way the writes will be. One name is refused by the system rather than
-// the tree: macOS stores no name that is not UTF-8, so a backup carrying one,
-// which another system can write, would fail partway there.
+// the way the writes will be. A key that is not UTF-8 is no exception: its
+// encoded name writes the byte by its number, which macOS stores too.
 func saveTreeHasRoomFor(root string, entries []SaveEntry) error {
 	directories := make(map[string]bool)
 	for _, entry := range entries {
-		if (runtime.GOOS == "darwin" || runtime.GOOS == "ios") && !utf8.ValidString(entry.Key) {
-			return fmt.Errorf("backend: save backup entry %q is not a name this system can store", entry.Key)
-		}
 		parts := strings.Split(encodeSaveKey(entry.Key), "/")
 		path := root
 		missing := false
@@ -645,12 +639,13 @@ func pruneSaveTree(root string, keep map[string]bool, naming saveNaming) (int, e
 		if relative == saveNamesRecord {
 			return nil
 		}
-		key, _, err := saveEntryKey(relative, naming)
+		key, _, err := saveEntryKey(composedSavePath(root, relative), naming)
 		// A leftover temporary file is removed with the rest: it is not a save
 		// and the restore it belonged to is over. A file whose name is not a
 		// key at all is left alone — this program did not write it and does
-		// not know what it is.
-		if err != nil {
+		// not know what it is — and so is the companion macOS keeps beside a
+		// file, which goes with its file.
+		if err != nil || saveCompanionFile(name) {
 			return nil
 		}
 		if !saveTemporaryName(entry.Name()) && (keep[key] || restored(entry)) {

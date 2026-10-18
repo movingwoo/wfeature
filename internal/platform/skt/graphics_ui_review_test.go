@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/rand"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,11 +64,51 @@ func TestGetRGBPixelsFillsTheCallersArray(t *testing.T) {
 	}
 	for index, point := range [][2]int{{1, 1}, {2, 1}, {1, 2}, {2, 2}} {
 		pixel := (point[1]*4 + point[0]) * 4
-		want := int32(uint32(context.pixels[pixel+3])<<24 | uint32(context.pixels[pixel])<<16 |
-			uint32(context.pixels[pixel+1])<<8 | uint32(context.pixels[pixel+2]))
+		// 0x00RRGGBB, as the specification gives it: no alpha.
+		want := int32(uint32(context.pixels[pixel])<<16 | uint32(context.pixels[pixel+1])<<8 | uint32(context.pixels[pixel+2]))
 		if got, _ := values[index].Int32(); got != want {
 			t.Fatalf("pixel %d = %#x, want %#x", index, got, want)
 		}
+	}
+}
+
+// getRGBPixels reads the screen under the lock a title's drawing takes, so a
+// read on one thread while another draws is no data race. Run with -race.
+func TestGetRGBPixelsReadsTheScreenUnderItsLock(t *testing.T) {
+	vm := jvm.New(nil, jvm.Options{})
+	context := reviewContext(8, 8)
+	context.screen = &sync.Mutex{}
+	context.color = 0x123456
+	buffer, err := vm.NewArray(jvm.Type{Kind: jvm.TypeInt}, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &Runtime{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			context.withDestinationWrite(func() {
+				for y := range int64(8) {
+					for x := range int64(8) {
+						context.putColorPixel(x, y)
+					}
+				}
+			})
+		}
+	}()
+	for range 200 {
+		if _, err := session.getGraphicsRGBPixels(vm, rgbPixelArguments(context, 0, 0, 8, 8, buffer, 0, 8)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-done
+	_, values, err := jvm.ArraySnapshot(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := values[63].Int32(); got != 0x123456 {
+		t.Fatalf("a drawn pixel reads %#x, want 0x123456 with no alpha", got)
 	}
 }
 
@@ -168,9 +209,8 @@ func rowByRowGetRGBPixels(context *graphicsContext, values []jvm.Value, x, y, wi
 		for column := int32(0); column < width; column++ {
 			pixel := jvm.IntValue(0)
 			if index, ok := contextPixelIndexUnclipped(context, x+column, y+row); ok {
-				pixel = jvm.IntValue(int32(uint32(context.pixels[index+3])<<24 |
-					uint32(context.pixels[index])<<16 | uint32(context.pixels[index+1])<<8 |
-					uint32(context.pixels[index+2])))
+				pixel = jvm.IntValue(int32(uint32(context.pixels[index])<<16 |
+					uint32(context.pixels[index+1])<<8 | uint32(context.pixels[index+2])))
 			}
 			values[int(offset)+int(row)*int(scanLength)+int(column)] = pixel
 		}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/api/midp"
@@ -42,6 +43,10 @@ type Runtime struct {
 
 	events *backend.EventLoop
 	logger *slog.Logger
+
+	// destroyExpired is set once a closing session's destroyApp has had its
+	// time (see destroyWait): no step window is renewed past it.
+	destroyExpired atomic.Bool
 
 	// uncaught counts the guest exceptions that ended a callback rather than
 	// the session, and keeps what the first one said. See uncaught.go.
@@ -249,8 +254,20 @@ func (runtime *Runtime) renewGuestSteps() error {
 	case StateDestroyed, StateError:
 		return jvm.ErrStepLimit
 	}
+	if runtime.destroyExpired.Load() {
+		return jvm.ErrStepLimit
+	}
 	return nil
 }
+
+// destroyWait is how long the destroyApp a closing session asks for may run,
+// which is as long as a KTF title's service call may wait. Past it no step
+// window is renewed and the machine's waits and sleeps are let go, so the
+// call ends and the session closes, storing what the title wrote as any
+// ending does. A destroyApp that looped or waited for ever otherwise held
+// the close for ever: a parked game a page had left, a server stopping, and an
+// app reopened behind it waiting on that server.
+var destroyWait = 15 * time.Second
 
 // clockMillis is the millisecond timestamp RMS stamps stores with, and the one
 // System.currentTimeMillis answers with. They are one clock on purpose: a
@@ -499,6 +516,12 @@ func (runtime *Runtime) Destroy(unconditional bool) error {
 		argument := int32(0)
 		if unconditional {
 			argument = 1
+			expire := time.AfterFunc(destroyWait, func() {
+				runtime.destroyExpired.Store(true)
+				runtime.endAudioWaits()
+				runtime.VM.Close()
+			})
+			defer expire.Stop()
 		}
 		if _, err := runtime.VM.InvokeVirtual(runtime.MIDlet, "destroyApp", "(Z)V", jvm.IntValue(argument)); err != nil {
 			if runtime.isStateChangeException(err) {

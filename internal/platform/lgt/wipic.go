@@ -222,6 +222,7 @@ const directColorType uint32 = 1 << 0
 const (
 	wipiSuccess     int32 = 0
 	wipiError       int32 = -1
+	wipiBadFileName int32 = -3
 	wipiExists      int32 = -5
 	wipiInvalid     int32 = -9
 	wipiNoEntry     int32 = -12

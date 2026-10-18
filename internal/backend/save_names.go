@@ -1,11 +1,14 @@
 package backend
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -45,12 +48,17 @@ import (
 //   - what Windows refuses or changes in a name: the controls below 0x20 and
 //     <>:"\|?* anywhere, a '.' or ' ' at the end of a segment, which it drops,
 //     and the first letter of a device name such as "con" or "com1.txt" (see
-//     saveNameDevice).
+//     saveNameDevice);
+//   - a '~' before a digit: NTFS gives a file a short name of that shape,
+//     "SAVEFI~1.DAT" for "savefile.dat", and a lookup of the short name finds
+//     the file it belongs to.
 //
-// Everything else is written as it is: the rest of ASCII, characters outside
-// it that have no case and that normalization leaves alone — Hangul
-// syllables, CJK ideographs and kana among them — and bytes that are not
-// UTF-8. A handset stored its own record store files with the '#' for upper
+// A byte that is not UTF-8 is written as '#' '-' and two lower-case hex
+// digits: macOS refuses such a name, and Windows turns the byte into U+FFFD,
+// so two names would be one there. Everything else is written as it is: the
+// rest of ASCII, and characters outside it that have no case and that
+// normalization leaves alone — Hangul syllables, CJK ideographs and kana among
+// them. A handset stored its own record store files with the '#' for upper
 // case (see internal/platform/skt/rms_packaged.go). A key none of whose
 // characters is changed has exactly the path it always had. Keys do not
 // change: platforms, save packs and the save API carry keys, and only this
@@ -80,16 +88,17 @@ import (
 // are read, as a name an earlier build wrote there does (see locateSave).
 
 // saveNameForm is one form of the encoding: the runes it writes with a '#'
-// before them, and the runes it writes by their number, which may depend on
-// where in its segment a rune stands. '#' is written "##", and every other
-// rune as it is.
+// before them, the runes it writes by their number, which may depend on where
+// in its segment a rune stands, and whether it writes a byte that is not UTF-8
+// by its number too. '#' is written "##", and every other rune as it is.
 type saveNameForm struct {
 	marked   func(r rune) bool
 	numbered func(name string, index int, r rune, size int) bool
+	bytes    bool
 }
 
 // currentSaveNameForm is the form this build writes.
-var currentSaveNameForm = saveNameForm{marked: saveNameEncodes, numbered: saveNameNumbered}
+var currentSaveNameForm = saveNameForm{marked: saveNameEncodes, numbered: saveNameNumbered, bytes: true}
 
 // firstSaveNameForm is the form a build before this one wrote, under the same
 // record: an upper-case letter with a '#' before it whether normalization
@@ -174,8 +183,8 @@ func saveNameDevice(name string) bool {
 }
 
 // saveNameNumbered reports whether the rune r, size bytes at index in a
-// segment, is written by its number. A byte that is not UTF-8 is kept as it
-// is.
+// segment, is written by its number. A byte that is not UTF-8 is the form's
+// to write (see saveNameForm.bytes).
 func saveNameNumbered(name string, index int, r rune, size int) bool {
 	switch {
 	case r == '#' || saveNameEncodes(r):
@@ -185,6 +194,8 @@ func saveNameNumbered(name string, index int, r rune, size int) bool {
 	case r < 0x20 || strings.ContainsRune(saveNameWindowsRefused, r):
 		return true
 	case index+size == len(name) && (r == '.' || r == ' '):
+		return true
+	case r == '~' && index+1 < len(name) && '0' <= name[index+1] && name[index+1] <= '9':
 		return true
 	}
 	return index == 0 && saveNameDevice(name)
@@ -209,10 +220,12 @@ func decodeSaveName(name string) (string, bool) {
 func (form saveNameForm) encode(name string) string {
 	var encoded strings.Builder
 	copied := 0
+	const hex = "0123456789abcdef"
 	for index := 0; index < len(name); {
 		r, size := utf8.DecodeRuneInString(name[index:])
+		invalid := form.bytes && r == utf8.RuneError && size == 1
 		marked := r == '#' || form.marked(r)
-		if !marked && !form.numbered(name, index, r, size) {
+		if !invalid && !marked && !form.numbered(name, index, r, size) {
 			index += size
 			continue
 		}
@@ -221,13 +234,14 @@ func (form saveNameForm) encode(name string) string {
 		}
 		encoded.WriteString(name[copied:index])
 		switch {
+		case invalid:
+			encoded.Write([]byte{'#', '-', hex[name[index]>>4], hex[name[index]&0xf]})
 		case r == '#':
 			encoded.WriteString("##")
 		case marked:
 			encoded.WriteByte('#')
 			encoded.WriteString(name[index : index+size])
 		default:
-			const hex = "0123456789abcdef"
 			number := [2 + saveNameNumberDigits]byte{'#', '+'}
 			for digit := range saveNameNumberDigits {
 				number[len(number)-1-digit] = hex[r>>(4*digit)&0xf]
@@ -245,21 +259,30 @@ func (form saveNameForm) encode(name string) string {
 }
 
 // decode reverses encode. The name is read as the encoding's tokens — "##"
-// for '#', "#+" and six lower-case hex digits for a rune by its number, '#'
-// and a rune for that rune — and it is one of the form's names only when the
-// segment it reads as is written as exactly the name again. What the encoding
-// writes for a rune can depend on where the rune stands, so this is the one
-// test that holds for every rule at once, and it makes the encoding a
-// bijection: no two names read as one segment, and a name the encoding would
-// not have written — a character it changes written bare, a '#' before
-// anything it does not write after one, a number for a rune it writes
-// otherwise — reads as none.
+// for '#', "#+" and six lower-case hex digits for a rune by its number, "#-"
+// and two for a byte, '#' and a rune for that rune — and it is one of the
+// form's names only when the segment it reads as is written as exactly the
+// name again. What the encoding writes for a rune can depend on where the rune
+// stands, so this is the one test that holds for every rule at once, and it
+// makes the encoding a bijection: no two names read as one segment, and a name
+// the encoding would not have written — a character it changes written bare,
+// a '#' before anything it does not write after one, a number for a rune it
+// writes otherwise — reads as none. Nor does a name whose segment no key can
+// have: ".", ".." or one holding '\' or NUL, each of which the encoding
+// numbers, so "#+00002e" is a name it writes and no key is ever stored at.
 func (form saveNameForm) decode(name string) (string, bool) {
 	decoded, ok := parseSaveName(name)
-	if !ok || form.encode(decoded) != name {
+	if !ok || form.encode(decoded) != name || !saveKeySegment(decoded) {
 		return "", false
 	}
 	return decoded, true
+}
+
+// saveKeySegment reports whether a segment is one a normalized key can hold
+// (see NormalizeSaveKey).
+func saveKeySegment(segment string) bool {
+	return segment != "" && segment != "." && segment != ".." && !strings.ContainsAny(segment, "/\\\x00") &&
+		!strings.ContainsRune(segment, os.PathSeparator)
 }
 
 // parseSaveName reads a name as the encoding's tokens, without asking whether
@@ -286,6 +309,13 @@ func parseSaveName(name string) (string, bool) {
 		case '#':
 			decoded.WriteByte('#')
 			index++
+		case '-':
+			value, ok := parseSaveByte(name[index+1:])
+			if !ok {
+				return "", false
+			}
+			decoded.WriteByte(value)
+			index += 3
 		case '+':
 			number, ok := parseSaveNumber(name[index+1:])
 			if !ok {
@@ -300,6 +330,26 @@ func parseSaveName(name string) (string, bool) {
 		}
 	}
 	return decoded.String(), true
+}
+
+// parseSaveByte reads the two lower-case hex digits at the start of a name as
+// a byte.
+func parseSaveByte(digits string) (byte, bool) {
+	if len(digits) < 2 {
+		return 0, false
+	}
+	value := byte(0)
+	for index := range 2 {
+		switch digit := digits[index]; {
+		case '0' <= digit && digit <= '9':
+			value = value<<4 | digit - '0'
+		case 'a' <= digit && digit <= 'f':
+			value = value<<4 | (digit - 'a' + 10)
+		default:
+			return 0, false
+		}
+	}
+	return value, true
 }
 
 // parseSaveNumber reads the six lower-case hex digits at the start of a name
@@ -348,10 +398,10 @@ func encodeSaveKey(key string) string {
 }
 
 // saveNamesFit reports whether every segment of a slash-separated path is a
-// name the file systems a Host runs on store.
+// name the file systems the Host runs on store.
 //
 // A key may be 512 bytes, and a segment written out may be eight times its
-// length: a segment that does not fit is one no host can store, so its key
+// length: a segment that does not fit is one the host cannot store, so its key
 // has no save. A read of it finds none and a write is refused, rather than
 // meeting the file system's error, which a platform takes for a store that
 // failed — a KTF title asking whether such a file exists would otherwise lose
@@ -359,18 +409,72 @@ func encodeSaveKey(key string) string {
 // an earlier build already stored under a name that fits (see locateSave).
 func saveNamesFit(path string) bool {
 	for segment := range strings.SplitSeq(path, "/") {
-		if len(segment) > maxSaveNameBytes {
+		if saveNameLength(segment) > maxSaveNameLength {
 			return false
 		}
 	}
 	return true
 }
 
-// errSaveNameTooLong marks the refusal of a key saveNamesFit refuses.
+// saveNameLength is a name's length in the unit the host's file systems limit
+// a name by: UTF-16 units where APFS, HFS+, exFAT and NTFS store 255 of them
+// (on this Mac, 255 Hangul syllables of 765 bytes are a name and 256 are not;
+// 127 emoji of 254 units are and 128 are not), and bytes where ext4 and f2fs
+// store 255. Measured in bytes everywhere, a name an earlier build stored on
+// macOS or Windows of 256 to 765 bytes could not be read, written or restored.
+func saveNameLength(name string) int {
+	if !saveNamesInUnits {
+		return len(name)
+	}
+	units := 0
+	for _, r := range name {
+		if r >= 0x10000 {
+			units += 2
+		} else {
+			units++
+		}
+	}
+	return units
+}
+
+// saveNamesInUnits says the host measures a name in UTF-16 units.
+var saveNamesInUnits = runtime.GOOS == "darwin" || runtime.GOOS == "ios" || runtime.GOOS == "windows"
+
+// maxSavePathBytes is the longest path the host opens, in bytes, and zero for
+// none to check: macOS and iOS open 1,023 and refuse 1,024 (measured on this
+// Mac), Linux and Android open 4,095, and Go opens a longer path on Windows.
+// A key's path, below the save directory's own, can be eight times the 512
+// bytes of a key. The path of the temporary file a write makes beside the
+// entry is at most 12 bytes longer than a short entry's.
+var maxSavePathBytes = savePathLimit(runtime.GOOS)
+
+func savePathLimit(goos string) int {
+	switch goos {
+	case "darwin", "ios":
+		return 1023
+	case "windows":
+		return 0
+	}
+	return 4095
+}
+
+// savePathFits reports whether the host opens a path and the temporary file a
+// write makes beside it.
+func savePathFits(path string) bool {
+	return maxSavePathBytes == 0 || len(path)+12 <= maxSavePathBytes
+}
+
+// errSaveNameTooLong marks the refusal of a key saveNamesFit or savePathFits
+// refuses.
 var errSaveNameTooLong = errors.New("save name is too long")
 
 func refuseLongSaveName(key string) error {
-	return fmt.Errorf("%w: save key %q has a name longer than the %d bytes a file name may have once it is written out", errSaveNameTooLong, key, maxSaveNameBytes)
+	unit := "bytes"
+	if saveNamesInUnits {
+		unit = "characters"
+	}
+	return fmt.Errorf("%w: save key %q, written out, has a name longer than the %d %s a file name may have here or a path longer than this host opens",
+		errSaveNameTooLong, key, maxSaveNameLength, unit)
 }
 
 // earlierSaveSpellings lists the names other than its encoded one under which
@@ -425,11 +529,11 @@ const saveNamesHeader = "wfeature save names 1"
 // at most maxSnapshotSaveEntries paths of at most 512 bytes, quoted.
 const maxSaveNamesRecord = maxSnapshotSaveEntries*(4*512+3) + 256
 
-// maxSaveNameBytes is the longest name the file systems a Host runs on store:
-// 255 bytes on ext4, and 255 characters on APFS and NTFS, which a name of 255
-// UTF-8 bytes never exceeds. An earlier name whose encoding would be longer is
-// left as it is.
-const maxSaveNameBytes = 255
+// maxSaveNameLength is the longest name the file systems a Host runs on
+// store: 255 bytes on ext4 and f2fs, and 255 UTF-16 units on APFS, HFS+, exFAT
+// and NTFS (see saveNameLength). An earlier name whose encoding would be
+// longer is left as it is.
+const maxSaveNameLength = 255
 
 type saveNamesState uint8
 
@@ -690,12 +794,12 @@ func planSaveNames(root string) ([]string, error) {
 			if visited++; visited > 2*maxSnapshotSaveEntries {
 				return fmt.Errorf("save directory %s has more entries than a save tree may hold", root)
 			}
-			name := entry.Name()
+			name := listedSaveName(filepath.Join(root, filepath.FromSlash(relative)), entry.Name())
 			path := name
 			if relative != "" {
 				path = relative + "/" + name
 			}
-			if path == saveNamesRecord || !saveKeyShaped(path) {
+			if path == saveNamesRecord || !saveKeyShaped(path) || !entry.IsDir() && saveCompanionFile(filepath.Join(root, filepath.FromSlash(path))) {
 				continue
 			}
 			if entry.IsDir() {
@@ -707,7 +811,7 @@ func planSaveNames(root string) ([]string, error) {
 			if encoded == name || saveTemporaryName(name) {
 				continue
 			}
-			if len(encoded) > maxSaveNameBytes {
+			if saveNameLength(encoded) > maxSaveNameLength {
 				if key, _ := readSaveName(name); key != name {
 					return fmt.Errorf("save name %q is too long to convert", path)
 				}
@@ -876,10 +980,84 @@ func saveNameExists(path string) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
-	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || saveNameRefused(err) {
 		return false, nil
 	}
 	return false, err
+}
+
+// listedSaveName is the name a directory's entry is read under. The volumes
+// macOS keeps names decomposed on — HFS+, exFAT and FAT, measured on disk
+// images on 2026-10-18 — list every name in NFD, one the store wrote composed
+// included, with its Hangul jamo and kana voicing marks apart, and there the
+// composed name is the same file; a folder copied from one of them onto APFS
+// keeps the decomposed names. Every name the encoding writes is its own NFC
+// form, so an entry whose name is decomposed, and whose composed name is the
+// same file, is read under the composed one: read as listed, a Hangul or kana
+// save planned a move to a name with its jamo numbered, and the key's own
+// lookup found nothing, even for a save this build had just written.
+//
+// What decomposition never makes is read as it is: a name with a singleton
+// such as the Greek question mark or the ohm sign, which NFD replaces, was
+// written so. So is a decomposed name on a volume that keeps it apart from its
+// composed one (ext4, NTFS), where the composed name is another file or none.
+// A decomposed key an earlier build stored on APFS is read as its composed
+// key: on APFS the two were one file for that build, and the composed one is
+// what a title's text decodes to.
+func listedSaveName(directory, name string) string {
+	if norm.NFC.IsNormalString(name) || !norm.NFD.IsNormalString(name) {
+		return name
+	}
+	composed := norm.NFC.String(name)
+	listed, err := os.Lstat(filepath.Join(directory, name))
+	if err != nil {
+		return name
+	}
+	other, err := os.Lstat(filepath.Join(directory, composed))
+	if err != nil || !os.SameFile(listed, other) {
+		return name
+	}
+	return composed
+}
+
+// saveCompanionFile reports whether a file is the companion macOS writes beside
+// a file on a volume with no place for its metadata — exFAT and FAT among
+// them, measured on disk images on 2026-10-18 — named "._" and the file's
+// name, in the AppleDouble format. It is no save. Read as one, every save on
+// such a volume put a 4 KiB key beside it in a backup, and a conversion moved
+// its file's companion along with the file and then found it gone.
+func saveCompanionFile(path string) bool {
+	if !strings.HasPrefix(filepath.Base(path), "._") {
+		return false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	var magic [4]byte
+	if _, err := io.ReadFull(file, magic[:]); err != nil {
+		return false
+	}
+	return binary.BigEndian.Uint32(magic[:]) == appleDoubleMagic
+}
+
+// appleDoubleMagic opens every AppleDouble file.
+const appleDoubleMagic = 0x00051607
+
+// composedSavePath reads each segment of a slash-separated path below root as
+// listedSaveName reads a directory's entry.
+func composedSavePath(root, relative string) string {
+	if norm.NFC.IsNormalString(relative) {
+		return relative
+	}
+	segments := strings.Split(relative, "/")
+	directory := root
+	for index, segment := range segments {
+		segments[index] = listedSaveName(directory, segment)
+		directory = filepath.Join(directory, segment)
+	}
+	return strings.Join(segments, "/")
 }
 
 // directoryNames lists one directory's names as the disk spells them. A path
@@ -887,7 +1065,7 @@ func saveNameExists(path string) (bool, error) {
 // it was made of until the directory changes (see savedListings).
 func directoryNames(directory string) ([]string, error) {
 	file, err := os.Open(directory)
-	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || saveNameRefused(err) {
 		return nil, nil
 	}
 	if err != nil {
@@ -907,6 +1085,9 @@ func directoryNames(directory string) ([]string, error) {
 	names, err := file.Readdirnames(-1)
 	if err != nil {
 		return nil, err
+	}
+	for index, name := range names {
+		names[index] = listedSaveName(directory, name)
 	}
 	savedListings.remember(directory, info, names)
 	return names, nil
@@ -976,7 +1157,7 @@ func spelledExactly(directory, name string) (bool, error) {
 func exactSavePath(root string, segments []string) (string, bool, error) {
 	path := root
 	for _, segment := range segments {
-		if len(segment) > maxSaveNameBytes {
+		if saveNameLength(segment) > maxSaveNameLength {
 			return "", false, nil
 		}
 		present, err := spelledExactly(path, segment)
@@ -1016,7 +1197,7 @@ func (store *DirectorySaveStore) locateSave(name string, names saveNames, write 
 	}
 	encodedKey := encodeSaveKey(key)
 	path := filepath.Join(store.root, filepath.FromSlash(encodedKey))
-	fits := saveNamesFit(encodedKey)
+	fits := saveNamesFit(encodedKey) && savePathFits(path)
 	if fits && (encodedKey == key || names.naming == namingEncoded && !slices.ContainsFunc(segments, hasEarlierSaveSpelling)) {
 		return path, true, nil
 	}
@@ -1037,6 +1218,11 @@ func (store *DirectorySaveStore) locateSave(name string, names saveNames, write 
 	} else {
 		earlier, found = findEarlierSave(store.root, segments)
 	}
+	if !found && !present && !write && saveNamesStripTrailing {
+		if at, stripped := store.strippedSave(segments, names); stripped {
+			return at, true, nil
+		}
+	}
 	switch {
 	case !fits && found:
 		return earlier, true, nil
@@ -1053,6 +1239,42 @@ func (store *DirectorySaveStore) locateSave(name string, names saveNames, write 
 		return earlier, true, nil
 	}
 	return path, true, nil
+}
+
+// saveNamesStripTrailing says the host drops a '.' or ' ' at the end of a path
+// segment, as Win32 does: an earlier build there stored the key "save." as
+// "save", and the key "SAVE    " as "SAVE".
+var saveNamesStripTrailing = runtime.GOOS == "windows"
+
+// strippedSave finds, for a key that has no save, the entry an earlier build
+// on a host that drops a segment's ending left for it: under each segment
+// without the dots and spaces at its end, as written then or encoded since.
+// That file is also the save of the key the shorter name is, which the two
+// keys shared there, so it is read where it is and never moved: the key's own
+// first write goes to its encoded name, and the other key keeps its file.
+func (store *DirectorySaveStore) strippedSave(segments []string, names saveNames) (string, bool) {
+	stripped := make([]string, len(segments))
+	changed := false
+	for index, segment := range segments {
+		stripped[index] = strings.TrimRight(segment, ". ")
+		if stripped[index] == "" {
+			return "", false
+		}
+		changed = changed || stripped[index] != segment
+	}
+	if !changed {
+		return "", false
+	}
+	if names.naming == namingEncoded {
+		at := filepath.Join(store.root, filepath.FromSlash(encodeSaveKey(strings.Join(stripped, "/"))))
+		if regularSaveFile(at) {
+			return at, true
+		}
+	}
+	if at, exists, _ := exactSavePath(store.root, stripped); exists && regularSaveFile(at) {
+		return at, true
+	}
+	return "", false
 }
 
 // laterSaveFile reports whether the file at one path was written after the
@@ -1206,7 +1428,7 @@ func moveEarlierSave(root string, segments []string, earlier string, replace boo
 func (store *DirectorySaveStore) storableSaveEntries(entries []SaveEntry, names saveNames) ([]SaveEntry, error) {
 	judged := make([]SaveEntry, 0, len(entries))
 	for _, entry := range entries {
-		if saveNamesFit(encodeSaveKey(entry.Key)) {
+		if encoded := encodeSaveKey(entry.Key); saveNamesFit(encoded) && savePathFits(filepath.Join(store.root, filepath.FromSlash(encoded))) {
 			judged = append(judged, entry)
 			continue
 		}

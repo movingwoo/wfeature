@@ -830,12 +830,16 @@ func hashtableInit(call *Invocation, arguments []Value) (Value, error) {
 	if err != nil {
 		return VoidValue(), err
 	}
-	for _, name := range []string{"keys", "values"} {
-		array, err := call.vm.newArray(objectArrayType, hashtableInitialCapacity)
-		if err != nil {
+	// Both arrays are made before either is stored, so a refusal leaves the
+	// table as it was rather than with keys and no values.
+	var arrays [2]*Object
+	for index := range arrays {
+		if arrays[index], err = call.vm.newArray(objectArrayType, hashtableInitialCapacity); err != nil {
 			return VoidValue(), err
 		}
-		if err := call.vm.SetField(table, HashtableClass, name, vectorElementsType, ReferenceValue(array)); err != nil {
+	}
+	for index, name := range []string{"keys", "values"} {
+		if err := call.vm.SetField(table, HashtableClass, name, vectorElementsType, ReferenceValue(arrays[index])); err != nil {
 			return VoidValue(), err
 		}
 	}
@@ -1020,7 +1024,10 @@ func hashtablePut(call *Invocation, arguments []Value) (Value, error) {
 }
 
 // growHashtable makes room for one more entry, growing both arrays together
-// so a key never outlives its value.
+// so a key never outlives its value. Both are made before either is stored:
+// the second can be refused, and a table left with grown keys and the old
+// values would never grow again, its next new key landing past the values'
+// end.
 func growHashtable(call *Invocation, table *Object, size int32) (*Array, *Array, error) {
 	keys, values, _, err := hashtableState(call.vm, table)
 	if err != nil {
@@ -1030,12 +1037,15 @@ func growHashtable(call *Invocation, table *Object, size int32) (*Array, *Array,
 		return keys, values, nil
 	}
 	capacity := int32(keys.Length())*2 + 1
-	grown := make([]*Array, 0, 2)
-	for arrayIndex, source := range []*Array{keys, values} {
-		next, err := call.vm.newArray(objectArrayType, capacity)
-		if err != nil {
+	var made [2]*Object
+	for index := range made {
+		if made[index], err = call.vm.newArray(objectArrayType, capacity); err != nil {
 			return nil, nil, err
 		}
+	}
+	grown := make([]*Array, 0, 2)
+	for arrayIndex, source := range []*Array{keys, values} {
+		next := made[arrayIndex]
 		existing, err := source.LoadRange(0, int(size))
 		if err != nil {
 			return nil, nil, err

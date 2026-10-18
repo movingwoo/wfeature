@@ -223,8 +223,10 @@ jar cfm internal/platform/skt/testdata/persistence.jar \
 The browser Host detects SKT containers, so `persistence-skt.zip` wraps
 `persistence.jar` and `PERSISTENCE.MF` renamed to `persistence.msd` at the ZIP
 root. `text-input-skt.zip` likewise wraps `text-input.jar` and `TEXT_INPUT.MF`
-renamed to `text-input.msd`, and `canvas-skt.zip` wraps `canvas.jar` beside
-`canvas.msd`. Regenerate an outer ZIP after rebuilding its JAR.
+renamed to `text-input.msd`, `canvas-skt.zip` wraps `canvas.jar` beside
+`canvas.msd`, and `hang-destroy-skt.zip` wraps `hang-destroy.jar` beside
+`HANG_DESTROY.MF` renamed to `hang-destroy.msd`. Regenerate an outer ZIP after
+rebuilding its JAR.
 
 ## Full SKT checkpoints
 
@@ -244,9 +246,10 @@ JAR's `META-INF/MANIFEST.MF`.
 | JAR | Source | Manifest | Used by |
 | --- | --- | --- | --- |
 | `arithmetic.jar` | `internal/jvm/testdata/Arithmetic.java` | `MANIFEST.MF` | `runtime_test.go` (JAR to bytecode execution) |
-| `lifecycle.jar` | `src/LifecycleMIDlet.java` | `LIFECYCLE.MF` | `runtime_test.go`, `cmd/cli/exit_test.go` |
+| `lifecycle.jar` | `src/LifecycleMIDlet.java` | `LIFECYCLE.MF` | `runtime_test.go`, `destroy_wait_review_test.go` (`hangNextDestroy("loop")` and `("wait")`), `cmd/cli/exit_test.go` |
 | `deferred-start.jar` | `src/LifecycleMIDlet.java` | `DEFERRED_START.MF` (`Fixture-Defer-Start: true`) | `runtime_test.go` |
 | `runtime-failure.jar` | `src/LifecycleMIDlet.java` | `RUNTIME_FAILURE.MF` (`Fixture-Fail-Start: true`) | `runtime_test.go`, `cmd/cli/exit_test.go` |
+| `hang-destroy.jar` | `src/LifecycleMIDlet.java` | `HANG_DESTROY.MF` (`Fixture-Hang-Destroy: wait`, a `destroyApp` that waits for a notification nobody sends) | `internal/webhost/close_sessions_review_test.go` and `web/acceptance/android-lifecycle.mjs`, through `hang-destroy-skt.zip` |
 | `display.jar` | `src/DisplayMIDlet.java` | `DISPLAY.MF` | `runtime_test.go` (display selection) |
 | `canvas.jar` | `src/CanvasMIDlet.java`, resources `fixture.png` and `data.bin` from `FIXTURE.PNG.b64` and `DATA.BIN.b64` | `CANVAS.MF` | `runtime_test.go`, `internal/platform/detect` |
 | `connector.jar` | `src/ConnectorMIDlet.java` | `CONNECTOR.MF` | `connector_test.go` |

@@ -50,8 +50,13 @@ func TestSaveNamesSpellOutCase(t *testing.T) {
 		{"ς", "#+0003c2"},
 		{"café", "caf#+0000e9"},
 		{"Été", "#Ét#+0000e9"},
-		// Bytes that are not UTF-8 are kept.
-		{"\xffA", "\xff#A"},
+		// A byte that is not UTF-8 is written by its number too: macOS refuses
+		// it in a name, and Windows makes it U+FFFD.
+		{"\xffA", "#-ff#A"},
+		{"\xbc\xbc.dat", "#-bc#-bc.dat"},
+		// So is a '~' before a digit, the shape of an NTFS short name.
+		{"SAVEFI~1.DAT", "#S#A#V#E#F#I#+00007e1.#D#A#T"},
+		{"a~b", "a~b"},
 	} {
 		if got := encodeSaveKey(test.key); got != test.path {
 			t.Errorf("%q is stored at %q, want %q", test.key, got, test.path)
@@ -63,7 +68,10 @@ func TestSaveNamesSpellOutCase(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"Save", "#a", "#", "a#", "#1", "##A#", "#K", "Ä", "é", "#+000061", "#+0000E9", "#+0000e", "#+", "#é"} {
+	for _, name := range []string{"Save", "#a", "#", "a#", "#1", "##A#", "#K", "Ä", "é", "#+000061", "#+0000E9", "#+0000e", "#+", "#é",
+		"#-41", "#-FF", "#-f", "#-", "\xff", "x~1",
+		// Names the encoding writes for segments no key holds.
+		"#+00002e", "#+00005c", "#+000000"} {
 		if decoded, ok := decodeSaveName(name); ok {
 			t.Errorf("%q, which the encoding never writes, read as the name %q", name, decoded)
 		}
@@ -76,7 +84,9 @@ func TestSaveNamesSpellOutCase(t *testing.T) {
 // holds nothing Windows refuses or drops.
 func TestEverySaveNameReadsBack(t *testing.T) {
 	for r := rune(0); r <= unicode.MaxRune; r++ {
-		if !utf8.ValidRune(r) {
+		// '/' separates a key's segments, and no key holds '\\' or NUL
+		// (NormalizeSaveKey).
+		if !utf8.ValidRune(r) || r == '/' || r == '\\' || r == 0 {
 			continue
 		}
 		name := "a" + string(r) + "#" + string(r) + "Z"
@@ -87,7 +97,8 @@ func TestEverySaveNameReadsBack(t *testing.T) {
 		}
 		// What Windows drops from the end of a name is ASCII.
 		written := []string{encoded}
-		if r < utf8.RuneSelf {
+		// "." alone is no key's segment either.
+		if r < utf8.RuneSelf && r != '.' {
 			alone := encodeSaveName(string(r))
 			if decoded, ok := decodeSaveName(alone); !ok || decoded != string(r) {
 				t.Fatalf("%q is written %q and reads back as %q (%t)", string(r), alone, decoded, ok)

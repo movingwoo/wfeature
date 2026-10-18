@@ -637,6 +637,37 @@ func TestWIPIFileSystemRemoveOfAMissingNameThrows(t *testing.T) {
 	}
 }
 
+// A removal the store refuses stands for the session and is stored at its
+// end, as a refused write is, and FileSystem.remove reports the refusal with
+// an IOException; XFile.unlink, whose answer every local title discards,
+// answers 0 as for any removal.
+func TestWIPIFileSystemRemoveReportsARefusedStore(t *testing.T) {
+	store := newFileRuleStore(t, map[string][]byte{"fs/save": {1}, "fs/other": {2}})
+	runtime := fileRuleRuntime(t, store, nil)
+	store.setRefuse(true)
+	if _, err := runtime.VM.InvokeStatic(wipi.FileSystemClass, "remove", "(Ljava/lang/String;)V", ruleText(runtime, "save")); !runtime.VM.IsGuestException(err, jvm.IOExceptionClass) {
+		t.Fatalf("FileSystem.remove the store refused: %v, want IOException", err)
+	}
+	if answer := ruleUnlink(t, runtime, "other"); answer != 0 {
+		t.Fatalf("XFile.unlink the store refused = %d, want 0", answer)
+	}
+	for _, name := range []string{"save", "other"} {
+		if exists, _, _ := ruleFileSystem(t, runtime, name); exists {
+			t.Fatalf("%q is still there after its refused removal", name)
+		}
+	}
+	store.setRefuse(false)
+	if err := runtime.Destroy(true); err != nil {
+		t.Fatal(err)
+	}
+	next := fileRuleRuntime(t, store, nil)
+	for _, name := range []string{"save", "other"} {
+		if exists, _, _ := ruleFileSystem(t, next, name); exists {
+			t.Fatalf("%q came back in the next session after its refused removal", name)
+		}
+	}
+}
+
 // The streams see a removed file as missing, and a FileOutputStream brings it
 // back.
 func TestXCEStreamsSeeARemovedFileAsMissing(t *testing.T) {
