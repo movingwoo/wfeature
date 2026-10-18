@@ -9,7 +9,7 @@ import (
 
 // The wide ABI has four signed clip words and independent signed translations.
 // Select it by verified code revision, never by treating a coordinate as a code
-// pointer. Compact contexts remain unchanged. See docs/lgt-qa-2026-09-20.md.
+// pointer. Compact contexts remain unchanged. See docs/history/lgt.md#lgt-qa-2026-09-20.
 const wideContextSize = 56
 
 func hasWideGraphicsContexts(module []byte) bool {

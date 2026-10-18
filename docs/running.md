@@ -668,4 +668,4 @@ If an LGT title asks to press its OZ key and restart, press the emulator's
 OK/confirmation key and let the game exit before launching it again. The guest
 may save its acknowledgment only through that action; restarting the emulator
 immediately repeats the notice. Do not delete saves to dismiss it. See the
-[recorded restart investigation](startup-compatibility-2026-09-19.md#lgt-restart-notice-e934256c238a).
+[recorded restart investigation](history/ktf.md#startup-compatibility-2026-09-19-lgt-restart-notice-e934256c238a).

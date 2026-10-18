@@ -120,9 +120,9 @@ loops are unsupported. A recognized C controller also keeps availability after
 an ignored empty confirmation; its live state blocks input while a validation
 message covers the editor, permits a fresh edit on return, and blocks input after
 acceptance. Unknown callers keep the conservative input-method-activity
-requirement. See the [initial implementation](ktf-c-input-bitmap-investigation.md),
-the [timer delivery and clipping regression](ktf-graphics-input-qa-2026-09-23.md)
-and the [controller lifetime regression](ktf-input-lifetime-2026-09-23.md).
+requirement. See the [initial implementation](history/ktf.md#ktf-c-input-bitmap-investigation),
+the [timer delivery and clipping regression](history/ktf.md#ktf-graphics-input-qa-2026-09-23)
+and the [controller lifetime regression](history/ktf.md#ktf-input-lifetime-2026-09-23).
 
 Each carrier, for the `InputMethodHandler` route and the C editor alike, is a
 key: an uncaught guest exception from the title's `keyNotify` ends that key as
@@ -141,7 +141,7 @@ An `XTextField` built with a placeholder constructor Canvas is supported after
 the focused field paints directly onto the current screen. Offscreen painting
 does not qualify, and focus and display changes invalidate that evidence. Host
 commits repaint the visible Canvas. See the
-[SKT name-input regression](skt-name-input-2026-09-23.md).
+[SKT name-input regression](history/skt.md#skt-name-input-2026-09-23).
 
 The `TextComponent` route is append-only. `TextComponentHandler` identifies the
 title-owned component and exposes its size, cursor, limit, constraints and
@@ -350,7 +350,7 @@ removed from the dialog's text before the edit is accepted.
 
 ## Validation
 
-The [2026-09-23 exception audit](text-input-audit-2026-09-23.md) records five
+The [2026-09-23 exception audit](history/testing.md#text-input-audit-2026-09-23) records five
 additional defect categories, their authored reproductions, supported-route
 coverage and an acceptance matrix that separates unsupported and unreached
 editors from regressions. All five categories have fixes and ordinary Go

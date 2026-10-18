@@ -78,7 +78,7 @@ slot files, timestamps, nonce and reserved bits stay intact. Reading does not
 rewrite the backing receipt, and later guest writes persist normally through the
 save boundary. This revision-scoped recovery does not claim a general receipt
 format. Evidence and remaining QA are in
-[the gameplay investigation](ktf-gameplay-qa-2026-09-20.md).
+[the gameplay investigation](history/ktf.md#ktf-gameplay-qa-2026-09-20).
 
 KTF, LGT and SKT snapshot the Host identity after Host configuration (the
 default is set by `wipic.SetSubscriberNumber`; see
@@ -259,7 +259,7 @@ choice's opcode, a one-byte text length and the local informational message
 its own UI. This variant acknowledges only the agreement and does not accept the
 Thumb variant's remote-save commands; the guest writes its own receipt and
 progresses after confirmation. The local reproduction and its limits are in
-[the gameplay QA report](gameplay-qa-2026-09-20.md#lgt-agreement-reproduction).
+[the gameplay QA report](history/skt.md#gameplay-qa-2026-09-20-lgt-agreement-reproduction).
 
 Only the recognized dial callbacks, socket callback, endpoint, session subscriber
 and application token qualify. The limits are four sockets and 64 pending dials;
@@ -372,4 +372,4 @@ error, which remains an open frame-decoding issue. Details are in
 
 The embedded 100-byte format and first-run initialization behavior are
 documented in the
-[2026-09-19 startup investigation](startup-compatibility-2026-09-19.md#lgt-embedded-certificate-74b0ff2230f7).
+[2026-09-19 startup investigation](history/ktf.md#startup-compatibility-2026-09-19-lgt-embedded-certificate-74b0ff2230f7).

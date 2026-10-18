@@ -281,7 +281,7 @@ real browser.
 The WebKit Blob failure did not recur in the 2026-09-12 instrumented routes
 ([WebKit observations](history/testing.md#webkit-webkit-frame-decoding-investigation))
 and recurred during the 2026-09-30 SKT retained-session reload route
-([resume investigation](skt-resume-2026-09-30.md#validation)). Its cause is
+([resume investigation](history/skt.md#skt-resume-2026-09-30-validation)). Its cause is
 unresolved. On recurrence, preserve the lifecycle phase, browser version, Blob
 properties, origin/navigation and server frame evidence.
 
@@ -704,7 +704,7 @@ picture. A static picture that sends no new pictures is expected, but the
 runtime must keep ticking. Both engines decode lossless WebP, so the route also
 checks that the page asked for WebP pictures and drew them; every composition
 check above ran on WebP. Measured scope and results are in
-[the CPU investigation](cpu-saturation-investigation-2026-09-23.md) and the
+[the CPU investigation](history/session.md#cpu-saturation-investigation-2026-09-23) and the
 [bandwidth record](history/session.md#frame-bandwidth-2026-09-24).
 
 ## Quick save and checkpoints
@@ -1152,7 +1152,7 @@ Real-archive probes stay opt-in through `TestLocalSKTCheckpoint`
 with separate temporary saves and anonymous digest labels. No local game data is
 bundled in these tests.
 
-The [2026-10-07 review](quicksave-review-2026-10-07.md) records eight reproduced
+The [2026-10-07 review](history/maintenance.md#quicksave-review-2026-10-07) records eight reproduced
 defects and their fixes. Regressions cover:
 
 - SKT files shared per path: a quick step stores every dirty path's current
@@ -1586,7 +1586,7 @@ is in the implementation record. That change included no new real-game,
 physical-device or browser acceptance.
 
 The alternate LGT graphics context layout remains unconfirmed. The later
-[KTF investigation](ktf-qa-2026-09-21.md#native-environment-return-and-the-slow-case)
+[KTF investigation](history/ktf.md#ktf-qa-2026-09-21-native-environment-return-and-the-slow-case)
 establishes tag-2 word results in the environment; other tags and wide
 environment returns remain unconfirmed.
 
@@ -1651,7 +1651,7 @@ change: 267 archives ran to the end of the script, 15 ended with an error
 180-second limit, against 254, 20 and 26 in the run that found the three. The
 three titles run all 3,000 ticks and no run stops on a method lookup; the one
 lookup still failing was the field `TextComponent.m_cPos:I` in one title, a
-failure [recorded before](ktf-qa-2026-09-21.md#comparison-and-current-gates)
+failure [recorded before](history/ktf.md#ktf-qa-2026-09-21-comparison-and-current-gates)
 and published since (below). Every title whose outcome differs between runs had
 already flipped the same way across earlier runs of this sweep, and the four
 that looked worse on the first rerun gave the same result twice each on `main`

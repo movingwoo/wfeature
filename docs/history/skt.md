@@ -31,6 +31,10 @@ This consolidation adds no execution or acceptance evidence.
 - [Landscape evidence](#followup-landscape-evidence)
 - [Native keyboard and IME boundary](#followup-native-keyboard-and-ime-boundary)
 - [Remaining acceptance](#followup-remaining-acceptance)
+- [Gameplay QA, 2026-09-20](#gameplay-qa-2026-09-20)
+- [SKT name input with a placeholder Canvas](#skt-name-input-2026-09-23)
+- [SKT input and tile rendering (2026-09-29)](#skt-qa-2026-09-29)
+- [SKT retained-session resume (2026-09-30)](#skt-resume-2026-09-30)
 
 <a id="implementation-skvm-and-the-skt-platform"></a>
 
@@ -2372,3 +2376,681 @@ corpus of this date:
 4. Supply a package reported to support landscape and compare it at `240x320`
    and `320x240`. The corpus has no stable landscape declaration from which
    automatic selection can be derived.
+
+<a id="gameplay-qa-2026-09-20"></a>
+
+## Gameplay QA, 2026-09-20
+
+This investigation starts from revision `5b00ae17cdb867e86e2bfc6aac8093d872c4217d`
+and the locally retained September 19 server/page reports. Five reported paths
+remain distinct: SKT unpaced gameplay, SKT character-start failure, SKT tutorial
+failure, LGT initial network agreement, and an LGT slowdown after selecting
+the medium in-game speed. Passing one path does not establish the others.
+
+<a id="gameplay-qa-2026-09-20-skt-separately-installed-resource-archives"></a>
+
+### SKT separately installed resource archives
+
+The character-start report ends in `System.arraycopy` with a null source.
+The caller loads map data from a separate JAR when `getResourceAsStream`
+does not find it in the primary JAR. The outer package contains that data.
+Two runtime defects prevented access: the container loader dropped every
+`.jar` beside the primary payload, and the two-string `XFile` constructor
+treated the entry name as a textual file mode, an interpretation the old
+implementation had inferred, whereas the observed caller passes an archive name
+and its internal resource path.
+
+The loader now retains secondary JARs as installed files without adding their
+classes to the primary class path. `XFile(String, String)` opens an entry in
+the named archive, read-only. Integer-mode constructors keep their existing
+save behavior. Archive reads reuse the bounded JAR parser, including entry
+count, input/expanded size, duplicate and path checks. The entry may have a
+single leading slash; missing, damaged and unsafe resources fail with
+`IOException`. Original archive bytes are preserved.
+
+An authored outer container packages the existing Canvas MIDlet fixture with
+a newly generated resource JAR. Tests cover both path spellings, the entry
+named `r` (which must not become a file mode), actual guest reads, rejected
+writes, missing resources and unsafe paths. API tests check forwarding of both
+constructor arguments.
+
+For local archive SHA-256 prefix `1f0d7e81336a`, the page's final session inputs
+were converted to press/release events at 16 ms ticks. Separate empty save roots
+were used. The unchanged CLI fails at tick 368 with the reported null-array
+stack. The corrected CLI completes the same route plus 300 observation ticks:
+674 ticks, active state, no error, 62,371 non-black pixels, and a visible opening
+scene with characters and dialogue. Local artifacts are
+`build/qa-case1.route`, `build/qa-case1-{baseline,fixed}.log`, and
+`build/qa-case1-{before,after}.png`. This proves entry past the reported
+failure, not campaign completion or progress restoration.
+
+<a id="gameplay-qa-2026-09-20-skt-refresh-driven-speed"></a>
+
+### SKT refresh-driven speed
+
+The reported fast loop repeatedly calls `Thread.yield` and `XDisplay.refresh`
+without a gameplay sleep. Scaling the guest clock and `Thread.sleep` therefore
+does not limit its iterations. Slowing Host ticks only reduces delivered frames;
+the independent guest thread continues running at interpreter throughput.
+
+`XDisplay.refresh` now paces its producer to at most 60 refreshes per guest
+second. This is an emulator policy, not a measured handset refresh contract.
+The existing speed clock scales that bound. Work already spent drawing counts
+toward the interval, late frames do not accumulate credit, and waits observe
+live speed changes. Rendering and presentation locks are not held while waiting.
+Terminal states release waits without another Host tick. Frame snapshots and
+coalesced Host presentation retain their existing ownership.
+
+The regression test previously completed two 0.25x refresh intervals in
+4.25 microseconds. It now requires at least 120 ms and also exercises changing
+the live speed; a separate test covers shutdown without Host ticks. The existing
+clock tests retain deterministic coverage of each speed multiplier.
+
+A local replay of the reported archive's first 30 seconds of input then measures
+three consecutive intervals in the same live runtime:
+
+| Selected speed | Refresh calls | Wall interval | State |
+| --- | ---: | ---: | --- |
+| 1x | 175 | 3.011 s | active |
+| 0.25x | 45 | 3.006 s | active |
+| 2x | 311 | 3.002 s | active |
+
+The counter measures guest calls, not browser frame delivery. Higher speeds
+remain limited by execution cost. The local probe and results are
+`build/qa_speed_probe.go`, `build/qa-speed-events.json`, and
+`build/qa-speed-result.log`. This establishes that the selected speed reaches
+the producer; perceived handset fidelity and real-phone rendering are separate.
+
+<a id="gameplay-qa-2026-09-20-skt-tutorial-reproduction"></a>
+
+### SKT tutorial reproduction
+
+Archive SHA-256 prefix `d3e3b16cefd0` reproduces the reported exception with
+292 press/release events from the retained page session. The isolated run
+fails at tick 4,652, after approximately 75.6 seconds, at the same drawing
+instruction: `b.try(Graphics)` bytecode offset 102 reads index 9 from a row
+of length 5. Local artifacts are `build/qa-case2-events.json`,
+`build/qa_tutorial_probe.go`, and `build/qa-tutorial-probe.log`.
+
+A VM store observer tracks the shared `h.w` name table and menu state. The
+ability-name loader installs one row of 24 entries. At 67.673 seconds the
+item loader replaces it with 28 rows of five entries. At 75.594 seconds an
+equipment operation returns to menu state 6; the subsequent tutorial overlay
+reads the retained item table as ability names. Its lazy loader checks only
+whether the shared table is null. The table is non-null, so the required
+24-entry resource is not loaded.
+
+In the main loop, key handlers queue input, the guest worker consumes it
+before updating and drawing, and `paint` only supplies the graphics object, so a
+concurrent Host paint replacing the name table does not explain this trace. Do
+not suppress the bounds exception or fabricate a larger array.
+
+An independent OpenJDK 8 replay restores the failing object graph and invokes
+the original drawing method. It throws the same index-9 exception on its first
+frame, through the same guest drawing methods. Clearing only the name table
+allows 1,000 frames with repeated confirmation inputs and leaves a one-row,
+24-entry ability table. This validates the drawing/data-flow diagnosis; the
+graph comes from the emulator and does not prove a complete independent
+handset input route. The desktop shim preserves image dimensions but does not
+render pixels. Local artifacts are `build/qa-case2-failure-openjdk.log` and
+`build/qa-case2-failure-reset-openjdk.log`.
+
+The tutorial's phase-17 block clears image resources and changes to phase 5,
+but does not clear the item-name cache. Ordinary menu exit paths do clear it.
+A diagnostic observer clearing it at that transition completes the original
+292-event route and 5,500 ticks, active and without an exception. The production
+compatibility adapter now makes this same correction for the exact class-set
+digest `d70497e3b4fae79a2b552c0cdad418494e01faa282a29a2eb8b7c4a702e45347`.
+It replaces the redundant phase-17 assignment with a null name-table store;
+the block still sets phase 5 before its next method call. Branch offsets,
+exception regions, stack limits and unrelated methods remain unchanged.
+Four appended constant-pool entries provide the field reference. Original
+archive bytes remain unchanged, and any class-set change disables selection.
+This is an observed revision's guest-cache workaround, not a new JVM rule.
+
+The production runtime without the diagnostic mutation completes 5,000 ticks
+of the same route, remains active, and shows the next combat tutorial dialogue
+and its world scene. Its observer records the null store followed by the
+ordinary ability loader installing 24 names. Artifacts are
+`build/qa-tutorial-production.log` and `build/qa-case2-probe.png`.
+This passes the reported crash point, not the whole tutorial or campaign.
+The authored `TutorialCacheMIDlet.java` JAR reproduces the stale-table bounds
+exception, then proves lazy reload after the adapter and preservation of the
+final phase. Tests reject truncated classes, wrong fields and offsets, and
+verify unrelated method bytecode and original archive ownership.
+
+<a id="gameplay-qa-2026-09-20-lgt-agreement-reproduction"></a>
+
+### LGT agreement reproduction
+
+The retained log directory has no matching original report, so this path uses
+fresh isolated runs of archive `ecb1bf8d2079`. Both local package variants
+contain the same module, SHA-256 prefix `41ed310172ee`. The completed route
+selects the default explicit No at the customer-information agreement,
+shows network progress, and eventually shows a server-communication error.
+`build/qa-case3-network.route` completes 7,018 ticks; its log records
+`netConnect` from guest address `0x1355c` with callback `0x13070`, followed
+by two `netClose` calls. The baseline status is `unsupported`.
+
+None of the eight existing Thumb notification patterns matches this ARM
+implementation. Static inspection finds a different stream framing: the
+builder formats `SMSAGREE %s %s %c`, and its sender includes one terminating
+NUL rather than padding the command to 100 bytes. The agreement response
+handler accepts codes 2 and 3; the stream decoder reads a signed command byte
+and a payload-length byte. The socket callback is `0x131ac`. These are local
+investigation addresses, not proposed recognition keys. A diagnostic overlay
+injects only this module's routing contract into the existing in-process socket
+service. The same 7,018-tick route then writes 32 bytes, reads a two-byte
+response, and closes the socket normally. The final frame is an empty
+informational dialog with an OK button, rather than the baseline's communication
+error. A second fresh-save replay adds explicit confirmation and 300 observation
+ticks. It
+completes 7,324 ticks and reaches the title screen without the network error;
+artifacts are `build/qa-case3-null-complete.{route,log,png}`. This confirms the
+No path with the diagnostic adapter. Those diagnostic runs did not establish
+explicit Yes, restart behavior or production module recognition, and left the
+informational dialog blank. The final implementation and acceptance follow.
+
+<a id="gameplay-qa-2026-09-20-implemented-arm-agreement-support"></a>
+
+#### Implemented ARM agreement support
+
+The production recognizer now joins the agreement initializer, writer and reply
+handler through their virtual table, follows the constructed network object's
+virtual table to the stream decoder, and validates dial/socket callback state
+and transport links. It extracts the application and endpoint from the matched
+initializer. Archive names, module hashes and fixed image addresses do not select
+the adapter. Authored fixtures cover relocated code/data, mismatched links,
+changed instruction windows and strings, ambiguous writers, truncated data and
+address overflow. Unsupported compiler layouts retain the ordinary failure path.
+
+The separate stream parser accepts only the current session's identity,
+application and explicit N/Y choice, with a terminating NUL and a 64-byte bound.
+It rejects oversized, trailing, unrelated and repeated commands. The response
+uses code 2 for No or 3 for Yes, followed by the length and bytes of
+`Handled locally. Nothing sent.` This replaces the diagnostic adapter's blank
+dialog without claiming contact with the original service. Tests exercise every
+split position, final-terminator handling, guest socket writes and short reads.
+
+A release CLI built from the actual source, without diagnostic overlays, passes
+both fresh-save choices. The final No route completes 7,324 ticks and the final
+Yes route 7,330 ticks. Both reach the title screen after confirmation. The Yes
+replay also captures the visibly selected Yes button and the readable local
+notice. Traces show a 32-byte request, a two-byte response header and a separate
+30-byte text read, then ordinary socket and network closure. Artifacts are
+`build/qa-case3-arm-message.{log,png}` and
+`build/qa-case3-arm-{yes-selected,message-dialog,final-yes}.png`, with the latter
+route's log at `build/qa-case3-arm-final-yes.log`. Only isolated QA save roots
+were used. A fresh runtime using the No route's saved data then completes
+2,212 ticks and reaches the title without a dial or socket write. Both saved
+files retain their SHA-256 hashes. Restart evidence is
+`build/qa-case3-arm-restart.{route,log,png}`. This proves the reported initial
+agreement and its immediate restart path, not campaign completion or any
+external service functionality.
+
+<a id="gameplay-qa-2026-09-20-outstanding-investigation"></a>
+
+### Outstanding investigation
+
+- The LGT medium-speed page report contains temporary drops, including 4.4 fps,
+  57.1 ms per tick and 0.67x measured guest speed, followed by recovery toward
+  0.96–0.98x. The server report is at 1.00x after recovery. These measurements
+  do not identify the cause or establish a fix.
+
+The final LGT session in the retained page report starts playing at
+`2026-09-19T14:14:06.095Z`. Its archive SHA-256 is
+`344e1285110a77089625b6d353c9766ecfd900763d7283ba0fd5eeeded07dcab`.
+The page records two transient drops: at 14:14:16.425Z, 7.9 fps with 27.2 ms
+ticks and measured speed 0.58x; at 14:14:56.997Z, 4.4 fps with 57.1 ms ticks
+and 0.67x. Each recovers. This identifies the package and time windows to
+replay; it does not yet distinguish guest loading work from a timer defect.
+
+A full reading of the same page report finds a much more severe later window:
+at 14:15:54.384Z the average tick is 228.6 ms and measured speed is 0.17x;
+at 14:15:56.583Z it is 358.3 ms and 0.11x; at 14:15:59.143Z it is 635.6 ms
+and 0.06x. It recovers to 0.97x by 14:16:05.207Z, with further intermittent
+drops afterward. These later measurements, rather than only the early loading
+dips, are the remaining investigation's target.
+
+The module hash is
+`a1467fcb4a07f8ed763b43c74fda41c9ce44566539cc21f51e1bbcaae296b696`.
+A debug runtime replay with a fresh isolated save root delivers all 1,326
+recorded key edges over 160 seconds without uncaught callbacks and does not
+reproduce the severe window. Its captures show that the fixed timestamps reach a
+main-menu confirmation instead of the speed option, so it did not reproduce the
+setting change either. Logs, captures and guest profiles are
+`build/qa-case4-full-*`, with input events at `build/qa-case4-events.json`.
+
+A separate manual probe (`build/qa_lgt_manual.go`, using only
+`var/savedata/qa-20260920/medium-manual/`, copied from the preceding replay's
+save root) reaches the speed option. In the first navigation the first CLR
+removes the system menu's selection and another CLR returns to play; shorter
+holds do not change that. Later navigation verifies each screen and uses two
+ticks held, two released, then 30 observation ticks. Menu-only timings do not
+establish gameplay behavior after selecting medium.
+
+- **High, combat tutorial.** The small selected glyph was first misread as
+  medium; its pixel strokes identify it as high. A 300-tick real-time
+  measurement completes in 7.685 s wall time, with 7.339 s of guest time,
+  6.663 s busy, a 57.684 ms maximum tick and 796,673,754 instructions. This is
+  neither the reported slowdown nor a medium-setting acceptance
+  (`build/qa-case4-combat-high-option.png`, `build/qa-case4-combat-high.png`).
+  An earlier adjacent-setting measurement is not labeled high, because its
+  displayed value was not established.
+- **Medium, first combat stage.** Navigation passes the tutorial; the full menu
+  has Status, Skill, Item, Record and System tabs, unlike the tutorial's
+  system-only menu, and first-use Item and Record explanations must be confirmed
+  before tab navigation proceeds. Medium is selected and verified
+  (`build/qa-case4-battle-medium-option.png`); after leaving the menu the
+  battlefield stays visible with its minimap, enemies and weather. A 300-tick
+  measurement takes 11.914 s wall time and advances 11.968 s guest time
+  (about 1.00x), with 7.667 s busy, a 53.876 ms maximum tick and 912,392,079
+  guest instructions (`build/qa-case4-battle-medium.png`; console measurements in
+  `build/qa-case4-manual-evidence.txt`). This verifies that setting change
+  without the reported transient; it does not explain or resolve the original
+  episode.
+
+After the probe closed, its ordinary save files were copied to the isolated
+`medium-battle-checkpoint` QA save root, with hashes in
+`build/qa-case4-battle-save-hashes.json`, for later runs.
+
+The macOS CPU profile again attributes most samples to
+`runtime.pthread_cond_signal`; the previously measured profiler limitation in
+[ARM execution history](armcore.md#implementation-where-a-clets-time-goes-and-the-quantum-that-is-not-one-number)
+applies. Do not infer a scheduler optimization from this profile alone. Guest
+instruction samples and measured tick times remain the useful evidence.
+
+<a id="gameplay-qa-2026-09-20-lgt-websocket-comparison"></a>
+
+#### LGT WebSocket comparison
+
+An isolated debug `webhost.Server` and real WebSocket connection repeat the
+setting change using a copy of the first-stage QA save. This exercises the
+shared session adapter, audio collector, PNG encoder, socket writer, key
+dispatch and statistics used by the page. The existing user server is not
+restarted or changed. The probe has its own ephemeral listener, game directory
+under `var/games/.qa-web-case4/`, and saves under
+`var/savedata/qa-20260920/medium-web/`.
+
+The captured option screens explicitly establish high, then medium. Each
+setting has a 12-second observation interval in the same first battle, with
+enemies, weather and damage visible. Five complete two-second statistics
+windows after the initial mixed window give:
+
+| In-game setting | Measured guest speed | Mean tick cost | Delivered frame rate |
+| --- | --- | --- | --- |
+| High | 0.969–0.984x | 20.46–21.33 ms | 16.27–16.96 fps |
+| Medium | 0.994–1.001x | 26.25–31.63 ms | 12.39–12.52 fps |
+
+The transition window itself reports 1.013x and 21.943 ms per tick. No severe
+drop appears immediately after selection or during the following interval.
+Medium's lower presentation rate here accompanies an on-time guest clock;
+it is distinct from the original report's 0.06x clock shortfall. The tick-cost
+measurement brackets `session.Tick`; frame conversion, PNG encoding and socket
+writing are outside that timed call. They can still compete for host resources,
+so this timing boundary alone does not exclude host contention.
+
+Artifacts are `build/qa_lgt_web.go`, `build/qa-case4-web.log`,
+`build/qa-case4-web-comparison.json`, and the `high-selected`, `high-end`,
+`medium-selected`, and `medium-end` PNGs under `build/qa-case4-web-*`.
+The probe was stopped after observation. These results are a second
+unsuccessful reproduction through the actual host path; they neither identify
+nor fix the historical transient. The original report lacks a code revision and
+a slow-tick execution profile, and the user service then running reported only
+version `dev` and had started after that report, so it cannot establish the
+historical executable either. Further diagnosis needs a reproduced slow state or
+more evidence from that episode, not a speculative timing change.
+
+<a id="gameplay-qa-2026-09-20-validation"></a>
+
+### Validation
+
+`make test`, `make test-debug`, `go test -race ./internal/...`,
+`go vet ./...` and `git diff --check` passed at three points:
+
+- after both SKT changes, with the Node gate at 219 passing tests;
+- after connecting the ARM recognizer and adding the informational response,
+  still with 219 Node tests (logs `build/qa-arm-{test,test-debug,race,vet}.log`);
+- after the tutorial adapter (logs `build/qa-tutorial-{test,test-debug,race,vet}.log`),
+  when the optional original-archive fingerprint test also passed with an
+  absolute `WFEATURE_SKT_TUTORIAL_ARCHIVE` path.
+
+No server restart, publication or real-phone check was part of these runs.
+Original archives and user saves are unchanged; probes use
+`var/savedata/qa-20260920/`.
+
+<a id="skt-name-input-2026-09-23"></a>
+
+## SKT name input with a placeholder Canvas
+
+<a id="skt-name-input-2026-09-23-reproduction-and-cause"></a>
+
+### Reproduction and cause
+
+The two SKT reports saved at 07:42 UTC on 2026-09-23 show working key
+delivery and active sessions. Replaying their final sessions with isolated
+saves reached both name editors, where `Runtime.TextInput` returned
+`no supported text field is active` before the correction.
+
+Both archives construct `com.xce.lcdui.XTextField` with an empty text value,
+an eight-character limit, unconstrained input, and a placeholder Canvas.
+The placeholder has an empty `paint` body; the visible game Canvas paints
+the focused field itself. The Host adapter required the constructor's Canvas
+to be the current display, so it rejected these editors.
+
+The archive SHA-256 values are
+`2d66945008c1be8a749abd91d54e98c622268ab3c53e2a7c07cbe108a4d5780d` and
+`2f5246006bd86d43e3ea85901208082b8eae8b47ca8831d28879d74301e15392`.
+The routes and images remain ignored local artifacts.
+
+This is vendor-specific observed behavior. A search of the WIPI specification
+site and public documentation found no XTextField contract. The correction
+does not change `m.SK_VM` or infer a different constructor argument order.
+
+<a id="skt-name-input-2026-09-23-correction-and-boundaries"></a>
+
+### Correction and boundaries
+
+A focused field painted directly through this runtime's screen Graphics records
+the current display and its revision. That evidence also permits Host text
+input when the constructor supplies a different Canvas. An offscreen image
+does not establish a visible target. Focus calls clear the evidence, and
+display transitions invalidate it. Existing field, value, constraint, focus,
+menu, and display revision checks still apply at commit.
+
+After a Host commit, the visible Canvas is queued for repaint, because the
+vendor field's `repaint` stub alone cannot present the changed name.
+The game still handles OK, validates its name policy, and dismisses the editor.
+The Host adds no handset Hangul keypad automaton.
+
+<a id="skt-name-input-2026-09-23-validation"></a>
+
+### Validation
+
+`TestHostXTextFieldPaintedOnCurrentCanvas` reproduces the rejected field with
+an authored Canvas and the real XTextField constructor. Restoring the original
+ownership check makes it fail at opening the painted field. The corrected
+path checks Korean commit and readback, immediate Canvas repaint, stale edits,
+focus restoration, and a display round trip without repainting the field.
+`TestHostXTextFieldRejectsOffscreenPaint` rejects an image-only field.
+
+Both local archives accept a two-character Korean name and return the same
+text on reopening in release and debug probes. Debug probes additionally
+confirm with the game's ordinary OK key; both dismiss the editor and remain
+active. This proves the reported name-entry route, not complete gameplay or
+name persistence across a new runtime.
+
+Chromium and WebKit also pass both original archives through the served page:
+open the native-text dialog, submit Korean, reopen and read it back, then use
+OK to reach the next setup screen. The dialog reports unavailable after the
+game closes the field. Neither browser reports a page error. The runs use
+isolated saves and do not establish physical-phone IME behavior. Results and
+screenshots are under `var/acceptance/name-input-chromium-1790150858291` and
+`var/acceptance/name-input-webkit-1790150937937`.
+
+`make test` (including 227 Node tests), `make test-debug`,
+`go test -race ./internal/...`, `go vet ./...`, and `make server` pass.
+
+<a id="skt-qa-2026-09-29"></a>
+
+## SKT input and tile rendering (2026-09-29)
+
+The later [retained-session investigation](#skt-resume-2026-09-30) adds a
+resume correction for this tile-corrected revision and another verified class
+set. It prevents repeated startup from replacing the retained game.
+
+Two local MIDP archives reproduced three reported failures. Original archives,
+disassembly, logs and screenshots remain under ignored `var/` directories.
+Diagnostic output is in `var/diagnostics/skt-qa-20260929`; probe saves use
+`var/savedata/qa-20260929`.
+
+<a id="skt-qa-2026-09-29-serial-animation-input"></a>
+
+### Serial animation input
+
+A Canvas records key presses in a counter and consumes them inside `paint`.
+Its serial Runnable clears the counter, requests another serial callback and
+requests a repaint. The repaint ran immediately after that Runnable in the same
+event drain, so input delivered between Host passes was cleared by the next
+Runnable before another paint could consume it. Both `fire` and
+`5` reached `keyPressed` while the title remained on its animated opening screen.
+
+Repaints requested during a serial callback now wait for the next Host pass,
+where they run before the next serial callback. This provides an input window
+before painting and preserves one serial callback per Host pass. Explicit
+`serviceRepaints` still paints synchronously. The rule applies to the shared
+runtime used by the CLI and server.
+
+The WIPI specification's MIDP Display entry and the
+[MIDP Display contract](https://docs.oracle.com/javame/config/cldc/ref-impl/midp2.0/jsr118/javax/microedition/lcdui/Display.html#callSerially(java.lang.Runnable))
+place serial callbacks after a repaint cycle. This fix makes that cycle boundary
+observable to input delivered between Host passes.
+
+The authored `SerialInputMIDlet` JAR reproduces the clearing pattern. Before
+the fix, its paint consumes zero of four input taps; afterward it consumes all
+four. Separate checks cover bounded serial progression and synchronous painting.
+
+<a id="skt-qa-2026-09-29-midp-call-key"></a>
+
+### MIDP call key
+
+The page and CLI use Host code `10` for Call. A reported archive initializes its
+send-key constant to `190`; its gameplay input switch handles that value and
+starts a guard action. Passing `10` straight to the Canvas never reaches the
+branch, so the tutorial cannot advance.
+
+MIDP Canvas delivery now maps Host Call to `190` for press, repeat and release.
+The existing WIPI Card path still maps it to WIPI `KEY_SEND` (`-10`), as defined
+by the WIPI specification. Script input retains its own translation. The page
+protocol and saved keyboard mappings keep Host code `10`.
+
+<a id="skt-qa-2026-09-29-cross-archive-call-verification"></a>
+
+#### Cross-archive Call verification
+
+The initial fix had real-game evidence from the reported archive only; a
+follow-up audit checked the common mapping against other local archives.
+
+The scan covered 106 containers in the two local SKT library directories:
+94 Java archives with 79 distinct class sets, plus 12 script archives. It
+disassembled 174 candidate classes containing key handlers or possible `190`
+constants. This was a candidate search, not a gameplay pass over 106 games.
+Coordinates, array indexes, internal action numbers and switch entries that
+share the default target were excluded from positive Call evidence.
+
+Three different games have executable actions for raw Canvas code `190`:
+
+| Local label | Java class-set SHA-256 | Static contract and runtime result |
+| --- | --- | --- |
+| `archive-017` | `ed8641c5e528fa5d62a0fcdcbfaf49e2d4e4c42e21358e89d474ab00f9cfba56` | The key handler forwards to a scene handler whose `190` branch selects action state `7`. In the treatment scene, raw `10` left scene `11`, action `2` unchanged; normal Host Call changed the action to `7` and opened the patient-transfer notice. |
+| `archive-042` | `3be2da69a3a6d9f33a33c3c510684a7f29b469309f5f1366a51598e5276cc516` | `keyPressed(190)` records internal action `20` and calls the action interpreter. In combat scene `1010`, raw `10` left the action and Call sequence latch at zero. Normal Host Call set action `20` and latch `1`; a second press advanced the latch to `2`. |
+| `archive-075` | `e3a656d9d672fb5db522ab5a3752208cd333c43cf68c09368e4ed2bb56c315df` | The original report: `KEY_SEND = 190`, the guard action and advancement to the next tutorial lesson, as recorded above and below. |
+
+A fourth class set (`archive-077`,
+`7cba828e0c4e479f749f749f48a94d7655f162b31412d40edea897909c630fc6`)
+contains an explicit `190` case that jumps to the same exit as the default.
+It is evidence of an ignored key in that handler, not a working Call action.
+
+The two additional runtime checks used original archives, isolated saves and
+normal input to reach the scenes. The probes read guest fields without changing
+them. To compare the old value at the same scene, they delivered `10` directly
+to the current Canvas callback, then used the normal runtime Host Call path.
+This compares key values; it is not a replay of a complete older executable.
+The second probe records both key-down and key-up, with observations immediately
+after key-down so a later frame cannot hide the input latch.
+
+This evidence supports keeping `190` as the emulated SKT MIDP handset's common
+Call mapping. No conflicting raw Call value was established in this audit.
+It does not establish that every SKT game uses Call or accepts the same device
+layout. The [MIDP Canvas key-event contract](https://docs.oracle.com/javame/config/cldc/ref-impl/midp2.0/jsr118/javax/microedition/lcdui/Canvas.html)
+does not define a universal Call constant; its standard keypad constants cover
+digits, star and pound. This positive handset code is observed vendor behavior,
+not a portable MIDP or WIPI standard constant.
+
+The follow-up changed documentation only. Focused MIDP Call, WIPI key mapping
+and CLI key-name parsing regressions passed. The prior browser acceptance
+still covers transport and the shared input path; these two additional games
+were checked in the shared runtime, not replayed in a browser. Corpus membership,
+disassembly, route data, observations and screenshots remain in ignored
+`var/diagnostics/skt-call-audit-20260929`; saves are isolated under
+`var/savedata/skt-call-audit-20260929`.
+
+<a id="skt-qa-2026-09-29-inclusive-tile-clipping"></a>
+
+### Inclusive tile clipping
+
+The second archive's tile renderer advances in 16-pixel steps and passes
+`16 + adjustment` for both clip extents. Its constructor sets the adjustment
+to `-1`; ordinary count-based clipping therefore drops each tile's final row
+and column. The CLI framebuffer shows a black grid, so this is already present
+before browser scaling or frame compression.
+
+The existing `skt.inclusive_set_clip` correction is enabled for this exact
+Java class set through `skt-inclusive-clip-002`. Its fingerprint is
+`e3a656d9d672fb5db522ab5a3752208cd333c43cf68c09368e4ed2bb56c315df`.
+The rule does not change standard MIDP clipping or enable an exception based on
+profile, title or filename. The authored tile fixture already covers ordinary
+and inclusive clipping, device bounds and WIPI exclusion. The local archive
+test checks recognition and rejection after mutation of each class.
+
+<a id="skt-qa-2026-09-29-validation"></a>
+
+### Validation
+
+- `make test`, `make test-debug`, `go test -race ./internal/...` and
+  `go vet ./...` passed. Logs are in the diagnostic directory above.
+- Debug and release CLI/server builds succeeded. Both browser acceptance runs
+  finished with empty page-error lists and no server warnings or errors.
+- The authored serial-input regression failed before the scheduling change
+  (zero of four presses consumed) and passed afterward. Synchronous repaint,
+  exception cleanup and existing serial scheduling tests also passed.
+- The authored Canvas fixture received `10` before the Call mapping change and
+  `190` afterward for press, repeat and release. Existing WIPI key tests passed.
+- The tile fixture and registry checks passed, including the local archive's
+  class fingerprint and rejection after mutation of each class.
+- In the first real archive, the debug CLI reached the main menu, changed menu
+  selection and entered the new-game introduction. The browser page reached
+  the menu and changed selection in Chromium and WebKit.
+- In the second real archive, before/after CLI captures of the same room show
+  the missing tile edges restored. Chromium and WebKit also rendered the room
+  without the black grid.
+- The debug CLI and both browser engines completed the guard instruction and
+  reached the following movement/attack lesson. Chromium used its keyboard
+  mapping; WebKit used the page's Call button. A read-only runtime probe also
+  observed the guard action and the tutorial state advancing from `2` to `3`.
+  Input replay allowed the dialogue to finish between taps; the CLI acceptance
+  replay used 80 ticks between confirmation, Call and the next confirmation.
+
+This acceptance run covers the reported opening screens and tutorial boundary.
+It is not a full playthrough or a physical iPhone test. Browser command logs,
+page-error lists and framebuffer captures remain in the diagnostic directory.
+
+<a id="skt-resume-2026-09-30"></a>
+
+## SKT retained-session resume (2026-09-30)
+
+<a id="skt-resume-2026-09-30-failure-and-evidence"></a>
+
+### Failure and evidence
+
+The user reported an installed iPhone PWA, switching to another app and
+returning after approximately three seconds. The automated browser checks
+below exercise the page lifecycle with WebKit; they are not physical iPhone
+or installed-PWA suspension tests.
+
+The reported app switch retained the server session. The debug log records a
+pause and park at 09:14:28.355 KST and a resume at 09:14:33.722 — a
+5.367-second absence with no intervening session start. The lifecycle resume
+invoked `startApp` again inside the existing JVM.
+
+The reported revision's `startApp` unconditionally constructs a new Canvas,
+stores it as the current game and starts another worker. Its `pauseApp` returns
+without stopping the previous worker. A direct reproduction changed Canvas
+identity and doubled the JVM's reported thread objects from two to four.
+The old game keeps its retained Graphics and resources while the new game
+initializes and draws, which explains the return to the opening screen and
+allows competing drawing after a new game is selected.
+
+The failure was also reproduced in a different local game. Two other games
+retained their Canvas and thread count under the same pause/resume sequence.
+Labels refer to the corpus recorded in the [previous audit](#skt-qa-2026-09-29-cross-archive-call-verification).
+
+| Label | Canvas retained before correction | Thread objects before/after resume |
+| --- | --- | --- |
+| `archive-017` | Yes | 1 / 1 |
+| `archive-024` | Yes | 0 / 0 |
+| `archive-042` | No | 2 / 4 |
+| `archive-075` | No | 2 / 4 |
+
+<a id="skt-resume-2026-09-30-scope-and-contract"></a>
+
+### Scope and contract
+
+The [WIPI specification](https://mirusu400.github.io/wipi-wiki/)'s MIDP `MIDlet`
+entry defines reactivation through
+`startApp`; a standard MIDlet must handle repeated calls. The server's retention
+protocol did not lose or replace this session. Removing lifecycle callbacks
+from every game would break applications that use them to stop and restart
+their own work.
+
+The compatibility registry therefore selects `skt.resume_without_start` for
+the two verified class sets:
+
+- `3be2da69a3a6d9f33a33c3c510684a7f29b469309f5f1366a51598e5276cc516`
+- `e3a656d9d672fb5db522ab5a3752208cd333c43cf68c09368e4ed2bb56c315df`
+
+After a successful initial start, these revisions return to the active state
+without re-running their initialization. The current Canvas, JVM, worker and
+game state remain owned by the retained session. A deferred initial start still
+retries its real callback. Ordinary MIDlets and WIPI Jlets keep their existing
+lifecycle behavior. Matching uses all class bytes, not filenames or profiles.
+
+This correction prevents duplicate initialization. It does not add an execution
+snapshot or freeze independently running Java threads and the guest clock;
+those retain the existing behavior described in [SKT lifecycle](../skvm.md#loading-and-lifecycle).
+
+<a id="skt-resume-2026-09-30-validation"></a>
+
+### Validation
+
+The authored `RestartingMIDlet` fixture creates a new Canvas and worker on
+each start. Before the correction, the retention regression failed because
+resume replaced its Canvas. The regression checks three pause/resume cycles,
+input progress, worker count and callback counts. Separate tests keep standard
+MIDP reactivation and deferred initial starts working. An opt-in local test
+rejects the correction after changing any class in either recognized archive.
+
+After correction, all four original archives retained their Canvas. The two
+affected revisions kept two reported thread objects instead of growing to four;
+the other two retained their original counts of one and zero. In the reported
+revision's tutorial, three 5.4-second pauses also preserved the current Canvas,
+thread count and guest progress fields. Captured room backgrounds remained
+intact; changing character-animation pixels are not lost background tiles.
+After the third return, input reached the same Canvas: its last-key field
+recorded `190` for Host Call, then `148` for confirmation, while the worker
+continued updating its frame counter.
+
+`make test`, `make test-debug`, `go test -race ./internal/...` and `go vet ./...`
+passed. Debug and release CLI/server builds succeeded. The local fingerprint
+test recognized both original class sets and rejected every class mutation.
+
+The browser route uses the real page client and WebSocket, dispatching hidden
+and visible lifecycle events around 5.4-second absences. In the final route,
+both Chromium and WebKit retained one start across two returns, passed a
+pixel comparison of the room background, and delivered confirmation and Call
+press/release pairs after returning. Both final routes had no page errors.
+
+An additional reload route in Chromium retained one session start across two
+returns and an actual page reload, with three resumes and no page errors. WebKit also retained one start and three resumes, but the
+reload route recorded a Blob access-control error. This is a recurrence of the
+[previously unresolved WebKit decoder observation](testing.md#webkit-webkit-frame-decoding-investigation),
+not evidence of lost JVM state. That run is not a clean browser acceptance pass.
+
+Original PNG captures and replay of the captured WebP messages preserve the
+room background. Pixel comparisons across returns locate changes within the
+animated character area; no additional graphics compatibility change was made.
+These checks do not establish physical-device suspension behavior or recovery
+after the server process itself exits.
+
+Local evidence is under ignored `var/diagnostics/skt-resume-20260930` and saves
+are isolated under `var/savedata/skt-resume-20260930`.

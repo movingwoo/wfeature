@@ -50,42 +50,21 @@ are written in Korean for players; everything here is English.
 
 | Record | Contents |
 | --- | --- |
-| [KTF](history/ktf.md), [LGT](history/lgt.md), [SKT](history/skt.md) | Detailed layouts, original investigations, routes, and compatibility follow-up. |
+| [KTF](history/ktf.md), [LGT](history/lgt.md), [SKT](history/skt.md) | Detailed layouts, original investigations, routes, compatibility follow-up, and the dated QA records of 2026-09-19 to 2026-09-30. |
 | [ARM](history/armcore.md) | Interpreter optimizations, benchmarks, and profile evidence. |
-| [Sessions](history/session.md) | Protocol and retention decisions, previous measurements. |
-| [Testing](history/testing.md) | Detailed probe instructions, dated acceptance, runtime regressions, settling, and WebKit observations. |
+| [Sessions](history/session.md) | Protocol and retention decisions, previous measurements, and the 2026-09-23 CPU saturation investigation. |
+| [Testing](history/testing.md) | Detailed probe instructions, dated acceptance, runtime regressions, settling, WebKit observations, and the 2026-09-23 text input audit. |
 | [Coverage](history/coverage.md) | The 2026-09-12 API audits; not a current missing-feature queue. |
 | [Authentication](history/authentication.md) | Scheme recognition, controlled routes, and acceptance evidence. |
-| [Maintenance](history/maintenance.md) | Superseded plans, performance watches, and paused snapshot research. |
+| [Maintenance](history/maintenance.md) | Superseded plans, performance watches, paused snapshot research, and the 2026-10-07 quick-save review. |
 | [Audio](history/audio.md) | The cross-platform playback audit, corpus evidence, unverified vendor mappings, and the app timing investigation. |
 
-## Dated investigation records
+## Source review
 
-These are dated QA and investigation reports written before the rule below
-was applied to them. Each records the reproduction, the repair and what stayed
-open on its date; the maintained behavior is in the references above, and an
-open item that is still open is carried in [maintenance](maintenance.md).
-
-| Record | Contents |
-| --- | --- |
-| [Startup compatibility, 2026-09-19](startup-compatibility-2026-09-19.md) | Three startup investigations and the KTF new-character relay and slot service. |
-| [Gameplay QA, 2026-09-20](gameplay-qa-2026-09-20.md) | SKT resource archives, refresh pacing and a tutorial, and an LGT agreement screen. |
-| [KTF gameplay QA, 2026-09-20](ktf-gameplay-qa-2026-09-20.md) | KTF additional-content receipts, a scene camera and repaint cadence. |
-| [KTF QA, 2026-09-21](ktf-qa-2026-09-21.md) | KTF 1.2 startup regressions, a cadence survey, image lifetime and menu text. |
-| [KTF C input and bitmaps](ktf-c-input-bitmap-investigation.md) | The KTF C input method and BMP transparency with a high palette index. |
-| [KTF graphics and input QA, 2026-09-23](ktf-graphics-input-qa-2026-09-23.md) | Dialogue clipping and timer-deferred C text input. |
-| [KTF input lifetime, 2026-09-23](ktf-input-lifetime-2026-09-23.md) | Text input kept available after a title rejects an empty name. |
-| [KTF save slots, 2026-09-23](ktf-save-slots-2026-09-23.md) | Save names that are also resource directories, the first slot and collector roots. |
-| [LGT QA, 2026-09-20](lgt-qa-2026-09-20.md) | Five LGT cases: rendering, the name editor, audio and pacing. |
-| [LGT QA, 2026-09-21](lgt-qa-2026-09-21.md) | Ten LGT cases: startup, certificates, rendering and media. |
-| [LGT key callback hang, 2026-09-23](lgt-key-callback-hang-2026-09-23.md) | A key callback that waited on a worker. |
-| [SKT name input, 2026-09-23](skt-name-input-2026-09-23.md) | A name field drawn over a placeholder canvas. |
-| [SKT QA, 2026-09-29](skt-qa-2026-09-29.md) | Serial repaint and input windows, the Call key and tile clipping. |
-| [SKT resume, 2026-09-30](skt-resume-2026-09-30.md) | Resume without a prior start for two class sets. |
-| [Text input audit, 2026-09-23](text-input-audit-2026-09-23.md) | Five text-input defect classes, the route matrix and its outcome taxonomy. |
-| [CPU saturation, 2026-09-23](cpu-saturation-investigation-2026-09-23.md) | Skipping unchanged frames, deferring scaling, and frame-copy measurements. |
-| [Quick-save review, 2026-10-07](quicksave-review-2026-10-07.md) | Eight quick save/load findings across KTF, LGT and SKT and their repairs. |
-| [Source review, 2026-10-16](source-review-2026-10-16.md) | A full-source review: 153 code and 9 documentation findings, each with its resolution, and the limits the fixes left. |
+[Source review, 2026-10-16](source-review-2026-10-16.md) is a full-source
+review: 153 code and 9 documentation findings, each with its resolution, and the
+limits the fixes left. It stays here while its follow-up items are open, then
+moves to `history/`.
 
 ## Paused SGS work
 

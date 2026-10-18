@@ -73,6 +73,13 @@ This consolidation adds no execution or acceptance evidence.
 - [Host-composed text](#followup-host-composed-text)
 - [Java text spacing (2026-09-15)](#text-ktf-java-text-spacing)
 - [Validation](#text-validation)
+- [Startup compatibility investigation, 2026-09-19](#startup-compatibility-2026-09-19)
+- [KTF C input and bitmap investigation (2026-09-19)](#ktf-c-input-bitmap-investigation)
+- [KTF gameplay QA, 2026-09-20](#ktf-gameplay-qa-2026-09-20)
+- [KTF 1.2 QA, 2026-09-21](#ktf-qa-2026-09-21)
+- [KTF dialogue clipping and deferred text input](#ktf-graphics-input-qa-2026-09-23)
+- [KTF input availability after rejected confirmation](#ktf-input-lifetime-2026-09-23)
+- [KTF slot creation and save overlay reads](#ktf-save-slots-2026-09-23)
 
 <a id="implementation-ktf-platform-implementation-status"></a>
 
@@ -7165,7 +7172,7 @@ A player reported that one title used to let them name the character in a new
 save slot, but here every slot was named for them — a space, the Korean word for
 "local" and the slot number. The name came from this runtime: the local slot
 service standing in for the carrier's slot server (see
-[`startup-compatibility-2026-09-19.md`](../startup-compatibility-2026-09-19.md))
+[the 2026-09-19 startup investigation](#startup-compatibility-2026-09-19))
 put it in the creation receipt, command 1430.
 
 **The receipt's status byte zero means the name screen.** The title's reply
@@ -7479,3 +7486,1725 @@ Pixel regressions and local CLI dialogue replay passed. The isolated KTF branch 
 `go test -race ./internal/...` and `go vet ./...`.
 The two later scenes were not replayed individually, and no new Safari check
 was performed. Original assets and saves remain outside Git.
+
+<a id="startup-compatibility-2026-09-19"></a>
+
+## Startup compatibility investigation, 2026-09-19
+
+Three local archives were investigated through the shared session path used by
+the CLI and browser server. Archive digests identify evidence, never select
+runtime behavior. All probes used isolated saves below the ignored
+`var/savedata/qa-20260919/`; original user saves were not edited. Raw traces and
+screenshots are under `var/acceptance/qa-20260919/` and are not distribution assets.
+
+<a id="startup-compatibility-2026-09-19-ktf-startup-exception-1379b56de66e"></a>
+
+### KTF startup exception (`1379b56de66e`)
+
+The first failure was a compiled protected-field access check. It compared the
+receiver's decoded class address against the canonical class record in the
+image. A dispatch alias referred to the same class but failed that raw address
+comparison, producing a guest `java/lang/Error` during construction.
+
+For ordinary images the JVM context and dispatch aliases now occupy a bounded
+4 MiB region immediately after the mapped image and BSS. Object headers name
+canonical image records when their signed 27-bit displacement is representable.
+Distant runtime records still use aliases. Earlier native modules retain their
+existing context layout. Large images can still require aliases for records
+outside the displacement range; this is not evidence of universal raw-address
+identity support for every possible image layout.
+
+The next startup failures exposed three independent runtime omissions:
+
+- Fieldless runtime subclasses did not retain their parent's instance size.
+  Guest subclass fields could overlap `TextComponent.imHandler`.
+- The constructor stored that handler under an unqualified field key, while
+  the guest-field publisher read its canonical declaring-class key.
+- `Kernel.getExecNames` and `InputMethodHandler.getCurrentMode` were missing.
+  The former lists the current session application with descriptor filters;
+  the latter returns the input mode already maintained by the handler.
+
+The API contracts were checked against the WIPI specification for
+[Kernel](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msf/core/Kernel.md)
+and [InputMethodHandler](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lcdui/InputMethodHandler.md).
+Both debug and release 1,200-tick runs reached the title menu with 1,200
+frame flushes.
+This proves startup and menu input, not campaign completion or progress restore.
+
+<a id="startup-compatibility-2026-09-19-lgt-embedded-certificate-74b0ff2230f7"></a>
+
+### LGT embedded certificate (`74b0ff2230f7`)
+
+The notice requests a certificate on the first connection. It does not describe
+a twelve-hour renewal interval. Ordinary offline transport correctly delivers a
+connection failure, but the archive requires a separate application certificate
+to pass its startup gate. Its identity/options file reads already succeeded.
+
+The main save contains a 100-byte encrypted options header, a 100-byte
+certificate at offset 100, and progress records from offset 200. The header's
+first 48 plaintext bytes carry a byte-sum checksum at offset 48; byte 27 is the
+certificate-presence flag. The certificate reader compares the decoded string
+against the session subscriber number followed by the application identifier
+and an archive-owned token. The writer and reader share those pointers and the
+cipher seed. The cipher uses ciphertext feedback and two module-owned factors.
+
+`lgt-certificate-100` recognizes connected reader, writer, startup gate,
+header reader, subscriber accessor and encoder/decoder instruction contracts.
+It resolves filenames, tokens, state addresses and cipher parameters from those
+contracts. It rejects ambiguous matches, invalid paths, mismatched application
+identity, invalid header checksums, inconsistent live state and open target
+files. No game name, archive digest or absolute guest instruction address
+selects this adapter. No guest instruction is patched and no server is contacted.
+
+After Clet initialization has created or loaded the normal save, the session
+exposes the certificate and presence flag privately. The matched live presence
+flag stays coherent if the guest initializes its settings again after the first
+notice. Publishing the flag requires that the rest of the live options match
+the header being saved. Writes restore the original certificate and flag,
+recompute the header checksum, and persist ordinary settings and progress.
+Malformed nonempty target writes are refused rather than persisting the private
+certificate in an invalid record. File deletion ledgers keep ordinary behavior.
+Disabling compatibility exposes the backing state again.
+
+Release reached save-slot selection from a fresh save in 2,200 ticks; debug
+reached the opening story on a subsequent 2,200-tick session. A copy of the
+release save run with `-no-auth` returned to the original certificate prompt,
+confirming that compatibility did not persist a generated certificate.
+
+A separately modified diagnostic save first proved the certificate format by
+reaching the menu. It was never installed over a user's save. Automated tests
+use invented application tokens and newly assembled instruction fixtures.
+
+<a id="startup-compatibility-2026-09-19-lgt-restart-notice-e934256c238a"></a>
+
+### LGT restart notice (`e934256c238a`)
+
+This archive deliberately exits once before proceeding. Its initial `option`
+record is 18 bytes, with a restart flag in byte 17. The notice asks for the OZ
+confirmation key, represented by `fire`/OK, rather than the numeric zero key.
+After its input delay, the confirmation handler clears the flag, writes and
+closes the options file, then requests guest exit. Restarting the emulator
+before that handler runs leaves the flag set and repeats the notice.
+
+A fresh isolated run confirmed at ticks 50 and 150 (five-tick holds), exited at
+tick 152 and persisted the cleared flag. A new session with the same saves
+passed the notice, and confirming the following startup notices reached the
+title. Debug and release both reproduced the exit at tick 152 and reached the
+title on the next run. The case needs no emulator change or save deletion: the
+game exits through its own confirmation action and is then launched again.
+
+<a id="startup-compatibility-2026-09-19-validation-boundary"></a>
+
+### Validation boundary
+
+Regression tests cover canonical class identity, inherited instance payload,
+handler publication, executable filtering, input mode readback, class arena
+bounds, relocated certificate recognition, changed instructions, ambiguous
+contracts, cipher feedback, private certificate persistence, malformed writes
+and first-run reinitialization. Real archive checks exercise native CLI sessions;
+a fresh browser or physical-device playthrough is outside this evidence.
+
+`make test`, `make test-debug`, `go test -race ./internal/...` and
+`go vet ./...` passed, and `make debug`, `make release`, `make server` and
+`make server-release` succeeded. Additional truncated-contract tests passed in
+the focused LGT certificate suite after those full checks.
+
+<a id="startup-compatibility-2026-09-19-follow-up-entering-a-campaign"></a>
+
+### Follow-up: entering a campaign
+
+Evidence is under `var/acceptance/qa-20260919-followup/`. The original user's
+saves remain untouched; KTF uses a fresh isolated save directory and LGT reuses
+the isolated restart-check save described above.
+
+For `1379b56de66e`, Continue failed while painting because the compiled caller
+could not resolve `java/lang/Character.isDigit(C)Z`. The JVM already implements
+that CLDC operation; publishing its KTF runtime class metadata connects the
+compiled caller to the existing implementation. A regression test checks both
+AOT resolution and digit boundaries. Continue now loads the packaged level-five
+slot and draws its field scene. This does not prove campaign completion or a
+save/restore cycle.
+
+New character creation is a separate unresolved path: declining its connection
+prompt returns to character customization; accepting displays the guest's
+server-disconnected message and returns to the title menu. The captured run
+contains `Network.disconnect`, but no `Network.connect` or `URL.find` call.
+Therefore the message alone does not establish a host transport refusal or a
+working remote service. Do not describe this path as fixed or substitute a
+successful connection result without establishing the guest's required state
+and response contract.
+Superseded: see the follow-ups below and [network](../network.md#the-surface).
+
+For `e934256c238a`, New Game stopped at the unimplemented LGT graphics slot
+`0xed`. The caller passes a framebuffer, crop coordinates, dimensions and a
+length pointer, then supplies the result to `CreateImage`. This identifies
+`MC_grpEncodeImage`, consistent with the
+[WIPI graphics contract](https://mirusu400.github.io/wipi-wiki/c-api/graphics.md).
+The implementation synchronizes guest-written RGB565 pixels, clips the region,
+encodes BMP with the existing shared encoder, and returns a caller-owned buffer
+from the normal guest heap. Tests cover round-trip pixels, cropping, overflow
+boundaries, invalid pointers and release through the ordinary free operation.
+New Game now passes the opening story, reaches the controls tutorial, and
+accepts character movement in the first playable scene.
+
+After these changes, `make test`, `make test-debug`,
+`go test -race ./internal/...`, and `go vet ./...` passed. Debug and release CLI
+and server builds succeeded. The interactive checks above used the debug CLI;
+a fresh browser playthrough remains outside this evidence.
+
+<a id="startup-compatibility-2026-09-19-new-character-dependency-and-transport-investigation-2026-09-20"></a>
+
+#### New-character dependency and transport investigation, 2026-09-20
+
+The first failure is now localized. The archive declares
+`REQLIB=01039AD6|01.00.08` and calls `Kernel.getExecNames` with the required
+identifier as its name filter. The current application has a different AID.
+The lookup returns no installed match; the guest caches this as a false flag.
+Its connection routine reads that flag at `0x1c6e6a` and enters its own error
+path before calling `Network.connect`. The displayed server-disconnected
+message therefore hides a missing dependency check. A scan of 608 local ZIPs
+under `var/games` and `var/ext` found the reference only in this archive's
+descriptor and no archive providing the required application.
+
+A diagnostic-only experiment changed that flag in an isolated session. It
+then reached the emulator's ordinary `Network.connect` refusal. A second
+experiment supplied connection success, which reached
+`URL.find("socket://wipiwicgsfg.magicn.com:17096")`. DNS resolution of that
+hostname failed on this machine on 2026-09-20. This observation does not prove
+when or why the remote service stopped resolving.
+
+A third experiment supplied an in-memory socket with an empty input stream
+and a capture-only output stream. The guest requested both streams, then raised
+a caught array-bounds exception before sending bytes. The initial attribution
+to incoming data was incorrect: the follow-up below locates the exception in
+the outgoing identity header. Empty input alone did not establish peer order.
+Neither an installed-name alias nor blanket connection success establishes a
+playable offline new-character path. The compatible service response and
+subsequent character-creation protocol remain unimplemented.
+
+All three experiments were confined to a temporary test and isolated saves.
+Their injected success values, guest-memory edits, and socket stand-ins are
+not present in product code. Evidence, screenshots, memory dumps and the local
+probe source are under `var/acceptance/qa-network-20260920/`. No game payload,
+subscriber data or save was sent to the remote host; the only external check
+was DNS resolution.
+
+`Kernel.getExecNames` now records its filters and match count through the
+existing debug diagnostic boundary, so a future saved log exposes the missing
+lookup instead of only the guest's generic connection message. A `REQLIB`
+declaration does not fabricate an installed application. The regression suite
+explicitly preserves that distinction. Release diagnostics remain disabled.
+
+For this diagnostic-only follow-up, ordinary, debug and race KTF package tests
+and `go vet ./internal/platform/ktf` passed. Both CLI and server debug/release
+builds succeeded. An unmodified archive startup with the rebuilt debug CLI
+recorded `kernel executable lookup name="01039AD6" version=* vendor=* matches=0`.
+The earlier full-repository gates describe the preceding gameplay API fixes;
+they were not rerun for this lookup diagnostic addition.
+
+<a id="startup-compatibility-2026-09-19-relay-framing-and-worker-progress-2026-09-20"></a>
+
+#### Relay framing and worker progress, 2026-09-20
+
+Compatibility has three distinct owners. Handset properties and worker grants
+belong to the common platform runtime. The recovered relay envelope belongs
+to a protocol module in `internal/platform/ktf/relay_protocol.go`. Application
+commands and service state require a separate local service contract; recognizing
+an envelope is not enough to claim that service is installed or successful.
+CLI and browser hosts must use the same runtime path. No title-name condition,
+archive digest dispatch, or guest-address patch implements product behavior.
+
+The outgoing header builder reads `WIPISTANDARDVERSION`, trims it, encodes it,
+and marks its first byte with `0x80`. The previously empty property caused the
+array-bounds exception at `0x1cdeac`. Both Java property entry points now expose
+the shared value `1.2.1`. This is the emulator's chosen baseline, not a claim of
+complete WIPI conformance or a recovered handset's exact version string. The
+WIPI 1.2.1 property documentation consulted does not specify this property.
+The regression test fails with the previous empty value and exercises the
+caller-visible byte conversion after the change.
+
+With diagnostic dependency and socket stand-ins, the guest emits a 72-byte
+frame and later a 71-byte frame. Both have 52 extension bytes; the payloads
+have 13 and 12 bytes respectively. Their command semantics remain unresolved.
+The codec consumes and reproduces both captured frames exactly. The prefix is:
+
+| Offset | Width | Meaning |
+| --- | --- | --- |
+| 0 | 1 | Zero marker |
+| 1 | 4 | Big-endian total frame length, including the prefix |
+| 5 | 2 | Big-endian extension length |
+| 7 | variable | Extensions, followed by application payload |
+
+The compiled writer at `0x1cdd00` establishes the prefix, and the reader at
+`0x1cf340` consumes its one-, four-, and two-byte fields. Extension and payload
+contents stay opaque in the codec. Tests use authored bytes, cover every
+truncated prefix/body, adjacent frames, malformed lengths and the one-MiB
+emulator resource limit. The codec is not yet connected to a product socket
+or local service, and does not enable network success.
+
+The initial capture also exposed a scheduler defect. A UI callback requeues
+itself each round. `ServiceThreads(ctx, 1)` counted that serial callback as
+the only worker grant, so a started receiver never entered `run()`. The common
+scheduler now grants the requested worker slice independently of the client
+thread's serial callback. Each queue retains its existing bounds and ordering.
+An authored test proves both make progress on successive rounds and that a
+completed worker retires; it fails before the change with `serial=1 worker=0`.
+The archive then enters both its receiver (`0x1cc204`) and relay input reader.
+With immediate EOF it reports disconnection and retires the receiver. This is
+an expected diagnostic transport failure, not successful character creation.
+A second probe supplies an extension-free envelope containing three authored
+big-endian words (`12, 0, 10`). It reaches the application receive queue at
+`0x1b5300`; this proves frame delivery, not the meaning or validity of a
+character-creation response.
+
+All dependency flags, connection successes, and socket stand-ins remain in the
+ignored probe only. Evidence is under `var/acceptance/qa-relay-20260920/`, using
+isolated saves under `var/savedata/qa-relay-20260920/`. No service payload was
+sent externally. The bounded local service now implements the recovered
+handshake, confirmation text, and displayable EUC-KR slot name. It is exposed
+only when the archive declares the matching provider contract; unrelated
+applications retain the offline refusal. The original save tree is never
+modified by acceptance runs.
+
+The first implementation returned a binary digest in the slot-name field. The
+guest treated those bytes as a bitmap-font string, so selecting the new slot
+raised `ArrayIndexOutOfBoundsException` from its paint callback. The service now
+returns a short EUC-KR display name, and its regression test checks that the
+field round-trips through the same encoding. A copied save with the corrupted
+field was repaired for reproduction only; no user save was changed.
+Superseded: since 2026-10-10 the receipt carries no name; its status byte says
+the slot is empty, and the title asks the player for one and registers it
+(command 1440) — see
+[A name the title asks for](#implementation-a-name-the-title-asks-for).
+
+After the property, framing and scheduler changes, `make test` (including
+219 browser-client tests), `make test-debug`, `go test -race ./internal/...`,
+and `go vet ./...` passed. Debug and release CLI/server builds succeeded.
+The temporary probe was retained as text under ignored evidence, outside Go
+package discovery. These checks do not establish offline new-character
+completion or a browser playthrough.
+
+The later [slot creation and save overlay check](#ktf-save-slots-2026-09-23)
+validates sequential creation and restart of all six slots in both profiles,
+including the zero-based first-slot request and a save/resource path collision.
+
+<a id="ktf-c-input-bitmap-investigation"></a>
+
+## KTF C input and bitmap investigation (2026-09-19)
+
+<a id="ktf-c-input-bitmap-investigation-observations-2026-09-19"></a>
+
+### Observations (2026-09-19)
+
+A reported KTF archive (SHA-256
+`5f6037b8852b74254d5e66f8066c251c3a437bb0526f190233f38864b93fdef1`) showed a
+green rectangle around its startup logo and did not expose its name editor to
+Host text input. These were two separate runtime limitations, not a
+speed-setting fault. The implementation and validation below supersede the
+initial findings.
+
+<a id="ktf-c-input-bitmap-investigation-bitmap-evidence"></a>
+
+### Bitmap evidence
+
+The startup BMPs decoded successfully, but their `biClrImportant` fields are
+`0x126` and `0x100`, with 256-entry palettes and `bfReserved1 == 1`.
+`bitmapTransparentIndex` treated these as out-of-range palette indices and
+left the images opaque. Their low bytes select palette entries 38 and 0, both
+RGB `#209020`; direct decoding through the original `wipic.DecodeBitmap`
+produced 2,463 and 30,536 fully opaque green pixels, which is the visible
+backdrop.
+
+The decoder now accepts the `0x100` flag only for an 8-bit palette with the
+existing transparency marker, and the low-byte index must still fit the actual
+palette. Other high bits remain invalid. Authored fixtures cover the extended
+variant, ordinary transparency, and out-of-range indices.
+
+A separate image-load failure: one UI BMP declares 256 used palette entries
+but its pixel offset leaves room for only 43. Its important-colour value
+`0x113` selects the same green. The original decoder returned
+`bmp: unsupported BMP image`. For this marked, uncompressed 8-bit variant with
+a 40-byte info header, a copied header now derives the palette count from the
+checked pixel offset; the underlying decoder still validates pixel indices and
+row lengths. Unmarked files do not receive this repair.
+
+<a id="ktf-c-input-bitmap-investigation-input-evidence"></a>
+
+### Input evidence
+
+The session report records input-method table 4 calls to entries 0, 1, and 2
+as stubs. The Host adapter in `runtime_lwc_host_input.go` then supported Java
+LWC/KFC objects, not this game-owned WIPI-C editor. Disassembly of the caller
+identifies the entries:
+
+- At `0x124b08`, entry 1 is called with mode 3, after obtaining the mode count
+  and list: `MC_imSetCurrentMode`.
+- At `0x124b10`, entry 2 takes no arguments and its return replaces the stored
+  mode: `MC_imGetCurrentMode`.
+- At `0x124ffe`, entry 0 receives `0x9d` (the flush character), a type, two
+  buffers and two size pointers: `MC_imHandleInput`.
+
+The [WIPI graphics/input-method specification](https://mirusu400.github.io/wipi-wiki/c-api/graphics.md)
+defines these signatures; the caller establishes the table order. All three
+entries returned zero, so setting numeric mode failed and reading the current
+mode returned zero. They now implement mode state and completed/composing
+output buffers.
+
+<a id="ktf-c-input-bitmap-investigation-implemented-input-boundary"></a>
+
+### Implemented input boundary
+
+The Host adapter appends completed EUC-KR text through the guest card's
+existing numeric-key callback; the C widget keeps its text, cursor, display,
+confirmation and field policy. No game-memory offsets or archive-specific
+patches are used, and the Java Shell and KFC adapters retain precedence. The
+current contract is in [native text input](../native-text-input.md#supported-editors);
+the findings specific to this caller were:
+
+- The observed C input callback uses event type 2 for a pressed key, distinct
+  from the Java card event constants. Its first four arguments are in
+  registers; the composing buffer and size pointer are on the stack.
+- The caller initializes capacities of 6 and 8 bytes and then reads the size
+  words as produced byte lengths. Both output strings are terminated and both
+  lengths written.
+- The keypad mode selects an automaton, not a field constraint: the name editor
+  selects mode 3 yet labels the field for Korean text. The Host therefore
+  validates controls, encoding and length without treating that mode as a
+  digits-only policy, and does not reorder the published mode list.
+- The completion buffer holds an automaton result, not the whole field. A Host
+  submission (up to 64 characters) is validated before any guest callback,
+  then delivered one complete EUC-KR character at a time; each character and
+  its terminator must fit the buffer, and a character that cannot fit is
+  rejected without splitting its encoding. The guest applies its own field
+  limit on each callback; the reported five-character field accepts five
+  Korean characters in one submission.
+- Numeric keypad input is supported; other handset keypad composition is out
+  of scope because the Host IME supplies completed text.
+- A flush invalidates old snapshots but does not close the editor; CLR that
+  flushes composition retains availability. Key activity, mode changes,
+  flushing, card replacement, a newly focused Java editor, shutdown and
+  successful submission invalidate snapshots, and a callback that no longer
+  routes to the C input method rejects the edit.
+- A changed target or interrupted callback stops delivery and invalidates a
+  snapshot that already inserted a prefix. Accepted characters remain the
+  guest's; this C interface cannot promise whole-field rollback after a
+  mid-submission guest failure, and the prefix is never replayed through the
+  same edit token.
+
+Queued guest event loops remained unsupported: commits require consumption
+before returning. The later [timer-delivery correction](#ktf-graphics-input-qa-2026-09-23)
+added cards that defer keys and CLR flushing to their owning C timer.
+
+<a id="ktf-c-input-bitmap-investigation-validation"></a>
+
+### Validation
+
+Authored regressions cover extended transparency, compact palettes,
+source-byte preservation, malformed palette offsets and pixel indices,
+truncated rows, mode state, buffer lengths and termination, pressed-key
+handling, Korean Host input, single-character capacity rejection and retry,
+unsupported characters, stale targets, cancellation and stopping a
+composition when the guest changes mode. Existing Java editor tests remain in
+the affected package gate.
+
+The initial isolated-save replay proved only two-character insertion. User
+feedback exposed two missed requirements (the field accepts five characters,
+and CLR deletion must not disable input), which then gained authored
+regressions and a fresh real-archive replay. That replay submitted five
+Korean characters at once, deleted one with CLR, appended a replacement,
+cleared all five with CLR, and submitted five again. Captured frames and
+retained EUC-KR guest strings establish the field value, and the guest's
+confirmation buttons continued into the story. Old snapshots were rejected
+after deletion and dismissal. Both startup logos rendered without the green
+backdrop, with no image-decode errors on that route. This does not establish
+whole-game rendering or saved-name restoration.
+
+Artifacts and the opt-in replay probe are under the ignored
+`var/diagnostics/ktf-c-input-logo-20260919/`. Physical iPhone IME interaction
+was not repeated; the replay calls the same platform text provider as the
+browser transport, and no session protocol or page change was needed. The
+final code passed `make test` (including Node tests), `make test-debug`,
+`go test -race ./internal/...`, `go vet ./...`, and `make server`.
+
+<a id="ktf-gameplay-qa-2026-09-20"></a>
+
+## KTF gameplay QA, 2026-09-20
+
+This investigation covers a rope-scrolling report, two additional-content
+prompts, and four reports of excessive gameplay speed. Baseline revision is
+`5a9321f`. Archive identities are SHA-256 prefixes. Real archives and probe
+output remain ignored; original archives and user saves are unchanged, and all
+writes use `var/savedata/ktf-qa-20260920/`.
+
+<a id="ktf-gameplay-qa-2026-09-20-missing-additional-content"></a>
+
+### Missing additional content
+
+Archive `689c491586b9` shows the additional-content offer after 400 CLI
+service rounds. Accepting with key 1 and advancing 200 rounds displays the
+network-connection failure. The runtime reports missing `Config.dat` and
+`MixTable`; neither exists in the outer package or the payload JAR, and a
+similarly named menu resource is not the required data file.
+
+The three packaged `ZipTable` resources independently prove the content is
+missing. Each has a little-endian 16-bit count followed by nine-byte records:
+container number, 32-bit offset, 16-bit packed length, and 16-bit unpacked
+length. The maximum offset plus packed length for each container gives:
+
+| Index | Records | Absent containers | Required packed bytes |
+| --- | ---: | --- | ---: |
+| `5/ZipTable` | 28 | `5/0`–`5/1` | 97,292 |
+| `7/ZipTable` | 62 | `7/0`–`7/5` | 279,584 |
+| `9/ZipTable` | 29 | `9/0`–`9/3` | 166,375 |
+
+All twelve containers are absent from the payload JAR; their combined extent
+is **543,251 bytes**. The outer package contains only the JAR, descriptor,
+metadata, and icons. This repeats the historical completeness check against
+the current archive rather than inferring completeness from archive size. The
+title requires an original complete package; accepting a download without
+supplying those bytes cannot establish gameplay.
+
+Local evidence: `build/ktf-qa-273-{start,download}.{json,png,log}` where
+present. The initial `start.log` contains an unsuccessful screenshot command;
+the later live probe uses the supported `shot` command and captures the prompt.
+
+<a id="ktf-gameplay-qa-2026-09-20-packaged-data-rejected-with-existing-saves"></a>
+
+### Packaged data rejected with existing saves
+
+Archive `93d5b6b8ceb5`, save owner `PD005362`, contains five complete data
+files — `char.dat` (45,677 bytes), `map.dat` (163,179), `mon.dat` (182,527),
+`pattern.dat` (76,964), and `tile.dat` (155,061) — alongside a 64-byte
+`prefs`. Each data file in the current debug save is byte-identical to its
+packaged copy.
+
+A fresh isolated runtime selects `ktf-subscriber-fallback`, reads all five
+files, and reaches the menu, scenario selection, empty slots, character
+selection, and initial attribute selection.
+
+Copying the existing debug save to an isolated root reproduces the 600 KB
+download offer. Only `prefs` is opened before the offer; the five data files
+are not consulted. A second isolated copy that changes only `db/prefs` to the
+packaged 64 bytes reaches the menu, with all progress files, including
+`db/save0.dat`, still present. The subscriber fallback alone therefore does
+not handle the existing saved receipt. The packaged record's SHA-256 prefix is
+`2a702cdf2db4`; the rejected saved record's is `ab7dbef36a21`. Replacing the
+whole preference record is not an acceptable production fix: a correction
+must preserve user progress and distinguish receipt fields from settings.
+
+Evidence: `build/ktf-qa-248-{copied,prefs-only}.{json,png,log}` and the
+`menu`, `scenario`, `slot`, and `character` PNGs. Copied saves are under
+`copied/PD005362` and `prefs-only/PD005362` in the isolated QA root.
+
+<a id="ktf-gameplay-qa-2026-09-20-receipt-field-diagnosis-and-correction"></a>
+
+#### Receipt field diagnosis and correction
+
+The guest decoder accepts the rejected record's encrypted checksum. Decoding
+with its own substitution table and session identity yields marker 75,
+settings 3 and 2, five zero 19-bit content lengths, two zero 32-bit fields,
+and a final zero two-bit field. The packaged record has the same marker and
+settings, lengths 45,633 / 163,135 / 182,483 / 76,920 / 155,017, and final
+field 1. Each length is the corresponding file size minus its 44-byte footer.
+
+Changing only those five lengths in an isolated receipt, retaining the final
+field and all other bits, passes the download prompt and exposes the existing
+level-one slot, so the unknown final field need not change. The decoder probe
+is `build/ktf_qa_receipt_decode_test.txt` with log `build/ktf-qa-decode.log`;
+the field-only comparison is `build/ktf-qa-248-fields-{menu,scenario,slot}.png`.
+
+The production adapter applies the same field-only recovery on reads of
+`db/prefs`, only for the identified compiled-image digest and recognized
+subscriber accessor. Packaged receipt lengths must match all five resources;
+saved overrides must match packaged bytes; deletion ledgers or read errors
+prevent recovery. Existing settings and save slots are preserved, and startup
+writes no replacement record. Other compiled revisions keep the existing
+behavior until their private format is established.
+
+<a id="ktf-gameplay-qa-2026-09-20-production-acceptance"></a>
+
+#### Production acceptance
+
+The production CLI, without diagnostic overlays or pre-edited receipts, reads
+a fresh copy of the failing user save, passes the prompt, exposes the existing
+level-one slot, and loads it into a visible town scene. The route completes
+2,508 service ticks without error. Captures are
+`build/ktf-qa-248-production-{menu,slot,play}.png`; diagnostics and console
+output are `build/ktf-qa-248-production.{json,log}`. Both the production copy
+and the original user tree retain receipt hash prefix `ab7dbef36a21` and slot
+hash prefix `fd1d01fb8ed7` after the run; no original receipt was deleted or
+overwritten.
+
+Authored regressions cover exact field preservation, checksum regeneration,
+word-crossing bit order, ordinary save/restart, incomplete or deleted content,
+changed data overrides, invalid records, read failures, and rejection of other
+executables. The opt-in local archive recognition test passes. No original
+archive or cipher table is included in the tests.
+
+<a id="ktf-gameplay-qa-2026-09-20-rope-scrolling-reproduction"></a>
+
+### Rope-scrolling reproduction
+
+The retained server report at `2026-09-20T08:27:40.666Z` corresponds to
+archive `db8ef04a6504`, save owner `PD006654`. It reports guest speed 1.00x,
+4,168 rounds, 1,581 flushes, and 853 `Clet$CletCard.paint` calls; timers
+account for 99% of measured service work. The page report supplies 212 key
+edges from the last session, beginning at `08:27:05.874Z`.
+
+The first replay passed page key codes directly to the platform and is invalid
+as reproduction evidence. The corrected replay applies the Host's key
+conversion, runs 50.002 seconds, advances guest time 50.048 seconds, delivers
+all 212 edges, and records 999 flushes over 6,722 service calls. Captures
+progress from opening dialogue to the tutorial map with a rope visible, but
+not to the reported held-rope scene; the on-time clock does not establish
+scrolling correctness.
+
+Evidence: `build/ktf_qa_replay.go`, `build/ktf-qa-rope-events.json`,
+`build/ktf-qa-rope-mapped.{json,log}`, and sampled
+`build/ktf-qa-rope-mapped-NNN.png` frames. The corrected replay exits normally.
+
+<a id="ktf-gameplay-qa-2026-09-20-held-rope-reproduction-and-rejected-paint-hypothesis"></a>
+
+#### Held-rope reproduction and rejected paint hypothesis
+
+The manual replay must allow at least one service frame after releasing a key
+before pressing the next; without that gap the game's input logic drops
+actions. The route `build/ktf-qa-rope-route.txt` reaches the rope, grabs it
+with two separate UP presses, waits two guest seconds, then climbs in two
+350 ms segments, capturing every service frame. No original save is changed.
+
+The stationary hanging segment reproduces the defect. Matching a fixed 30×10
+pixel patch of the island above the player over frames 649–888 places it at
+Y=114 or Y=130, with **40 transitions in two guest seconds**. Character and
+terrain move together: a 16-pixel camera oscillation without input.
+
+A diagnostic experiment suppressed all automatic paints after a timer directly
+flushed its screen. It reduced paint calls to four startup calls, but the held
+rope produced the same 114/130 coordinates and 40 transitions. Unsolicited
+paint explains the four speed reports, not this defect, so the experiment was
+removed from production; it is retained only under ignored build paths.
+
+Evidence: `build/ktf-qa-rope-{before,after}.log`,
+`build/ktf-qa-rope-{before,after}-frame-*.png`,
+`build/ktf-qa-rope-camera.json`, and
+`build/ktf-qa-rope-direct-flush-experiment.json`. The production memory probe
+reuses the after-frame filenames; the camera coordinates are unchanged.
+
+<a id="ktf-gameplay-qa-2026-09-20-camera-state-and-viewport-mismatch"></a>
+
+#### Camera state and viewport mismatch
+
+Snapshots at held-rope frames 651 and 657 differ in only 15 aligned words of
+the relocated client image. The camera Y field at `0x1a2500` changes from 0 to
+-16. Its map object has width 320 and height 304; the viewport object has
+width 240 and height 320.
+
+A hardware-style write watch identifies the camera smoothing store at
+`0x11db9a` and the clamp store at `0x11dbe2`. The clamp first sets a negative
+camera Y to zero; otherwise, when `cameraY + viewportHeight > mapHeight`, it
+sets Y to `mapHeight - viewportHeight`, which is -16 for a 304-pixel map and a
+320-pixel viewport. Smoothing followed by these two branches alternates the
+visible camera position. This is guest code, not a fluctuating Host clock or a
+screen-conversion offset.
+
+A startup watch identifies viewport initialization at `0x139464`: the guest
+copies width and height from its screen framebuffer record at offsets 8 and
+12, and the platform supplies its default 240×320. This identifies the
+geometry mismatch without establishing a different handset resolution.
+
+Evidence: `build/ktf-qa-rope-image-{651,657}.bin`,
+`build/ktf-qa-rope-watch.json`, and `build/ktf-qa-rope-viewport-watch.json`.
+The image snapshots are ignored diagnostics, never bundled fixtures.
+
+<a id="ktf-gameplay-qa-2026-09-20-revision-scoped-camera-correction-and-acceptance"></a>
+
+#### Revision-scoped camera correction and acceptance
+
+The WIPI [screen framebuffer contract](https://mirusu400.github.io/wipi-wiki/c-api/graphics.md)
+returns the display's framebuffer and gives no rule for subtracting 16 pixels
+because one map is shorter. The correction therefore preserves the selected
+240×320 screen, framebuffer stride, graphics APIs, input coordinates, and save
+format, and adapts the identified guest clamp instead.
+
+Only compiled-image SHA-256
+`9ba7fbd6552f8176dfe9411ba8815a33dcf463ff50418e9f8f92707244f99b9c`
+qualifies, and the relocated clamp routine must also match its own digest
+before one Thumb store is replaced in emulator memory. At that instruction,
+negative camera Y stores become zero; nonnegative values, all registers and
+flags, the horizontal clamp, smoothing and return path keep their behavior.
+The on-disk archive is never patched, and unknown images or changed routines
+receive no correction. This adapts guest logic; it does not claim that ARM
+stores or WIPI framebuffer heights have different semantics.
+
+The unchanged recorded route reaches the same rope, hangs, climbs twice, and
+reaches its top. Tracking the same island patch gives:
+
+| Route segment | Samples | Island Y | Position changes |
+| --- | ---: | --- | ---: |
+| Hang, two seconds | 240 | 114 | 0 |
+| First climb, 350 ms | 42 | 114 | 0 |
+| First pause, one second | 120 | 114 | 0 |
+| Second climb, 350 ms | 42 | 114 | 0 |
+| Second pause, one second | 120 | 114 | 0 |
+
+The baseline hanging segment switches between Y=114 and Y=130 forty times.
+The corrected route advances 61.415 guest seconds, flushes 1,280 frames, and
+records one installed adaptation and 584 corrected negative stores. The player
+moves upward while the island stays still, so rendering is not frozen.
+Evidence: `build/ktf-qa-rope-camera-fixed.log`,
+`build/ktf-qa-rope-camera-fixed.json`,
+`build/ktf-qa-rope-camera-fixed-frame-*.png`, and
+`build/ktf-qa-rope-camera-acceptance.json`.
+
+Authored Thumb regressions run the original and corrected clamp for 400 steps
+on maps shorter than, equal to, and taller than the viewport: the short-map
+oscillation disappears and the other bounds and ordinary scrolling are
+unchanged. Further tests preserve neighboring memory, every register and
+condition flag; cover signed extremes; reject unknown executables and calls
+from another instruction; and reject unmapped or wrapping field addresses.
+
+<a id="ktf-gameplay-qa-2026-09-20-excessive-speed"></a>
+
+### Excessive speed
+
+The four reported archives are `1d18b7cc06d1`, `8fdd8f52b5bf`,
+`f286e817508f`, and `3b72d4676d5d`. Existing timing code applies a 16.667 ms
+frame-period floor and an instruction cost model; these are emulator policy,
+not measured handset rates. The WIPI 1.2.1
+[kernel specification](https://mirusu400.github.io/wipi-wiki/c-api/kernel.md)
+specifies timer delays in milliseconds and no universal game frame rate, so
+neither a global speed change nor a fourfold timing defect is claimed without
+tracing each archive's actual loop.
+
+<a id="ktf-gameplay-qa-2026-09-20-asynchronous-repaint-cadence"></a>
+
+#### Asynchronous repaint cadence
+
+The WIPI [Card contract](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lcdui/Card.md)
+distinguishes asynchronous `repaint` from synchronous `serviceRepaints`, and
+the [graphics contract](https://mirusu400.github.io/wipi-wiki/c-api/graphics.md)
+queues `MC_grpRepaint` rather than calling `paintClet` inline.
+
+The Host respected a live worker calling `serviceRepaints` but not one calling
+only `repaint`, so it painted again while the worker slept. The C entry queued
+an event only for a guest-owned event loop and dropped requests in
+Host-driven sessions; automatic Host painting masked that omission.
+
+Asynchronous Java requests now give their live worker the same card
+ownership. C requests set the pending flag in both event-loop modes. A C timer
+requesting repaint retains ownership only through a rearm of the same record
+and callback; timer cancellation, callback replacement, worker exit, and
+another visible card leave automatic fallback eligible. No global speed
+multiplier or timer delay changed, and bootstrap-only automatic painting
+remains supported.
+
+A manual-clock probe runs 1,200 session ticks with the same input schedule:
+
+| Archive | Paint calls before | After | Repaint requests after | Guest seconds after |
+| --- | ---: | ---: | ---: | ---: |
+| `1d18b7cc06d1` | 670 | 143 | 137 | 10.660 |
+| `8fdd8f52b5bf` | 1,200 | 244 | 239 | 19.200 |
+| `f286e817508f` | 1,035 | 157 | 150 | 18.012 |
+| `3b72d4676d5d` | 851 | 401 | 401 | 16.092 |
+
+The extra initial calls precede the first worker/timer ownership. Stages
+differ because paint can advance application state, so before/after images are
+not paired speed measurements. This proves removal of unsolicited paint, not a
+handset-equivalent speed for all four campaigns. Probe and outputs:
+`build/ktf_qa_timing_probe.txt`, `build/ktf-qa-speed-baseline.log`,
+`build/ktf-qa-speed-after.log`, and the per-archive diagnostics JSON files.
+
+Authored regressions reproduce 100 world steps from one asynchronous request
+before the correction. A Thumb callback requests repaint and rearms a 120 ms
+timer through the actual platform stubs; repeated idle paint service does not
+advance the world. Cancelling that timer restores fallback even while an
+unrelated timer remains queued.
+
+<a id="ktf-gameplay-qa-2026-09-20-gameplay-cadence-after-correction"></a>
+
+#### Gameplay cadence after correction
+
+A second manual-clock route runs 6,000 ticks, pressing OK every 120 ticks and
+releasing two ticks later. All four archives reach visible gameplay. Deltas
+over the last 1,200 ticks, excluding startup:
+
+| Archive | Guest seconds | Repaint requests | Paint calls | Paints per second |
+| --- | ---: | ---: | ---: | ---: |
+| `1d18b7cc06d1` | 10.667 | 133 | 133 | 12.47 |
+| `8fdd8f52b5bf` | 19.200 | 240 | 240 | 12.50 |
+| `f286e817508f` | 16.934 | 240 | 240 | 14.17 |
+| `3b72d4676d5d` | 15.995 | 399 | 399 | 24.95 |
+
+Each requested repaint produces exactly one paint in these windows. The two C
+loops declare 70 ms and 40 ms gameplay timers respectively. This establishes
+guest-requested pacing at default speed without the former extra Host frames;
+it does not measure graphics-call cost on a physical handset. Evidence:
+`build/ktf-qa-play-window.log`, `build/ktf-qa-play-*-window.json`,
+`build/ktf-qa-play-*.json`, and the four `build/ktf-qa-play-*-5999.png`
+captures.
+
+<a id="ktf-gameplay-qa-2026-09-20-validation-boundary"></a>
+
+### Validation boundary
+
+The missing-content question is resolved for the identified archive. The
+receipt correction preserves existing progress and loads the saved slot into
+play. All four speed cases reach gameplay with exactly one paint per requested
+repaint. The rope route reproduces the old oscillation and verifies stable
+hanging and climbing after the revision-scoped correction.
+
+`make test`, `make test-debug`, `go test -race ./internal/...`, and
+`go vet ./...` pass with the final implementation; the Node gate has 226
+passing tests. The opt-in real-archive receipt recognition and authored
+compatibility tests also pass. Final gate logs are
+`build/ktf-qa-final-{test,debug,race,vet}.log` and
+`build/ktf-qa-final-compatibility.log`; the speed acceptance rerun is
+`build/ktf-qa-final-speed.log`. `git diff --check` passes.
+
+These are local shared-session/CLI measurements with isolated saves. They do
+not establish physical-handset performance or support for unidentified
+compiled revisions, and missing game data still requires a complete original
+package. No server restart, real-phone test, commit, or publication was done.
+
+<a id="ktf-qa-2026-09-21"></a>
+
+## KTF 1.2 QA, 2026-09-21
+
+Baseline: `bcb36b4`. This investigation covers three reported startup
+regressions, additional excessive-speed cases, one slow gameplay case, and a C
+title with excessive speed, displaced text, and an image-lifetime crash.
+Archive identities are SHA-256 prefixes; original archives and user saves
+remain unchanged. Probes write under `var/savedata/ktf-qa-20260921/`. Sections
+are in investigation order; an interim status in an earlier section is
+resolved by a later one where noted.
+
+<a id="ktf-qa-2026-09-21-current-status"></a>
+
+### Current status
+
+The three startup regressions, the erroneous native sleep result, the image
+ownership crash, and four additional unsolicited-paint cases are corrected.
+The reported in-game menu text is corrected for the identified C image, and
+the selected screen size is preserved. The slow case reaches combat at 13.2
+frames per wall second. Repeating-timer and serial-loop regressions and the
+full test/debug/race/vet gates pass.
+
+All 263 local inputs have bounded outcomes, including six unsupported inputs,
+two execution failures and four callback-exception cases; a completed probe is
+not full campaign acceptance. After the settings-submenu follow-up the user
+confirmed their checks were complete and requested a PR. That records user
+acceptance of the reported QA work, not a calibrated original handset speed
+measurement. No arbitrary speed multiplier or global text offset is applied.
+The six pre-existing failures remain separate follow-up work.
+
+<a id="ktf-qa-2026-09-21-startup-regression"></a>
+
+### Startup regression
+
+The three reported archives are `c7d06bd34291`, `61ba00511b84`, and
+`3185174d2121`. Each installs a visible card and starts a worker that exhausts
+instruction slices without requesting a repaint or sleeping. The Host's
+`forcedSlice` guard prevents automatic painting, and no display-originated
+initial repaint was queued when the card became visible.
+
+A 1,200-tick CLI run of the first archive produces zero flushes and no screen.
+A bounded 20-tick probe reproduces the same state in all three: one card, one
+worker, `forcedSlice=true`, `repaintPending=false`, and no flushes. Allowing
+one paint releases all three: another 20 ticks produce 11, 5, and 4 flushes.
+This isolates an initial-paint dependency; it does not show that every busy
+worker should receive unsolicited paints.
+
+The display now queues a repaint after successfully notifying a newly shown or
+uncovered card. Worker instruction limits and subsequent frame ownership are
+unchanged. The [WIPI Card specification](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/lcdui/Card.md)
+describes visibility notification and repaint servicing; this supplies the
+display invalidation needed for the newly visible card to appear. The
+specification does not prescribe this emulator's worker scheduler.
+
+`TestShownCardPaintUnblocksBusyWorker` reproduces a worker waiting for state
+initialized by paint; it fails before the fix (`initial paint=false`) and
+passes after it. Existing forced-slice and asynchronous cadence tests and the
+KTF package suite pass, and all three local 20-tick probes produce frames
+without forced diagnostic intervention.
+
+Evidence: `build/ktf-next-cases.json`, `build/ktf-next-7-startup.{log,json}`,
+`build/ktf-next-probe.log`, `build/ktf-next-force-paint.log`,
+`build/ktf-next-fixed-probe.log`, and `build/ktf-next-unit.log`.
+
+<a id="ktf-qa-2026-09-21-remaining-investigation"></a>
+
+### Remaining investigation
+
+The slow case is archive `4120f27288ab`. The C gameplay case is
+`2f9822f32b78`; its retained server report at `2026-09-20T23:43:57.521Z` ends
+in a timer callback at `0x124055`, drawing source handle `0x30063840` from
+`0x12209b`. The record has framebuffer depth zero, and the handle is
+allocated. Earlier diagnostics include draws of destroyed surfaces and
+unreadable framebuffer destruction, which pointed to a resource-lifetime
+problem without yet showing whether the guest or the emulator invalidated the
+record (resolved under "Source ownership correction").
+
+The C text API specifies baseline Y, so changing every C text call to
+top-aligned text would contradict the contract; the reported scene had to be
+reproduced first (resolved under "In-game menu text correction").
+Excessive-speed coverage must include actual requested and unsolicited paints,
+not only a static API scan or a first frame.
+
+<a id="ktf-qa-2026-09-21-extended-startup-acceptance"></a>
+
+### Extended startup acceptance
+
+A manual-clock route runs 6,000 ticks per archive with separate saves and an
+OK press every 120 ticks after startup. All three runs complete without error.
+The final screens show an empty load-slot menu (`c7d06bd34291`), an opening
+investigation dialogue (`61ba00511b84`), and the hospital scene with an
+interaction response (`3185174d2121`). These establish startup recovery and
+input response, not completed campaigns or save restoration. Captures and
+counts are `build/ktf-next-play{7,9,10}-{1199,2399,3599,4799,5999}.{png,json}`.
+The initial display fix passes `make test`, `make test-debug`, internal race,
+and vet gates (`build/ktf-next-{test,debug,race,vet}.log`).
+
+<a id="ktf-qa-2026-09-21-native-environment-return-and-the-slow-case"></a>
+
+### Native environment return and the slow case
+
+Archive `4120f27288ab` initially renders only three frames over 19.350387
+guest seconds (1,200 ticks). Instrumenting the Java sleep boundary records
+repeated 11,036 ms waits; this is not CPU saturation.
+
+The compiled native at `0x1058bd` ends by storing a 32-bit result at
+environment offset 40, then tag 2 at offset 36, and leaves the scratch offset
+`0x2b1c` in r0. The frame loop reads the native result, subtracts elapsed
+time, and passes it to `Thread.sleep`, so the register-only return path
+reported 11,036 instead of the environment's value (initially zero, then 75).
+The native's instructions at `0x105ac6` through `0x105ad0` and runtime
+snapshots establish this convention for the affected caller. It was the
+missing caller evidence noted in the earlier native-ABI review.
+
+Production `CallNative` now recognizes an explicitly published tag-2 word.
+The tag is cleared on entry, so an earlier result cannot override a later
+register return. A nested scope restores its caller's tag and value on exit,
+and both words use the existing logical-thread storage boundary. Older
+modules, unprepared synthetic runtimes, absent tags, and unsupported tags keep
+their register return. Other environment result tags and a wide environment
+return convention are not established.
+
+Authored Thumb fixtures cover nonzero, zero and negative word results,
+unsupported tags and a subsequent register-only return; scope tests cover
+nested results and separate logical threads; existing native-call tests pass.
+A production run reaches the animated opening and produces 215 flushes over
+15.950319 guest seconds at 1,200 ticks, then reaches a mostly empty menu
+background (combat is established under "Sustained cadence and playable
+slow-case follow-up"). A diagnostic run observes 10, 66 and 75 ms frame waits
+after the correction; the unrelated worker's 500 ms wait is unchanged.
+
+Evidence: `build/ktf-next-image5.bin`, `build/ktf-next-symbols5.txt`,
+`build/ktf-next-native-slot5.log`, `build/ktf-next-native-production5.log`,
+`build/ktf-next-play5-*.png`, and the ignored overlay sources under
+`build/ktf-next-*`. Diagnostic runs overwrite the numbered play captures; the
+named run logs distinguish baseline and corrected measurements.
+
+<a id="ktf-qa-2026-09-21-reproduced-image-lifetime-crash"></a>
+
+### Reproduced image-lifetime crash
+
+The page log provides 72 input edges for its final C session. Replaying them
+with a copy of the debug save reproduces the same failure at `0x12209b` after
+14.767274801 guest seconds and 56 delivered edges. Allocation addresses differ
+from the server report, but the record shape and failing call match.
+
+The trace creates a framebuffer at `0x30062fdc` and its image wrapper at
+`0x30062ffc`. On the next timer callback, `MC_grpDestroyImage` receives
+`0x30062fdc`, which previously held an image record but now holds the new
+framebuffer. The destructor accepts that framebuffer and releases it and its
+pixels, leaving the live wrapper pointing at the released framebuffer. The
+surface classifier tests whether that first word is currently allocated, so it
+misclassifies the wrapper as a plain framebuffer and fails on its zero depth.
+"Source ownership correction" below removes the earlier cause rather than
+suppressing the final depth error.
+
+Evidence: `build/ktf-next-replay-events.json`, `build/ktf-next-replay6.log`,
+`build/ktf-next-lifetime6.log`, and `build/ktf-next-replay6.json`. The
+lifetime instrumentation retains allocation sizes, destruction arguments, and
+caller addresses. Screens are `build/ktf-next-replay6-*.png`.
+
+<a id="ktf-qa-2026-09-21-speed-and-text-evidence-still-open"></a>
+
+### Speed and text evidence still open
+
+The suspected additional speed archive is `b3fee0c259f4`; its filename differs
+from the report's wording, so its identity was not confirmed. The 6,000-tick
+route reaches the tutorial prompt and records 3,000 explicit repaints and
+3,000 paints over 100.002 guest seconds, so it does not show the extra-paint
+mechanism of the previous fix; its `callSerially` loop is examined under
+"Separately suspected serial title".
+
+The C title records 3,001 automatic card paints and 1,500 timer flushes over
+75.018167 guest seconds in the exploratory OK route. A dialog capture was
+examined, but its heading may belong to the narrow upper title bar, so it did
+not establish the reported in-game text defect or a replacement for the
+specified baseline convention. Neither this route nor the crash replay proves
+handset-equivalent pacing. Extra card paints were later excluded as the cause
+of this title's speed ("Rejected C cadence hypothesis"), and its timer cadence
+was measured ("C timer request measurement"); its timer and update loop were
+not investigated further.
+
+<a id="ktf-qa-2026-09-21-current-validation"></a>
+
+### Current validation
+
+After the native-return and startup changes, `make test` (including 226 Node
+tests), `make test-debug`, `go test -race ./internal/...`, and `go vet ./...`
+pass (`build/ktf-next-native-{test,debug,race,vet}.log`), and
+`git diff --check` passes. No user save, archive, running server, Git commit,
+or remote publication was changed. Combat performance, broader speed
+coverage, text placement, and the image-lifetime crash were still open at this
+point.
+
+<a id="ktf-qa-2026-09-21-source-ownership-correction"></a>
+
+### Source ownership correction
+
+Image records retain their encoded source address for destruction. This title
+also frees that source itself after creation; the address then becomes
+another allocation, including another image, but the old destructor still
+freed it. The unexpected destruction of a live framebuffer follows these stale
+ownership links; it is not evidence that malformed depth should be accepted.
+
+`imageSourceBuffers` now records the source allocation each live image still
+owns. Any release revokes every reference to that allocation before the arena
+can reuse its address. Destruction consults ownership rather than trusting a
+stale address in guest word thirteen, and freeing an image removes its entry.
+Non-WIPI sources are not adopted. Guest image records and drawing rules keep
+their layout and behavior.
+
+The [WIPI image creation contract](https://mirusu400.github.io/wipi-wiki/c-api/graphics.md)
+says a static image's source is released after its first frame is decoded. An
+experiment that moved release directly into creation made this archive's
+startup fail in a later `memcpy` of its source, so it is excluded. The
+emulator keeps its delayed-release compatibility, and a caller that releases
+the source first now revokes that delayed ownership. The caller establishes
+this divergence; it is not inferred as a change to the standard.
+
+`TestImageDestroyPreservesReusedSourceAllocation` creates an authored PNG,
+releases its source, reuses exactly that address, and destroys the old image:
+before the fix destruction frees the replacement, after it the replacement
+stays live. Existing complete-destruction, repeated-allocation, and
+out-of-bounds source-field tests pass.
+
+The unchanged 72-edge crash replay now completes 40.0008 guest seconds, 4,099
+ticks and 1,700 flushes without error, where the old run fails after 56 edges
+and 14.767274801 seconds. A separate interactive CLI route reaches character
+selection, a locked-character dialog, the stage map and a playable character
+in the first arena. All writes remain in isolated saves.
+
+Evidence: `build/ktf-source-lifetime-replay.log` (rejected eager release),
+`build/ktf-source-owner-replay.log` (ownership experiment),
+`build/ktf-source-production-replay.log` (production), and
+`build/ktf-console6-{popup,play}.{png,json}`. The source correction passes
+`make test`, `make test-debug`, internal race and vet
+(`build/ktf-source-{test,debug,race,vet}.log`).
+
+<a id="ktf-qa-2026-09-21-bounded-corpus-cadence-survey"></a>
+
+### Bounded corpus cadence survey
+
+All 263 files in the local KTF 1.2 directory were attempted. The runner uses
+isolated fresh saves, a fixed clock origin, 20 guest seconds or 2,400 ticks,
+one 100 ms OK press per guest second, and an eight-second process-internal
+wall deadline, with three processes concurrently. These are startup/input and
+cadence observations, not complete campaigns or wall-performance benchmarks.
+
+The outcomes are 214 bounded runs without an error, 37 probe deadlines, six
+inputs not loaded, four guest-requested exits, and two other guest failures.
+Deadlines are inconclusive. The input failures include unsupported
+containers; a filename extension alone is not format recognition. The two
+other failures concern a text-component field and a guest database
+destination; their comparison with the original HEAD is under "Comparison and
+current gates".
+
+The corpus manifest, per-archive counts, captures, and outcome summary are
+`build/ktf-cadence-corpus.json`, `build/ktf-cadence-sweep/`, and
+`build/ktf-cadence-summary.json`. The summary retains the compiled runner's
+SHA-256 so the survey is not mistaken for a measurement of later changes.
+
+<a id="ktf-qa-2026-09-21-repeating-java-timer-ownership"></a>
+
+#### Repeating Java timer ownership
+
+A repeating Java timer creates a worker for each invocation. The previous
+cadence fix attached ownership to that worker, so its return restored
+automatic painting even though the next invocation of the same task was still
+scheduled. Three archives show substantially more paints than requests in
+this gap.
+
+A successfully returned task now passes its card ownership to the pending
+entry with the same Timer and task identities; cancelling or replacing the
+task releases it. Synchronous repaint ownership is preserved. The authored
+scheduler regression fails before the fix with twenty world steps from one
+request; after it, three invocations each advance the world once, and
+replacing the task on the same Timer restores fallback painting.
+
+The same bounded input route with fresh saves gives:
+
+| Archive | Paints before | Requests before | Paints after | Requests after |
+| --- | ---: | ---: | ---: | ---: |
+| `231df14c4f50` | 1,271 | 177 | 191 | 178 |
+| `6d63b4025bef` | 1,295 | 99 | 112 | 99 |
+| `87bc9d3210d4` | 1,318 | 131 | 143 | 133 |
+
+Initial display paints and pre-ownership startup account for the remaining
+paints; these aggregate counts do not alone prove each campaign's
+steady-state rate. Changed game state can change later requests, so the small
+request-count differences are kept rather than normalized away. Results are
+in `build/ktf-cadence-fixed/`.
+
+<a id="ktf-qa-2026-09-21-rejected-c-cadence-hypothesis"></a>
+
+#### Rejected C cadence hypothesis
+
+An experiment gave directly flushing C timers the same persistent ownership.
+The reported C replay dropped to three card paints but still produced 1,701
+flushes in 40.0008 guest seconds against production's 1,700, so extra card
+paints do not explain that title's excessive gameplay speed. The experiment is
+excluded (`build/ktf-timer-publish-replay.log`). This result does not affect
+the independently reproduced repeating-Java-task defect.
+
+<a id="ktf-qa-2026-09-21-comparison-and-current-gates"></a>
+
+### Comparison and current gates
+
+Both non-exit failures reproduce identically in `bcb36b4`: archive
+`4c5da24020cd` lacks `TextComponent.m_cPos:I`, and `59263295de74` supplies the
+unmapped database destination `0x1d14250`. They are pre-existing failures,
+not regressions from this investigation. (The field is published since
+2026-10-10; see
+[the KTF history](#implementation-a-text-components-protected-fields).
+The destination is an address the archive's packaged save carries from the
+handset that wrote it; see
+[the KTF history](#implementation-a-packaged-save-that-holds-the-address-of-the-phone-that-wrote-it).)
+Original-HEAD comparison results are `build/ktf-cadence-head/`.
+
+After the repeating-timer correction, `make test`, `make test-debug`,
+`go test -race ./internal/...`, and `go vet ./...` pass
+(`build/ktf-timer-{test,debug,race,vet}.log`), and `git diff --check` passes.
+No blanket C paint suppression or eager image-source release is included in
+production.
+
+<a id="ktf-qa-2026-09-21-sustained-cadence-and-playable-slow-case-follow-up"></a>
+
+### Sustained cadence and playable slow-case follow-up
+
+The three corrected repeating-timer cases also complete 60 guest seconds with
+a fresh save and a clock advanced by 1 ms per tick. Between seconds 10 and 60
+the paint/request deltas are 360/360 (`231df14c4f50`), 250/250
+(`6d63b4025bef`), and 333/333 (`87bc9d3210d4`), so the bootstrap surplus does
+not grow between task invocations. The route still uses a 100 ms OK press per
+second and is not full campaign coverage. Results and ten-second snapshots are
+in `build/ktf-cadence-steady/`.
+
+The slow archive reaches the town, accepts movement and dialogue, opens the
+region map, and enters an arena with active enemies. Starting a new slot
+requires the numeric confirmation key the guest displays; repeating OK alone
+does not complete that route. The fixed 1 ms clock gives 67 additional
+paints, repaint requests and flushes during five seconds of arena activity,
+with movement visible and no exception. Captures and counters are
+`build/ktf-slow-fixed-combat{0,5}.{png,json}`. The earlier mostly empty menu
+captures therefore do not indicate a menu deadlock.
+
+A release run on the wall clock produces 129 flushes in 9.771 seconds (13.2
+per second) in its final town window, consistent with the 75 ms frame wait
+established at the native return boundary (`build/ktf-slow-wall-route.log`,
+`build/ktf-slow-wall-steady.{png,json}`). The large erroneous sleep is gone in
+real time as well as in accelerated probes.
+
+A further probe follows the manual input route into the arena, then switches
+only the clock source to elapsed wall time, preserving the current guest
+instant and all outstanding deadlines, and services `TickFor`, the entry point
+the interactive Host uses. In 10.016 seconds it publishes 132 frames (13.2 per
+second), and repeated attack input produces a visible 26-hit combo; the
+before/after captures both show the arena and the run ends without error. This
+establishes playable combat at the declared 75 ms cadence after the
+native-return fix; it does not measure an original handset or the browser's
+presentation rate.
+
+Evidence: `build/ktf-slow-switch-test.log`,
+`build/ktf-slow-switch-{before,after}.{png,json}`, and the ignored
+`build/ktf_wall_combat_probe.txt`. Earlier whole-route wall-clock scripts
+ended in town because their timed inputs reached different UI states, so files
+named `wall-combat` or `wall-timed-combat` are not arena evidence.
+
+<a id="ktf-qa-2026-09-21-c-timer-request-measurement"></a>
+
+### C timer request measurement
+
+The C crash replay is unchanged and still completes without error. An ignored
+instrumentation overlay counts timer requests by callback, delay, and clock
+second: callback `0x124055` arms 199 waits of 50 ms, then 1,501 waits of 20 ms,
+and complete sampled seconds in the later interval contain 50 requests each.
+Total publication remains 1,700 flushes in 40.0008 seconds. This is a
+requested timer cadence, not an automatic paint surplus.
+
+The callback disassembly confirms the distinction: it selects a literal 50 ms
+on one state path and a state-provided interval on the gameplay path. The
+[timer specification](https://mirusu400.github.io/wipi-wiki/llms-full.txt)
+defines milliseconds and allows operating-system resolution and scheduling
+error; it does not establish this archive's original handset frame rate, so no
+global slowdown is inferred from the 50 Hz observation. Whether callback
+deadline accounting or unmodelled handset work explains the reported speed
+remains open. Evidence is `build/ktf-c-delay-replay6.json`,
+`build/ktf-c-delay-replay.log`, and the relocated local image
+`build/ktf-c-image6.bin`; the diagnostic overlay is excluded from production.
+
+<a id="ktf-qa-2026-09-21-deadline-recheck-and-serial-repaint-ownership"></a>
+
+### Deadline recheck and serial repaint ownership
+
+The 37 inconclusive corpus entries were retried with a 30-second wall
+deadline, a fresh save, and a clock advanced by 1 ms per tick toward 20 guest
+seconds. Twenty-five reach the target without error; twelve still exhaust the
+probe deadline and remain inconclusive (resolved under "Final bounded corpus
+classification"). Corpus identities and runner hashes are in
+`build/ktf-cadence-deadline-summary.json`; results are in
+`build/ktf-cadence-deadline-recheck/`. This recheck predates the serial fix
+below.
+
+Archive `d373b4d1370e` exposes another unsolicited-paint path: its
+self-queued serial Runnable polls each idle pass and requests repaint only
+when its own frame interval expires. Over 20 seconds it makes 209 requests but
+receives 1,250 paints. The worker and timer ownership rules do not cover a
+serial invocation, which runs on the client thread and returns between polls.
+
+A serial invocation now retains the shown card whose repaint it requested or
+serviced, but only while the same Runnable is queued again. Polls without a
+new repaint keep the ownership; returning without requeueing releases it, and
+a different instance of the same class does not inherit it. An explicit
+repaint still runs. Serial dispatch timing and timeout behavior are
+unchanged. Ownership storage is limited to queued Runnables and removed when
+each is taken.
+
+The authored regression exercises the serial scheduler, polling passes,
+asynchronous and synchronous repaint, and replacement by another instance.
+Before the fix one request produces twenty asynchronous or thirteen
+synchronous paints; after it each requested frame advances the world once,
+and stopping the original loop restores fallback painting.
+
+The same fresh-save, 1 ms clock route for `d373b4d1370e` now gives 214 paints
+from the same 209 requests, the remaining five during bootstrap. All 27 corpus
+entries observed using `callSerially` complete the 20-second recheck without
+error, which does not establish completed gameplay for every entry. Results
+and runner identity are in `build/ktf-cadence-serial-fixed/` and
+`build/ktf-cadence-serial-summary.json`.
+
+After this correction, `make test`, `make test-debug`,
+`go test -race ./internal/...`, and `go vet ./...` pass
+(`build/ktf-serial-{test,debug,race,vet}.log`).
+
+<a id="ktf-qa-2026-09-21-popup-text-path"></a>
+
+### Popup text path
+
+A C character-selection route captures a locked-character popup in
+`build/ktf-c-text-locked.png`. Instrumentation records every string draw
+through both byte and Unicode APIs. The popup body produces no additional
+string calls; its glyphs are assembled from image strips such as 9-by-255,
+4-by-147 and 9-by-135 pixels, and the string API calls in this route render
+the footer. Changing the shared string baseline therefore cannot correct this
+popup's body. The body begins near the icon/header area, but the intended
+original layout was not established, so this is not a proven reproduction of
+the reported scene. Image-call and string-call counters are in
+`build/ktf-image-text-popup.json`, with the route in
+`build/ktf-c-popup-route.jsonl`; all instrumentation is excluded from
+production.
+
+<a id="ktf-qa-2026-09-21-final-bounded-corpus-classification"></a>
+
+### Final bounded corpus classification
+
+All twelve remaining deadline cases complete at least 20 guest seconds when
+run on the wall clock with `TickFor`, new isolated saves, and a 30-second
+overall context deadline. This separates the cost of forcing short
+manual-clock advances through guest waits from a runtime failure. Results and
+runner identity are `build/ktf-cadence-wall-recheck/` and
+`build/ktf-cadence-wall-summary.json`.
+
+A callback exception can end a guest thread or paint without returning a fatal
+session error, so such cases are counted separately. Four archives have them:
+`929a1b0477c5` and `d234152636c8` report array bounds exceptions,
+`868dec926b27` a null image during paint, and `53f738529d20` a null reference
+in a worker. All four reproduce on original HEAD `bcb36b4` with the same
+callback and exception class. The worker case's guest stack begins at
+`0x123d2b` and `0x120111`; its later automatic paints follow the failed
+worker's exit and are not evidence of another live-loop ownership bug.
+Original comparisons are `build/ktf-cadence-head-exception/`.
+
+The combined 263-input classification is 247 completed bounded probes without
+recorded uncaught callbacks, four callback-exception cases, six inputs not
+loaded, four guest-requested exits, and two fatal guest execution failures
+(`build/ktf-cadence-combined-summary.json` identifies each contributing
+result). It combines the recorded stages and revisions; it is not one uniform
+post-fix wall-clock run and does not claim full gameplay for 247 archives. The
+six exception/execution cases predate this work and remain separate
+compatibility follow-ups.
+
+<a id="ktf-qa-2026-09-21-separately-suspected-serial-title"></a>
+
+### Separately suspected serial title
+
+Archive `b3fee0c259f4` reaches the menu, starts the scenario, and advances to
+a park scene. A wall-clock opening route publishes 863 frames in 20.007 guest
+seconds, with 863 sleeps of 10 ms each; repaint counts track publication, so
+this is not the unsolicited-paint failure fixed above. Earlier 30 Hz
+observations used deadline-skipping probes and are not a wall frame-rate
+measurement. Neither the short requested wait nor this opening scene
+establishes the intended original handset speed.
+
+Evidence: `build/ktf-cadence-serial-wall/b3fee0c259f4.{png,json}` and
+`build/ktf-serial11-{title,new,settled}.png`. This archive calls no timeout
+overload. The separately corrected serial-loop archive uses a 30 ms
+`callSerially` timeout, which the compatibility path ignores while the title's
+own elapsed-time test controls repaint requests; that timeout behavior is
+unchanged and is not asserted to implement the specification's timeout
+parameter. A normal-speed reference was requested from the user, who then
+identified the text scene.
+
+<a id="ktf-qa-2026-09-21-in-game-menu-text-correction"></a>
+
+### In-game menu text correction
+
+The user's screenshot identifies the in-game pause menu in archive
+`2f9822f32b78`. A deterministic input route reproduces the displacement at
+2,538 ticks. The letters are assembled from bundled bitmap glyph strips, not
+drawn by the WIPI string APIs, so font ascent or baseline changes cannot move
+them.
+
+The guest draws a 172×168 dialog panel centered at screen height / 2. Its
+separate text routine uses fixed title Y=85 and body Y=115, plus an origin the
+guest explicitly initializes to zero; memory watches identify those stores and
+no later writer. At 240×320 the panel starts at Y=76, putting its title over
+the upper border and its first body line over the header box. The same route
+at 240×280 puts the panel at Y=56 and aligns both text blocks. This shows a
+mismatch between the fixed text layout and the selected display; it does not
+identify the archive's original handset model or justify altering every
+framebuffer's reported height.
+
+The [WIPI framebuffer contract](https://mirusu400.github.io/wipi-wiki/c-api/graphics.md)
+returns the display framebuffer. The correction keeps that contract and adapts
+this guest routine through the revision-scoped compatibility boundary.
+Compiled-image SHA-256
+`d4fd51c94269e3143b57802c00898f2ce43dee2e5726076d133b44a0304809c6`
+and both relocated layout digests must match. Seven `STR r3,[sp,#4]`
+instructions across the common dialog and settings layouts are replaced in
+emulator memory, and their stored text Y gains `floor(screenHeight/2) - 140`.
+Registers, flags, horizontal coordinates, panel rendering and the on-disk
+archive keep their behavior, and unknown or changed images receive no
+correction. This is a compatibility adaptation, not a claim about original
+handset behavior.
+
+At 240×320 the title now starts at Y=105 and the body at Y=135, inside their
+boxes; the same routine's character-selection notice also aligns. The replay
+resumes combat through menu item 1 and continues to 2,748 ticks without error.
+Replaying the identical route without the correction produces pixel-identical
+character-description and resumed-combat frames, with differences confined to
+dialog text in the two dialog captures. Authored regression tests cover even
+and odd screen heights, an unchanged 280-pixel layout, neighboring memory,
+register/flag preservation, unknown images, unauthorized hook locations and
+invalid stack addresses. `make test`, `make test-debug`,
+`go test -race ./internal/...`, and `go vet ./...` pass
+(`build/ktf-menu-{test,debug,race,vet}.log`).
+
+Evidence: `build/ktf-ge-menu-route.jsonl`, `build/ktf-menu-glyph-trace.txt`,
+`build/ktf-menu-geometry.txt`, `build/ktf-menu-280-end.png`,
+`build/ktf-menu-fixed-{end,popup,resume}.png`,
+`build/ktf-menu-fixed-resume-run.log`, and `build/ktf-menu-fixed-diag.json`.
+The traces and original assets are local diagnostics, not bundled fixtures.
+
+<a id="ktf-qa-2026-09-21-follow-up-settings-submenu"></a>
+
+#### Follow-up: settings submenu
+
+The first correction covered only the common dialog layout and missed the
+separate settings layout; the user reported displacement after entering
+another menu. Selecting item 2 from the pause menu reproduces it at 2,648
+ticks.
+
+The settings panel is also centered at Y=76, but four text calls use fixed Y
+values 85, 115, 128 and 141, and the vibration row has separate ON and OFF
+argument stores that converge on one text call. Five additional stores are
+therefore needed: title, both vibration states, volume and speed. Both code
+regions are validated before any store is replaced, so a changed settings
+layout cannot receive only the common-dialog correction.
+
+The extended regression fails against the first correction at `0x129740` and
+passes with all seven stores, checking layout-relative positions and
+machine-state preservation at five screen heights, including an odd height.
+Separate local save directories cover settings ON/OFF, volume/speed changes,
+main-menu and world-map navigation, the exit confirmation and CLR return. The
+full `make test`, `make test-debug`, internal race and vet checks pass again
+(`build/ktf-submenu-{test,debug,race,vet}.log`).
+
+Evidence: `build/ktf-submenu-before.png`,
+`build/ktf-submenu-glyph-trace.txt`,
+`build/ktf-submenu-regression-{before,after}.log`,
+`build/ktf-submenu-{2,3,4,5}-route.jsonl`,
+`build/ktf-submenu-{2,3,4,5}-isolated.log`, and
+`build/ktf-submenu-fixed-*.png`.
+
+<a id="ktf-qa-2026-09-21-user-acceptance"></a>
+
+### User acceptance
+
+On 2026-09-21, after the settings-submenu correction, the user confirmed that
+their checks were complete and requested publication of the fixes as a PR.
+The reported QA batch is accepted. The bounded corpus survey, unconfirmed
+native return tags and the absence of original handset timing measurements
+keep the limitations recorded above; acceptance does not expand those proofs.
+
+<a id="ktf-graphics-input-qa-2026-09-23"></a>
+
+## KTF dialogue clipping and deferred text input
+
+<a id="ktf-graphics-input-qa-2026-09-23-scope-and-evidence"></a>
+
+### Scope and evidence
+
+The reported failures concern two local archives, identified without titles:
+
+| Case | Archive SHA-256 | Reported path |
+| --- | --- | --- |
+| A | `016d344f7c328e6713c3e553555069472e82ecae9123eb25dc304bc6d1e2c890` | Dialogue borders and a four-character Korean name field |
+| B | `c36cbe78011f1a794341e4a250aeb1a2d23466c0b9dfdb68e802aa5ee96a5a7e` | A five-character Korean name field |
+
+The newer report for case B supersedes the initial authentication diagnosis:
+both archives reach their name editor, and the failure occurs when the Host
+submits text before the guest has processed its queued key. No authentication
+change is needed for this path.
+
+The 2026-09-23 debug logs and isolated-save replays establish the failures.
+The [WIPI graphics and input-method specification](https://mirusu400.github.io/wipi-wiki/c-api/graphics.md)
+defines clip coordinates and completed/composing input buffers. It leaves the
+graphics record opaque; the vendor layout and deferred key delivery below come
+from the actual callers.
+
+<a id="ktf-graphics-input-qa-2026-09-23-graphics-correction"></a>
+
+### Graphics correction
+
+Case A's SDK helper at `0x1017d8` examines the leading graphics-context word
+before reading the clip through `GetContext`; zero selects the full
+framebuffer. `SetContext` stored the four clip coordinates without setting
+this word, so nested drawing restored full bounds and painted past the
+dialogue's right and bottom edges.
+
+Setting a clip now sets the leading flag; a null clip clears it. An invalid
+source pointer leaves the context unchanged. An explicitly empty intersection
+must also draw nothing: treating every empty rectangle as an absent clip let
+widget border fragments escape the name editor, so the renderer distinguishes
+an enabled empty clip from a disabled clip. Nonempty bounds written directly
+by a caller remain supported.
+
+The reproduced dialogue stays within its requested horizontal bounds
+`[34, 206)`, and the name editor no longer draws stray border fragments. This
+is evidence for those widgets, not a whole-game rendering certification.
+
+<a id="ktf-graphics-input-qa-2026-09-23-input-correction"></a>
+
+### Input correction
+
+Both cards queue their numeric-key notification and consume it in a later C
+timer callback through `MC_imHandleInput`. The Host required that call during
+`keyNotify` itself, so it returned `ErrTextInputChanged`, discarded the
+pending completed character, and disabled input availability; the timer then
+received a carrier key with no completed text.
+
+The input adapter records the C timer that activates or handles the editor. A
+commit waits for that timer's deadline before injecting each complete EUC-KR
+character, then runs the ordinary timer scheduler under the existing guest
+execution lock. A manual probe clock advances to the deadline; an interactive
+Host waits cancellably. A missing timer, or a deadline more than one second
+away, rejects delivery before a key is queued. The 64-character submission
+limit, encoding checks, and nested Host service budget remain in force.
+
+Card, focus, mode and revision checks also run when the timer consumes text.
+Canceled queued carriers are discarded, and an accepted prefix invalidates the
+old edit token. A new synchronous editor clears the previous timer owner.
+Generic guest event loops remain unsupported; this change handles the observed
+C timer path, whose consumption can be checked before returning.
+
+CLR needs the same deferred treatment. Its timer may only flush composition,
+which does not close the field. The adapter recognizes that flush only for the
+pending CLR, its owning timer and the same visible card. A key that dismisses
+the editor without further input-method activity still disables availability.
+
+The guest retains its cursor, value, confirmation and length policy: case A
+rejects a five-character name on confirmation and accepts four, and case B
+accepts five. These limits are not encoded in the emulator. Current behavior:
+[native text input](../native-text-input.md#supported-editors).
+
+<a id="ktf-graphics-input-qa-2026-09-23-validation-and-limits"></a>
+
+### Validation and limits
+
+Authored regressions cover SDK clip readback, invalid clip pointers,
+explicitly empty clipping for blits and rectangle fills, five-character timer
+delivery with manual and wall clocks, CLR and replacement input, stale
+snapshots, dismissal, mode/card changes, removed or distant timers,
+cancellation, queued carrier cleanup, and replacement of the timer owner. The
+timer fixture uses the platform's ARM/SVC callback path; no JVM interpreter
+behavior changed.
+
+Local debug and release probes used the real archives with isolated saves
+under `var/savedata/ktf-qa-20260923/`; screenshots, diagnostics and command
+transcripts are under ignored `var/diagnostics/ktf-qa-20260923/`. The route
+inserts Korean text, rejects reuse of the consumed edit, deletes with CLR,
+reopens the Host editor, inserts a replacement and confirms through the
+guest's normal key. Both cases continue into the next story scene displaying
+the submitted name; case A was checked in debug and case B in release. No
+game files or original saves were modified.
+
+`make test` (including all 227 Node tests), `make test-debug`,
+`go test -race ./internal/...`, and `go vet ./...` passed, and both server
+profiles were rebuilt with `make server server-release`.
+
+Physical iPhone keyboard interaction and saved-name restoration are outside
+this replay. The platform text provider is shared by the CLI and browser Host;
+the session protocol and page implementation were unchanged.
+
+<a id="ktf-input-lifetime-2026-09-23"></a>
+
+## KTF input availability after rejected confirmation
+
+<a id="ktf-input-lifetime-2026-09-23-reproduction"></a>
+
+### Reproduction
+
+The 14:52:49 local debug report exposed a route the earlier
+[timer-input acceptance](#ktf-graphics-input-qa-2026-09-23) omitted. Case A,
+archive SHA-256 `016d344f7c328e6713c3e553555069472e82ecae9123eb25dc304bc6d1e2c890`,
+keeps its name editor open when OK is pressed with an empty name; opening Host
+text input afterward returned `no supported text field is active`.
+
+The report contains two input-mode selections and no character-processing
+calls. An isolated-save replay reproduced the failure on the then-current
+source: the editor remains visible, but one empty confirmation makes
+`Session.TextInput` unavailable. Selecting another keypad mode or entering a
+digit reactivates the input method. The earlier acceptance opened Host input
+immediately after the editor appeared, so it missed this key sequence.
+
+<a id="ktf-input-lifetime-2026-09-23-cause-and-bounded-correction"></a>
+
+### Cause and bounded correction
+
+`dispatchKeyToCards` invalidated pending edits on external keys and also
+disabled C input whenever a key produced no input-method activity. The second
+inference was too broad: an ignored confirmation neither calls the automaton
+nor closes the editor. Keeping every C input activation alive would instead
+expose closed editors, so the correction requires evidence of the controller
+lifetime.
+
+The [WIPI input-method contract](https://mirusu400.github.io/wipi-wiki/c-api/graphics.md)
+provides composition buffers and mode selection, but no game-owned C widget
+identity or visibility query. The observed Thumb caller writes its controller
+state immediately before initializing the editor and selecting the input mode.
+That state is unchanged after an empty confirmation, changes while a length
+error message covers the editor, returns when the message is dismissed, and
+changes when a valid name is accepted.
+
+The adapter recognizes that bounded call sequence at mode activation. It checks
+the mode wrapper, saved static base, initializer and controller call target,
+then resolves the state pointer through the caller's PC-relative literal and
+static-base table. Code/data addresses and the state value are derived from the
+running guest; there is no archive-name, hash, absolute-address or
+image-content shortcut. Invalid instructions, inconsistent frames and
+unreadable or overflowing pointers leave the existing conservative behavior.
+
+For a recognized controller, availability follows its live state. Every
+external key still invalidates the old edit. A validation message blocks
+input; returning to the editor permits a fresh snapshot. The commit checks the
+controller before delivery and again inside the timer's input-method call, so
+nothing is delivered after the controller changes. Unknown C callers still
+require observed input-method activity after keys. Debug diagnostics count
+`C input controller lifetime recognized` when the path is established; input
+contents are not logged. Current behavior:
+[native text input](../native-text-input.md#supported-editors).
+
+<a id="ktf-input-lifetime-2026-09-23-validation"></a>
+
+### Validation
+
+`wipic_input_owner_test.go` authors a relocated Thumb call layout and saved
+frames with different addresses and a different controller value. Regressions
+cover rejected confirmation, stale snapshots, hidden/restored controllers,
+controller changes during timer delivery, mode changes, malformed
+instructions, changed call targets, signed table offsets and invalid pointers.
+Existing unrecognized-caller and timer-input tests retain their behavior.
+
+The real-archive replay uses isolated saves, with screenshots and commands
+under ignored `var/diagnostics/ktf-input-recheck-20260923/`. It presses empty
+confirmation three times, inserts five Korean characters, verifies that the
+guest's length-error message blocks Host input, dismisses the message, deletes
+the name, inserts four characters and confirms. The next story scene displays
+the submitted name, and Host input is unavailable after the editor closes.
+
+That route passed in debug and release builds. The second archive's earlier
+insertion/deletion/replacement/confirmation route passed again in release. On
+the isolated PR branch, `make test`, `make test-debug`,
+`go test -race ./internal/...`, `go vet ./...`, and `make server server-release`
+passed, and the local debug and release server binaries were rebuilt.
+
+This is shared-platform-path acceptance. The original saves and the running
+user session were preserved. Physical iPhone IME interaction is not automated.
+
+<a id="ktf-save-slots-2026-09-23"></a>
+
+## KTF slot creation and save overlay reads
+
+<a id="ktf-save-slots-2026-09-23-report-and-cause"></a>
+
+### Report and cause
+
+The local 15:15:40 debug report (duplicated at 15:15:44) ends in
+`FileSystem.exists("/ev/0/f000")` with `read save fs/ev/0/f000: ... not a directory`.
+Archive SHA-256:
+`1379b56de66ee4f90ae53aea9a7a43117d19ab61eb1c015d1fc16c2e304251b4`.
+
+The guest writes a save named `ev` and also reads packaged resources beneath
+`ev/`; these are separate entries in the mounted resource table. The host save
+store maps slashes to real directories, so probing `fs/ev/0/f000` beneath the
+saved regular file returns `ENOTDIR`. The resource lookup still finds the
+archive entry, but the save reader retained the host error and the native call
+ended the session. Clearing saves alone cannot fix this, because the guest
+creates the conflicting save again.
+
+`DirectorySaveStore` now treats `ENOTDIR` on a read as an absent save entry,
+which allows the existing archive fallback. Other read failures still
+propagate. Writes beneath a regular file still fail and preserve that file.
+No save format, archive contents, resolution order, or platform entry point
+changed.
+
+The [WIPI FileSystem contract](https://mirusu400.github.io/wipi-wiki/java-api/org/kwis/msp/io/FileSystem.md)
+defines existence queries and I/O failures but not this host save overlay, so
+the correction belongs to the backend storage adapter.
+
+<a id="ktf-save-slots-2026-09-23-first-slot-creation"></a>
+
+### First-slot creation
+
+A fresh-save route found a separate local-service error: selecting the first
+slot reaches request kind 5, command 1410, and the service rejected its
+zero-based index 0 (the display-name generator already adds one). The service
+now accepts 0 through 127, retaining the signed-byte bound, message-length
+validation, and conversation ordering; missing or extra slot bytes remain
+invalid. This is an observed application protocol, not a WIPI API contract.
+The provider keeps its dependency and endpoint checks and contacts no external
+service.
+
+Since 2026-10-10 the creation receipt asks the title for a name instead of
+supplying one, and the title registers the name the player gives it — see
+[A name the title asks for](#implementation-a-name-the-title-asks-for).
+Slots created before that keep the names they were saved with.
+
+<a id="ktf-save-slots-2026-09-23-evidence-and-scope"></a>
+
+### Evidence and scope
+
+The original 18-file debug save was copied under ignored
+`var/savedata/backups/ktf-save-slots-20260923/PD006309/` and verified by
+per-file SHA-256 before any reset. Acceptance used separate save trees under
+`var/savedata/ktf-save-slots-fixed-{debug,release}-20260923/`. An empty host
+save directory still exposes a packaged first-slot record; the route replaces
+it through the game's New Game confirmation.
+
+Both build profiles created all six slots in order, committed local-service
+receipts, and restored the slots and their opening scene in new processes.
+Commands, screenshots, and diagnostics are under ignored
+`var/diagnostics/ktf-save-slots-20260923/`. These are shared-platform-path
+checks, not a physical iPhone or complete campaign playthrough.
+
+Recreating the third slot with the reported character-selection sequence
+reaches the exact `/ev/0/f000` lookup. Replaying identical commands against
+copies of the same saves fails with `ENOTDIR` in the old binary and passes in
+the fixed release binary; debug also passes that lookup during creation and a
+subsequent restart. Both fixed runs record `exists /ev/0/f000 found=true`
+without an uncaught callback or retained save-read error.
+
+The original save separately reproduces a slot-name paint exception in both
+old and fixed binaries when the second slot is selected. This is consistent
+with the earlier [invalid service label](#startup-compatibility-2026-09-19-relay-framing-and-worker-progress-2026-09-20)
+record and is not repaired automatically. The requested reset replaced these
+old records with the newly created slots, retaining the verified backup.
+
+After validation, only the reported game's active debug save tree was replaced
+with the verified fresh slots; other games and the active release save tree
+were preserved, and the debug server was restarted with the rebuilt binary.
+At the user's later request to test creation personally, the six-slot debug
+save was moved to the backup tree and the active game save directory left
+absent. The packaged first-slot record remains part of the unchanged archive
+and can still appear before New Game replaces it.
+
+Backend and KTF regression tests fail before the correction and pass after
+it. They cover packaged descendants of a saved file, missing descendants,
+writes after a resource lookup, restart, preservation of the parent file, all
+six zero-based slots, and malformed service messages. Existing read-error and
+transaction-failure tests remain enabled. `make test`, `make test-debug`,
+`go test -race ./internal/...`, and `go vet ./...` passed; both server
+profiles built, and the backend tests also cross-compiled for Windows amd64
+with cgo disabled.
+
+<a id="ktf-save-slots-2026-09-23-continuous-creation-and-collection-roots"></a>
+
+### Continuous creation and collection roots
+
+The 15:52:36 report (duplicated at 15:52:42) follows creation in slot order
+6, 2, 3, 4, then 5 without restarting. Its fifth service conversation stops
+after phase 1: `RelayInputStream.read([B)I` receives address `0x3015cfd0`,
+which no longer has a JVM object binding. The trace had allocated that address
+as a two-byte array, and the server collected guest objects immediately before
+the failure. The earlier six-slot acceptance started a new process for each
+slot and so did not cover this continuous allocation history.
+
+`Core.Call` derives a temporary ARM thread whose registers differ from its
+logical parent. The collector scanned only the service thread and worker
+parents, missing the registers of active derived calls, including callers
+beneath another nested call. An array held only there could lose its strong
+JVM binding, be reclaimed by Go, and fail at the next native boundary.
+
+The execution layer now tracks active calls until they unwind and exposes
+their saved registers through `Thread.LiveContexts`. Collection scans all
+these contexts while execution is parked, including suspension inside a
+native call and a forced step-budget yield. Normal returns, errors, and
+cancellation remove the temporary roots. Stack scanning, Go graph retention,
+collection thresholds, and the save format are unchanged.
+
+An authored ARM regression holds different arrays only in an outer and an
+inner call register, runs collection across a Go GC, and checks both
+bindings. It fails before the fix for service and worker threads and passes
+afterward; the arrays become collectible after normal and error unwinds. An
+execution test separately parks nested calls at the step limit, checks their
+register snapshots from the host, and verifies cleanup after cancellation.
+
+The user's new 24-file save tree was copied to ignored
+`var/savedata/backups/ktf-slot-order-20260923/PD006309/` and verified by
+SHA-256. Acceptance used separate save trees, preserving the active saves;
+commands, screenshots, diagnostics, and local collection probes are under
+ignored `var/diagnostics/ktf-slot-order-20260923/`.
+
+Debug and release both complete 6, 2, 3, 4, 5 in one process, with all five
+service phases recorded five times and the fifth opening scene rendered. The
+ordinary replay also passes in the old binary, so creation order alone is not
+a deterministic reproducer, and running Go GC every ten ticks does not
+guarantee that guest collection lands in the vulnerable window.
+
+A local build overlay forces guest collection and Go GC after phase 1 has
+completed and while phase 2 is pending. With the old register scan, the first
+creation fails at the same `RelayInputStream.read([B)I` boundary: a two-byte
+array allocated at guest site `0x1d5ac7` loses its binding. With the fix, both
+profiles complete all five creations under the identical forced window,
+including 33 nonempty collection cycles, with no failed service or uncaught
+callback. The overlay and forced-GC probes are local evidence only and are not
+in the server builds.
+
+`make test`, `make test-debug`, `go test -race ./internal/...`, and
+`go vet ./...` pass with the new regression tests, and both server profiles
+build. The active debug server was restarted with the fix, preserving all 24
+save files byte for byte. Physical iPhone replay remains a user confirmation.
