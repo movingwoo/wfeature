@@ -374,17 +374,23 @@ func javaCurrentThread(
 // with none free and that many mapped, the start is refused with
 // errJavaThreadLimit. Every start comes through here whatever built the
 // thread, and a checkpoint records the stacks mapped, so the number a title
-// can reach is by construction one a checkpoint restores. A thread the round
-// has seen finish gives its stack back when the round drops it, so a stack is
-// counted from the start until then rather than until the run returns.
+// can reach is by construction one a checkpoint restores.
+//
+// **A thread that has ended gives its stack back here**, whichever call saw it
+// end. A round drops the threads that ended in it, but a thread can also end
+// inside a call of the platform's own thread — the wait that ran it, or the
+// lock that thread took back from it — and a startApp that starts a loader and
+// waits for it, once per resource, never reaches a round: counting those as
+// running refused the seventeenth load with every thread finished.
 func (client *Client) startJavaWorker(thread *javaThread) (*javaWorker, error) {
 	runtime := client.javaRuntimeState()
+	runtime.dropFinishedJavaWorkers()
 	stack, reused := runtime.threadStacks, false
 	for index := 0; index < runtime.threadStacks && !reused; index++ {
 		base := javaThreadStackBase + uint32(index)*uint32(javaThreadStackSize)
 		taken := false
 		for _, worker := range runtime.workers {
-			if worker != nil && worker.stackBase == base {
+			if worker.stackBase == base {
 				taken = true
 				break
 			}
@@ -429,6 +435,33 @@ func (client *Client) startJavaWorker(thread *javaThread) (*javaWorker, error) {
 	runtime.workers = append(runtime.workers, worker)
 	go client.runJavaWorker(thread, worker)
 	return worker, nil
+}
+
+// dropFinishedJavaWorkers takes the threads that have ended off the list.
+// Their goroutines are gone and their Thread objects keep the record that
+// answers isAlive, so nothing reads them here again; what is left is the
+// threads a checkpoint has to restore, one to a stack.
+//
+// The list is built again rather than compacted: a round walks the list it
+// started with, and the thread starting this one may be in it.
+func (runtime *javaRuntime) dropFinishedJavaWorkers() {
+	finished := false
+	for _, worker := range runtime.workers {
+		if worker == nil || worker.done {
+			finished = true
+			break
+		}
+	}
+	if !finished {
+		return
+	}
+	live := make([]*javaWorker, 0, len(runtime.workers))
+	for _, worker := range runtime.workers {
+		if worker != nil && !worker.done {
+			live = append(live, worker)
+		}
+	}
+	runtime.workers = live
 }
 
 // runJavaWorker is the worker goroutine: wait for the first slice, then enter

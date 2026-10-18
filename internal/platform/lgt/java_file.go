@@ -475,12 +475,20 @@ func javaFileClose(
 			return 0, err
 		}
 	}
-	if file.dirty && client.storeContent(file.name, file.fileContent) != nil {
+	// A File opened only to read has nothing of its own to store: a write
+	// waiting on the path is another handle's, and its close or the ending
+	// stores it.
+	if file.writable && file.dirty && client.storeContent(file.name, file.fileContent) != nil {
 		if client.logger != nil {
 			client.logger.Debug("LGT java file close kept a write the store refused", "name", file.name, "file", object)
 		}
 		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, fmt.Sprintf(": %s could not be stored", file.name))
 	}
+	// The rewrite the open began is stored now, so the handle the streams
+	// keep is no longer one: a quick load gives it the file as it is then,
+	// as it gives any other handle. Left marked, a quick save taken while a
+	// stream held it cut a longer save written after it back to this one.
+	file.truncated = false
 	for sink, owner := range runtime.sinkFiles {
 		if owner == object {
 			runtime.sinkFiles[sink], runtime.files[sink] = sink, handle

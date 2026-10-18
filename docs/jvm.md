@@ -28,10 +28,18 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
   class or interface and nothing else (JVMS 5.5): an interface's array constant
   read inside an implementing class runs the interface's initializer, and an
   inherited static read through a subclass does not run the subclass's.
-  Initializing a class initializes its superclass and then each superinterface
-  that declares a default method, an interface's own superinterfaces first
-  (JVMS 5.5); an interface with only abstract or static methods is not
-  initialized, and one the loader cannot find is passed over. Only a class file
+  Initializing a class prepares its statics, `ConstantValue` included, and
+  then initializes its superclass and each superinterface that declares a
+  default method, an interface's own superinterfaces first (JVMS 5.4.2 and
+  5.5), so a store their initializers make into the class's statics stands; an
+  interface with only abstract or static methods is not initialized, and one
+  the loader cannot find is passed over without being counted as missing in
+  `ClassCensus`. An `OutOfMemoryError` that ends an initialization leaves the
+  class uninitialized, and its next use initializes it again from the start;
+  JVMS 5.5 marks it erroneous for good, but the error comes from the heap
+  budget, which counts this runtime's memory and not the handset's, and can
+  land inside a built-in class's initializer that could not fail on a handset.
+  Every other failure is kept and rethrown at each later use. Only a class file
   of version 52 or later can declare a default method. The local corpus's 2,232
   class files are versions 45.3 to 47.0 and its 27 interfaces declare none, so
   for every title the walk initializes nothing. Selecting a default method in
@@ -331,7 +339,10 @@ refused. It does not provide session save/load; see
 `HeapState` is a separate, bounded object-graph component. It retains aliases,
 cycles, exact primitive bits, statics, completed class initialization, AOT
 metadata and binding strength, interned string roots, identity counters, and
-cooperative Thread flags with fresh notification channels. Platform roots must
+cooperative Thread flags with fresh notification channels. A platform's
+defined constants are seeded again after a restore, in every initialized
+class, so a snapshot from an earlier build cannot bring back that build's
+values (SKT's soft keys changed twice). Platform roots must
 be supplied explicitly. Native payloads and arrays outside the core library
 require platform codecs. Held monitors, active or failed initializers,
 independently scheduled threads, overlapping list views, and unbounded recurring
@@ -672,8 +683,7 @@ the total: a guest that kept allocating in a loop grew until the host ran out of
 memory, and every session on a server went with it. `Options.MaxHeapBytes`
 (`DefaultMaxHeapBytes`, 256 MiB) bounds what one VM's guest keeps alive. An
 allocation past it raises `java/lang/OutOfMemoryError`, which the guest can
-catch, as it could on a handset. The first refusal is logged as a warning and
-the rest at debug level.
+catch, as it could on a handset.
 
 **The budget counts the bytes this runtime spends, not what the handset
 spent.** An array element is a 24-byte `Value` whatever its type, an object is
@@ -681,16 +691,21 @@ about 550 bytes with its field table, and a String is its text plus about 190.
 What is charged and may be refused: every object `new` makes, every array
 (`newarray`, `anewarray`, `multianewarray`, `NewArray`, and the arrays the class
 library makes, so `Vector`, `Hashtable` and `ByteArrayOutputStream` growth too),
-the Strings and the byte and char arrays library methods hand back, the small
+the Strings and the byte and char arrays library methods hand back, the text a
+`String` constructor builds from a `char[]`, a `byte[]` or a `StringBuffer`
+(weighed when it exists, since the object was weighed at its `new`; one built
+from another String shares that one's text and adds nothing), the small
 `Integer`, `Calendar`, `Date` and `Runtime` objects they return, and a
 `StringBuffer`'s characters as they grow. Charged and never refused, because
-the caller has no way to fail with a guest exception: a Host's `NewString`, the
-text of a caught exception (a title reads it in the handler for this very
-error), and a platform's AOT instances and arrays (`NewAOTInstance`,
-`NewAOTArray`), which its own arena already bounds. Not charged: the exceptions
-the runtime raises, interned literals and constants (the pool has its own
-bounds), `Class` and `TimeZone` objects, what a platform builds for itself, and
-a restored heap.
+the caller has no way to fail with a guest exception: a Host's `NewString`
+and `NewHostObject` (the `Long` an SKT player event carries from a tick to its
+listener), the text of a caught exception (a title reads it in the handler for
+this very error), and a platform's AOT instances and arrays (`NewAOTInstance`,
+`NewAOTArray`), which its own arena already bounds; an AOT instance is charged
+the 224 bytes it costs here, its fields being in that arena (232 were measured
+with its binding). Not charged: the exceptions the runtime raises, interned
+literals and constants (the pool has its own bounds), `Class` and `TimeZone`
+objects, what a platform builds for itself, and a restored heap.
 
 **Whether an object is still alive is Go's answer, asked of a sample.** There is
 no collector of this runtime's own, and a weak pointer per object would cost
@@ -701,11 +716,32 @@ weight that makes the live weights an unbiased estimate of the live bytes (the
 method Go's own heap profile uses). An allocation of 256 KiB or more is always
 recorded at its exact size, so a large array is counted exactly and refused
 before the host commits it. When a sample would pass the limit, samples whose
-objects have died are dropped; if that is not enough, the budget runs
-`runtime.GC` and drops again, and only then refuses. Nothing is checked between
+objects have died are dropped; if that is not enough, the budget may run
+`runtime.GC` and drop again, and then refuses. Nothing is checked between
 samples, so a guest can pass the limit by about 256 KiB before it is told. The
 seed is fixed, so the same allocations reach the limit at the same one.
 `VM.HeapUsage` reports the current estimate and the limit.
+
+**A refusal keeps the sampling point, and a collection is rationed.** Each
+admitted sample stands for the bytes allocated since the one before, so the
+point a refused sample took stays spent: every allocation after a refusal is
+weighed in turn until one fits, and only an admitted sample draws the next
+point, while the charge is within the limit (an allocation that may not be
+refused can take it past). Drawing a new point at each refusal let the bytes
+between samples through uncharged: under a 4 MiB budget, a title that catches
+the error and goes on kept 53,413 of 60,000 small objects where 7,598 fit, and
+ran 6,589 collections in 28.9 seconds; it now keeps 7,903 with 21 collections
+in half a second. A collection stops every session in the process, so a
+refusal that none could help (what is reserved and the allocation alone pass
+the limit) is made without one: 30 arrays larger than the budget ran 30
+collections and now run none. Otherwise the first refusal in a row collects,
+so a title that let go of memory finds it at its next allocation as it did on
+a handset, and then the second, the fourth, the eighth: 51 refusals while full
+ran 53 collections and now run 7. Between collections the budget looks at its
+samples again only once Go's collector has finished a cycle, because nothing
+dies in between and reading a weak pointer while the collector marks keeps its
+object alive. The first refusal is logged as a warning and the rest at debug
+level, once per collection with their count.
 
 **A restore is never refused for size.** Restored objects are not charged, so a
 checkpoint loads whatever heap it carries, and the budget bounds what the guest

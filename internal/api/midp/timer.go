@@ -207,18 +207,16 @@ func startTimerThread(call *jvm.Invocation, timer, task *jvm.Object, delay, peri
 	// A task already scheduled, on this Timer or another, is refused as
 	// java.util.Timer refuses it. A second worker ran the task twice as often,
 	// and ran it beside itself.
-	timerQueueMu.Lock()
 	queued, err := booleanField(call, task, TimerTaskClass, "queued")
-	if err == nil && !queued {
-		err = setBooleanField(call, task, TimerTaskClass, "queued", true)
-	}
-	timerQueueMu.Unlock()
 	if err != nil {
 		return err
 	}
 	if queued {
 		return jvm.Throw("java/lang/IllegalStateException", "TimerTask already scheduled")
 	}
+	// The worker is made before the task is marked: making it can be refused,
+	// and a task marked with no worker would never run and could never be
+	// scheduled again.
 	worker, err := call.NewObject(TimerThreadClass, "()V")
 	if err != nil {
 		return err
@@ -239,8 +237,27 @@ func startTimerThread(call *jvm.Invocation, timer, task *jvm.Object, delay, peri
 	if err := setBooleanField(call, worker, TimerThreadClass, "fixedRate", fixedRate); err != nil {
 		return err
 	}
-	_, err = call.InvokeVirtual(worker, "start", "()V")
-	return err
+	timerQueueMu.Lock()
+	queued, err = booleanField(call, task, TimerTaskClass, "queued")
+	if err == nil && !queued {
+		err = setBooleanField(call, task, TimerTaskClass, "queued", true)
+	}
+	timerQueueMu.Unlock()
+	if err != nil {
+		return err
+	}
+	if queued {
+		return jvm.Throw("java/lang/IllegalStateException", "TimerTask already scheduled")
+	}
+	if _, err := call.InvokeVirtual(worker, "start", "()V"); err != nil {
+		// A worker that did not start runs nothing, so the task is free to
+		// be scheduled again.
+		timerQueueMu.Lock()
+		_ = setBooleanField(call, task, TimerTaskClass, "queued", false)
+		timerQueueMu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // timerThreadRun is the worker: wait, run the task, and either stop or wait

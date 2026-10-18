@@ -276,6 +276,12 @@ func (client *Client) storeIssuedWrites() (int, error) {
 		}
 		stored++
 	}
+	if client.databaseIndexWaiting {
+		if client.storeWaitingDatabaseIndex() {
+			return stored, refused(fmt.Errorf("the index of the databases"))
+		}
+		stored++
+	}
 	databases, open := client.databaseContents()
 	for _, database := range databases {
 		if !database.unsaved {
@@ -387,6 +393,7 @@ func (client *Client) rebuildRestoredStorage() error {
 	client.saveReadError = nil
 	client.removed, client.created, client.removedLegacy, client.createdLegacy = nil, nil, nil, nil
 	client.removedUnsaved, client.createdUnsaved, client.fileEpochs = false, false, nil
+	client.databaseIndexWaiting, client.databaseIndexPending = false, nil
 	for handle, cursor := range restored.fileCursors {
 		if file := client.files[handle]; file != nil {
 			file.cursor = cursor

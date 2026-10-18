@@ -99,7 +99,7 @@ var javaPlatformSupers = map[string]string{
 	"java/lang/NumberFormatException":                   "java/lang/IllegalArgumentException",
 	"java/lang/ArrayIndexOutOfBoundsException":          "java/lang/IndexOutOfBoundsException",
 	"java/lang/StringIndexOutOfBoundsException":         "java/lang/IndexOutOfBoundsException",
-	"java/lang/OutOfMemoryError":                        "java/lang/Error",
+	"java/lang/OutOfMemoryError":                        "java/lang/VirtualMachineError",
 	"java/lang/VirtualMachineError":                     "java/lang/Error",
 	"java/io/EOFException":                              "java/io/IOException",
 	"java/io/InterruptedIOException":                    "java/io/IOException",

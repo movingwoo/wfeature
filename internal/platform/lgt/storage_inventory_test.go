@@ -127,7 +127,7 @@ func TestStorageInventoryCountsAnAuthoredSession(t *testing.T) {
 	boundary("both closed", map[int]int{storageLedgersLoaded: 2})
 
 	// A name the save store has no key for is a file nothing can store.
-	unkeyed := open(text(`dir\name.dat`), fileOpenReadWrite)
+	unkeyed := open(text(`.removed/name.dat`), fileOpenReadWrite)
 	callSlot(t, client, slotFsWrite, unkeyed, written, 3)
 	boundary("a written file with no save key", map[int]int{
 		storageHandles: 1, storageWritable: 1, storageDirty: 1, storageStale: 1, storageNoSaveKey: 1,
@@ -152,11 +152,11 @@ func TestStorageInventoryCountsAnAuthoredSession(t *testing.T) {
 	boundary("a removal list the store no longer agrees with", map[int]int{storageLedgersLoaded: 2, storageStaleLedgers: 1})
 
 	for column, want := range map[int][]string{
-		storageDirty:            {"save.dat", `dir\name.dat`, "twice.dat", "TWICE.dat"},
+		storageDirty:            {"save.dat", `.removed/name.dat`, "twice.dat", "TWICE.dat"},
 		storageStaleClean:       nil,
 		storageEmptyOverContent: nil,
-		storageNoSaveKey:        {`dir\name.dat`},
-		storageDirtyNoSaveKey:   {`dir\name.dat`},
+		storageNoSaveKey:        {`.removed/name.dat`},
+		storageDirtyNoSaveKey:   {`.removed/name.dat`},
 		storageRemovedOpen:      {"save.dat"},
 		storageSharedKeys:       {"key:fs/save.dat"},
 		storageSharedDirtyKeys:  nil,
@@ -187,7 +187,7 @@ func TestStorageInventoryCountsAnAuthoredSession(t *testing.T) {
 		t.Errorf("handles = %d at %d boundaries and dirty = %d at %d, want 2 at 9 and 2 at 5",
 			record.Max["handles"], record.BoundariesWith["handles"], record.Max["dirty"], record.BoundariesWith["dirty"])
 	}
-	if want := []string{"save.dat", `dir\name.dat`, "twice.dat", "TWICE.dat"}; !slices.Equal(sortedCopy(record.Examples["dirty"]), sortedCopy(want)) {
+	if want := []string{"save.dat", `.removed/name.dat`, "twice.dat", "TWICE.dat"}; !slices.Equal(sortedCopy(record.Examples["dirty"]), sortedCopy(want)) {
 		t.Errorf("the record's dirty examples are %q, want %q", record.Examples["dirty"], want)
 	}
 }

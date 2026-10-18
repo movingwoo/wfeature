@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
@@ -43,10 +44,45 @@ type CoreTarget struct {
 	// again. A stop the guest reaches meanwhile — one already decided when
 	// the breakpoints were cleared — does not park, because nobody is left
 	// to release it.
-	idle     bool
-	finished bool
-	killed   bool
+	idle bool
+	// clients counts the clients that have ended. A resume carries the count
+	// its client attached under, and one whose client has gone since does
+	// nothing: a client that asks and hangs up at once is gone before the
+	// resume it asked for has started, and a guest stopped for it would stay
+	// stopped with nobody to let it go.
+	clients uint64
+	// foretold is a stop the client has been told of before the guest made
+	// it: the guest was running no code, so the answer could not wait for its
+	// next instruction. That instruction is where it stops, and it parks
+	// there without a second answer. passForetold is set when the client
+	// resumed before the guest got there, so the stop is not made at all.
+	foretold     bool
+	passForetold bool
+	finished     bool
+	killed       bool
 }
+
+// haltWait is how long a request to stop waits for the guest's next
+// instruction before it is answered anyway. A guest that is running reaches
+// it at once, and one between a session's ticks within a tick or two; a host
+// that runs no guest code at all — a run waiting on its driver, an idle
+// title, a guest inside a long host call — would leave the answer waiting
+// for good, and a client gives up on a target that does not answer (lldb
+// after about 20 seconds, gdb after 2).
+const haltWait = 250 * time.Millisecond
+
+// resumeMode is what a client asked the guest to do.
+type resumeMode int
+
+const (
+	// resumeContinue runs to the next stop.
+	resumeContinue resumeMode = iota
+	// resumeStep runs one instruction.
+	resumeStep
+	// resumeHalt stops a running guest at its next instruction: '?', a
+	// client's first question.
+	resumeHalt
+)
 
 // NewCoreTarget attaches a debugger to a core. Attaching slows execution to
 // one instruction per quantum; see armcore.AttachDebugger.
@@ -74,14 +110,21 @@ func (target *CoreTarget) Detach() {
 // running rather than frozen, as qAttached promises. A resume still waiting
 // for a stop gives up, clearing any step it had asked for. The debugger stays
 // attached for the next client. Serve calls it however a connection ends.
+//
+// A resume this client asked for that has not started yet never will (see
+// clients), and a stop it armed or was told of is dropped, so nothing the
+// client left behind can stop the guest once it has gone.
 func (target *CoreTarget) endClient() {
 	target.mu.Lock()
+	target.clients++
 	breakpoints := target.breakpoints
 	target.breakpoints = nil
 	target.idle = true
+	target.foretold, target.passForetold = false, false
 	abandon := target.abandon
 	target.abandon = nil
 	target.mu.Unlock()
+	target.core.CancelStep()
 	for address := range breakpoints {
 		target.core.ClearBreakpoint(address)
 	}
@@ -89,6 +132,28 @@ func (target *CoreTarget) endClient() {
 		close(abandon)
 	}
 	target.release()
+}
+
+// attachClient answers the count a client's resumes carry; see clients.
+func (target *CoreTarget) attachClient() uint64 {
+	target.mu.Lock()
+	defer target.mu.Unlock()
+	return target.clients
+}
+
+// gone answers how a target whose run has ended is reported: killed when its
+// client killed it, and exited otherwise. A stop reply would tell the client
+// there is a target left to continue.
+func (target *CoreTarget) gone() (string, bool) {
+	target.mu.Lock()
+	defer target.mu.Unlock()
+	switch {
+	case target.killed:
+		return "X09", true
+	case target.finished:
+		return "W00", true
+	}
+	return "", false
 }
 
 // Finished is called by whoever runs the guest when the run ends, so a client
@@ -115,16 +180,32 @@ func (target *CoreTarget) hook(_ context.Context, _ *armcore.Core, thread *armco
 		target.mu.Unlock()
 		return nil
 	}
+	publish := true
+	if target.foretold {
+		// This is the stop the client was told of while the guest ran no
+		// code. It has had its answer, so the stop is not published again;
+		// and if it resumed since, the guest does not stop here at all.
+		target.foretold, publish = false, false
+		if target.passForetold {
+			target.passForetold = false
+			target.mu.Unlock()
+			return nil
+		}
+	}
 	wakeup := make(chan struct{})
 	target.wakeup = wakeup
 	target.thread.Store(thread)
-	// Published under the same lock as the wakeup, so a resume that finds a
-	// stop waiting can tell whether the guest is still parked at it.
-	select {
-	case target.stops <- stop:
-	default:
-		// A stop nobody collected means the client is not listening; the
-		// guest still parks, because stopping is what a breakpoint means.
+	// Published under the same lock as the wakeup, and after the thread, so
+	// a resume that finds a stop waiting can tell whether the guest is still
+	// parked at it, and reads the registers it stopped with.
+	if publish {
+		select {
+		case target.stops <- stop:
+		default:
+			// A stop nobody collected means the client is not listening;
+			// the guest still parks, because stopping is what a breakpoint
+			// means.
+		}
 	}
 	target.mu.Unlock()
 	<-wakeup
@@ -255,12 +336,12 @@ func (target *CoreTarget) ClearBreakpoint(address uint32) {
 
 // Continue releases the guest and waits for the next stop.
 func (target *CoreTarget) Continue() (Signal, error) {
-	return target.resume(false, nil)
+	return target.resume(target.attachClient(), resumeContinue, nil)
 }
 
 // Step runs exactly one instruction.
 func (target *CoreTarget) Step() (Signal, error) {
-	return target.resume(true, nil)
+	return target.resume(target.attachClient(), resumeStep, nil)
 }
 
 // resume lets the guest go and waits for its next stop. A receive on
@@ -268,42 +349,102 @@ func (target *CoreTarget) Step() (Signal, error) {
 // instruction. Every change to the core's pending step happens here, on the
 // resume's own goroutine, so an interrupt can neither be cleared before it
 // takes effect nor outlive the stop that answers it.
-func (target *CoreTarget) resume(single bool, interrupt <-chan struct{}) (Signal, error) {
+//
+// A halt, or an interrupt, that the guest does not answer within haltWait is
+// answered as a stop all the same and left foretold: the guest is running no
+// code, and stops at its next instruction without a second reply, which a
+// client would read as the answer to a later request.
+func (target *CoreTarget) resume(client uint64, mode resumeMode, interrupt <-chan struct{}) (Signal, error) {
 	target.mu.Lock()
+	if client != target.clients {
+		target.mu.Unlock()
+		return SignalKill, ErrDetached
+	}
 	if target.finished {
 		target.mu.Unlock()
 		return SignalKill, nil
 	}
 	target.idle = false
-	select {
-	case <-target.stops:
-		if target.wakeup != nil {
-			// The guest stopped while nobody was waiting: it reached a
-			// breakpoint after the client set it and before it asked to
-			// continue. That stop is the one this resume would have run to,
-			// so it is the answer, and the guest stays where it stopped.
-			// Releasing it here would report a stop the guest has already
-			// left and keep the client one stop behind from then on.
+	if target.foretold {
+		// The client was told the guest stopped, and the guest has not got
+		// there yet. A halt has its answer already; a step stops where the
+		// told stop is, which is the guest's next instruction; a continue
+		// runs past it.
+		switch mode {
+		case resumeHalt:
+			target.mu.Unlock()
+			return SignalTrap, nil
+		case resumeStep:
+			target.foretold = false
+		case resumeContinue:
+			target.passForetold = true
+		}
+	} else {
+		select {
+		case <-target.stops:
+			if target.wakeup != nil {
+				// The guest stopped while nobody was waiting: it reached a
+				// breakpoint after the client set it and before it asked to
+				// continue. That stop is the one this resume would have run
+				// to, so it is the answer, and the guest stays where it
+				// stopped. Releasing it here would report a stop the guest
+				// has already left and keep the client one stop behind from
+				// then on.
+				target.mu.Unlock()
+				return SignalTrap, nil
+			}
+			// A stop whose park has already been let go is stale, and
+			// dropped.
+		default:
+		}
+		if mode == resumeHalt && target.wakeup != nil {
 			target.mu.Unlock()
 			return SignalTrap, nil
 		}
-		// A stop whose park has already been let go is stale, and dropped.
-	default:
 	}
 	abandon := make(chan struct{})
 	target.abandon = abandon
+	foretold := target.foretold || target.passForetold
 	target.mu.Unlock()
-	if single {
-		target.core.StepOnce()
+	if !foretold {
+		if mode != resumeContinue {
+			target.core.StepOnce()
+		}
+		target.release()
 	}
-	target.release()
+	var answer <-chan time.Time
+	if mode == resumeHalt {
+		answer = time.After(haltWait)
+	}
 	for stopped := false; !stopped; {
 		select {
 		case <-target.stops:
 			stopped = true
 		case <-interrupt:
 			interrupt = nil
+			// A continue from a foretold stop the guest has not reached yet
+			// stops there after all: that stop answers the interrupt.
+			target.mu.Lock()
+			target.foretold, target.passForetold = false, false
+			target.mu.Unlock()
 			target.core.StepOnce()
+			answer = time.After(haltWait)
+		case <-answer:
+			target.mu.Lock()
+			if target.abandon == abandon {
+				target.abandon = nil
+			}
+			select {
+			case <-target.stops:
+				// The guest stopped as the wait ran out.
+				target.mu.Unlock()
+				stopped = true
+				continue
+			default:
+			}
+			target.foretold, target.passForetold = true, false
+			target.mu.Unlock()
+			return SignalTrap, nil
 		case <-abandon:
 			target.core.CancelStep()
 			return SignalKill, ErrDetached

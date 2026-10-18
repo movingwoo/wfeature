@@ -46,6 +46,11 @@
 //   to its ten-second deadline), the app starts the next server only once the
 //   old one has ended, the old game's destroyApp record is written, and the
 //   page is the new server's. Three times, as for the finish.
+// - Opened again the same way while the server holds parked a title whose
+//   destroyApp never returns (the page let go of its session first), the old
+//   server still ends, at its drain's ten-second deadline with that close
+//   left behind, and the next server starts after it without the app having
+//   to end the old one.
 //
 // The pages are read through the web view's DevTools socket, one page at a
 // time, and no DevTools client is attached while a change is made. Playwright
@@ -134,6 +139,8 @@ const fixtures = [
     ["destroy-save.msd", readFileSync("cmd/cli/testdata/DESTROY_SAVE.MF")],
     ["destroy-save.jar", readFileSync("cmd/cli/testdata/destroy-save.jar")],
   ])],
+  // A destroyApp that waits for a notification nobody sends.
+  ["android-lifecycle-hang.zip", readFileSync("internal/platform/skt/testdata/hang-destroy-skt.zip")],
 ];
 // How many times destroyApp has written the fixture's record, wherever the
 // server keeps it under the app's save tree.
@@ -438,31 +445,56 @@ const start = game => `(() => {
 // intent, because the launch did not come from the home process.
 const label = /<string name="app_name">([^<]*)<\/string>/
   .exec(readFileSync("mobile/android/res/values/strings.xml", "utf8"))?.[1] ?? "W-Feature";
+const bounds = "bounds=\"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]\"";
+// An icon is a TextView with the app's label.
 const icon = new RegExp(`<node [^>]*text="${label.replace(/[.*+?^$|()[\]{}\\]/g, "\\$&")}"[^>]*` +
-  "bounds=\"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]\"");
-const iconOnScreen = () => {
+  `class="android\\.widget\\.TextView"[^>]*${bounds}`);
+const onScreen = pattern => {
   const dump = "/data/local/tmp/android-lifecycle-ui.xml";
   for (let attempt = 0; attempt < 3; attempt++) {
     tryAdb("shell", "uiautomator", "dump", dump);
     const xml = tryAdb("shell", "cat", dump);
     tryAdb("shell", "rm", "-f", dump);
-    const node = icon.exec(xml);
+    const node = pattern.exec(xml);
     if (node) return [Math.round((Number(node[1]) + Number(node[3])) / 2), Math.round((Number(node[2]) + Number(node[4])) / 2)];
     if (xml.includes("<hierarchy")) return null;
   }
   return null;
 };
+const keyboardShown = () => /mInputShown=true/.test(tryAdb("shell", "dumpsys", "input_method"));
+const appOnTop = () => tryAdb("shell", "dumpsys", "activity", "activities").split("\n")
+  .some(line => line.includes("topResumedActivity") && line.includes(`${app}/`));
+// The app list is opened with the launcher's own ALL_APPS intent rather than
+// the key of that name: the Pixel launcher takes the key for a search, focuses
+// its search field and brings the keyboard up over the icons, seconds later on
+// a busy device, so a tap there typed into the search; swipes `input` sends do
+// not open the list. The tap on the icon is still the launcher starting the
+// app. One that did not bring the app up is tried again from the home screen,
+// with the screen kept beside the result.
 const tapIcon = async () => {
-  adb("shell", "input", "keyevent", "KEYCODE_HOME");
-  await pause(1500);
-  let at = iconOnScreen();
-  if (!at) {
-    adb("shell", "input", "keyevent", "KEYCODE_ALL_APPS");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    adb("shell", "input", "keyevent", "KEYCODE_HOME");
     await pause(1500);
-    at = iconOnScreen();
+    let at = onScreen(icon);
+    if (!at) {
+      tryAdb("shell", "am", "start", "-a", "android.intent.action.ALL_APPS");
+      await pause(1500);
+      if (keyboardShown()) {
+        adb("shell", "input", "keyevent", "KEYCODE_BACK");
+        await pause(1000);
+      }
+      at = onScreen(icon);
+    }
+    if (!at) throw new Error(`the launcher shows no ${label} icon`);
+    adb("shell", "input", "tap", String(at[0]), String(at[1]));
+    for (let i = 0; i < 20 && !appOnTop(); i++) await pause(250);
+    if (appOnTop()) return;
+    result.notes.push(`a tap on the ${label} icon did not bring the app up (attempt ${attempt + 1})`);
+    try {
+      writeFileSync(join(output, `icon-tap-${attempt + 1}.png`), execFileSync(adbPath, ["exec-out", "screencap", "-p"]));
+    } catch {}
   }
-  if (!at) throw new Error(`the launcher shows no ${label} icon`);
-  adb("shell", "input", "tap", String(at[0]), String(at[1]));
+  throw new Error(`a tap on the ${label} icon did not bring the app up`);
 };
 const launch = async (home = false) => {
   adb("shell", "am", "force-stop", app);
@@ -567,13 +599,14 @@ try {
     await pause(500);
     await page.until(ready);
     const listed = await page.evaluate(`[...document.querySelectorAll("#game-select option")]
-      .map(option => option.value).filter(value => /android-lifecycle-(check|drain)/.test(value))`);
+      .map(option => option.value).filter(value => /android-lifecycle-(check|drain|hang)/.test(value))`);
     if (listed.length) games = listed;
     page.close();
   }
   const canvas = games.find(game => game.includes("android-lifecycle-check"));
   const drain = games.find(game => game.includes("android-lifecycle-drain"));
-  if (!canvas || !drain) throw new Error(`the test games are not in the library: ${games}`);
+  const hang = games.find(game => game.includes("android-lifecycle-hang"));
+  if (!canvas || !drain || !hang) throw new Error(`the test games are not in the library: ${games}`);
 
   // A: each declared change and its putting back, one at a time.
   for (const change of declared) {
@@ -868,6 +901,78 @@ try {
     relaunched.every(relaunchOk), {
       passed: `${relaunched.filter(relaunchOk).length} of ${relaunched.length}`, runs: relaunched,
     });
+
+  // F: the same reopening while the game the finished server holds is parked
+  // and is a title whose destroyApp never returns. A drain that closed parked
+  // games ahead of its deadline never ended, and the app waited on it for
+  // ever; now the drain leaves that close behind at its ten-second deadline,
+  // the old server ends on its own, and the new activity starts the next one
+  // after it. The page lets go of its session first, as a page the app has
+  // hidden or a tab that closed does, so the game is parked when the drain
+  // begins: finishing the activity with the game attached reaches the drain
+  // before the page's own parking does. The server's lines after its SIGTERM
+  // do not reach the log (the app closes the pipe they go to), so its own
+  // account of the close it left behind is not read here.
+  {
+    await launch();
+    const page = await shown();
+    if (!(await page.until(ready))) throw new Error("the page did not come up ready");
+    await page.evaluate(start(hang));
+    if (!(await page.until(playing))) throw new Error("the hang fixture did not start");
+    await pause(1500);
+    const old = (await status())?.pid;
+    const leaving = deviceNow();
+    await page.evaluate(`location.href = "about:blank"`).catch(() => {});
+    page.close();
+    let parked = false;
+    for (let i = 0; i < 40 && !(parked = serverLog(leaving).includes("session parked")); i++) await pause(250);
+    const since = deviceNow();
+    // As in E, with the wait for the old pid long enough to see the drain's
+    // deadline pass and the app's own bound (30 s) after it.
+    const [, destroyedAt, relaunchedAt, goneAt] = tryAdb("shell", [
+      `since=$(date +%s.%3N)`,
+      `input keyevent KEYCODE_BACK`,
+      `i=0; until logcat -b events -d -v epoch -t "$since" | grep -q 'wm_on_destroy_called.*${app}.MainActivity'; do i=$((i+1)); [ $i -ge 200 ] && break; sleep 0.02; done`,
+      `destroyed=$(date +%s.%3N)`,
+      `am start -n ${app}/.MainActivity >/dev/null 2>&1`,
+      `relaunched=$(date +%s.%3N)`,
+      `end=$(($(date +%s) + 45)); while [ -e /proc/${old} ] && [ $(date +%s) -lt $end ]; do sleep 0.05; done`,
+      `echo "$since $destroyed $relaunched $(date +%s.%3N)"`,
+    ].join("; ")).split(/\s+/).map(Number);
+    let now = null;
+    for (let i = 0; i < 120; i++) {
+      now = await status();
+      if (now?.pid > 0 && now.pid !== old) break;
+      await pause(250);
+    }
+    const shownPage = await shown().catch(() => null);
+    const pageReady = Boolean(await shownPage?.until(`(${ready}) || (${playing})`, 15000));
+    shownPage?.close();
+    await pause(1000);
+    const events = lifecycleEvents(since).map(({ event }) => event);
+    const own = appLog(since);
+    const started = own.find(line => line.text === "starting a server")?.at ?? null;
+    const ended = own.find(line => line.text.startsWith("the earlier server ended"))?.at ?? null;
+    const run = {
+      old, new: now?.pid ?? null, servers: servers(), pageReady, parked,
+      exercised: parked && events.includes("wm_on_destroy_called") && relaunchedAt < goneAt,
+      waited: own.some(line => line.text.startsWith("waiting for the server a finished activity ended")),
+      forced: own.some(line => line.text.startsWith("the earlier server did not end")),
+      timesMs: {
+        destroyed: Math.round((destroyedAt - Number(since)) * 1000),
+        relaunched: Math.round((relaunchedAt - Number(since)) * 1000),
+        oldGone: Math.round((goneAt - Number(since)) * 1000),
+        newStarted: started && Math.round((started - Number(since)) * 1000),
+      },
+      startedAfterOldEnded: started !== null && started >= goneAt - 0.25 && ended !== null && ended <= started,
+      appLog: own.map(line => `${Math.round((line.at - Number(since)) * 1000)} ${line.text}`),
+      serverLog: serverLog(leaving), events,
+    };
+    check("F opened again while the finished server holds a parked game whose destroyApp never returns: the old server ends at its drain's deadline and the next one starts after it",
+      run.exercised && run.waited && !run.forced && run.startedAfterOldEnded &&
+        run.timesMs.oldGone - run.timesMs.destroyed <= 15000 && run.new > 0 && run.new !== run.old &&
+        run.servers.length === 1 && run.servers[0] === String(run.new) && run.pageReady, run);
+  }
 } catch (error) {
   result.notes.push(`stopped: ${String(error.stack ?? error)}`);
   console.error(error);

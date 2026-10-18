@@ -443,7 +443,8 @@ handling of the orientation request, the density, the display size, the night
 mode and the font scale, one at a time and back, and puts every setting back as
 it found it even when a check fails. It then finishes the activity with BACK,
 leaves a task the home screen started with BACK and comes back to it, and opens
-the app again while the server it just ended is draining:
+the app again while the server it just ended is draining, once more with the
+game it parked a title whose `destroyApp` never returns:
 
 ```sh
 make mobile-android && adb install -r mobile/android/build/wfeature.apk
@@ -463,7 +464,7 @@ which makes the hidden page of a destroyed activity's web view visible again,
 and that page then takes the game back from the new one. The script attaches
 only to the page on the window, and to none while a change is made.
 
-It checks five things:
+It checks six things:
 
 - each change `configChanges` declares leaves the activity instance, the
   page's document, its session socket and the server's pid as they were;
@@ -477,8 +478,10 @@ It checks five things:
   every finish, as after the control, `POST /api/shutdown`;
 - BACK on a task the home screen started only stops the activity: the server
   keeps its pid and parks the game, and the record is not written. The script
-  starts the app with a tap on its icon (from a `uiautomator` dump of the
-  home screen, or of the app list), because Android counts a start as the home
+  starts the app with a tap on its icon (from a `uiautomator` dump of the home
+  screen, or of the app list, which it opens with the launcher's `ALL_APPS`
+  intent: the Pixel launcher takes the key of that name for a search and brings
+  the keyboard up over the icons), because Android counts a start as the home
   screen's only when the launcher made it; `am start` with the launcher's own
   intent still makes a task BACK finishes. It stays away until Android freezes
   the cached app (90 s at most); the server is in the app's cgroup and freezes
@@ -494,7 +497,17 @@ It checks five things:
   second, before the new activity gets as far as starting a server, so the
   script leaves a game upload in flight that never sends its whole body (and
   is never written); the drain waits for it until its ten-second deadline.
-  Three times, as for the finish.
+  Three times, as for the finish;
+- the same reopening while the server holds parked the hang-destroy fixture
+  (`internal/platform/skt/testdata/hang-destroy-skt.zip`), whose `destroyApp`
+  waits for a notification nobody sends: the old server ends on its own within
+  15 seconds of `onDestroy`, the app has not had to end it, and the next server
+  starts after it. The page lets go of its session first (it is sent to
+  `about:blank`) and the script waits for `session parked`: finished with the
+  game attached, the activity reaches the drain before the page's own parking
+  does, and the drain then closes the game through its runner, which the
+  deadline bounded before. The server's lines after its SIGTERM do not reach
+  the log, since `Process.destroy()` closes the pipe they go to.
 
 On 2026-10-16, on the Pixel 10 Pro image of Android 17 (SDK 37) with web view
 155, the app built from this tree passed all fifteen checks in two runs. Every
@@ -527,6 +540,21 @@ drained on for another 8–9.5 s, 0 of 3. Its home-screen checks passed: BACK
 from the home screen needed no change. Finishing was slower on this boot for
 both builds (`onDestroy` 1.2–2.9 s after BACK, the server gone 0.2–0.8 s
 after it), so the destroyed web view does not slow the drain.
+
+On 2026-10-18, on the same image and web view, the app built from this tree
+passed all twenty checks. Opened again during the drain, its old server ended
+9.9–10.0 s after `onDestroy`, held there by the upload in flight, and the next
+one started 11.6–11.8 s after BACK, 3 of 3; with the hang fixture parked, the
+old server ended by itself 10.1 s after `onDestroy` and the next one started
+after it. The app from `0ba8f2b`, run the same way as a control, passed the
+other nineteen and failed that one: its old server was still there 255 s after
+`onDestroy`, and the new activity was still waiting for it. A first version of
+the step finished the activity with the game attached; the old server then
+closed the game through its runner and ended at its deadline on both builds,
+which is why the page now lets go of its session first. On this boot the app
+list's key opened the launcher's search with the keyboard over the icons, and
+the script's tap typed into it until it opened the list with the intent
+instead.
 
 ### The iOS app on a simulator
 

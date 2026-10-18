@@ -3,6 +3,8 @@ package jvm
 import (
 	"encoding/binary"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"weak"
 )
@@ -424,5 +426,16 @@ func (vm *VM) restoreHeapState(saved HeapState, codec HeapCodec, threadsAllowed 
 	vm.nextExecution.Store(saved.NextExecution)
 	vm.aotMu.Unlock()
 	vm.mu.Unlock()
+	// A defined constant is the platform's, and a snapshot carries the value
+	// the build that took it defined: EventQueue's soft keys changed in two
+	// builds, and a quick save from before either restored the old numbers or
+	// none. So every initialized class has its constants seeded again over
+	// what was restored, in name order, so that a constant string interned
+	// here is numbered the same way every time.
+	for _, name := range slices.Sorted(maps.Keys(initialized)) {
+		if err := vm.seedDefinedConstants(name); err != nil {
+			return nil, err
+		}
+	}
 	return roots, nil
 }

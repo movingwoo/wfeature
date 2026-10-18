@@ -169,6 +169,13 @@ func (store *authenticationCertificate100Store) StoreSave(name string, data []by
 	if store.base != nil {
 		return store.base.StoreSave(name, data)
 	}
-	store.volatile[name] = data
+	// Over no store it keeps what it rewrites and nothing else, as the other
+	// adapters do: the session keeps the title's other files itself, within
+	// its bound (keepSessionFile). Keeping them here too held every file
+	// twice, and past the session's bound the store of one this already held
+	// was refused.
+	if name == store.key {
+		store.volatile[name] = data
+	}
 	return nil
 }
