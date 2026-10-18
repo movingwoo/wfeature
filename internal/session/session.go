@@ -1331,6 +1331,11 @@ func (s *Session) resume(ctx context.Context) error {
 	return ErrNotRunning
 }
 
+// closeWait is how long closing a session gives an LGT title's destroyClet,
+// which is as long as a KTF title's service call may wait and an SKT
+// title's destroyApp may run: a close ends in bounded time on every platform.
+var closeWait = 15 * time.Second
+
 // Close ends the session. It is safe to call more than once, and safe to call
 // on a session whose game already exited.
 // **Closing runs guest code too**, on every platform that has threads to
@@ -1360,7 +1365,11 @@ func (s *Session) Close() {
 		closing("session close", nativeSession.Close)
 	}
 	if lgtSession != nil {
-		closing("session close", func() { _ = lgtSession.Close(context.Background()) })
+		closing("session close", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), closeWait)
+			defer cancel()
+			_ = lgtSession.Close(ctx)
+		})
 	}
 	if runtime != nil {
 		closing("session close", func() { _ = runtime.Destroy(true) })

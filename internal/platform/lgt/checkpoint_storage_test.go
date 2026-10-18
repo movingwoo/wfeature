@@ -362,7 +362,7 @@ func TestCheckpointRefusesAnOpenFileBehindItsSave(t *testing.T) {
 			return map[string]string{"fs/save.dat": "onered", "fs/SAVE.dat": "TWO"}, func() { files.close(first); files.close(second) }
 		},
 		"its name is not one a save can have": func(files *guestFiles) (map[string]string, func()) {
-			first := files.open("dir\\save.dat", fileOpenReadWrite)
+			first := files.open(".removed/save.dat", fileOpenReadWrite)
 			files.write(first, "lost")
 			return nil, func() { files.close(first) }
 		},

@@ -123,9 +123,14 @@ func runtimeInputMethodNotifyKeyInput(runtime *initializationRuntime, vm *jvm.VM
 	// whatever key carried it; a carrier forwarded anywhere else is left for
 	// the Host to find undelivered.
 	if pending := runtime.javaInput.pending; pending != nil && pending.handler == receiver {
-		runtime.javaInput.pending = nil
-		runtime.touchInputMethod(receiver, true)
-		if err := notifyInputMethodListener(vm, listener, pending.units, inputMethodInsert); err != nil {
+		// Taken once the array that carries it exists: making the array can
+		// be refused, and the character stays for the next key rather than
+		// being lost with the refusal.
+		taken := func() {
+			runtime.javaInput.pending = nil
+			runtime.touchInputMethod(receiver, true)
+		}
+		if err := notifyInputMethodListenerAfter(vm, listener, pending.units, inputMethodInsert, taken); err != nil {
 			return jvm.VoidValue(), err
 		}
 		return jvm.IntValue(1), nil
@@ -177,6 +182,12 @@ func inputMethodListener(receiver *jvm.Object) (*jvm.Object, error) {
 // how many there are, and which edit it is. A deletion's array is empty,
 // because the listeners that settled the contract read only its count.
 func notifyInputMethodListener(vm *jvm.VM, listener *jvm.Object, units []uint16, edit int32) error {
+	return notifyInputMethodListenerAfter(vm, listener, units, edit, nil)
+}
+
+// notifyInputMethodListenerAfter is notifyInputMethodListener that calls taken,
+// when it is set, once the array exists and before the listener has it.
+func notifyInputMethodListenerAfter(vm *jvm.VM, listener *jvm.Object, units []uint16, edit int32, taken func()) error {
 	length := len(units)
 	if edit == inputMethodDelete {
 		length = 1
@@ -184,6 +195,9 @@ func notifyInputMethodListener(vm *jvm.VM, listener *jvm.Object, units []uint16,
 	array, err := vm.NewArray(jvm.Type{Kind: jvm.TypeChar}, int32(len(units)))
 	if err != nil {
 		return err
+	}
+	if taken != nil {
+		taken()
 	}
 	values := make([]jvm.Value, len(units))
 	for index, unit := range units {

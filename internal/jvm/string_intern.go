@@ -31,7 +31,10 @@ func (vm *VM) internString(text string, receiver *Object) (*Object, error) {
 		return nil, guestException("java/lang/OutOfMemoryError", "interned string pool limit exceeded")
 	}
 	if receiver == nil {
-		receiver = vm.NewString(text)
+		// Not charged to the heap budget: the pool bounds what it holds, and
+		// a literal is part of the title rather than something it allocated.
+		receiver = nativeStringValue(text)
+		vm.objectIdentity(receiver)
 		// Use the owned payload as the map key too, rather than retaining a
 		// potentially large backing allocation supplied by a native caller.
 		text, _ = StringText(receiver)

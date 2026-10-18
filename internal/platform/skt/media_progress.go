@@ -87,11 +87,15 @@ func (runtime *Runtime) recordPlayerProgressLocked(object *jvm.Object, player *p
 	return nil
 }
 
+// queuePlayerTimeLocked queues an event that carries a media time. The Long
+// that carries it is the platform's, made for an event that a tick may be
+// delivering, so the heap budget charges it and never refuses it: a refusal
+// there ended the session instead of reaching the title.
 func (runtime *Runtime) queuePlayerTimeLocked(object *jvm.Object, player *playerData, event string, micros int64) error {
 	if len(player.listeners) == 0 {
 		return nil
 	}
-	value, err := runtime.VM.NewObject(jvm.LongClass, "(J)V", jvm.LongValue(micros))
+	value, err := runtime.VM.NewHostObject(jvm.LongClass, "(J)V", jvm.LongValue(micros))
 	if err != nil {
 		return err
 	}

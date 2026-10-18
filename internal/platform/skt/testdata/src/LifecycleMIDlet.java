@@ -11,12 +11,14 @@ public final class LifecycleMIDlet extends MIDlet {
     private static boolean deferStart;
     private static boolean refuseConditionalDestroy = true;
     private static boolean refuseForcedDestroy;
+    private static String hangDestroy;
 
     public LifecycleMIDlet() {
         state = 1;
         appProperty = getAppProperty("fixture-property");
         failStart = getAppProperty("fixture-fail-start") != null;
         deferStart = getAppProperty("fixture-defer-start") != null;
+        hangDestroy = getAppProperty("fixture-hang-destroy");
     }
 
     protected void startApp() throws MIDletStateChangeException {
@@ -47,6 +49,23 @@ public final class LifecycleMIDlet extends MIDlet {
     }
 
     protected void destroyApp(boolean unconditional) throws MIDletStateChangeException {
+        // A destroyApp that never returns: one that loops, and one that waits
+        // for a notification nobody sends.
+        if ("loop".equals(hangDestroy)) {
+            while (hangDestroy != null) {
+                state++;
+            }
+        }
+        if ("wait".equals(hangDestroy)) {
+            Object lock = new Object();
+            synchronized (lock) {
+                try {
+                    lock.wait();
+                } catch (InterruptedException e) {
+                    state = 9;
+                }
+            }
+        }
         if (failDestroy) {
             failDestroy = false;
             state = 8;
@@ -68,6 +87,10 @@ public final class LifecycleMIDlet extends MIDlet {
 
     public static String appProperty() {
         return appProperty;
+    }
+
+    public static void hangNextDestroy(String how) {
+        hangDestroy = how;
     }
 
     public static void failNextPause() {

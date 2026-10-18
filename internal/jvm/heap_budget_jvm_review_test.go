@@ -171,3 +171,98 @@ func TestStringBufferSetLengthZeroesReusedStorage(t *testing.T) {
 		t.Fatalf("refill() = %q, want %q", got, "axy\x00\x00")
 	}
 }
+
+// A title that catches OutOfMemoryError and goes on allocating keeps only what
+// the budget holds: after a refusal every allocation is weighed until one fits,
+// so the ones between two samples no longer pass uncharged.
+func TestHeapBudgetHoldsAGuestThatGoesOnAfterARefusal(t *testing.T) {
+	vm := newBudgetVM(heapBudgetSource(), testHeapBudget)
+	const attempts = 60000
+	kept := heapBudgetInt(t, vm, "retainThroughRefusals", "(I)I", IntValue(attempts))
+	expected := int32(testHeapBudget / objectHeapBytes)
+	if kept > expected*5/4 {
+		t.Fatalf("retainThroughRefusals(%d) kept %d objects, want about %d", attempts, kept, expected)
+	}
+	if charged, limit := vm.HeapUsage(); charged > limit+limit/4 {
+		t.Fatalf("HeapUsage() = %d of %d after the refusals", charged, limit)
+	}
+	t.Logf("kept %d objects of %d attempts (about %d fit)", kept, attempts, expected)
+}
+
+// The text a String constructor builds is charged with the String: the object
+// was weighed at its `new`, before there was any text.
+func TestHeapBudgetChargesTheTextAStringConstructorBuilds(t *testing.T) {
+	const length = 20000
+	for kind, name := range []string{"char[]", "byte[]", "StringBuffer", "byte[] in UTF-8"} {
+		vm := newBudgetVM(heapBudgetSource(), testHeapBudget)
+		kept := heapBudgetInt(t, vm, "retainCopies", "(II)I", IntValue(int32(kind)), IntValue(length))
+		if kept < 0 || kept > testHeapBudget/length {
+			t.Errorf("String(%s): kept %d copies of %d characters under a %d-byte budget", name, kept, length, testHeapBudget)
+		}
+	}
+}
+
+// A refusal that no collection could help is made without one, and a guest
+// that goes on being refused is collected for only as its refusals double: a
+// collection stops every session in the process.
+func TestHeapBudgetRationsItsCollections(t *testing.T) {
+	collections := func() uint32 {
+		var stats runtime.MemStats
+		runtime.ReadMemStats(&stats)
+		return stats.NumGC
+	}
+	vm := newBudgetVM(heapBudgetSource(), testHeapBudget)
+	before := collections()
+	for range 30 {
+		if message := heapBudgetString(t, vm, "refuseOne"); !strings.Contains(message, "heap budget") {
+			t.Fatalf("refuseOne() = %q", message)
+		}
+	}
+	if ran := collections() - before; ran > 3 {
+		t.Errorf("30 refusals of an array larger than the budget ran %d collections", ran)
+	}
+
+	vm = newBudgetVM(heapBudgetSource(), testHeapBudget)
+	before = collections()
+	refused := heapBudgetInt(t, vm, "refusedWhileFull", "(I)I", IntValue(60))
+	ran := collections() - before
+	if refused < 30 || ran > 10 {
+		t.Errorf("refusedWhileFull(60) was refused %d times and ran %d collections, want at least 30 and at most 10", refused, ran)
+	}
+	t.Logf("%d refusals while full ran %d collections (%d by the budget)", refused, ran, vm.heap.collections)
+}
+
+// An object the host makes for itself — the Long a player event carries from a
+// tick to a listener — is charged and never refused, where the same object a
+// guest asks for is: a refusal there reached the platform, which ended the
+// session.
+func TestHeapBudgetNeverRefusesAHostObject(t *testing.T) {
+	vm := newBudgetVM(heapBudgetSource(), testHeapBudget)
+	held, err := vm.makeArray(Type{Kind: TypeInt}, 1<<20, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.KeepAlive(held)
+	// Past the limit the guest's next sampled Long is refused, and from
+	// there every allocation is weighed.
+	refused := false
+	for attempt := 0; attempt < 10000 && !refused; attempt++ {
+		_, err := vm.NewObject(LongClass, "(J)V", LongValue(5))
+		if err != nil && !vm.IsGuestException(err, "java/lang/OutOfMemoryError") {
+			t.Fatal(err)
+		}
+		refused = err != nil
+	}
+	if !refused {
+		t.Fatal("no guest Long was refused past the budget")
+	}
+	boxed, err := vm.NewHostObject(LongClass, "(J)V", LongValue(5))
+	if err != nil {
+		t.Fatalf("NewHostObject(Long) past the budget: %v", err)
+	}
+	if value, err := vm.InvokeVirtual(boxed, "longValue", "()J"); err != nil {
+		t.Fatal(err)
+	} else if got, _ := value.Int64(); got != 5 {
+		t.Fatalf("the host's Long holds %d", got)
+	}
+}

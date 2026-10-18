@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"reflect"
 	"runtime"
+	"runtime/metrics"
 	"sync"
 	"sync/atomic"
 	"unicode/utf16"
@@ -36,9 +37,12 @@ var (
 	objectStructBytes = int64(reflect.TypeFor[Object]().Size())
 	// An object's field table: the map header and its first group of slots.
 	objectHeapBytes = objectStructBytes + 48 + 8*int64(reflect.TypeFor[string]().Size()+reflect.TypeFor[Value]().Size()) + 8
-	arrayHeapBytes  = objectStructBytes + int64(reflect.TypeFor[Array]().Size()+reflect.TypeFor[valueStorage]().Size())
-	valueHeapBytes  = int64(reflect.TypeFor[Value]().Size())
-	stringHeapBytes = objectStructBytes + int64(reflect.TypeFor[string]().Size())
+	// An AOT instance keeps its fields in the platform's arena, so its field
+	// table stays empty: the header and nothing else.
+	aotObjectHeapBytes = objectStructBytes + 48
+	arrayHeapBytes     = objectStructBytes + int64(reflect.TypeFor[Array]().Size()+reflect.TypeFor[valueStorage]().Size())
+	valueHeapBytes     = int64(reflect.TypeFor[Value]().Size())
+	stringHeapBytes    = objectStructBytes + int64(reflect.TypeFor[string]().Size())
 	// A small object the class library hands back with its state in Native.
 	libraryObjectHeapBytes = objectStructBytes + 16
 )
@@ -62,6 +66,29 @@ var (
 // collection and drops again, and only then refuses with OutOfMemoryError.
 // Between samples nothing is checked, so the guest can pass the limit by about
 // one interval before it is told.
+//
+// **A refused sample keeps its sampling point.** Each admitted sample stands
+// for the bytes allocated since the one before, so drawing the next point at
+// a refusal let those bytes through uncharged, an interval at a time, and a
+// guest that catches the error grew without bound while the charge stayed at
+// the limit. So the point stays spent: every allocation after a refusal is
+// weighed as that sample was, until one fits, and only an admitted sample
+// draws the next point — and only while the charge is within the limit, since
+// one admitted without the right to refuse may take it past.
+//
+// **A collection is rationed.** While the budget refuses, every allocation
+// reaches it, and a collection stops every session in the process. So a
+// refusal that no collection could help — the reserved charge and the weight
+// alone pass the limit — is made at once. Otherwise the first refusal in a row
+// collects, as a handset's collector ran before it gave up, so a title that
+// let go of memory finds it at its next allocation; then the second, the
+// fourth, the eighth and so on, so a guest that goes on being refused costs a
+// collection each time its refusals double. The count is of refusals rather
+// than of time, so the same allocations are refused at the same one. Between
+// collections the budget looks again only once Go's collector has finished a
+// cycle, since nothing dies in between, and looking is what keeps an object
+// alive: a weak pointer read while the collector marks shades what it points
+// to.
 type guestHeap struct {
 	limit int64
 	// interval is heapSampleBytes outside tests.
@@ -81,6 +108,16 @@ type guestHeap struct {
 	compactAt int
 	logger    *slog.Logger
 	refused   bool
+	// refusedInRow counts the refusals since the guest was last admitted.
+	refusedInRow int
+	// collections counts the collections the budget ran, for tests.
+	collections int
+	// cycles is Go's count of finished collections when the samples were
+	// last looked through, read through gcCycles.
+	cycles   uint64
+	gcCycles []metrics.Sample
+	// refusals counts the refusals since the last one logged.
+	refusals int
 }
 
 // heapSample is one sampled allocation. Exactly one of the weak pointers is
@@ -107,6 +144,7 @@ func newGuestHeap(limit, interval int64, logger *slog.Logger) *guestHeap {
 		random:    rand.New(rand.NewPCG(0x5f3759df, 0x9e3779b97f4a7c15)),
 		compactAt: heapCompactSamples,
 		logger:    logger,
+		gcCycles:  []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}},
 	}
 	budget.countdown.Store(budget.nextInterval())
 	return budget
@@ -137,55 +175,94 @@ func (budget *guestHeap) charge(bytes int64, refuse bool) (int64, error) {
 	return budget.sample(bytes, refuse)
 }
 
-// sample is charge for an allocation at or past a sampling point.
+// sample is charge for an allocation at or past a sampling point, and for
+// every allocation while the point is spent.
 func (budget *guestHeap) sample(bytes int64, refuse bool) (int64, error) {
 	budget.mu.Lock()
 	defer budget.mu.Unlock()
 	weight := bytes
-	if bytes < budget.interval {
+	small := bytes < budget.interval
+	if small {
 		if budget.countdown.Load() > 0 {
 			// Another allocation took this sampling point and drew the next.
 			return 0, nil
 		}
-		budget.countdown.Store(budget.nextInterval())
 		weight = budget.sampleWeight(bytes)
 	}
-	if refuse && budget.charged+weight > budget.limit && !budget.collect(weight) {
-		budget.logRefusal(bytes)
-		return 0, guestException("java/lang/OutOfMemoryError",
-			fmt.Sprintf("heap budget of %d bytes exhausted (%d in use, %d requested)", budget.limit, budget.charged, bytes))
+	if refuse {
+		if budget.charged+weight > budget.limit {
+			if fits, collected := budget.collect(weight); !fits {
+				// The point stays spent, so the next allocation is weighed
+				// in turn.
+				budget.refusedInRow++
+				budget.logRefusal(bytes, collected)
+				return 0, guestException("java/lang/OutOfMemoryError",
+					fmt.Sprintf("heap budget of %d bytes exhausted (%d in use, %d requested)", budget.limit, budget.charged, bytes))
+			}
+		}
+		budget.refusedInRow = 0
 	}
 	budget.charged += weight
 	budget.pending += weight
+	if small && budget.charged <= budget.limit {
+		budget.countdown.Store(budget.nextInterval())
+	}
 	return weight, nil
 }
 
-// logRefusal reports the first refusal as a warning and the rest at debug
-// level, because a guest that catches the error may meet it every frame.
-func (budget *guestHeap) logRefusal(bytes int64) {
+// logRefusal reports the first refusal as a warning. The rest are reported at
+// debug level, and only at the budget's own collections, with how many there
+// were since the last report: while the budget refuses, a guest that catches
+// the error meets it at every allocation.
+func (budget *guestHeap) logRefusal(bytes int64, collected bool) {
 	if budget.logger == nil {
 		return
 	}
+	budget.refusals++
 	level := slog.LevelDebug
-	if !budget.refused {
+	switch {
+	case !budget.refused:
 		level = slog.LevelWarn
 		budget.refused = true
+	case !collected:
+		return
 	}
 	budget.logger.Log(context.Background(), level, "guest heap budget exhausted",
-		"limit", budget.limit, "charged", budget.charged, "requested", bytes)
+		"limit", budget.limit, "charged", budget.charged, "requested", bytes, "refused", budget.refusals)
+	budget.refusals = 0
 }
 
 // collect makes room for weight more if dead objects are holding it, first
 // from what Go's collector has already found and then after a collection of
-// its own.
-func (budget *guestHeap) collect(weight int64) bool {
-	budget.compact()
-	if budget.charged+weight <= budget.limit {
-		return true
+// its own, when one is due. It reports whether the weight fits, and whether it
+// ran a collection.
+func (budget *guestHeap) collect(weight int64) (fits, collected bool) {
+	if budget.pending+weight > budget.limit {
+		// What is reserved for allocations under way and this one pass the
+		// limit alone: no collection makes room for it.
+		return false, false
+	}
+	if budget.cycleFinished() {
+		budget.compact()
+		if budget.charged+weight <= budget.limit {
+			return true, false
+		}
+	}
+	// The first refusal in a row, the second, the fourth, the eighth.
+	if attempt := budget.refusedInRow + 1; attempt&(attempt-1) != 0 {
+		return false, false
 	}
 	runtime.GC()
+	budget.collections++
 	budget.compact()
-	return budget.charged+weight <= budget.limit
+	return budget.charged+weight <= budget.limit, true
+}
+
+// cycleFinished reports whether Go's collector has finished a cycle since the
+// samples were last looked through.
+func (budget *guestHeap) cycleFinished() bool {
+	metrics.Read(budget.gcCycles)
+	return budget.gcCycles[0].Value.Kind() == metrics.KindUint64 && budget.gcCycles[0].Value.Uint64() != budget.cycles
 }
 
 func (budget *guestHeap) record(sample heapSample) {
@@ -201,6 +278,10 @@ func (budget *guestHeap) record(sample heapSample) {
 // compact drops the samples whose allocation has died and recounts the charge
 // from the rest.
 func (budget *guestHeap) compact() {
+	metrics.Read(budget.gcCycles)
+	if budget.gcCycles[0].Value.Kind() == metrics.KindUint64 {
+		budget.cycles = budget.gcCycles[0].Value.Uint64()
+	}
 	kept := budget.samples[:0]
 	charged := budget.pending
 	for _, sample := range budget.samples {
@@ -286,6 +367,19 @@ func (vm *VM) stringResult(text string) (Value, error) {
 		return VoidValue(), err
 	}
 	return ReferenceValue(object), nil
+}
+
+// setStringText gives a String a constructor is building the text it holds,
+// charged to the heap budget first: the object was weighed at its `new`,
+// before there was any text. A refusal leaves the String as it was.
+func (vm *VM) setStringText(object *Object, text string) error {
+	if len(text) != 0 {
+		if err := vm.chargeObject(object, int64(len(text))); err != nil {
+			return err
+		}
+	}
+	object.Native = text
+	return nil
 }
 
 // unrefusedString makes a String that is charged and never refused: the text

@@ -89,15 +89,19 @@ exception; a legacy profile string alone cannot. The selected correction does
 not change WIPI Graphics, `clipRect`, fills, or image dimensions. See
 [compatibility registry](platform-compatibility.md).
 
-WIPI `Graphics.getRGBPixels` and `setRGBPixels` read their last argument as
-the element stride between rows, 0 meaning the width. The specification calls
-it bytes per line, and the KTF platform reads it that way (a pitch of a quarter
-of it, nothing copied when that is shorter than the width). The one local SKT
-title that has them passes 1 with a `w*h` array, which neither reading copies
-as a packed picture, from a method nothing in the title calls; what the handset
-did is not settled, and no reachable code depends on it. A stride shorter than
-the width overlaps the rows in the array, a later row overwriting an earlier
-one; the read writes each element once, so its work is bounded by the array.
+WIPI `Graphics.getRGBPixels` hands each pixel out as `0x00RRGGBB`, the form the
+specification gives (it carried the surface's alpha in the top byte, so an
+opaque pixel compared unequal to the colour drawn), and reads the surface under
+the lock a title's drawing takes. `getRGBPixels` and `setRGBPixels` read their
+last argument as the element stride between rows, 0 meaning the width. The
+specification calls it bytes per line, and the KTF platform reads it that way (a
+pitch of a quarter of it, nothing copied when that is shorter than the width).
+The one local SKT title that has them passes 1 with a `w*h` array, which neither
+reading copies as a packed picture, from a method nothing in the title calls;
+what the handset did is not settled, and no reachable code depends on it. A
+stride shorter than the width overlaps the rows in the array, a later row
+overwriting an earlier one; the read writes each element once, so its work is
+bounded by the array.
 
 `Canvas.getHeight()` reports the display less 16 rows (`canvasReservedRows`),
 because the corpus adds those rows back; the framebuffer and the `XDisplay`
@@ -192,21 +196,24 @@ make the path absent to every later read: `exists` and `isFile` answer false,
 `filesize` and `sizeOf` answer -1, a read-only open throws `IOException`, and a
 handle still open on it reads an empty file. The removal stores, in one batch,
 the emptied file and the path on `fs/.removed` — the key and form of the KTF
-guest filesystem's list, names joined by newlines, each the path of the save
-key below `fs/` — so the path stays absent in later sessions, a packaged file
-of the same name included. Opening the path for writing again brings it back as
-an empty file, and a write through a handle left open on it brings it back
-holding what was written; the store that writes it takes the name off the list
-in the same batch as its bytes. Removing a name that does not exist changes and
-stores nothing: `unlink` answers 0, as it always did, and `remove` throws the
+guest filesystem's list, names joined by newlines, each the path of the save key
+below `fs/` — so the path stays absent in later sessions, a packaged file of the
+same name included. Opening the path for writing again brings it back as an
+empty file, and a write through a handle left open on it brings it back holding
+what was written; the store that writes it takes the name off the list in the
+same batch as its bytes. Removing a name that does not exist changes and stores
+nothing: `unlink` answers 0, as it always did, and `remove` throws the
 `IOException` the specification gives a missing file. Removing a file made or
 written in this session that never reached the store, and that the archive does
 not package, stores nothing either, since a later session would not find it. A
 name with a line break cannot go on the list, so nothing is removed: `unlink`
 answers -1 for it and `remove` throws `IOException`, the specification's answer
-for a file it could not remove. An empty file an earlier build's `unlink` left
-behind is a present empty file: nothing records which empty files were
-removals. `/.removed` and paths below it are refused, as the list's own key.
+for a file it could not remove. A removal the store refuses stands for the
+session and waits for the session's end, as a refused write does; `remove`
+reports it with an `IOException`, and `unlink` answers 0. An empty file an
+earlier build's `unlink` left behind is a present empty file: nothing records
+which empty files were removals. `/.removed` and paths below it are refused, as
+the list's own key.
 
 The missing-name answers rest on the local corpus rather than a handset. A
 2026-10-17 scan of its 91 distinct SKT archives (79 Java, 12 SGS) found 3

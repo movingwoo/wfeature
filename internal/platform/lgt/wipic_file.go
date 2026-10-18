@@ -579,7 +579,9 @@ func (client *Client) closeFileHandle(handle uint32) bool {
 	if file == nil {
 		return false
 	}
-	if file.dirty && client.storeContent(file.name, file.fileContent) != nil {
+	// A handle opened only to read has nothing of its own to store; see
+	// javaFileClose.
+	if file.writable && file.dirty && client.storeContent(file.name, file.fileContent) != nil {
 		return false
 	}
 	delete(client.files, handle)
@@ -685,6 +687,12 @@ func (client *Client) readFile(name string) ([]byte, bool) {
 // absent source and an occupied destination both leave the store untouched,
 // and the specification names a code for each.
 func (client *Client) renameFile(oldName, newName string) int32 {
+	// A name with no save key is one the store cannot hold — the index of
+	// the databases, the path lists — and moving a file there would leave it
+	// under neither name.
+	if !hasSaveKey(newName) {
+		return wipiBadFileName
+	}
 	data, ok := client.readFile(oldName)
 	if !ok {
 		return wipiNoEntry
@@ -776,6 +784,7 @@ func (client *Client) flushOpenFiles() {
 			client.logger.Debug("LGT path list store failed at the ending", "list", key, "error", err)
 		}
 	}
+	client.storeWaitingDatabaseIndex()
 }
 
 // storeFile gives the store a guest path's bytes, with the store's answer:
@@ -1010,12 +1019,15 @@ func formatFileList(exact, legacy map[string]bool) []byte {
 // with no save is not recorded, and neither is one the listing shows as
 // packaged already; see packagedAs.
 func (client *Client) markFileCreated(name string) {
-	if !hasSaveKey(name) {
+	// The packaged check comes first because it reads nothing, which is what
+	// lets a quick save store a packaged file without reading the list on the
+	// live session (prepareIssuedWriteLists reads it only for other paths).
+	if !hasSaveKey(name) || client.packagedAs(name) {
 		return
 	}
 	set := client.createdFiles()
 	key := fileListKey(name)
-	if set[key] || client.packagedAs(name) {
+	if set[key] {
 		return
 	}
 	set[key] = true
@@ -1037,11 +1049,18 @@ func (client *Client) markFileCreated(name string) {
 // packaged one, and the listing shows the packaged file in the archive's
 // spelling. Asking the case-blind lookup left that save out of the list, so a
 // title listing the directory to find its saves did not find it.
+//
+// The name is read the way the archive lookup reads it (archive.Resource): a
+// title's raw EUC-KR spelling of a packaged Korean name is that packaged file,
+// and so is a backslash spelling.
 func (client *Client) packagedAs(name string) bool {
 	if client.archive == nil {
 		return false
 	}
-	path := fileListKey(name)
+	path, err := safeEntryName(strings.TrimPrefix(archiveText([]byte(fileListKey(name))), "/"))
+	if err != nil {
+		return false
+	}
 	for _, files := range []map[string][]byte{client.archive.Resources, client.archive.Packaged, client.archive.supplemental} {
 		if _, packaged := files[path]; packaged {
 			return true
@@ -1259,7 +1278,13 @@ func (client *Client) markFileRemoved(name string, removed bool) {
 // beneath them, have no save key, as a path with ".." has none: the title's
 // handle works and nothing reaches the store. Case is folded because a Host's
 // filesystem may fold it.
+//
+// A backslash separates directories as a slash does, as the archive lookup
+// reads it: a title's "data\save.dat" is "data/save.dat", so a write of it is
+// stored and a removal of it hides what a read finds. The store refuses a
+// backslash in a key, so no earlier build stored a save under one.
 func fileSaveKey(name string) (string, error) {
+	name = strings.ReplaceAll(name, "\\", "/")
 	key, err := backend.NormalizeSaveKey(fileSaveScope + strings.TrimPrefix(name, "/"))
 	if err != nil {
 		return "", err

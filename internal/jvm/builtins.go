@@ -1113,16 +1113,13 @@ func (vm *VM) registerStringBuiltins() {
 				// then drew an empty screen from for as long as it ran.
 				switch charsetOf(encoding) {
 				case charsetUTF8:
-					object.Native = strings.ToValidUTF8(string(data), "\ufffd")
-					return VoidValue(), nil
+					return VoidValue(), vm.setStringText(object, strings.ToValidUTF8(string(data), "\ufffd"))
 				case charsetPlatform:
-					object.Native = vm.decodePlatformBytes(data)
-					return VoidValue(), nil
+					return VoidValue(), vm.setStringText(object, vm.decodePlatformBytes(data))
 				}
 				return VoidValue(), guestException("java/io/IOException", "unsupported character encoding: "+encoding)
 			}
-			object.Native = vm.decodePlatformBytes(data)
-			return VoidValue(), nil
+			return VoidValue(), vm.setStringText(object, vm.decodePlatformBytes(data))
 		})
 	}
 	// The char-array constructors are how CLDC code turns a StringBuffer's or
@@ -1130,7 +1127,7 @@ func (vm *VM) registerStringBuiltins() {
 	// edits text has no way back.
 	for _, descriptor := range []string{"([C)V", "([CII)V"} {
 		descriptor := descriptor
-		vm.builtin(StringClass, "<init>", descriptor, func(_ *VM, arguments []Value) (Value, error) {
+		vm.builtin(StringClass, "<init>", descriptor, func(vm *VM, arguments []Value) (Value, error) {
 			object, err := nativeReference(arguments, 0)
 			if err != nil {
 				return VoidValue(), err
@@ -1164,8 +1161,7 @@ func (vm *VM) registerStringBuiltins() {
 				}
 				units[index] = uint16(unit)
 			}
-			object.Native = string(utf16.Decode(units))
-			return VoidValue(), nil
+			return VoidValue(), vm.setStringText(object, string(utf16.Decode(units)))
 		})
 	}
 	vm.builtin("java/lang/String", "length", "()I", func(_ *VM, arguments []Value) (Value, error) {

@@ -102,17 +102,24 @@ pause boundary. Resuming reattaches presentation and drives resume, then sends
 the picture the game had. These callbacks do not establish that all guest
 threads and clocks freeze.
 
-Stopping the server ends every game it holds. A parked game is closed where it
-waits. A game whose page is still attached is asked to close: its runner
+Stopping the server ends every game it holds. A parked game is closed on a
+goroutine of its own and keeps its save folder claimed until its close has
+returned. A game whose page is still attached is asked to close: its runner
 finishes the round it is in and closes the session on its own goroutine, as a
 page's `stop` does, and the server waits for that before it exits. The HTTP
 server's shutdown does not reach a session socket, so without this a connected
 game would end with the process, and what its title had written and not yet
 handed to the save store (a file it left open, keys a native package keeps until
-a frame ends) would be lost. The wait shares the shutdown's ten-second deadline;
-a runner that has not let go by then is named in the log. Once a stop has begun,
-nothing starts, resumes or parks. Ordinary saves and quick save slots survive,
-and a later page can return to the slot's moment after starting the game.
+a frame ends) would be lost. The wait for both shares the shutdown's ten-second
+deadline; a close that has not ended by then is named in the log and left
+behind. A close is bounded on its own too: a title's ending (`destroyApp`,
+`destroyClet`, a Jlet's `destroyApp`) runs for fifteen seconds at most, after
+which its call is ended and the close stores what the title wrote. Parked games
+used to be closed one after another under the server's lock before the wait
+began, so one whose `destroyApp` never returned kept the server from ever
+stopping. Once a stop has begun, nothing starts, resumes or parks. Ordinary
+saves and quick save slots survive, and a later page can return to the slot's
+moment after starting the game.
 
 <a id="ktf-checkpoints"></a>
 
@@ -537,39 +544,73 @@ a host would take for another character, or refuse, is written by its number,
   `com0` to `com9`, `lpt0` to `lpt9`, and `com` or `lpt` with `¹`, `²` or `³`,
   in any case, alone or before a `.` (`con.txt` is `#+000063on.txt`; `CON` is
   `#C#O#N` already).
+- A `~` before a digit, the shape of an NTFS short name: a lookup of
+  `SAVEFI~1.DAT` finds `savefile.dat` there (`savefi~1.dat` is
+  `savefi#+00007e1.dat`).
+- A byte that is not UTF-8, as `#-` and two hex digits (an LGT C Clet's EUC-KR
+  `\xbc\xbc` is `#-bc#-bc`): macOS refuses such a name, and Windows makes the
+  byte U+FFFD, so two keys were one there.
 
-Everything else, bytes that are not UTF-8 included, is written as it is: lower-case
-ASCII letters, digits, the rest of ASCII, and characters with no case that
-normalization leaves alone, Hangul syllables, CJK ideographs and kana among
-them. `rms/Option` is stored at `rms/#Option` and `fs/save#1` at `fs/save##1`; a
-key none of whose characters is changed keeps the path it always had, which is
-every key of lower-case ASCII letters, digits, Korean syllables and punctuation
-other than the eight above whose segments are no device names and do not end in
-`.` or a space. A name reads back as a key only when that key is
-written as exactly that name again, so a key has one name and a name at most
-one key. Keys do not change. The owner folder is the Host's name for a game, not
-a key, and is not encoded, and neither are the quick-save slots and lock files
-in `.wfeature-quicksave/`. The earlier KTF native package lowercases its file
-names on purpose, so its keys never differ by case.
+Everything else is written as it is: lower-case ASCII letters, digits, the rest
+of ASCII, and characters with no case that normalization leaves alone, Hangul
+syllables, CJK ideographs and kana among them. `rms/Option` is stored at
+`rms/#Option` and `fs/save#1` at `fs/save##1`; a key none of whose characters is
+changed keeps the path it always had, which is every key of lower-case ASCII
+letters, digits, Korean syllables and punctuation other than the eight above
+whose segments are no device names and do not end in `.` or a space. A name
+reads back as a key only when that key is written as exactly that name again,
+and only as a segment a key can hold — not `.`, `..`, nor one with `\` or NUL,
+each of which the encoding writes by its number — so a key has one name and a
+name at most one key. Keys do not change. The owner folder is the Host's name
+for a game, not a key, and is not encoded, and neither are the quick-save slots
+and lock files in `.wfeature-quicksave/`. The earlier KTF native package
+lowercases its file names on purpose, so its keys never differ by case.
 `internal/backend/save_names.go` holds the encoding.
 
-A key one of whose segments, written out, is longer than 255 bytes — the name
-limit of ext4, and within that of APFS and NTFS — has no save and cannot have
-one: a read or an existence check finds none, and a write, or a batch or a
-restore that holds the key, is refused with an error that names the limit,
-before anything is written. A platform answers that refusal as it answers a
-store that failed, as a failed file or record write, and the session goes on.
-Before, the file system's error reached the platform as a failed read, and a
-KTF title that asked for such a name could not save again for the rest of the
-session. A key is at most 512 bytes, and a segment written out is at most eight
-times as long (`#+` and six digits for one ASCII character). KTF record
-databases (at most 31 bytes, 248 written out) never reach the limit. An SKT
-record store name (at most 32 characters) reaches it only when each of its 32
-characters is written by its number (256 bytes), and an LGT Java database (at
-most 128 bytes, then `.db`) once its name written out passes 252 bytes, 32
+A key one of whose segments, written out, is longer than the host's name limit —
+255 bytes on Linux and Android (ext4, f2fs), 255 UTF-16 units on macOS, iOS and
+Windows (APFS, HFS+, exFAT and NTFS; on the development Mac 255 Hangul
+syllables, 765 bytes, are a name and 256 are not) — or whose path is longer than
+the host opens (1,023 bytes on macOS and iOS, 4,095 on Linux and Android), has
+no save and cannot have one: a read or an existence check finds none, and a
+write, or a batch or a restore that holds the key, is refused with an error that
+names the limit, before anything is written. A platform answers that refusal as
+it answers a store that failed, as a failed file or record write, and the
+session goes on. Before, the file system's error reached the platform as a
+failed read, and a KTF title that asked for such a name could not save again for
+the rest of the session. A key is at most 512 bytes, and a segment written out
+is at most eight times as long (`#+` and six digits for one ASCII character).
+KTF record databases (at most 31 bytes, 248 written out) never reach the limit.
+An SKT record store name (at most 32 characters) reaches it only when each of
+its 32 characters is written by its number (256 bytes), and an LGT Java database
+(at most 128 bytes, then `.db`) once its name written out passes 252 bytes, 32
 numbered characters or 127 upper-case letters. Files on every platform (KTF C
 and Java files and databases, SKT `XFile`, LGT files) are bounded only by the
-key; a segment of more than 255 bytes failed before the encoding too.
+key; a segment past the host's limit failed before the encoding too. Measured in
+bytes on every host, a name an earlier build stored on macOS or Windows of 256
+to 765 bytes could not be read, written or restored there.
+
+The volumes macOS keeps names decomposed on — HFS+, exFAT and FAT, measured on
+disk images — list every name in NFD, the composed names the store writes
+included, and a folder copied from one of them onto APFS keeps the decomposed
+names. An entry whose name is decomposed, and whose composed name is the same
+file, is read under the composed name, which is every name the encoding
+writes: read as listed, a Hangul or kana save was moved to a name with its
+jamo numbered and its key found nothing, a fresh save included (HFS+ and exFAT
+images: 3 of 4 fresh saves and 1 of 4 earlier ones read, and on FAT the
+conversion stopped; now 4 of 4 on each). A name with a singleton such as the
+Greek question mark, which decomposition replaces, is read as it is, and so is
+a decomposed name where the composed one is another file (ext4, NTFS). A
+decomposed key an earlier build stored on APFS reads as its composed key: the
+two were one file for that build. The companion macOS writes beside a file on
+exFAT and FAT, `._` and its name in the AppleDouble format, is no save: a
+listing, an export and a conversion pass over it, and a restore leaves it.
+
+On Windows a key an earlier build stored with a `.` or space at the end of a
+segment is under the name without it, which Win32 made: a read of `fs/save.`
+that finds nothing under its own names reads `fs/save`, where it is. That file
+is also the save of the key `fs/save`, which shared it there, so it is never
+moved; the key's first write goes to its own name.
 
 A folder whose names are encoded holds the file `.wfeature-names#1`, written
 before its first name with a `#`. No key is ever stored under that name, in any

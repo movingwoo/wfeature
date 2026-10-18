@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+MIDlet-Name: Hang Destroy Fixture
+MIDlet-1: Hang Destroy Fixture, , LifecycleMIDlet
+Fixture-Property: from-manifest
+Fixture-Hang-Destroy: wait

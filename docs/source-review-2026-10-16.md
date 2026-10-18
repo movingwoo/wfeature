@@ -53,7 +53,10 @@ key or byte.
 The review of PR #234 found 15 more defects in that work, all fixed on the same
 branch; see [Review of PR #234](#review-of-pr-234-2026-10-17). The limits the
 fixes left were taken up on 2026-10-17; see [Follow-up of the remaining
-limits](#follow-up-of-the-remaining-limits-2026-10-17).
+limits](#follow-up-of-the-remaining-limits-2026-10-17). The review of that
+work, PR #235, found 22 more, and they and the candidates it did not verify were
+taken up on 2026-10-18; see [Follow-up of the review of PR
+#235](#follow-up-of-the-review-of-pr-235-2026-10-18).
 
 Real-game acceptance over the local corpus of 532 archives: after the first
 round every archive reached the same rung as on `dcb8c27` except three SKT
@@ -5785,6 +5788,235 @@ These follow-ups left limits of their own:
   is refused where v0.5.2 stored it under its raw name; no local key is near
   it.
 
+## Review of PR #235 (2026-10-18)
+
+`/code-review` at max effort read PR #235 (`0ba8f2b`, the follow-up above)
+against `eb93831` and reported 15 findings, numbered Q01 to Q15 here in the
+order it ranked them. Q16 to Q22 are findings its verifiers also confirmed or
+found plausible that fell past its cap of 15. Most were reproduced by probe
+tests against both commits; the probes are not in the repository. All of them,
+and the candidates, were taken up the same day; see [Follow-up of the review of
+PR #235](#follow-up-of-the-review-of-pr-235-2026-10-18). The two reports the
+verifiers refuted are under [Refuted](#refuted), and the candidates no verifier
+checked follow the list.
+
+- **Q01** `internal/platform/lgt/java_file.go:486` (also :506): closing a
+  truncate-mode (mode 3) `File` hands its handle to the streams still open on
+  it without clearing `openFile.truncated`. A quick save taken while such a
+  stream lives records a finished save as a rewrite in progress, and a later
+  quick load cuts the path's shared buffer to that length
+  (`checkpoint_storage.go:436-441`): a longer save written after the
+  checkpoint, by the title or by a `.wfs` import, reads back cut, and the next
+  append loses its tail for good. `eb93831` closed the handle at `File.close`
+  and kept the whole newer save. Suggested fix: clear the flag when the handle
+  passes to a stream.
+- **Q02** `internal/backend/save_names.go:184`: runes that are not
+  `BoundaryBefore` (Hangul medial and final jamo, kana voicing marks) are
+  written by their number, which breaks Hangul and kana saves on volumes that
+  list names decomposed (HFS+, and exFAT on macOS). `planSaveNames` turns the
+  NFD spelling it lists into a numbered-jamo name (`fs/가나` becomes
+  `fs/ᄀ#+001161ᄂ#+001161`), and the title's NFC key, taking the fast path at
+  :1020, never finds it. On HFS+ and exFAT disk images even this build's own
+  fresh `StoreSave` read back as missing; an earlier build's save, a restored
+  export and an APFS folder copied from HFS+ do the same, where `eb93831` read
+  them. The macOS package lets the save folder live on any drive. Suggested
+  fix: NFC-normalize listed names before planning or decoding them.
+- **Q03** `internal/platform/lgt/wipic_file.go:1016`: `markFileCreated` now
+  reads the created list before its `packagedAs` check, while
+  `prepareIssuedWriteLists` (`checkpoint_storage.go:198`) still skips that
+  read for packaged paths, so a quick save that stores a packaged file reads
+  `fs/.created` on the live client. If the read fails, the sticky
+  `saveReadError` refuses the capture and stops the title at its next native
+  call, and a second dirty packaged file is marked clean without being stored,
+  so a later quick load loses its write. `eb93831` read nothing and stored
+  both. Suggested fix: check `packagedAs` first, or have the pre-read cover
+  packaged paths.
+- **Q04** `internal/jvm/heap_budget.go:150`: `sample()` re-arms the countdown
+  before deciding to refuse and never charges a refused sample's weight, so
+  once the budget is full every sampled allocation is refused while the ones
+  between samples pass the fast path (:134, :227) uncharged. A title that
+  catches `OutOfMemoryError` grows without bound while `HeapUsage` stays at the
+  limit: under an 8 MiB budget a node loop kept 95 MB (11.3 times the budget)
+  with `HeapUsage` at 8.14 MB, and at the default 256 MiB the live heap passed
+  the limit at about 2.6 MB/s with no ceiling, where [JVM](jvm.md) promises at
+  most about 256 KiB over.
+- **Q05** `internal/jvm/builtins.go:1167`: the text the `String` constructors
+  store is never charged: from `char[]` (:1167), `byte[]` (:1116, :1119, :1124,
+  `builtins_lang.go:894`, :897), `StringBuffer` (`builtins_lang.go:922`) and
+  `String` (:1076). The only charge is `objectHeapBytes` at `new`
+  (`vm.go:929`), weighed before the text exists. Under a 4 MiB budget, 400
+  `new String(buf)` from one 50,000-character array kept 60,000,000 bytes with
+  `HeapUsage` at 0 and no refusal, where `String.valueOf(buf)` was refused
+  after 12.
+- **Q06** `mobile/android/src/com/movingwoo/wfeature/MainActivity.java:163`: a
+  reopened activity waits for the ended server with `previous.waitFor()` and no
+  limit, but the server's drain does not bound closing a parked game:
+  `internal/webhost/resume.go:118-121` drops parked games synchronously before
+  its 10 s deadline loop, `cmd/server` waits on `<-games` with no timeout, and
+  SKT `destroyApp` gets new step windows until it returns. An SKT title whose
+  `destroyApp` never returns, parked by the page's `visibilitychange` before
+  `onDestroy`'s SIGTERM (BACK finishing the activity on Android 8 to 11),
+  leaves the reopened app on '이전 실행을 마치는 중...' until its process is
+  killed. The server-side hang predates the PR, which turned it into a screen
+  that never moves; LGT is bounded at about 3e9 steps (minutes), KTF at 15 s.
+- **Q07** `internal/platform/skt/media_progress.go:94`: the SKT host audio tick
+  (`AdvanceAudio`, `observePlayerLocked`, `queuePlayerTimeLocked`) boxes the
+  event time with `VM.NewObject(java/lang/Long)`, which this PR made
+  refusable; a refusal there reaches `runtime.fail("advance Player")`
+  (`media.go:95`) instead of the title and ends the session. Reproduced at tick
+  340 under an 8 MiB budget, while refusals in guest code in the same run were
+  absorbed. The PR's own rule is that a host allocation is charged and never
+  refused (`NewString`, `NewAOTArray`).
+- **Q08** `internal/jvm/corelib_util.go:1050`: `growHashtable` stores the grown
+  keys array before allocating the values array, so an `OutOfMemoryError` from
+  the second `newArray` (refusable since this PR, `vm.go:1131`) leaves keys at
+  2n+1 and values at n, and growth, gated only on `size < keys.Length()`, is
+  never retried: every later put of a new key throws
+  `ArrayIndexOutOfBoundsException` ('index 8 for length 8'), even after
+  `clear()`. With the default sampler 15 of 60 refusals hit that window. MIDP
+  `Timer` has the same shape: `internal/api/midp/timer.go:213` marks the task
+  queued before the refusable `NewObject(TimerThread)` at :222, so the task
+  never runs and rescheduling it throws `IllegalStateException`.
+- **Q09** `internal/backend/save_names.go:187` (plausible): a trailing `.` or
+  space is now written by its number, but Win32 stored such a key under the
+  stripped name, and no lookup tries that spelling (`earlierSaveSpellings`
+  :389, `exactSavePath` :1036, `findEarlierSave` :1095 through `spelledExactly`
+  :961). On Windows a v0.5.2 save for `fs/save.`, or for a space-padded
+  `jdb/SAVE    `, is not found after the upgrade, and the next store writes
+  `fs/save#+00002e` beside it. The new tests skip Windows; no local title is
+  known to use such a key.
+- **Q10** `internal/platform/lgt/java_thread.go:396`: the 16-stack start bound
+  also counts workers that finished but are still listed. `runOtherJavaWorkers`
+  (a platform thread's `Object.wait`) and the monitor-enter grant mark workers
+  done without dropping them, and only the `ServiceJavaThreads` defer prunes.
+  A `startApp` that loads 17 resources one thread at a time (`start()`, then
+  `wait()` on a lock) gets `OutOfMemoryError` '16 guest threads are already
+  running' with none alive, and the title does not start. `eb93831` ran all 20
+  cycles, though it mapped 20 stacks and refused later quick saves.
+- **Q11** `internal/gdbstub/session.go:157`: `?` to a live target that is not
+  parked goes through `run()` and waits, with no timeout, for the guest's next
+  ARM instruction. A client attaching while the host runs no guest code
+  (`runktf -serve -gdb` waiting on stdin, an idle title, a guest that ended)
+  gets no stop reply: lldb's `gdb-remote` fails after about 20 s with 'no stop
+  reply packet was received' (`eb93831` attached in 0.1 s), gdb times out,
+  Ctrl-C only re-arms the step, and the late `S05` or `S09` is read as the
+  reply to a later packet. Suggested fix: answer `?` from the last registers
+  when no guest thread is inside `core.Run`, and arm the stop for the next
+  entry.
+- **Q12** `internal/gdbstub/session.go:113`: routing `?` through `run()`
+  exposes its hang-up race on the first packet every client sends. With the
+  client's EOF already queued, `run()` and `Serve`'s deferred `endClient()`
+  both finish before the resume goroutine, which then sets `idle=false` and
+  `StepOnce`, so the guest parks with no client attached and the game stays
+  frozen until another client attaches; the hook waits only on `wakeup`, so
+  Ctrl-C cannot end the CLI. A client that sent `$?#3f` and closed at once froze
+  the game in 45 of 50 rounds at `0ba8f2b` and 0 of 50 at `eb93831`; `s` had
+  the same race before the PR.
+- **Q13** `internal/jvm/vm.go:1316`: the budget's `OutOfMemoryError` can now be
+  raised inside class initializers, Go-written ones included that could not
+  fail before (`List` and `AlertType` in `internal/api/midp/lcdui.go:180` and
+  :146, `Boolean`, `System`, the SKVM toolkit). The failure is cached in
+  `initErrors` for good and `CaptureHeapState` (`heap_state.go:189`) refuses
+  every later quick save, so a caught OOM is not fully recoverable: after the
+  552-byte `Command` allocation in `List.<clinit>` was refused and the title
+  freed its memory, every use of `List` rethrew the cached error. It needs the
+  refusal to land on that allocation (about 0.2%).
+- **Q14** `internal/backend/save_names.go:362`: `saveNamesFit` and
+  `exactSavePath` (:979) measure a segment in UTF-8 bytes, but APFS and NTFS
+  allow 255 UTF-16 units, so a save an earlier build stored under a 256 to
+  509 byte name whose encoding is unchanged (86 to 169 Hangul syllables) can
+  no longer be read, written or restored, and `findEarlierSave` (:1104) skips
+  it. `ReadSaveTree` still exports it, and `WriteSaveTree` refuses that export
+  whole, so none of the backup's other saves are restored. `eb93831` read,
+  overwrote and restored it. Very unlikely in practice.
+- **Q15** `internal/platform/lgt/wipic_file.go:1044`: `packagedAs` compares the
+  title's raw path bytes with the archive's decoded entry keys
+  (`archive.go:370`), so a C Clet that rewrites a packaged Korean-named file
+  under its EUC-KR spelling puts that path on the created list (`eb93831`
+  asked `archive.Resource`, which decodes EUC-KR), and `MC_fsList` shows the
+  file twice, in later sessions too. It needs a Linux or Android host or a
+  session with no store; macOS refuses EUC-KR names.
+- **Q16** `internal/platform/lgt/java_file.go:478` (low): a read-only
+  `File.close` throws `IOException` while another handle's refused write waits
+  on the same path; the `File` closes once the store recovers. C `MC_fsClose`
+  has behaved the same since before the PR.
+- **Q17** `internal/platform/lgt/wipic_file.go:700` (low): `MC_fsRename` onto a
+  name with no save key (newly `__databases__.db` in this PR) answers success,
+  and the file is under neither name, with or without a store, while the
+  removal list hides the source for good; `eb93831` moved the file. Suggested
+  fix: refuse when `!hasSaveKey(newName)`.
+- **Q18** `internal/platform/lgt/wipic_file.go:1216` (plausible):
+  `markFileRemoved` and `parseFileList` skip names with no save key while
+  `archive.Resource` accepts a backslash spelling, so
+  `MC_fsRemove("data\\hello.txt")` no longer hides the packaged file, and the
+  entries an earlier build wrote for such names are erased. No title using a
+  backslash is known; the specification uses `/`.
+- **Q19** `internal/platform/skt/text_input.go:390` (plausible, deliberate):
+  `holdDigitMode` keeps a vendor XTextField with a NUMERIC or DECIMAL
+  constraint in digit mode, so `-` and `.` cannot be typed (`eb93831` gave `-3`
+  and `1.5` where the head gives `111111113` and `115`). It copies TextBox's
+  rule (R113), and every known call site passes constraint 0.
+- **Q20** `internal/jvm/heap_budget.go:186` (low, cost): every refused sample
+  runs a full `runtime.GC()` under `budget.mu`, even when the sample alone is
+  over the limit: 30 refusals ran 30 collections of about 7.8 ms each, and a
+  concurrent VM ran about 30% slower. `System.gc()` already allows the same.
+  Suggested fix: refuse at once when the pending charge and the weight pass the
+  limit, and throttle the collection.
+- **Q21** `internal/platform/lgt/java_layout.go:102` (low): LGT maps
+  `OutOfMemoryError` to `Error`, skipping `VirtualMachineError`, so
+  `catch (VirtualMachineError)` does not catch the new `Thread.start` refusal.
+  The mapping predates the PR, which makes it reachable; it needs 16 stacks and
+  such a catch.
+- **Q22** `internal/api/wipi/definitions.go:65` (low): `EventQueue.SOFT3` reads
+  0 after a quick save from before this branch is restored, because statics
+  are restored whole and the defined constants are seeded only at
+  initialization; `SOFT1` and `SOFT2` changed in #234 the same way. Only quick
+  saves from development builds carry it, and no key is delivered as 92.
+
+Not verified (no verifier checked these; some predate the PR; each held and is
+fixed in the follow-up):
+
+- `internal/platform/lgt/java_stream.go:426`: closing a title's
+  `DataInputStream` around a `File` stream after the `File` closed leaves the
+  inner stream's handle open until a collection (probes by several finders: one
+  handle at the head, none at `eb93831`).
+- `mobile/android/src/com/movingwoo/wfeature/MainActivity.java:145` and :153:
+  `finished` is per activity, so a recreated activity's stale start thread can
+  start a server after its successor finished and orphan it; the unbounded
+  wait widens the window. A finishing activity's late `onDestroy` (:605) can
+  stop the server its successor adopted, mostly as before the PR.
+- `internal/webhost/session.go:1338`: `CheatConsole()` now runs for every cheat
+  message, creating the console and giving panel-saved tables the image key.
+- `internal/platform/lgt/wipic_file.go:845`: `storeless()` counts the
+  certificate-100 adapter over no store as storeless though it keeps every
+  write in its own map, so files are held twice and the 64 MiB cap can refuse a
+  write the adapter already holds.
+- `internal/backend/save_names.go:331`: `readSaveName` accepts numbers for `.`,
+  `\` and NUL, so a raw `#+00002e` decodes to `.` and `SnapshotSaves` fails
+  whole. `saveNamesFit` (:360) checks segments but not the path limit (1,024
+  bytes on macOS), as `eb93831` did not either.
+- `internal/jvm/vm.go:1343`: a static written during a superinterface's
+  `<clinit>` recursion is reset to 0 (a javac 1.8 fixture: 5 on HotSpot, 0
+  here); it needs class file version 52. `vm.go:1404` loads every
+  superinterface, so `ClassCensus` lists unused interfaces as missing.
+- `internal/platform/ktf/runtime_input_method.go:126` and :184: the pending
+  character is cleared before a refusable `NewArray`, so a refusal drops it.
+- `internal/jvm/aot.go:251`: an AOT instance is charged about 550 bytes though
+  its fields live in the guest arena, which could take a KTF title with many
+  small objects past the budget.
+- `internal/jvm/string_intern.go:34`: interned literals are charged through
+  `NewString`, though [JVM](jvm.md) says they are not.
+- `internal/platform/lgt/java_database.go:742`: a refused index store loses the
+  database name from `listDataBases` for good, though the rewritten comment
+  says it recovers (predates the PR).
+- Before the PR: SKT `getRGBPixels` reads the screen without its lock
+  (`internal/platform/skt/wipi.go:539`, seen by `-race`); `contextARGB` puts
+  alpha in the top byte (`wipi.go:556`); `FileSystem.remove` returns normally
+  when the store refuses (`skvm_file.go:840`); non-UTF-8 keys are written raw,
+  colliding as U+FFFD on Windows and refused on macOS (`save_names.go:184`);
+  NTFS 8.3 short names may alias saves; a Windows `ERROR_INVALID_NAME` reads as
+  an error (`save_names.go:982`).
+
 ## Refuted
 
 The verifiers refuted these reports. They are kept so that the same claims are
@@ -5857,3 +6089,237 @@ not raised again without new evidence.
   which gives back exactly that basename. A file literally named
   '..%2F..%2Fx.zip' decodes to '..%2F..%2Fx' and contains no slash. The message
   handler is reachable only from the app's own loopback page.
+- `internal/jvm/heap_budget.go:153` A refusal weighs the charged total and the
+  sample's weight rather than the allocation's size, so with the live set near
+  the limit every sampled small allocation is refused: this is the documented
+  estimator, centred on the limit; the effect is small beside the estimator's
+  own spread and out of reach at the default 256 MiB.
+- `internal/gdbstub/core.go:130` Every attach parks the guest and the hook
+  ignores the context, so Ctrl-C cannot stop the CLI while a debugger is
+  attached: the hook ignored the context before PR #235, and `eb93831` behaves
+  the same after `?` and `s`; stopping on a bare attach is the documented
+  intent, and an interrupt is delayed, not lost.
+
+## Follow-up of the review of PR #235 (2026-10-18)
+
+Every finding above, Q01 to Q22, and every candidate in the "Not verified" list
+was taken up on 2026-10-18 on the same branch,
+`fix/review-followups-2026-10-17`, from `0ba8f2b`. Each candidate was reproduced
+first, and each one held. Every code change came with a regression test first
+run against `0ba8f2b`, where it fails with the reported symptom or is still
+waiting at its deadline. Q19 is kept by decision, and Q13 departs from JVMS 5.5
+on purpose.
+
+The gates pass: gofmt, go vet (default, debug and Windows), make test, make
+test-debug and go test -race ./internal/.... Every local archive (536) ran 60
+and then 500 ticks with `0ba8f2b`, twice, and with the branch. Every LGT title
+(130) ended on the same frame. Of the KTF and SKT titles, 14 ended on a frame
+neither `0ba8f2b` run had (2 KTF, 12 SKT); run again side by side, each build
+gave frames the other also gave, the phase of a title's own animation under
+load, which the 31 titles whose two `0ba8f2b` runs disagreed already show.
+
+- **Q01** Fixed. A truncate-mode `File` closed while a stream is still open on
+  it has finished its rewrite: the flag is cleared when its handle passes to
+  the stream, so a quick save taken then records an ordinary handle, and a
+  quick load keeps whole a longer save written after it. At `0ba8f2b` that save
+  read back as `a lon`, the length the `File` had held.
+- **Q02** Fixed ([save keys on disk](session.md#save-keys-on-disk)). An entry
+  whose name is decomposed and whose composed name opens the same file is read
+  under the composed name wherever names are listed: planning a conversion,
+  listing a directory, a snapshot, an export and a restore's pruning. On disk
+  images made with `hdiutil`, HFS+ and exFAT read 3 of 4 fresh saves and 1 of 4
+  earlier ones at `0ba8f2b`, and on FAT the conversion stopped; each now reads 4
+  of 4, as APFS did. Verifying it found the AppleDouble companions macOS writes
+  beside each file on exFAT and FAT (`._` and the file's name): a snapshot
+  there listed 11 entries for 4 keys. A companion is no save now, and a file of
+  that name that is not AppleDouble still is. A decomposed key an earlier build
+  stored on APFS reads as its composed key, which that volume made one file
+  with it; a name with a singleton such as the Greek question mark is read as
+  it is.
+- **Q03** Fixed. `markFileCreated` asks `packagedAs` before it reads the created
+  list, so a quick save that stores rewritten packaged files reads nothing on
+  the live session. At `0ba8f2b` an unreadable list refused the quick save and
+  every write of the session after it.
+- **Q04** Fixed. A refused sample keeps its sampling point: every allocation
+  after a refusal is weighed in turn until one fits, and only an admitted
+  sample draws the next point, while the charge is within the limit. Under a 4
+  MiB budget a title that catches the error and goes on kept 53,413 of 60,000
+  small objects where 7,598 fit (and spent 28.9 s in 6,589 collections); it now
+  keeps 7,903.
+- **Q05** Fixed. The text a `String` constructor builds from a `char[]`, a
+  `byte[]` (each charset path) or a `StringBuffer` is charged when it exists,
+  and a refusal leaves the String unset; one built from another String shares
+  that one's text, which adds no memory. Under a 4 MiB budget, 400 copies of a
+  20,000-character text were all kept before and are now refused within the
+  budget.
+- **Q06** Fixed, on each side. An SKT `destroyApp` that a close asks for may
+  run for 15 seconds, as long as KTF lets a Jlet's run (its service wait):
+  then no step window is renewed, the machine's waits and sleeps are let go,
+  and the call ends. An LGT `destroyClet` gets the same 15 seconds, where it
+  ran under a context that never ended. Stopping the server closes each parked
+  game on a goroutine of its own, which keeps the game's save folder claimed
+  until the close returns, and waits for those closes and for the attached
+  games within the drain's 10 seconds; a close still running then is named in
+  the log and left behind. A reopened Android activity waits 30 seconds for the
+  server a finished one ended and then ends it (`destroyForcibly`). The tests
+  use a `destroyApp` that loops, one that waits for a notification nobody
+  sends, and an LGT fixture whose `destroyClet` branches to itself: at `0ba8f2b`
+  the SKT destroy and the LGT close were still running after 10 seconds and
+  `CloseSessions` after 5; now each ends at its bound, and `CloseSessions` at
+  its deadline, with the claim held until the parked game's close returns 15
+  seconds later. The Android lifecycle check has a step for it (F, see
+  [testing](testing.md)): on the Android 17 emulator, with the hang fixture
+  parked and the app opened again right after BACK finished it, the old server
+  of `0ba8f2b` was still there 255 seconds after `onDestroy` and the app still
+  waiting, while the branch's ended by itself 10.1 seconds after `onDestroy`
+  and the next server started after it. The hang needs a game already parked
+  when the drain begins: finished with the game attached, the activity reaches
+  the drain before the page parks it, and `0ba8f2b` closed that game through
+  its runner within the deadline too.
+- **Q07** Fixed. `VM.NewHostObject` charges an object the host makes and never
+  refuses it, as `NewString` and `NewAOTArray` do, and the SKT audio tick boxes
+  a Player event's time with it. Of the 47 places a platform or API package
+  allocates, every other one is inside a guest's native call, where a refusal
+  reaches the title (the KTF input method's `char[]` among them, which lost a
+  character to one; below), or is the MIDlet's construction at start, which
+  meets a fresh budget.
+- **Q08** Fixed. `Hashtable` grows, and is made, with both arrays allocated
+  before either is published, so a refusal leaves it as it was and the next put
+  grows it; at `0ba8f2b` the test left 287 keys over 143 values. MIDP `Timer`
+  makes the task's worker before it marks the task queued, checks again under
+  its lock, and unmarks the task if the worker cannot start; with only that
+  change reverted, the task stayed marked scheduled with no worker.
+- **Q09** Fixed, for reads. On Windows a key with a `.` or space at the end of
+  a segment that finds nothing under its own names reads the name without the
+  ending, where Win32 stored it. The file is never moved, because it is also
+  the save of the key without the ending, and the key's first write goes to its
+  own name. The test forces the Windows rule on every host.
+- **Q10** Fixed. A thread that has ended gives its stack back at the next
+  `Thread.start`, whichever call saw it end, so the 16-stack bound counts only
+  threads a checkpoint restores. 48 loaders started one at a time by a
+  `startApp`, each ending inside the platform thread's wait or lock, ran on one
+  stack and the session saved and loaded; 16 threads running at once still
+  refuse the seventeenth.
+- **Q11** Fixed. `?`, and a Ctrl-C during a continue, wait at most 250 ms for
+  the guest's next instruction. A guest that is running stops within it and is
+  answered with the registers it stopped with; when no guest code runs (a run
+  waiting on its driver, a session between ticks, a long host call) the stop is
+  answered anyway from the registers of the last stop and stays armed, and the
+  guest parks at its next instruction without a second reply, so no late `S05`
+  answers a later packet. A continue sent before the guest gets there runs past
+  that stop, and a step stops at it. A guest whose run has ended answers `W00`,
+  or `X09` after a kill, instead of a stop reply, and `k` has no reply, as the
+  protocol says. lldb 2103 attached to `runktf -serve -gdb` waiting on stdin in
+  0.32 s, where `0ba8f2b` failed after 20.55 s with "no stop reply packet was
+  received".
+- **Q12** Fixed. Each connection carries the count of clients that had ended
+  when it attached, and a resume whose client has ended since does nothing, so
+  a `?`, `s` or `c` overtaken by its client's hang-up can no longer stop the
+  guest after the client has gone; a client's end also drops a step it armed.
+  Fifty clients each that sent `?`, `s`, `?` and `s`, or `?` into a reset
+  connection, and closed at once, left the guest running every time (`0ba8f2b`
+  hung), and the run ended on a cancel with nobody attached.
+- **Q13** Fixed, departing from JVMS 5.5 on purpose ([JVM](jvm.md)): an
+  initializer that ends in the budget's `OutOfMemoryError` leaves its class
+  uninitialized rather than erroneous, so the next use initializes it from the
+  start and quick saves are taken again. At `0ba8f2b` the capture was refused
+  with 'JVM heap has an active or failed initializer'.
+- **Q14** Fixed. A segment is measured as the host measures a name: in UTF-16
+  units on macOS, iOS and Windows, 255 of them, and in bytes elsewhere. On the
+  development Mac a name of 255 Hangul syllables (765 bytes) was a file and one
+  of 256 was not. A name of 150 syllables, refused at `0ba8f2b`, is stored and
+  read, and so is one an earlier build stored.
+- **Q15** Fixed. `packagedAs` turns the title's path into an archive key as the
+  archive lookup does (EUC-KR decoded, a backslash a separator, the path
+  cleaned), so a C Clet that rewrites a packaged Korean file under its own
+  bytes rewrites the packaged file, which stays off the created list, and
+  `MC_fsList` names it once.
+- **Q16** Fixed. A handle opened only to read has nothing of its own to store,
+  so its close, in C or in Java, succeeds while another handle's refused write
+  waits; the write is stored by its own handle's close.
+- **Q17** Fixed. A rename onto a name with no save key answers the
+  specification's `M_E_BADFILENAME` (-3), and the file stays where it was; at
+  `0ba8f2b` it answered 0 and the file was under neither name.
+- **Q18** Fixed. LGT's save key reads a backslash as the separator, as the
+  archive lookup does, so removing `data\hello.txt` hides the packaged file in
+  this session and the next, and a write of a backslash path, which had no save
+  before, is stored under the slash path. An entry an earlier build wrote with
+  a backslash still hides that spelling, and a rewrite of the list keeps it.
+- **Q19** Kept, by decision. A vendor XTextField with a NUMERIC or DECIMAL
+  constraint stays in the handset's digit mode on the keypad, and `-` and `.`
+  come from the page's text input, which a test now pins (`-3`, `1.5` and
+  `-0.25`); [native text input](native-text-input.md) says so.
+- **Q20** Fixed. A refusal that no collection could help is made without one;
+  the first refusal in a row and then the second, fourth, eighth and so on run
+  `runtime.GC`, and between them the samples are looked at only after Go's
+  collector has finished a cycle. 30 arrays larger than the budget ran 30
+  collections and now run none; 51 refusals while full ran 53 and now 7 (9 in
+  the process).
+- **Q21** Fixed. LGT's `OutOfMemoryError` is a `VirtualMachineError`, as in
+  CLDC, so a `catch (VirtualMachineError)` takes the refused `Thread.start`; no
+  other class in the platform's exception table was placed differently from
+  CLDC.
+- **Q22** Fixed. A restore seeds again the defined constants of every class it
+  restores as initialized, in name order, once the statics are adopted, so a
+  quick save from before a constant changed reads this build's value: `SOFT1`,
+  `SOFT2` and `SOFT3` read 21, 22 and 0 at `0ba8f2b` and now 90, 91 and 92.
+
+The candidates no verifier checked all held, and are fixed:
+
+- **A `DataInputStream` around a `File` stream.** Closing the wrapper lets go
+  at once of the file every object sharing the stream holds; at `0ba8f2b` one
+  handle stayed open until a collection.
+- **Android activities.** Only the activity created last starts or ends a
+  server: a start still in flight for an older activity launches nothing, and
+  a finished activity's late `onDestroy` leaves alone the server a newer one
+  took over.
+- **`CheatConsole()`.** The web host makes the text console only for a text
+  console line on a test server, so a panel operation neither creates it nor
+  gives a table the panel saves the image key.
+- **The certificate-100 adapter over no store** keeps only the file it rewrites,
+  and the session keeps the title's other files itself, within its bound,
+  once.
+- **Names for segments no key holds, and long paths.** A name that reads as
+  `.`, `..`, or a segment with `\` or NUL is no encoded name, so a raw
+  `#+00002e` reads as an earlier build's key of its own and a snapshot no
+  longer fails over it. A key whose path below the save folder is longer than
+  the host opens (1,023 bytes on macOS and iOS, where 1,024 gave
+  `ENAMETOOLONG`, and 4,095 on Linux and Android) has no save: a read finds none
+  and a write is refused with the limit named.
+- **Statics stored during a superinterface's initializer.** A class's statics
+  are prepared and its constants set before its superclass and superinterfaces
+  are initialized, so a store from their initializers stands: the javac 1.8
+  fixture reads 5, 7 and 6, as on HotSpot, where `0ba8f2b` read 0, 7 and 0. The
+  default-method walk probes a superinterface without listing it as missing.
+- **The KTF input method** takes the composed character only after its
+  `char[]` exists, so a refused delivery keeps it for the next.
+- **AOT instances** cost about 222 bytes here (232 with the binding) and were
+  charged 552; they are charged 224.
+- **Interned literals** went through `NewString` and were charged for the VM's
+  life; the pool, which has bounds of its own, makes them uncharged, as
+  [JVM](jvm.md) says.
+- **The LGT database index.** An index the store refuses waits in the session:
+  `listDataBases` reads it first, the next create starts from it, and the next
+  create, the ending and the quick steps store it again; a quick load drops it
+  with the rest of the session's state.
+- **Before the PR.** SKT `getRGBPixels` reads the screen under its lock
+  (`-race` reported the race at `0ba8f2b`) and answers `0x00RRGGBB`, as the
+  specification and KTF do, where it put alpha in the top byte.
+  `FileSystem.remove` throws an `IOException` when the store refuses the
+  removal, which stands and is stored at the ending. A byte that is not UTF-8
+  is written as `#-` and two hex digits, so macOS holds the save, and restores
+  a backup carrying one, which it refused whole, and Windows no longer makes two
+  such keys one. A `~` before a digit is written by its
+  number, so an NTFS short name cannot reach another save. On Windows
+  `ERROR_INVALID_NAME` reads as no save rather than as an error.
+
+These follow-ups left limits of their own:
+
+- A stopping server still leaves behind a title whose ending takes between 10
+  and 15 seconds: the drain's deadline is shorter than the platforms' bound. A
+  parked game that a start, a takeover or a second park of its token ends is
+  still closed under the server's lock, so one whose ending never returns holds
+  the lock for those 15 seconds.
+- Q09 and `ERROR_INVALID_NAME` have not run on Windows: the first is tested
+  with the Windows rule forced on, the second only compiles there (`go vet`).
+- The gdb stub has still been driven by lldb only.

@@ -227,6 +227,12 @@ type Client struct {
 	// and a quick save or a quick load asks the store again before it goes
 	// on. See storeIssuedWrites.
 	removedUnsaved, createdUnsaved bool
+	// databaseIndexWaiting says the store refused the last write of the
+	// database index, which databaseIndexPending holds: memory is ahead of
+	// the store, as with the path lists, and the next create or delete, the
+	// ending and a quick step write it again.
+	databaseIndexWaiting bool
+	databaseIndexPending []byte
 	// fileEpochs counts, for each path, how often its save has changed under
 	// the session: a write the store took, or a removal. An open buffer
 	// remembers the count it was last level with, which is how a quick step

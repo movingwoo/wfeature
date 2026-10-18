@@ -103,15 +103,27 @@ that a game is not ended by something that is not an ending.
   The app process outlives a finished activity, so the app can be opened
   again while the server it ended is still draining. The ended server is
   kept (`MainActivity.ending`), and the next activity starts a server only once
-  that one has ended, saying 이전 실행을 마치는 중... meanwhile. The wait has
-  no time limit: the drain is what writes the games' exit-time saves, and the
-  server bounds it itself. Before, the new server started with the new
-  activity and took the port the moment the old one stopped listening, while
-  the old one could still be closing its games. The start-up wait then takes
-  a `/api/status` answer only from a wfeature server whose parent process is
-  the app (the answer's `pid`, its parent read from `/proc`), so neither a
-  server still draining nor another program listening on the port passes for
-  the new one.
+  that one has ended, saying 이전 실행을 마치는 중... meanwhile. The drain is
+  what writes the games' exit-time saves, and the server bounds it: ten
+  seconds for its games, attached and parked side by side, a close still
+  running then named in its log and left behind, and every platform bounds a
+  title's own ending (`destroyApp`, `destroyClet`) at fifteen seconds. An old
+  process still there after 30 seconds will not end on its own, and the app
+  ends it (`destroyForcibly`). Before, a parked game was closed ahead of the
+  drain's deadline, so one whose `destroyApp` never returned kept the old
+  server, and the app's 이전 실행을 마치는 중..., for ever. Before that, the new
+  server started with the new activity and took the port the moment the old
+  one stopped listening, while the old one could still be closing its games.
+  The start-up wait then takes a `/api/status` answer only from a wfeature
+  server whose parent process is the app (the answer's `pid`, its parent read
+  from `/proc`), so neither a server still draining nor another program
+  listening on the port passes for the new one.
+
+  Only the activity created last starts or ends a server. Opened again
+  before Android has delivered the finished activity's `onDestroy`, the app
+  takes over the server still running, and the finished activity's late
+  `onDestroy` leaves it alone instead of ending the game under the new page;
+  a start still waiting for an older activity launches nothing.
 
   BACK on a task started from the home screen does not finish the activity on
   Android 12 and later: Android moves the task to the back. The activity only

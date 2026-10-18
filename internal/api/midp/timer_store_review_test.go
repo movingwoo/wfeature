@@ -1,6 +1,7 @@
 package midp
 
 import (
+	"runtime"
 	"sync/atomic"
 	"testing"
 
@@ -50,4 +51,68 @@ func TestTimerRefusesATaskAlreadyScheduled(t *testing.T) {
 	if workers != 1 {
 		t.Fatalf("one task has %d timer workers", workers)
 	}
+}
+
+// A Timer makes the task's worker before it marks the task scheduled. Making
+// the worker can be refused by the heap budget, and a task marked with no
+// worker never ran and could never be scheduled again: every later schedule
+// was refused as one already made.
+func TestTimerRefusedAWorkerLeavesTheTaskSchedulable(t *testing.T) {
+	var runs atomic.Int32
+	machine := jvm.New(nil, jvm.Options{MaxHeapBytes: 8 << 20})
+	if err := Define(machine); err != nil {
+		t.Fatal(err)
+	}
+	defineCountingTask(t, machine, &runs)
+	t.Cleanup(machine.Close)
+	timer, err := machine.NewObject(TimerClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := machine.NewObject(countingTaskClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Arrays up to the budget, then small objects until one is refused: from
+	// there the budget weighs every allocation, the worker's too. A string the
+	// host makes is never refused, and holding one takes the charge past the
+	// limit, so the worker cannot fit however the last sample fell.
+	var held []*jvm.Object
+	for {
+		array, err := machine.NewArray(jvm.Type{Kind: jvm.TypeInt}, 64<<10)
+		if err != nil {
+			break
+		}
+		held = append(held, array)
+	}
+	for refused := false; !refused; {
+		object, err := machine.NewObject(countingTaskClass, "()V")
+		if err != nil {
+			if !machine.IsGuestException(err, "java/lang/OutOfMemoryError") {
+				t.Fatal(err)
+			}
+			refused = true
+		}
+		held = append(held, object)
+	}
+	held = append(held, machine.NewString("held past the limit"))
+	schedule := func() error {
+		_, err := machine.InvokeVirtual(timer, "schedule", "(Ljava/util/TimerTask;J)V", jvm.ReferenceValue(task), jvm.LongValue(1))
+		return err
+	}
+	if err := schedule(); !machine.IsGuestException(err, "java/lang/OutOfMemoryError") {
+		t.Fatalf("a schedule whose worker the full budget refuses: %v, want OutOfMemoryError", err)
+	}
+	if queued, err := machine.Field(task, TimerTaskClass, "queued", "Z"); err != nil {
+		t.Fatal(err)
+	} else if flag, _ := queued.Int32(); flag != 0 {
+		t.Fatal("the task is marked scheduled with no worker")
+	}
+	runtime.KeepAlive(held)
+	held = nil
+	runtime.GC()
+	if err := schedule(); err != nil {
+		t.Fatalf("the schedule once the budget has room: %v", err)
+	}
+	waitForRuns(t, &runs, 1)
 }

@@ -891,18 +891,16 @@ func (vm *VM) registerStringExtraBuiltins() {
 		ranged := data[int(offset) : int(offset)+int(length)]
 		switch charsetOf(encoding) {
 		case charsetUTF8:
-			object.Native = strings.ToValidUTF8(string(ranged), "�")
-			return VoidValue(), nil
+			return VoidValue(), vm.setStringText(object, strings.ToValidUTF8(string(ranged), "�"))
 		case charsetPlatform:
-			object.Native = vm.decodePlatformBytes(ranged)
-			return VoidValue(), nil
+			return VoidValue(), vm.setStringText(object, vm.decodePlatformBytes(ranged))
 		}
 		return VoidValue(), guestException("java/io/IOException", "unsupported character encoding: "+encoding)
 	})
 	// A String built from a StringBuffer takes what the buffer holds now: the
 	// two do not share storage afterwards, which is what a title that keeps
 	// appending to the buffer it just read is relying on.
-	vm.builtin(StringClass, "<init>", "(Ljava/lang/StringBuffer;)V", func(_ *VM, arguments []Value) (Value, error) {
+	vm.builtin(StringClass, "<init>", "(Ljava/lang/StringBuffer;)V", func(vm *VM, arguments []Value) (Value, error) {
 		object, err := requireObject(arguments, 0)
 		if err != nil {
 			return VoidValue(), err
@@ -919,9 +917,9 @@ func (vm *VM) registerStringExtraBuiltins() {
 		// title shares a StringBuffer between threads on the strength of it
 		// being synchronized.
 		data.mu.Lock()
-		object.Native = string(utf16.Decode(data.units))
+		text := string(utf16.Decode(data.units))
 		data.mu.Unlock()
-		return VoidValue(), nil
+		return VoidValue(), vm.setStringText(object, text)
 	})
 	vm.builtin(StringBufferClass, "setCharAt", "(IC)V", func(_ *VM, arguments []Value) (Value, error) {
 		_, data, err := stringBufferArgument(arguments)

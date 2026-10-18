@@ -241,7 +241,10 @@ the same way wherever it asks. It composes no Hangul.
 - SKT `TextBox` and `XTextField` follow the field's constraint as the Host
   dialog does: an `UNEDITABLE` field takes no key at all, caret moves
   included, and a `NUMERIC`, `PHONENUMBER` or `DECIMAL` field is held in
-  numeric mode, so a key types its digit and `*` cannot leave it.
+  numeric mode, so a key types its digit and `*` cannot leave it. That is the
+  handset's digit mode, so the keypad types no `-` or `.` there; the page's
+  text input does, where the constraint allows them (a leading `-` for
+  `NUMERIC`, and a `.` for `DECIMAL`).
 
 An editor's state, including an unfinished multi-tap cycle, is captured in
 quick saves (`textinput.StateSnapshot`) and restored without sending keys.
