@@ -149,7 +149,7 @@ KTF · LGT · SKT (GNEX/GVM 포함)
 
 ## 라이선스
 
-[MIT](LICENSE). 번들된 구성 요소는 각자의 라이선스를 따르며, 전문은 [`THIRD-PARTY-NOTICES.md`](internal/licenses/THIRD-PARTY-NOTICES.md)에 있고 모든 릴리스 바이너리에 포함됩니다.
+[MIT](LICENSE). 번들된 구성 요소는 각자의 라이선스를 따르며 전문은 [`THIRD-PARTY-NOTICES.md`](internal/licenses/THIRD-PARTY-NOTICES.md)에 있고 모든 릴리스 바이너리에 포함됩니다.
 
 | 구성 요소 | 쓰임 | 라이선스 |
 |---|---|---|
