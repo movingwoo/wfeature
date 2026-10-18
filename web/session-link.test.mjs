@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { browserToken, browserTokenKey, createSessionLink } from "./session-link.js";
+import "./text-fixture.mjs";
+import { phrase } from "./text.js";
 
 const memory = () => {
   const values = new Map();
@@ -271,7 +273,7 @@ test("changed victims ask again and a disconnected dialog never restarts", async
   assert.equal(asked, 2);
   link.leave();
   gate.resolve(true);
-  await assert.rejects(start, /연결/);
+  await assert.rejects(start, { message: phrase("session.disconnected") });
   assert.equal(calls, 2);
 });
 

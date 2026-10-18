@@ -21,6 +21,7 @@
 
 import { askToConfirm } from "./confirm.js";
 import { reach } from "./reach.js";
+import { phrase } from "./text.js";
 
 // The extension the server writes and the input accepts. It is not `.zip`
 // because the file is not one, and a name that says so keeps somebody from
@@ -30,10 +31,11 @@ export const SAVE_BACKUP_EXTENSION = ".wfs";
 const endpoint = game => `api/savepack?game=${encodeURIComponent(game)}`;
 
 // said reads whatever the server put in the body, since those sentences are
-// written for this screen. Anything else gets one of our own.
+// written for this screen. Anything else gets one of our own, which names the
+// status the server answered with.
 const said = async (response, fallback) => {
   const text = await response.text().catch(() => "");
-  return text.trim() || `${fallback} (${response.status})`;
+  return text.trim() || phrase(fallback, { status: response.status });
 };
 
 // backupFileName is what the downloaded file is called: the game's own name
@@ -54,7 +56,7 @@ export const backupFileName = game => {
 // what the server said.
 export const exportSave = async (game, fetcher = fetch) => {
   const response = await reach(fetcher, endpoint(game), { cache: "no-store" });
-  if (!response.ok) throw new Error(await said(response, "세이브를 내보내지 못했습니다"));
+  if (!response.ok) throw new Error(await said(response, "savepack.export-failed"));
   return response.blob();
 };
 
@@ -62,7 +64,7 @@ export const exportSave = async (game, fetcher = fetch) => {
 // throws with what the server said.
 export const importSave = async (game, file, fetcher = fetch) => {
   const response = await reach(fetcher, endpoint(game), { method: "POST", body: file });
-  if (!response.ok) throw new Error(await said(response, "세이브를 가져오지 못했습니다"));
+  if (!response.ok) throw new Error(await said(response, "savepack.import-failed"));
   return response.json();
 };
 
@@ -71,9 +73,9 @@ export const importSave = async (game, file, fetcher = fetch) => {
 // restore that removed none did not, and only the person looking knows whether
 // that was what they meant.
 export const describeImport = ({ written = 0, removed = 0 } = {}) => {
-  const parts = [`세이브 ${written}개를 복원했습니다.`];
-  if (removed > 0) parts.push(`백업에 없는 ${removed}개는 지웠습니다.`);
-  parts.push("게임을 다시 시작하면 적용됩니다.");
+  const parts = [phrase("savepack.restored", { count: written })];
+  if (removed > 0) parts.push(phrase("savepack.removed", { count: removed }));
+  parts.push(phrase("savepack.restart"));
   return parts.join(" ");
 };
 
@@ -149,7 +151,7 @@ export const initSaveBackup = ({
   fetcher = fetch,
   chosenGame,
   onStatus,
-  confirm: ask = message => askToConfirm({ document: doc, message, confirmLabel: "가져오기" }),
+  confirm: ask = message => askToConfirm({ document: doc, message, confirmLabel: phrase("savepack.import-confirm") }),
 } = {}) => {
   const exportButton = doc.getElementById("save-export");
   const importButton = doc.getElementById("save-import");
@@ -177,10 +179,10 @@ export const initSaveBackup = ({
   exportButton.addEventListener("click", () => {
     const game = chosenGame?.();
     if (!game) {
-      onStatus?.("먼저 게임을 고르세요.");
+      onStatus?.(phrase("savepack.choose-game"));
       return;
     }
-    busy(exportButton, "내보내는 중...", async () => {
+    busy(exportButton, phrase("savepack.exporting"), async () => {
       const blob = await exportSave(game, fetcher);
       const name = backupFileName(game);
       const native = nativeSaver(win);
@@ -189,17 +191,17 @@ export const initSaveBackup = ({
         // The picker is the app's now, and what happens at it — a place
         // chosen, or a cancel — is not something the page hears about. So it
         // says what it did rather than claiming the file was written.
-        onStatus?.("저장할 위치를 고르세요.");
+        onStatus?.(phrase("savepack.choose-place"));
         return;
       }
       saveAs(blob, name, doc);
-      onStatus?.("세이브를 내려받았습니다.");
+      onStatus?.(phrase("savepack.downloaded"));
     });
   });
 
   importButton.addEventListener("click", () => {
     if (!chosenGame?.()) {
-      onStatus?.("먼저 게임을 고르세요.");
+      onStatus?.(phrase("savepack.choose-game"));
       return;
     }
     input.click();
@@ -213,13 +215,13 @@ export const initSaveBackup = ({
     if (!file) return;
     const game = chosenGame?.();
     if (!game) {
-      onStatus?.("먼저 게임을 고르세요.");
+      onStatus?.(phrase("savepack.choose-game"));
       return;
     }
     // Awaited, and only a yes goes on: a page that could not ask has not been
     // answered.
-    if (!(await ask?.("이 게임의 저장 데이터를 백업 파일로 되돌립니다. 지금 저장된 진행은 사라집니다. 계속할까요?"))) return;
-    busy(importButton, "가져오는 중...", async () => {
+    if (!(await ask?.(phrase("savepack.import-question")))) return;
+    busy(importButton, phrase("savepack.importing"), async () => {
       onStatus?.(describeImport(await importSave(game, file, fetcher)));
     });
   });

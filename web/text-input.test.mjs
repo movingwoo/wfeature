@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createTextInputDialog } from "./text-input.js";
+import "./text-fixture.mjs";
+import { phrase } from "./text.js";
 
 const fixture = connection => {
   const nodes = new Map();
@@ -77,7 +79,7 @@ test("failed validation preserves draft and password never uses textarea", async
   assert.equal(f.node("value").disabled, false);
   assert.equal(f.node("dialog").open, true);
   assert.equal(f.node("status").hidden, false);
-  assert.equal(f.node("status").textContent, "입력 불가능");
+  assert.equal(f.node("status").textContent, phrase("textinput.unavailable"));
 });
 
 test("append-only guest input keeps the insertion action and compact status", async () => {
@@ -88,8 +90,8 @@ test("append-only guest input keeps the insertion action and compact status", as
   await f.controller.open();
   assert.equal(f.node("status").dataset.state, "available");
   assert.equal(f.node("status").hidden, false);
-  assert.equal(f.node("apply").textContent, "삽입");
-  assert.equal(f.node("status").textContent, "입력 가능");
+  assert.equal(f.node("apply").textContent, phrase("textinput.insert"));
+  assert.equal(f.node("status").textContent, phrase("textinput.available"));
 });
 
 
@@ -105,9 +107,9 @@ test("opening distinguishes checking from an unavailable target", async () => {
   reject(new Error("no supported text field is active"));
   await opening;
   assert.equal(f.node("status").dataset.state, "unavailable");
-  assert.equal(f.node("status").textContent, "입력 불가능");
+  assert.equal(f.node("status").textContent, phrase("textinput.unavailable"));
   assert.equal(f.node("apply").disabled, true);
-  assert.equal(f.node("cancel").textContent, "닫기");
+  assert.equal(f.node("cancel").textContent, phrase("textinput.close"));
 });
 
 test("a stale target keeps the draft readable but prevents another submission", async () => {

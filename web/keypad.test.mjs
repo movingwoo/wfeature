@@ -167,7 +167,7 @@ test("the keypad layout is a setting rather than a key, and every list of it is 
     [],
     "a shape list offers something that is not a shape",
   );
-  assert.match(app, /option\.textContent = mine && edited \? `\$\{name\} \(수정됨\)` : name;/,
+  assert.match(app, /option\.textContent =\s+mine && edited \? phrase\("arrange\.shape-edited", \{ name \}\) : name;/,
     "an edited pad is not said on the shape it started from");
   assert.match(app, /shapeNames\.set\(option, option\.textContent\)/,
     "the name an option goes back to is not remembered");

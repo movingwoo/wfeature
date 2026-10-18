@@ -70,7 +70,7 @@ func TestTheLibraryIsNotThePagesToRemove(t *testing.T) {
 	}
 	// The sentence is for the person who pressed the button, so it says where
 	// the file is rather than which rule refused it.
-	if !strings.Contains(recorder.Body.String(), "직접 넣은 것이라") {
+	if !saysSentence(t, "remove.library", recorder.Body.String()) {
 		t.Errorf("body = %q", recorder.Body.String())
 	}
 	if _, err := os.Stat(kept); err != nil {
@@ -117,7 +117,7 @@ func TestRemovingAGameThatIsGoneSaysSo(t *testing.T) {
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", recorder.Code)
 	}
-	if !strings.Contains(recorder.Body.String(), "이미 없습니다") {
+	if !saysSentence(t, "remove.gone", recorder.Body.String()) {
 		t.Errorf("body = %q", recorder.Body.String())
 	}
 }

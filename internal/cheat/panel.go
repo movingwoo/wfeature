@@ -67,13 +67,19 @@ type PanelHits struct {
 	Overflowed bool       `json:"overflowed"`
 }
 
-// ErrNoPreviousScan explains the one failure a user can act on, in the words
-// the panel shows. Comparing against the previous scan needs a previous scan.
-var ErrNoPreviousScan = errors.New("이 필터는 이전 검색과 비교합니다. 먼저 `이 값으로 찾기`나 `값 모름`으로 시작하세요.")
-
-// ErrPanelTooManyCandidates is ErrTooManyCandidates in the words the panel
-// shows.
-var ErrPanelTooManyCandidates = errors.New("찾은 곳이 너무 많습니다. 아는 값이나 더 드문 값으로 `이 값으로 찾기`를 하거나 u16·u32처럼 더 큰 형식을 고르세요.")
+// The panel's failures a user can act on. The page words each of them —
+// internal/webhost answers it with a sentence from web/text.properties — so
+// what they say here is for a log.
+var (
+	// ErrNoPreviousScan: comparing against the previous scan needs a
+	// previous scan.
+	ErrNoPreviousScan = errors.New("this filter compares with the previous scan; start with a value or with unknown")
+	// ErrPanelTooManyCandidates is ErrTooManyCandidates, which a panel scan
+	// meets when it starts from a value too common or a type too narrow.
+	ErrPanelTooManyCandidates = errors.New("too many candidates; search for a rarer value or a wider type")
+	// ErrNothingToUndo is an undo with no scan behind it.
+	ErrNothingToUndo = errors.New("no scan to undo")
+)
 
 // PanelScan runs one scan and answers what survived. The value type and filter
 // arrive as the names the panel uses, and are parsed through the same parser
@@ -121,7 +127,7 @@ func PanelUndo(session *Session) (PanelCandidates, error) {
 		return PanelCandidates{}, errors.New("no cheat session")
 	}
 	if !session.Scanner().Undo() {
-		return PanelCandidates{}, errors.New("되돌릴 검색이 없습니다")
+		return PanelCandidates{}, ErrNothingToUndo
 	}
 	return PanelCandidateList(session), nil
 }

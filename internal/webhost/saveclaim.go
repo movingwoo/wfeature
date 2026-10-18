@@ -76,11 +76,11 @@ func (s *Server) takeSaveClaimLocked(directory, label string) error {
 // close one: a save folder that could not be prepared would otherwise send
 // somebody looking for a game that is not running. Both end with the backend's
 // own sentence, which is what names the cause.
-func saveClaimRefusal(err error) string {
+func (s *Server) saveClaimRefusal(err error) string {
 	if errors.Is(err, backend.ErrSaveDirectoryBusy) {
-		return "세이브를 사용할 수 없습니다. 다른 실행 중인 게임이나 도구를 종료한 뒤 다시 시도하세요. " + err.Error()
+		return s.phrase("start.claim-busy", "cause", err.Error())
 	}
-	return "세이브 폴더를 준비하지 못했습니다. 다른 게임이 사용 중인 것이 아니라 폴더 자체의 문제입니다. " + err.Error()
+	return s.phrase("start.claim-failed", "cause", err.Error())
 }
 
 // claimSaveDirectory takes the claim on a save directory for a game that is

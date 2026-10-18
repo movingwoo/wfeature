@@ -45,6 +45,11 @@ import {
   keyOrder,
   loadBindings,
 } from "./keybindings.js";
+import { phrase, readPageText, useText } from "./text.js";
+
+// The page's words, which the server put in the page; see text.js. They are
+// installed before anything below can show one.
+useText(readPageText(document));
 
 // The sink is registered once the session is up and before any game starts, so
 // a game's very first sound has somewhere to go. The AudioContext behind it
@@ -204,7 +209,7 @@ const reportEndingOrError = error => {
     return;
   }
   recordEvent(`session exited during start: ${error.message}`);
-  setStatus("게임이 스스로 종료되었습니다. 다시 실행하면 이어서 볼 수 있습니다.");
+  setStatus(phrase("status.game-quit"));
 };
 
 // The last selection survives returning to the picker.
@@ -331,12 +336,24 @@ const sendKey = (eventType, name) => {
 const localControl = name =>
   name === RAPID_FIRE || name === SETTINGS || name === FULLSCREEN || isCheckpointKey(name);
 
+// The rapid-fire button says which mode it is in.
+const rapidFireModes = {
+  off: "keypad.rapid-fire.off",
+  manual: "keypad.rapid-fire.manual",
+  auto: "keypad.rapid-fire.auto",
+};
+const rapidFireCaption = () => {
+  const mode = rapidFire.mode();
+  return phrase("keypad.rapid-fire", { mode: Object.hasOwn(rapidFireModes, mode) ? phrase(rapidFireModes[mode]) : mode });
+};
+
 const drawRapidFire = () => {
   for (const button of document.querySelectorAll(`button[data-key="${RAPID_FIRE}"]`)) {
     const label = button.querySelector(".keypad-label") ?? button;
-    label.textContent = `연사 ${rapidFire.mode()}`;
+    const caption = rapidFireCaption();
+    label.textContent = caption;
     fitKeypadLabel(label);
-    button.setAttribute("aria-label", `연사 ${rapidFire.mode()}`);
+    button.setAttribute("aria-label", caption);
   }
 };
 const rapidFire = createRapidFire({ send: sendKey, changed: drawRapidFire });
@@ -389,7 +406,7 @@ const fullscreenChanged = on => {
   document.getElementById("settings-panel")?.classList.toggle("visible", panelsDocked());
   const toggle = document.getElementById("fullscreen-toggle");
   if (toggle) {
-    toggle.textContent = on ? "⛶ 전체화면 끝내기" : "⛶ 전체화면";
+    toggle.textContent = phrase(on ? "fullscreen.leave" : "fullscreen.enter");
     toggle.setAttribute("aria-pressed", String(on));
   }
   placeFullscreenExit();
@@ -784,8 +801,8 @@ const sessionStateChanged = state => {
     document.getElementById("game-start").disabled = true;
     if (state === "occupied" || state === "playing") hideGameSelect();
     if (state === "occupied") setStatus("");
-    if (state === "connecting") setStatus("서버와 연결하는 중…");
-    if (state === "offline") setStatus("서버 연결을 기다리고 있습니다. 연결되면 자동으로 돌아옵니다.");
+    if (state === "connecting") setStatus(phrase("status.connecting"));
+    if (state === "offline") setStatus(phrase("status.offline"));
   }
 };
 
@@ -893,7 +910,7 @@ const initGameSelect = async () => {
     // Always asked for, never trusted from a cache: an unchanged list costs a
     // revalidation and an added game shows at once.
     const response = await reach(fetch, "games.json", { cache: "no-cache" });
-    if (!response.ok) throw new Error(`게임 목록을 불러오지 못했습니다 (${response.status})`);
+    if (!response.ok) throw new Error(phrase("picker.list-failed", { status: response.status }));
     const games = await response.json();
     select.replaceChildren();
 
@@ -911,7 +928,7 @@ const initGameSelect = async () => {
     }
 
     if (games.length === 0) {
-      select.add(new Option("등록된 게임이 없습니다", ""));
+      select.add(new Option(phrase("picker.empty"), ""));
       syncRemoveButton(document);
       return;
     }
@@ -927,7 +944,7 @@ const initGameSelect = async () => {
 
     select.disabled = false;
     startButton.disabled = sessionLink?.state() !== "ready";
-    startButton.textContent = "실행";
+    startButton.textContent = phrase("picker.start");
     syncRemoveButton(document);
     checkpointControls?.refresh();
     if (startButton.dataset.started) return;
@@ -938,24 +955,24 @@ const initGameSelect = async () => {
 
       select.disabled = true;
       startButton.disabled = true;
-      startButton.textContent = "불러오는 중...";
+      startButton.textContent = phrase("picker.starting");
 
       try {
         rememberGame(path);
         currentGameLabel = select.options[select.selectedIndex]?.textContent ?? "";
         recordEvent(`starting ${path} on the server`);
-        setStatus("게임을 시작하는 중입니다. 수십 초 걸릴 수 있습니다.");
+        setStatus(phrase("start.status"));
         await startServerGame(path, Number(localStore.getItem(FRAME_SCALE_KEY) ?? "1"));
       } catch (error) {
         reportEndingOrError(error);
         select.disabled = false;
         startButton.disabled = sessionLink?.state() !== "ready";
-        startButton.textContent = "실행";
+        startButton.textContent = phrase("picker.start");
       }
     });
   } catch (error) {
     reportError(error);
-    select.replaceChildren(new Option("게임 목록을 불러올 수 없습니다", ""));
+    select.replaceChildren(new Option(phrase("picker.unavailable"), ""));
     syncRemoveButton(document);
   }
 };
@@ -967,8 +984,8 @@ const initRestart = () => {
     // with nothing on screen, which is a button that does nothing.
     const restart = await askToConfirm({
       document,
-      message: "게임을 처음부터 다시 시작할까요? 저장하지 않은 진행은 사라집니다.",
-      confirmLabel: "다시 시작",
+      message: phrase("restart.question"),
+      confirmLabel: phrase("restart.confirm"),
     });
     if (!restart) return;
     try { await sessionLink.stop(); } catch (error) { reportError(error); }
@@ -1001,7 +1018,7 @@ const initDebugLog = debugBuild => {
   button.addEventListener("click", async () => {
     button.disabled = true;
     const previous = button.textContent;
-    button.textContent = "저장 중...";
+    button.textContent = phrase("debug-log.saving");
     try {
       // Two halves, saved together: the server knows what the guest did, and
       // only the page knows what became of the frames and the socket.
@@ -1009,8 +1026,8 @@ const initDebugLog = debugBuild => {
       pageAudio?.reportTiming();
       const pageLog = await saveReport(currentGameLabel).catch(() => null);
       setStatus(pageLog
-        ? `세션 보고서를 ${answer.message} 에, 페이지 로그를 var/logs/${pageLog} 에 저장했습니다.`
-        : `세션 보고서를 ${answer.message} 에 저장했습니다.`);
+        ? phrase("debug-log.saved-both", { report: answer.message, page: pageLog })
+        : phrase("debug-log.saved", { report: answer.message }));
     } catch (error) {
       reportError(error);
     } finally {
@@ -1126,7 +1143,7 @@ const initSettings = () => {
   // controller's settings button reaches. Its own corner button is the other.
   const fullscreenToggle = document.getElementById("fullscreen-toggle");
   if (fullscreenToggle) {
-    fullscreenToggle.textContent = fullscreen.on ? "⛶ 전체화면 끝내기" : "⛶ 전체화면";
+    fullscreenToggle.textContent = phrase(fullscreen.on ? "fullscreen.leave" : "fullscreen.enter");
     fullscreenToggle.setAttribute("aria-pressed", String(fullscreen.on));
     fullscreenToggle.addEventListener("click", toggleFullscreen);
   }
@@ -1213,7 +1230,7 @@ const initSettings = () => {
       if (!path) return;
       rememberScreen(path, screen.value);
       if (screenNote) {
-        screenNote.textContent = gameRunning ? "다시 시작해야 새 화면 크기로 적용됩니다." : "";
+        screenNote.textContent = gameRunning ? phrase("settings.screen.restart") : "";
         screenNote.classList.toggle("hidden", !gameRunning);
       }
     });
@@ -1281,7 +1298,7 @@ const initKeyBindings = () => {
       if (!bindable(code)) {
         // Still waiting: refusing a key the browser needs is not a reason to
         // make the user open the row again.
-        setStatus("이 키는 쓸 수 없습니다. 다른 키를 누르세요.");
+        setStatus(phrase("keyboard.reserved"));
         return;
       }
       // Asked before the assignment, which is what empties the row.
@@ -1290,7 +1307,7 @@ const initKeyBindings = () => {
       pendingCapture = null;
       apply(assign(keyBindings, name, code));
       if (loser) {
-        setStatus(`${codeLabel(code)} 키를 ${keyLabel(loser)}에서 가져왔습니다. ${keyLabel(loser)}은 이제 비어 있습니다.`);
+        setStatus(phrase("keyboard.moved", { code: codeLabel(code), from: keyLabel(loser) }));
       }
     };
     render();
@@ -1314,13 +1331,13 @@ const initKeyBindings = () => {
         code.className = "key-binding-code";
         code.classList.toggle("capturing", capturing === name);
         code.classList.toggle("unbound", !bound && capturing !== name);
-        code.textContent = capturing === name ? "키를 누르세요" : codeLabel(bound) || "없음";
+        code.textContent = capturing === name ? phrase("keyboard.press") : codeLabel(bound) || phrase("keyboard.none");
         code.addEventListener("click", () => (capturing === name ? stopCapture() : startCapture(name)));
 
         const drop = document.createElement("button");
         drop.className = "key-binding-clear";
         drop.textContent = "✕";
-        drop.setAttribute("aria-label", `${keyLabel(name)} 키 비우기`);
+        drop.setAttribute("aria-label", phrase("keyboard.clear", { key: keyLabel(name) }));
         drop.disabled = !bound;
         drop.addEventListener("click", () => {
           if (capturing === name) stopCapture();
@@ -1420,10 +1437,8 @@ const initPadBindings = () => {
   const render = () => {
     if (status) {
       status.textContent = shown === null
-        ? "패드 버튼을 아무거나 누르면 연결됩니다."
-        : shown.standard
-          ? `연결됨: ${shown.id}`
-          : `연결됨: ${shown.id} — 표준 배치로 읽히지 않는 패드입니다. 버튼을 눌러 밝아지는 줄에서 직접 정해 주세요.`;
+        ? phrase("pad.waiting")
+        : phrase(shown.standard ? "pad.connected" : "pad.connected-raw", { id: shown.id });
     }
     const bound = table();
     const naming = shown ?? { standard: true, family: "xbox" };
@@ -1438,8 +1453,8 @@ const initPadBindings = () => {
       const select = document.createElement("select");
       select.className = "pad-binding-target";
       select.dataset.input = input;
-      select.setAttribute("aria-label", `${label.textContent}에 둘 키`);
-      select.append(new Option(targetLabel(""), ""), group("전화기 키", keyOrder), group("페이지 기능", padActions));
+      select.setAttribute("aria-label", phrase("pad.target", { control: label.textContent }));
+      select.append(new Option(targetLabel(""), ""), group(phrase("pad.group.phone"), keyOrder), group(phrase("pad.group.page"), padActions));
       select.value = bound[input] ?? "";
       select.addEventListener("change", () => choose(input, select.value));
       row.append(label, select);
@@ -1623,7 +1638,7 @@ const initCheat = () => {
 
   const renderResults = result => {
     lastCount = result.count;
-    countLabel.textContent = `${result.count.toLocaleString()}개`;
+    countLabel.textContent = phrase("cheat.count", { count: result.count.toLocaleString() });
     results.replaceChildren();
 
     for (const item of result.items) {
@@ -1639,7 +1654,7 @@ const initCheat = () => {
       value.textContent = String(item.value);
 
       const freeze = document.createElement("button");
-      freeze.textContent = "고정";
+      freeze.textContent = phrase("cheat.freeze");
       freeze.addEventListener("click", () => run(async () => {
         renderFrozen(await cheat.freeze(item.address, item.value, valueType()));
       }));
@@ -1651,7 +1666,7 @@ const initCheat = () => {
     if (result.count > result.items.length) {
       const more = document.createElement("div");
       more.className = "cheat-more";
-      more.textContent = `... 외 ${(result.count - result.items.length).toLocaleString()}개. 더 좁혀보세요.`;
+      more.textContent = phrase("cheat.more", { count: (result.count - result.items.length).toLocaleString() });
       results.appendChild(more);
     }
   };
@@ -1677,7 +1692,7 @@ const initCheat = () => {
       }));
 
       const remove = document.createElement("button");
-      remove.textContent = "해제";
+      remove.textContent = phrase("cheat.unfreeze");
       remove.addEventListener("click", () => run(async () => {
         renderFrozen(await cheat.unfreeze(entry.address));
       }));
@@ -1728,7 +1743,7 @@ const initCheat = () => {
     if (!hitsList || !value) return;
     hitsList.textContent = "";
     if (value.items.length === 0) {
-      hitsList.textContent = "아직 기록된 쓰기가 없습니다.";
+      hitsList.textContent = phrase("cheat.hits.none");
       return;
     }
     for (const hit of value.items) {
@@ -1743,15 +1758,15 @@ const initCheat = () => {
       // A platform whose code is not in the address space names the writer
       // instead of addressing it, and sends that name as `site`.
       const where = hit.site ? hit.site : `pc ${hex(hit.pc)}`;
-      const writer = hit.origin === "host" ? `호스트 · 직전 ${where}` : where;
-      detail.textContent = `${writer} · ${hit.count}회 · ${hex(hit.value)}`;
+      const writer = hit.origin === "host" ? phrase("cheat.hits.host", { where }) : where;
+      detail.textContent = phrase("cheat.hits.row", { writer, count: hit.count, value: hex(hit.value) });
       row.append(address, detail);
       hitsList.append(row);
     }
     if (value.overflowed) {
       const note = document.createElement("div");
       note.className = "cheat-more";
-      note.textContent = "쓰기 지점이 너무 많아 일부가 빠졌습니다.";
+      note.textContent = phrase("cheat.hits.overflow");
       hitsList.append(note);
     }
   };
@@ -1759,7 +1774,7 @@ const initCheat = () => {
   document.getElementById("cheat-watch-add")?.addEventListener("click", () => run(async () => {
     const address = parseAddressInput(watchAddress?.value);
     if (address === null) {
-      setCheatStatus("주소를 0x… 형식으로 입력하세요.");
+      setCheatStatus(phrase("cheat.watch.bad-address"));
       return;
     }
     await cheat.watch(address);
@@ -1794,7 +1809,7 @@ const initCheat = () => {
     run(async () => {
       const loaded = await cheat.loadTable(text);
       if (!loaded) return;
-      setCheatStatus(`${loaded.applied}개 값을 적용했습니다.`);
+      setCheatStatus(phrase("cheat.table.applied", { count: loaded.applied }));
       renderFrozen(await cheat.frozen());
       renderHits(await cheat.hits());
     });
@@ -1856,7 +1871,7 @@ const main = async () => {
 
   let profileWired = false;
   sessionLink = createSessionLink({
-    confirmStart: message => askToConfirm({ document, message, confirmLabel: "종료하고 시작" }),
+    confirmStart: message => askToConfirm({ document, message, confirmLabel: phrase("start.replace-confirm") }),
     token: browserToken(localStore, sessionStore),
     connect: openSession,
     visible: () => !document.hidden,
@@ -1873,7 +1888,7 @@ const main = async () => {
     onStarted: sessionStarted,
     onExited: reason => {
       recordEvent(`session exited: ${reason}`);
-      setStatus("게임이 종료되었습니다. 목록에서 다시 실행할 수 있습니다.");
+      setStatus(phrase("status.game-ended"));
     },
   });
   initResumeOnReturn();

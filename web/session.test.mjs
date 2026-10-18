@@ -3,6 +3,8 @@ import { test } from "node:test";
 
 import { createRapidFire } from "./rapid-fire.js";
 import { GameSession, decodeSamples, playAudioEvents } from "./session.js";
+import "./text-fixture.mjs";
+import { phrase } from "./text.js";
 
 // The audio path is where the session protocol has to be exactly right and
 // cannot be checked by looking at the screen: a wrong sample decode is not
@@ -407,7 +409,7 @@ test("a token the server no longer holds resolves rather than throwing", async (
 
   const asking = session.resume("expired");
   const sent = socket.sent.at(-1);
-  socket.deliver({ kind: "resumed", id: sent.id, resumed: false, message: "이어서 진행할 게임이 없습니다." });
+  socket.deliver({ kind: "resumed", id: sent.id, resumed: false, message: phrase("resume.none") });
 
   // The page decides what to do about it: forget the token and offer the game
   // list. A rejection here would turn the ordinary end of a long absence into
@@ -541,7 +543,7 @@ test("closing the transport rejects pending requests without waiting for a socke
   const { session } = await openFakeSession();
   const asking = session.park();
   session.close();
-  await assert.rejects(asking, /세션 연결이 끊어졌습니다/);
+  await assert.rejects(asking, { message: phrase("session.disconnected") });
   assert.equal(session.pending.size, 0);
 });
 
@@ -649,7 +651,7 @@ test("quick load resets pending picture decoding, audio definitions and input be
   await new Promise(resolve => setImmediate(resolve));
   socket.deliverFrame(soundMessage([0x10, ...word(1), ...word(2), 1, 0]));
   assert.equal(session.audio.definitions.size, 1);
-  const oldCheat = assert.rejects(session.ask({ kind: "cheat", op: "frozen" }), /이전 요청/);
+  const oldCheat = assert.rejects(session.ask({ kind: "cheat", op: "frozen" }), { message: phrase("session.cancelled-by-load") });
   const loading = session.quickLoad();
   const request = socket.sent.at(-1);
   const sentBefore = socket.sent.length;

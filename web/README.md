@@ -433,6 +433,53 @@ writes that slot. Future versions and oversized records are not overwritten.
 Failed writes retain a working layout for the current tab and show an inline
 notice. The service worker's shell cache carries all three grid modules.
 
+## Text
+
+Every sentence and label a player reads on the page is in
+[`text.properties`](text.properties): the markup's buttons and headings, what
+the scripts write into the page — key names, status lines, the notes over the
+game screen, a question and its buttons — and what the server answers the page
+with, such as why an upload or a save import was refused. Rewording the page is
+an edit to that file and nothing else. A server serving this directory (`-web
+web`, which is what a checkout does) shows the edit on the next reload; a
+release carries the file in its binary. The words quoted elsewhere in this
+document are the file's current ones.
+
+The format is a strict subset of Java's: UTF-8, one `key = value` per line, and
+`#` starting a comment line. The value is the rest of the line without the
+spaces and tabs around it; there are no escapes and no continuation lines. A
+`{name}` in a value is filled in when the sentence is shown — `{count}개`,
+`{name} 을(를) 지웠습니다.` — from what the code that shows it passes, and a
+value without one is shown as written. Keys are named for where their text
+appears: `picker.*` the game picker, `key.*` the phone keys and the page's own
+controls, `pad.*` the game controller list, and so on, each group under a
+comment that says what it is.
+
+The server reads the file (`internal/webhost/text.go`) and refuses to start on
+a line that is neither a comment nor `key = value`, on a key written twice, and
+on a placeholder in `index.html` the file does not have. The markup names each
+of its words as `{{key}}`, which the server fills, escaped, before the page is
+sent, and `{{@table}}` is the whole table as JSON in `#page-text`: `app.js`
+installs it before anything else runs, and every script reads a sentence
+through `phrase(key, values)` in `text.js`, when it shows one rather than when
+it loads. The server words its own answers from the same table, so a sentence
+the page and the server both say is said once. A key the table does not have
+shows as the key itself rather than as nothing.
+
+`text.test.mjs` keeps it that way. It reads the file the way the server does —
+the cases in `testdata/text-format.json`, which `internal/webhost` runs against
+its own reader — and fails on a key the page or the server asks for that the
+file lacks, on a key in the file that nothing asks for, and on Korean written
+into a script, the markup or the stylesheet instead of the file; the Go tests
+fail on Korean written into the server or into `internal/cheat`, whose panel
+refusals the server words. The page's tests and the browser routes in
+`acceptance/` compare with `phrase(...)` rather than with copied sentences, so
+a reworded file does not fail them.
+
+What the emulated phone itself shows is the game's, not the page's: a soft-key
+label a platform draws on the game screen and the replies a title's network
+service is answered with stay with the platform that produces them.
+
 ## Server
 
 `go run ./cmd/server` serves this directory, the game archives and the save API
@@ -443,7 +490,9 @@ the emulator is Go and the server hosts emulation sessions in the same process;
 `internal/webhost` holds the routes. A released binary carries the files in
 this directory inside it (`embed.go`) and serves a directory instead when
 `-web` names one that exists, which is what a checkout does so an edit shows up
-on a reload. The profile served is the binary that is running, not a flag.
+on a reload. The page itself is sent with its words filled in from
+`text.properties` (see [Text](#text)). The profile served is the binary that is
+running, not a flag.
 
 - `GET /games.json` — `[{ group, name, path, added? }]` read from `-games`
   (`var/games`) and `-ext` (`var/ext`) on every request, listing the `.zip` and
@@ -496,7 +545,7 @@ offline, where it comes up and then fails on an import. `service-worker.test.mjs
 therefore compares the list against what `index.html` names and what the module
 graph from `app.js` reaches; two modules had already drifted out of it. A
 change to the list wants the cache name bumped with it. The shell cache is
-`wfeature-pwa-v58` (the constant in `service-worker.js`). The `wfeature-pwa-`
+`wfeature-pwa-v59` (the constant in `service-worker.js`). The `wfeature-pwa-`
 prefix, introduced in version 35, keeps already-installed workers from deleting
 it through their broad `wfeature-shell-*` cleanup. Activation removes legacy
 shell caches and strictly older `wfeature-pwa-vN` versions, preserving future

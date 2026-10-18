@@ -1,5 +1,7 @@
 // Connection ownership and recovery, independent of the page's DOM.
 // The browser token is a capability for one current game, not a save owner.
+import { phrase } from "./text.js";
+
 export const browserTokenKey = "wfeature.browser-token";
 export const browserToken = (storage, legacy, random = globalThis.crypto) => {
   const valid = value => /^[0-9a-f]{32}$/i.test(value ?? "");
@@ -145,7 +147,7 @@ export const createSessionLink = ({
       change(blocked ? "occupied" : "offline");
     },
     start: (path, scale, screen, quickLoad = false) => {
-      if (task || !socket || state !== "ready") return Promise.reject(new Error("서버 연결을 기다려 주세요."));
+      if (task || !socket || state !== "ready") return Promise.reject(new Error(phrase("session.wait-server")));
       return run(async () => {
         change("starting");
         try {
@@ -153,7 +155,7 @@ export const createSessionLink = ({
           let response = await current.start(path, scale, screen, token, "", quickLoad);
           while (response.confirmation) {
             const accepted = await confirmStart(response.message);
-            if (socket !== current || current.closed) throw new Error("세션 연결이 끊어졌습니다.");
+            if (socket !== current || current.closed) throw new Error(phrase("session.disconnected"));
             if (!accepted) { change("ready"); return; }
             response = await current.start(path, scale, screen, token, response.confirmation, quickLoad);
           }
@@ -166,7 +168,7 @@ export const createSessionLink = ({
       });
     },
     stop: () => {
-      if (task || !socket || state !== "playing") return Promise.reject(new Error("게임 연결을 기다려 주세요."));
+      if (task || !socket || state !== "playing") return Promise.reject(new Error(phrase("session.wait-game")));
       return run(async () => {
         change("stopping");
         try { await socket.stop(); change(blocked ? "occupied" : "ready"); }

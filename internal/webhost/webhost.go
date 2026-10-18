@@ -101,7 +101,10 @@ type Options struct {
 // Server answers every route the client uses. Its zero value is not usable;
 // build one with New.
 type Server struct {
-	client    fs.FS
+	client fs.FS
+	// text is the table of everything the page says, read out of client; see
+	// text.go.
+	text      *pageText
 	gameRoot  string
 	addedRoot string
 	saveRoot  string
@@ -161,8 +164,9 @@ func New(options Options) (*Server, error) {
 	if logger == nil {
 		logger = backend.NewLogger(io.Discard)
 	}
-	return &Server{
+	server := &Server{
 		client:          options.Client,
+		text:            &pageText{files: options.Client},
 		gameRoot:        options.GameRoot,
 		addedRoot:       options.AddedRoot,
 		saveRoot:        options.SaveRoot,
@@ -173,7 +177,14 @@ func New(options Options) (*Server, error) {
 		diagnostics:     backend.DebugBuild(),
 		version:         options.Version,
 		requestShutdown: options.RequestShutdown,
-	}, nil
+	}
+	// The page is filled from the text file on every load, so a file that does
+	// not read, or a page naming a sentence the file does not have, would fail
+	// every load from the first; a server says so when it starts instead.
+	if _, err := server.renderClientPage(); err != nil {
+		return nil, fmt.Errorf("webhost: %w", err)
+	}
+	return server, nil
 }
 
 // sessionTraceLimit is the debug profile's ordered-trace depth. It is the
@@ -407,6 +418,17 @@ func (s *Server) serveClient(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	name := path.Join(components...)
+	if name == pageFile {
+		// The page is sent with its words filled in; see text.go.
+		content, err := s.renderClientPage()
+		if err != nil {
+			s.logger.Error("could not fill the page from its text", "error", err)
+			writeError(writer, http.StatusInternalServerError, "Internal Server Error")
+			return
+		}
+		s.serveRevalidated(writer, request, contentType(name), content)
+		return
+	}
 	content, err := fs.ReadFile(s.client, name)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, "Not Found")

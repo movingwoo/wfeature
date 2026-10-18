@@ -3,6 +3,7 @@ import { QUICK_SAVE, QUICK_LOAD } from "./checkpoint.js";
 import { FULLSCREEN } from "./fullscreen.js";
 import { local } from "./storage.js";
 import { keyLabel, keyOrder } from "./keybindings.js";
+import { phrase } from "./text.js";
 
 export const COLUMNS = 14;
 export const ROWS = 9;
@@ -28,14 +29,16 @@ const directKeys = new Set([...localKeys, "MENU", "CALL", "SOFT2", "CLR"]);
 export const defaultActivation = (key) =>
   directKeys.has(key) ? "press" : "slide";
 const localNames = {
-  [RAPID_FIRE]: "연사",
-  [QUICK_SAVE]: "퀵세이브",
-  [QUICK_LOAD]: "퀵로드",
-  [SETTINGS]: "설정",
-  [FULLSCREEN]: "전체화면",
+  [RAPID_FIRE]: "key.RAPID_FIRE",
+  [QUICK_SAVE]: "key.QUICK_SAVE",
+  [QUICK_LOAD]: "key.QUICK_LOAD",
+  [SETTINGS]: "key.SETTINGS",
+  [FULLSCREEN]: "key.FULLSCREEN",
 };
-export const keyName = (key) => localNames[key] ?? keyLabel(key);
-export const keyFace = (key) => (key === "OK" ? "OK" : keyName(key));
+export const keyName = (key) =>
+  Object.hasOwn(localNames, key) ? phrase(localNames[key]) : keyLabel(key);
+export const keyFace = (key) =>
+  key === "OK" ? phrase("key.face.OK") : keyName(key);
 
 export const cells = Array.from({ length: ROWS * COLUMNS }, (_, index) => ({
   id: `r${Math.floor(index / COLUMNS) + 1}c${(index % COLUMNS) + 1}`,

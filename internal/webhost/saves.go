@@ -94,7 +94,7 @@ func (s *Server) listSaves(writer http.ResponseWriter, ownerRoot string) {
 	backend.WarnSaveLockFallback(s.logger, ownerRoot)
 	if err != nil {
 		s.logger.Warn("save directory unreadable", "path", ownerRoot, "error", err)
-		writeError(writer, http.StatusInternalServerError, "세이브를 읽지 못했습니다.")
+		writeError(writer, http.StatusInternalServerError, s.phrase("savepack.read-failed"))
 		return
 	}
 	for _, entry := range entries {

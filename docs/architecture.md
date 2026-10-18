@@ -32,7 +32,7 @@ apps wrap the same server. There is no desktop shell.
 | `internal/launcher` | Answers whether a server is running and stops it through `/api/status` and `/api/shutdown`; a port held by another process is reported and left alone. |
 | `internal/appserver` | Runs the server inside another program on loopback and returns its port, without owning a signal handler, a logger or the exit. |
 | `internal/licenses` | The project licence and third-party notices, embedded in every binary. |
-| `web` | The browser client, embedded in the server binary. |
+| `web` | The browser client, embedded in the server binary. Every sentence a player reads is in `web/text.properties`; `internal/webhost` fills the page from it and words its own answers with it ([web host](../web/README.md#text)). |
 | `mobile/android`, `mobile/ios` | The phone apps: a web view in front of the same server. Android runs the server binary as a child process. iOS does not let an app start a process, so `mobile/ios/lib` compiles `internal/appserver` into a `c-archive` that the app links and calls. See [mobile](mobile.md). |
 
 ### Runtime

@@ -18,6 +18,8 @@ import {
   targetLabel,
 } from "./gamepad.js";
 import { createKeyHolds } from "./key-holds.js";
+import "./text-fixture.mjs";
+import { phrase } from "./text.js";
 import { keyOrder } from "./keybindings.js";
 import { SETTINGS } from "./keypad-layout.js";
 import { RAPID_FIRE } from "./rapid-fire.js";
@@ -176,23 +178,25 @@ test("controls are named the way the controller in hand prints them", () => {
   // Android's name for one, with no vendor number in it.
   assert.equal(padFamily("Sony Interactive Entertainment Wireless Controller"), "playstation");
   assert.equal(padFamily("Pro Controller (STANDARD GAMEPAD Vendor: 057e Product: 2009)"), "nintendo");
-  assert.equal(inputLabel("b0", { family: "xbox" }), "A (아래)");
-  assert.equal(inputLabel("b0", { family: "playstation" }), "✕ (아래)");
+  const bottom = phrase("pad.side.bottom");
+  assert.equal(inputLabel("b0", { family: "xbox" }), phrase("pad.face", { name: "A", side: bottom }));
+  assert.equal(inputLabel("b0", { family: "playstation" }), phrase("pad.face", { name: "✕", side: bottom }));
   // The bottom button of a Nintendo controller is B: the layout is by place.
-  assert.equal(inputLabel("b0", { family: "nintendo" }), "B (아래)");
-  assert.equal(inputLabel("b1", { family: "nintendo" }), "A (오른쪽)");
+  assert.equal(inputLabel("b0", { family: "nintendo" }), phrase("pad.face", { name: "B", side: bottom }));
+  assert.equal(inputLabel("b1", { family: "nintendo" }), phrase("pad.face", { name: "A", side: phrase("pad.side.right") }));
   assert.equal(inputLabel("b6", { family: "playstation" }), "L2");
   assert.equal(inputLabel("b9", { family: "xbox" }), "Menu");
-  assert.equal(inputLabel("b12"), "십자 ↑");
-  assert.equal(inputLabel("ls-left"), "왼스틱 ←");
-  assert.equal(inputLabel("rs-upleft"), "오른스틱 ↖");
-  assert.equal(inputLabel("b0", { standard: false }), "버튼 1");
-  assert.equal(inputLabel("a2-", { standard: false }), "축 3 −");
-  assert.equal(inputLabel("h9-up", { standard: false }), "십자 ↑ (축 10)");
-  assert.equal(targetLabel(""), "없음");
-  assert.equal(targetLabel("CLR"), "취소");
-  assert.equal(targetLabel(RAPID_FIRE), "연사");
-  assert.equal(targetLabel(FULLSCREEN), "전체화면");
+  assert.equal(inputLabel("b10"), phrase("pad.stick.left-press"));
+  assert.equal(inputLabel("b12"), phrase("pad.dpad", { direction: "↑" }));
+  assert.equal(inputLabel("ls-left"), phrase("pad.stick.left", { direction: "←" }));
+  assert.equal(inputLabel("rs-upleft"), phrase("pad.stick.right", { direction: "↖" }));
+  assert.equal(inputLabel("b0", { standard: false }), phrase("pad.button", { number: 1 }));
+  assert.equal(inputLabel("a2-", { standard: false }), phrase("pad.axis", { number: 3, sign: "−" }));
+  assert.equal(inputLabel("h9-up", { standard: false }), phrase("pad.hat", { direction: "↑", number: 10 }));
+  assert.equal(targetLabel(""), phrase("pad.none"));
+  assert.equal(targetLabel("CLR"), phrase("key.CLR"));
+  assert.equal(targetLabel(RAPID_FIRE), phrase("key.RAPID_FIRE"));
+  assert.equal(targetLabel(FULLSCREEN), phrase("key.FULLSCREEN"));
   assert.deepEqual(padActions.filter(isPadAction), padActions);
   assert.ok(!isPadAction("OK"));
 });

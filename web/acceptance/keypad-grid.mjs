@@ -11,6 +11,7 @@ import {
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import net from "node:net";
+import { phrase, rapidFire } from "./page-text.mjs";
 
 const [binary, engineName = "chromium"] = process.argv.slice(2);
 if (!binary || !process.env.PLAYWRIGHT_MODULE)
@@ -286,9 +287,9 @@ try {
     await page.locator("#keypad-arrange-multiple").getAttribute("aria-pressed"),
     "true",
   );
-  assert.match(
+  assert.equal(
     await page.locator("#keypad-arrange-hint").textContent(),
-    /서로 다른 키/,
+    phrase("arrange.error.choose-key"),
   );
   await page.locator('#keypad-arrange-keys button[data-assign="3"]').click();
   await page.locator("#keypad-arrange-merge").click();
@@ -513,7 +514,7 @@ try {
     await page.locator('[data-cell="r1c8"]').click();
     assert.equal(
       await page.locator('[data-cell="r1c8"] .keypad-label').textContent(),
-      `연사 ${mode}`,
+      rapidFire(mode),
     );
     await labelsFit();
   }

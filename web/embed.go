@@ -5,7 +5,8 @@
 // be unpacked next to it.
 //
 // The shell is all there is to carry: the emulator runs in this same binary and
-// the page draws the frames a session sends it.
+// the page draws the frames a session sends it. text.properties travels with
+// it, because the server fills the page from it; see internal/webhost/text.go.
 package web
 
 import (
@@ -13,7 +14,7 @@ import (
 	"io/fs"
 )
 
-//go:embed *.html *.js *.css *.png *.webmanifest
+//go:embed *.html *.js *.css *.png *.webmanifest *.properties
 var files embed.FS
 
 // Client returns the embedded PWA shell, rooted where the page expects it:

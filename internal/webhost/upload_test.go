@@ -136,7 +136,7 @@ func TestAnUploadThatIsTooLargeSaysSo(t *testing.T) {
 	}
 	// The sentence is for the person who picked the file, so it is in their
 	// language rather than an HTTP reason phrase.
-	if !strings.Contains(recorder.Body.String(), "너무 큽니다") {
+	if !saysSentence(t, "add.too-large", recorder.Body.String()) {
 		t.Errorf("body = %q", recorder.Body.String())
 	}
 }

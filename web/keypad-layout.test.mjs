@@ -13,6 +13,8 @@ import {
   keyFace,
 } from "./keypad-layout.js";
 import { keyOrder } from "./keybindings.js";
+import "./text-fixture.mjs";
+import { phrase } from "./text.js";
 
 // Recorded old assignments keep migration tests independent of current defaults.
 const asDrawn = {
@@ -108,8 +110,10 @@ test("migration preserves the recorded handset arrangement of every preset", () 
 test("settings is a local action with a stable accessible name", () => {
   assert.ok(assignable.includes(SETTINGS));
   assert.ok(!keyOrder.includes(SETTINGS));
-  assert.equal(keyName(SETTINGS), "설정");
-  assert.equal(keyFace("OK"), "OK");
+  assert.equal(keyName(SETTINGS), phrase("key.SETTINGS"));
+  assert.equal(keyFace("OK"), phrase("key.face.OK"));
+  // The centre key's button says one thing and its name elsewhere another.
+  assert.equal(keyName("OK"), phrase("key.OK"));
 });
 
 test("legacy corruption retains exactly one settings action and drops unknown keys", () => {

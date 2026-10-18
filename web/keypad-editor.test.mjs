@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { initKeypadEditor, fitKeypadLabel } from "./keypad-editor.js";
 import { createKeypadLayout } from "./keypad-layout.js";
+import "./text-fixture.mjs";
+import { phrase } from "./text.js";
 
 // Exercise the actual editor handlers with DOM stubs and explicit font metrics.
 // These metrics do not establish rendered text or browser hit testing.
@@ -195,7 +197,7 @@ test("a conflicting merge keeps its selection until a key is chosen", () => {
   assert.equal(f.control("multiple").getAttribute("aria-pressed"), "true");
   for (const id of ["r2c2", "r2c3"])
     assert.equal(f.cell(id).getAttribute("aria-pressed"), "true");
-  assert.match(f.control("hint").textContent, /서로 다른 키/);
+  assert.equal(f.control("hint").textContent, phrase("arrange.error.choose-key"));
   f.key("3").click();
   assert.equal(f.stored().keyAt("r2c2"), "1");
   assert.equal(f.stored().keyAt("r2c3"), "2");
@@ -256,7 +258,10 @@ test("a dynamic label refits when its text changes without retaining an old shri
   f.pick("r2c2");
   f.key("RAPID_FIRE").click();
   const label = f.label("r2c2");
-  for (const text of ["연사 off", "연사 manual", "연사 auto", "연사 off"]) {
+  const captions = ["off", "manual", "auto", "off"].map((mode) =>
+    phrase("keypad.rapid-fire", { mode: phrase(`keypad.rapid-fire.${mode}`) }),
+  );
+  for (const text of captions) {
     label.textContent = text;
     fitKeypadLabel(label);
     const fitted = fontSize(label);

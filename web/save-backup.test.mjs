@@ -9,6 +9,8 @@ import {
   importSave,
   initSaveBackup,
 } from "./save-backup.js";
+import "./text-fixture.mjs";
+import { phrase } from "./text.js";
 
 const GAME = "games/skt/%EA%B2%8C%EC%9E%84.jar";
 
@@ -49,9 +51,9 @@ test("the game travels in the query, percent-encoded once", async () => {
 // longer usable. Rewording them here would flatten them back into one.
 test("the server's own words are what the person reads", async () => {
   for (const sentence of [
-    "이 백업은 다른 게임의 것입니다. 백업 1a2b3c4d, 지금 게임 5e6f7a8b.",
-    "백업 파일이 손상되었습니다. 옮기는 중에 파일이 깨진 것이니 다시 내보내거나 다시 옮겨 오세요.",
-    "이 게임이 실행 중입니다(다른 창). 그 창에서 게임을 멈춘 뒤 다시 가져오세요.",
+    phrase("savepack.other-game", { backup: "1a2b3c4d", current: "5e6f7a8b" }),
+    phrase("savepack.damaged"),
+    phrase("savepack.running", { holder: "다른 창" }),
   ]) {
     await assert.rejects(
       () => importSave(GAME, new Uint8Array(), async () => refused(409, sentence)),
@@ -63,15 +65,19 @@ test("the server's own words are what the person reads", async () => {
 test("a refusal with nothing to say still says something", async () => {
   await assert.rejects(
     () => exportSave(GAME, async () => refused(500, "   ")),
-    { message: "세이브를 내보내지 못했습니다 (500)" },
+    { message: phrase("savepack.export-failed", { status: 500 }) },
   );
 });
 
 test("what a restore did is said, not hidden behind a tick", () => {
-  assert.match(describeImport({ written: 3, removed: 0 }), /세이브 3개를 복원/);
-  assert.doesNotMatch(describeImport({ written: 3, removed: 0 }), /지웠습니다/);
-  assert.match(describeImport({ written: 3, removed: 4 }), /4개는 지웠습니다/);
-  assert.match(describeImport(), /세이브 0개/);
+  const restored = count => phrase("savepack.restored", { count });
+  const restart = phrase("savepack.restart");
+  assert.equal(describeImport({ written: 3, removed: 0 }), `${restored(3)} ${restart}`);
+  assert.equal(
+    describeImport({ written: 3, removed: 4 }),
+    `${restored(3)} ${phrase("savepack.removed", { count: 4 })} ${restart}`,
+  );
+  assert.equal(describeImport(), `${restored(0)} ${restart}`);
 });
 
 // A minimal stand-in for the three elements the page has, so the wiring below
@@ -132,7 +138,7 @@ test("nothing is sent until a game is chosen", async () => {
   await page.fire("save-import", "click");
   assert.equal(calls, 0);
   assert.equal(page.elements.get("save-import-file").clicked, 0);
-  assert.deepEqual(messages, ["먼저 게임을 고르세요.", "먼저 게임을 고르세요."]);
+  assert.deepEqual(messages, [phrase("savepack.choose-game"), phrase("savepack.choose-game")]);
 });
 
 test("an import asks before it replaces what is there", async () => {
@@ -197,7 +203,7 @@ test("an Android web view is handed the bytes rather than a download", async () 
   await settle();
   assert.deepEqual(handed, [[`게임${SAVE_BACKUP_EXTENSION}`, "AAEC+v8="]]);
   assert.equal(page.created.length, 0, "no anchor: the web view would drop it");
-  assert.deepEqual(messages, ["저장할 위치를 고르세요."]);
+  assert.deepEqual(messages, [phrase("savepack.choose-place")]);
 });
 
 test("an iOS web view is handed the same two things", async () => {
@@ -293,13 +299,13 @@ test("an import asks in the page's own dialog rather than through window.confirm
       page.fire("save-import-file", "change");
       await settle();
       assert.ok(page.classes.has("visible"), "the page's own question is on screen");
-      assert.match(page.text.textContent, /백업 파일로 되돌립니다/);
-      assert.equal(page.accept.textContent, "가져오기");
+      assert.equal(page.text.textContent, phrase("savepack.import-question"));
+      assert.equal(page.accept.textContent, phrase("savepack.import-confirm"));
       assert.equal(posts, 0, "nothing is sent before the answer");
       page.listeners[accepted ? "accept:click" : "cancel:click"]();
       await settle();
       assert.equal(posts, accepted ? 1 : 0, accepted ? "a yes restores" : "a no sends nothing");
-      if (accepted) assert.match(messages.at(-1), /세이브 2개를 복원/);
+      if (accepted) assert.equal(messages.at(-1), `${phrase("savepack.restored", { count: 2 })} ${phrase("savepack.restart")}`);
     }
   } finally {
     globalThis.confirm = original;
@@ -328,12 +334,12 @@ test("an import with no way to ask sends nothing", async () => {
 // A request that never reached the server rejects with the browser's own
 // sentence — "Failed to fetch", "Load failed" — which is English and says
 // nothing a player can act on.
-test("a server that cannot be reached is said in Korean, not in the browser's words", async () => {
+test("a server that cannot be reached is said in the page's words, not in the browser's", async () => {
   const unreachable = async () => {
     throw new TypeError("Failed to fetch");
   };
-  await assert.rejects(() => exportSave(GAME, unreachable), { message: /^서버에 연결하지 못했습니다/ });
-  await assert.rejects(() => importSave(GAME, new Uint8Array(), unreachable), { message: /^서버에 연결하지 못했습니다/ });
+  await assert.rejects(() => exportSave(GAME, unreachable), { message: phrase("network.unreachable") });
+  await assert.rejects(() => importSave(GAME, new Uint8Array(), unreachable), { message: phrase("network.unreachable") });
   const page = pageOf();
   const messages = [];
   initSaveBackup({
@@ -346,6 +352,5 @@ test("a server that cannot be reached is said in Korean, not in the browser's wo
   page.fire("save-export", "click");
   await settle();
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /^서버에 연결하지 못했습니다/);
-  assert.doesNotMatch(messages[0], /fetch/i);
+  assert.equal(messages[0], phrase("network.unreachable"));
 });

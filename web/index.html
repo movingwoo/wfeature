@@ -22,6 +22,11 @@
     <link rel="apple-touch-icon" href="apple-touch-icon.png" />
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="stylesheet" href="style.css" />
+    <!-- Every word on this page is in text.properties. The server fills each
+         key in double braces below with its sentence before the page is sent,
+         and this element with the whole table, which the scripts read through
+         text.js. -->
+    <script id="page-text" type="application/json">{{@table}}</script>
     <script src="app.js" type="module"></script>
   </head>
   <body>
@@ -33,8 +38,8 @@
       <aside class="rail rail-left">
         <section class="rail-card log-card">
           <header class="rail-card-head">
-            <span>📜 로그</span>
-            <button id="log-clear" class="rail-card-action">지우기</button>
+            <span>{{log.title}}</span>
+            <button id="log-clear" class="rail-card-action">{{log.clear}}</button>
           </header>
           <div id="log-view" class="log-view"></div>
         </section>
@@ -47,9 +52,9 @@
           <div class="prestart" id="prestart">
             <div class="prestart-row">
               <select id="game-select" class="game-select" disabled>
-                <option value="">게임 목록 불러오는 중...</option>
+                <option value="">{{picker.loading}}</option>
               </select>
-              <button id="game-start" class="game-start" disabled>실행</button>
+              <button id="game-start" class="game-start" disabled>{{picker.start}}</button>
             </div>
             <!-- A phone has no folder to put a game in: Android does not let a
                  file manager open the directory an app keeps its files in. So
@@ -58,13 +63,13 @@
                  games; the button beside it is what a person reads. -->
             <div class="prestart-row">
               <input type="file" id="game-file" class="game-file" accept=".zip,.jar,application/zip,application/java-archive" multiple />
-              <button id="game-add" class="game-add">＋ 게임 추가</button>
+              <button id="game-add" class="game-add">{{add.button}}</button>
               <!-- Only what this page added can go, so the button greys out on
                    a game that was put beside the server by hand. It stays on
                    screen rather than appearing and disappearing with the
                    selection: a control that comes and goes reads as a glitch,
                    and a disabled one says there is a rule. -->
-              <button id="game-remove" class="game-add game-remove" disabled>게임 삭제</button>
+              <button id="game-remove" class="game-add game-remove" disabled>{{remove.button}}</button>
             </div>
             <!-- The save tree lives beside the server, so from here a player's
                  progress is somewhere they cannot point at — and on a phone it
@@ -76,38 +81,38 @@
                  it would replace is not running. -->
             <div class="prestart-row">
               <input type="file" id="save-import-file" class="game-file" accept=".wfs" />
-              <button id="save-export" class="game-add save-backup">세이브 내보내기</button>
-              <button id="save-import" class="game-add save-backup">세이브 가져오기</button>
+              <button id="save-export" class="game-add save-backup">{{savepack.export}}</button>
+              <button id="save-import" class="game-add save-backup">{{savepack.import}}</button>
             </div>
           </div>
 
           <div class="prestart hidden" id="session-return" inert>
-            <p>다른 화면에서 게임을 진행 중입니다.</p>
-            <button id="session-takeover" class="game-start">이 화면에서 이어하기</button>
+            <p>{{resume.elsewhere}}</p>
+            <button id="session-takeover" class="game-start">{{resume.takeover}}</button>
           </div>
 
           <!-- The editor covers the game screen and keeps the keypad visible.
                Empty cells appear only while arranging; guest input is suspended. -->
           <div class="keypad-arrange" id="keypad-arrange">
             <div class="panel-header">
-              <span>🎮 키패드 세부 조정</span>
-              <button id="keypad-arrange-close" class="panel-close">완료</button>
+              <span>{{arrange.title}}</span>
+              <button id="keypad-arrange-close" class="panel-close">{{arrange.done}}</button>
             </div>
-            <label class="keypad-arrange-shape">타입
+            <label class="keypad-arrange-shape">{{arrange.shape}}
               <select id="keypad-shape-panel" class="game-speed keypad-shape-list">
-                <option value="type1" selected>Type1</option>
-                <option value="type2">Type2</option>
-                <option value="type3">Type3</option>
-                <option value="type4">Type4</option>
+                <option value="type1" selected>{{keypad.shape.type1}}</option>
+                <option value="type2">{{keypad.shape.type2}}</option>
+                <option value="type3">{{keypad.shape.type3}}</option>
+                <option value="type4">{{keypad.shape.type4}}</option>
               </select>
             </label>
             <div class="keypad-arrange-tools" id="keypad-arrange-tools">
-              <button id="keypad-arrange-multiple" type="button" aria-pressed="false">여러 칸 선택</button>
-              <button id="keypad-arrange-unselect" type="button">선택 해제</button>
-              <button id="keypad-arrange-merge" type="button" disabled>합치기</button>
-              <button id="keypad-arrange-split" type="button" disabled>나누기</button>
-              <button id="keypad-arrange-clear" type="button" disabled>비우기</button>
-              <button id="keypad-arrange-undo" type="button" disabled>되돌리기</button>
+              <button id="keypad-arrange-multiple" type="button" aria-pressed="false">{{arrange.multiple}}</button>
+              <button id="keypad-arrange-unselect" type="button">{{arrange.unselect}}</button>
+              <button id="keypad-arrange-merge" type="button" disabled>{{arrange.merge}}</button>
+              <button id="keypad-arrange-split" type="button" disabled>{{arrange.split}}</button>
+              <button id="keypad-arrange-clear" type="button" disabled>{{arrange.clear}}</button>
+              <button id="keypad-arrange-undo" type="button" disabled>{{arrange.undo}}</button>
             </div>
             <p id="keypad-arrange-storage" class="keypad-arrange-storage" role="status" hidden></p>
             <p class="keypad-arrange-hint" id="keypad-arrange-hint" role="status"></p>
@@ -115,7 +120,7 @@
                  the pad: a list floating on top of the keypad would cover the
                  cell it is a list for. -->
             <div class="keypad-arrange-keys" id="keypad-arrange-keys" hidden></div>
-            <button id="keypad-arrange-reset" class="panel-button">기본값으로 되돌리기</button>
+            <button id="keypad-arrange-reset" class="panel-button">{{arrange.reset}}</button>
           </div>
         </div>
 
@@ -132,19 +137,19 @@
         <div id="confirm-dialog" class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-text">
           <span id="confirm-text" class="confirm-text"></span>
           <div class="confirm-actions">
-            <button id="confirm-cancel" class="confirm-button">취소</button>
-            <button id="confirm-accept" class="confirm-button confirm-accept">확인</button>
+            <button id="confirm-cancel" class="confirm-button">{{confirm.cancel}}</button>
+            <button id="confirm-accept" class="confirm-button confirm-accept">{{confirm.accept}}</button>
           </div>
         </div>
 
         <dialog id="text-input-dialog" aria-labelledby="text-input-title">
-          <h2 id="text-input-title">🔤 문자 입력</h2>
+          <h2 id="text-input-title">{{textinput.title}}</h2>
           <p id="text-input-status" role="status" aria-live="polite" hidden></p>
-          <input id="text-input-value" aria-label="게임에 입력할 내용" aria-describedby="text-input-status" autocomplete="off" />
-          <textarea id="text-input-multiline" aria-label="게임에 입력할 내용" aria-describedby="text-input-status" hidden></textarea>
+          <input id="text-input-value" aria-label="{{textinput.field}}" aria-describedby="text-input-status" autocomplete="off" />
+          <textarea id="text-input-multiline" aria-label="{{textinput.field}}" aria-describedby="text-input-status" hidden></textarea>
           <div class="confirm-actions">
-            <button id="text-input-cancel" class="confirm-button">취소</button>
-            <button id="text-input-apply" class="confirm-button">입력</button>
+            <button id="text-input-cancel" class="confirm-button">{{textinput.cancel}}</button>
+            <button id="text-input-apply" class="confirm-button">{{textinput.apply}}</button>
           </div>
         </dialog>
 
@@ -152,39 +157,39 @@
           <!-- The live region is the text, not the popup: the dismiss button
                never changes and would be read out with every message. -->
           <span id="status-text" class="status-text" role="status" aria-live="polite"></span>
-          <button id="status-close" class="status-close">확인</button>
+          <button id="status-close" class="status-close">{{status.close}}</button>
         </div>
 
         <!-- Shapes and cell ownership are rendered from the validated layout. -->
         <div class="button-container">
-          <div class="keypad-grid" id="keypad-grid" aria-label="키패드"></div>
+          <div class="keypad-grid" id="keypad-grid" aria-label="{{keypad.label}}"></div>
         </div>
       </main>
 
       <aside class="rail rail-right">
         <div id="settings-panel" class="settings-panel">
           <div class="panel-header">
-            <span>⚙️ 설정</span>
-            <button id="settings-close" class="panel-close">닫기</button>
+            <span>{{settings.title}}</span>
+            <button id="settings-close" class="panel-close">{{settings.close}}</button>
           </div>
           <!-- The two sliders are the guest's two sound sources: its MIDI
                sequences, which on these games are the music, and its sampled
                PCM, which is the effects. The labels say what they are for
                rather than what they are made of. -->
-          <label>🎵 배경음 <input type="range" id="volume-midi" min="0" max="100" value="50" /></label>
-          <label>🔊 효과음 <input type="range" id="volume-pcm" min="0" max="100" value="50" /></label>
-          <label>🔍 화질
+          <label>{{settings.music}} <input type="range" id="volume-midi" min="0" max="100" value="50" /></label>
+          <label>{{settings.effects}} <input type="range" id="volume-pcm" min="0" max="100" value="50" /></label>
+          <label>{{settings.quality}}
             <!-- The filters run on the same thread as the emulator and cost more
                  per frame than emulating one does, so the menu says which are
                  affordable rather than leaving that to be discovered. -->
             <select id="frame-scale" class="game-speed">
-              <option value="1" selected>원본 (빠름)</option>
-              <option value="2">hq2x (느림)</option>
-              <option value="3">hq3x (느림)</option>
-              <option value="4">hq4x (매우 느림)</option>
+              <option value="1" selected>{{settings.quality.1}}</option>
+              <option value="2">{{settings.quality.2}}</option>
+              <option value="3">{{settings.quality.3}}</option>
+              <option value="4">{{settings.quality.4}}</option>
             </select>
           </label>
-          <label>📱 화면
+          <label>{{settings.screen}}
             <!-- The handset screen the game runs on. Almost every title here
                  was drawn for 240x320 and that is the default; a few were
                  packaged for a smaller phone and load their artwork by the
@@ -205,7 +210,7 @@
             <select id="screen-size" class="game-speed">
               <option value="128x160">128 × 160</option>
               <option value="176x220">176 × 220</option>
-              <option value="240x320" selected>240 × 320 (기본)</option>
+              <option value="240x320" selected>{{settings.screen.default}}</option>
               <option value="240x400">240 × 400</option>
               <option value="320x480">320 × 480</option>
             </select>
@@ -216,19 +221,19 @@
                happens. The row is removed on a browser with no vibrator,
                because a switch that cannot do anything reads as a broken one.
                -->
-          <label id="vibrate-row">📳 진동 <input type="checkbox" id="vibrate-toggle" checked /></label>
-          <label>⏩ 속도
+          <label id="vibrate-row">{{settings.vibrate}} <input type="checkbox" id="vibrate-toggle" checked /></label>
+          <label>{{settings.speed}}
             <select id="game-speed" class="game-speed">
-              <option value="0.25">0.25배</option>
-              <option value="0.5">0.5배</option>
-              <option value="0.75">0.75배</option>
-              <option value="1" selected>1배 (원래 속도)</option>
-              <option value="1.5">1.5배</option>
-              <option value="2">2배</option>
-              <option value="4">4배</option>
+              <option value="0.25">{{settings.speed.0.25}}</option>
+              <option value="0.5">{{settings.speed.0.5}}</option>
+              <option value="0.75">{{settings.speed.0.75}}</option>
+              <option value="1" selected>{{settings.speed.1}}</option>
+              <option value="1.5">{{settings.speed.1.5}}</option>
+              <option value="2">{{settings.speed.2}}</option>
+              <option value="4">{{settings.speed.4}}</option>
             </select>
           </label>
-          <label>🎮 키패드 타입
+          <label>{{settings.shape}}
             <!-- The shape, here as well as on the keypad screen. It is the one
                  control of the three that is worth reaching without opening
                  anything: switching between the shapes is a thing somebody does
@@ -245,22 +250,22 @@
                  script, because a select the page ships is a select that works
                  before app.js has run. -->
             <select id="keypad-shape-settings" class="game-speed keypad-shape-list">
-              <option value="type1" selected>Type1</option>
-              <option value="type2">Type2</option>
-              <option value="type3">Type3</option>
-              <option value="type4">Type4</option>
+              <option value="type1" selected>{{keypad.shape.type1}}</option>
+              <option value="type2">{{keypad.shape.type2}}</option>
+              <option value="type3">{{keypad.shape.type3}}</option>
+              <option value="type4">{{keypad.shape.type4}}</option>
             </select>
           </label>
           <!-- The rest of the keypad is one screen, and this is the way to it:
                the shape, the measurements and the cells were three controls in
                two places, which meant changing one of them meant finding out
                which place it was in. -->
-          <button id="keypad-arrange-open" class="panel-button">🎮 키패드 세부 조정</button>
+          <button id="keypad-arrange-open" class="panel-button">{{settings.arrange}}</button>
           <!-- 전체화면 puts the keypad away and gives the game screen the
                window: for a game controller or a keyboard, the keypad is only
                what keeps the screen small. The label says which way a press
                goes; app.js keeps it true. -->
-          <button id="fullscreen-toggle" class="panel-button" aria-pressed="false">⛶ 전체화면</button>
+          <button id="fullscreen-toggle" class="panel-button" aria-pressed="false">{{fullscreen.enter}}</button>
           <!-- Only where there is a keyboard to press: on a phone this is a
                list of keys nobody can reach, in a panel that has to stay short
                enough for a thumb. It starts hidden everywhere and app.js
@@ -268,13 +273,10 @@
                one. Folded shut because nineteen rows would otherwise be most
                of the panel. -->
           <details id="key-bindings" class="key-bindings hidden">
-            <summary>⌨️ 키보드 매핑 변경</summary>
+            <summary>{{keyboard.title}}</summary>
             <div id="key-bindings-list" class="key-bindings-list"></div>
-            <p class="key-bindings-hint">
-              키 이름을 누른 다음 새 키를 누르세요. Esc는 취소, ✕는 비우기입니다. 이미 쓰고 있는 키를
-              고르면 그 키를 쓰던 자리가 빕니다.
-            </p>
-            <button id="key-bindings-reset" class="panel-button">기본값으로</button>
+            <p class="key-bindings-hint">{{keyboard.hint}}</p>
+            <button id="key-bindings-reset" class="panel-button">{{keyboard.reset}}</button>
           </details>
           <!-- The same rule for a game controller: hidden until one has been
                used here, because a browser does not show a controller to a
@@ -283,26 +285,23 @@
                them, and the direction pad and the left stick both send the
                direction keys. A row lights while its control is held. -->
           <details id="pad-bindings" class="key-bindings hidden">
-            <summary>🕹️ 게임패드 매핑 변경</summary>
+            <summary>{{pad.title}}</summary>
             <p id="pad-bindings-status" class="key-bindings-hint" role="status"></p>
             <div id="pad-bindings-list" class="key-bindings-list pad-bindings-list"></div>
-            <p class="key-bindings-hint">
-              줄마다 그 버튼이 보낼 키를 고르세요. 패드 버튼을 누르는 동안 그 줄이 밝아집니다. 왼스틱은 방향키처럼 한
-              번에 한 방향만, 오른스틱은 5를 둘러싼 숫자 1~9입니다. 퀵세이브·퀵로드는 기본으로 비어 있습니다.
-            </p>
-            <button id="pad-bindings-reset" class="panel-button">기본값으로</button>
+            <p class="key-bindings-hint">{{pad.hint}}</p>
+            <button id="pad-bindings-reset" class="panel-button">{{pad.reset}}</button>
           </details>
 
-          <button id="cheat-toggle" class="panel-button hidden">🎯 치트</button>
-          <button id="debug-log" class="panel-button hidden">🐞 디버그 로그 저장</button>
-          <button id="text-input-toggle" class="panel-button hidden">🔤 문자 입력</button>
-          <button id="restart" class="panel-button hidden">🔄 재시작</button>
+          <button id="cheat-toggle" class="panel-button hidden">{{settings.cheat}}</button>
+          <button id="debug-log" class="panel-button hidden">{{settings.debug-log}}</button>
+          <button id="text-input-toggle" class="panel-button hidden">{{settings.text-input}}</button>
+          <button id="restart" class="panel-button hidden">{{settings.restart}}</button>
         </div>
 
         <div id="cheat-panel" class="cheat-panel">
           <div class="cheat-header">
-            <span>🎯 치트</span>
-            <button id="cheat-close" class="cheat-close">닫기</button>
+            <span>{{cheat.title}}</span>
+            <button id="cheat-close" class="cheat-close">{{cheat.close}}</button>
           </div>
 
           <div class="cheat-row">
@@ -315,42 +314,42 @@
               <option value="i8">i8</option>
             </select>
             <label class="cheat-check"><input type="checkbox" id="cheat-be" /> BE</label>
-            <input id="cheat-value" placeholder="값 (예: 1200, 0x4b0)" />
-            <button data-filter="eq">이 값으로 찾기</button>
+            <input id="cheat-value" placeholder="{{cheat.value}}" />
+            <button data-filter="eq">{{cheat.filter.eq}}</button>
           </div>
 
           <div class="cheat-row">
-            <button data-filter="unknown">값 모름</button>
-            <button data-filter="changed">변함</button>
-            <button data-filter="unchanged">안 변함</button>
-            <button data-filter="inc">증가</button>
-            <button data-filter="dec">감소</button>
-            <button data-filter="gt">&gt; 값</button>
-            <button data-filter="lt">&lt; 값</button>
+            <button data-filter="unknown">{{cheat.filter.unknown}}</button>
+            <button data-filter="changed">{{cheat.filter.changed}}</button>
+            <button data-filter="unchanged">{{cheat.filter.unchanged}}</button>
+            <button data-filter="inc">{{cheat.filter.inc}}</button>
+            <button data-filter="dec">{{cheat.filter.dec}}</button>
+            <button data-filter="gt">{{cheat.filter.gt}}</button>
+            <button data-filter="lt">{{cheat.filter.lt}}</button>
           </div>
 
           <div class="cheat-row">
-            <button id="cheat-undo">되돌리기</button>
-            <button id="cheat-reset">초기화</button>
+            <button id="cheat-undo">{{cheat.undo}}</button>
+            <button id="cheat-reset">{{cheat.reset}}</button>
             <span id="cheat-count" class="cheat-count">—</span>
           </div>
 
           <div id="cheat-results" class="cheat-list"></div>
 
-          <div class="cheat-section">고정된 값</div>
+          <div class="cheat-section">{{cheat.frozen}}</div>
           <div id="cheat-frozen" class="cheat-list"></div>
 
-          <div class="cheat-section" id="cheat-watch-section">쓰기 감시</div>
+          <div class="cheat-section" id="cheat-watch-section">{{cheat.watch}}</div>
           <div class="cheat-row" id="cheat-watch-row">
             <input id="cheat-watch-address" placeholder="0x40183a2c" />
-            <button id="cheat-watch-add">감시 추가</button>
-            <button id="cheat-watch-clear">전체 해제</button>
+            <button id="cheat-watch-add">{{cheat.watch.add}}</button>
+            <button id="cheat-watch-clear">{{cheat.watch.clear}}</button>
           </div>
           <div id="cheat-hits" class="cheat-list"></div>
-          <div class="cheat-section">치트 표</div>
+          <div class="cheat-section">{{cheat.table}}</div>
           <div class="cheat-row">
-            <button id="cheat-save">저장</button>
-            <button id="cheat-load">불러오기</button>
+            <button id="cheat-save">{{cheat.table.save}}</button>
+            <button id="cheat-load">{{cheat.table.load}}</button>
             <input id="cheat-load-file" type="file" accept=".json,application/json" hidden />
           </div>
           <div id="cheat-status" class="cheat-more"></div>
@@ -362,7 +361,7 @@
          just above it, or just beside it when the picture takes the whole
          height; that layout leaves room for one of the two at every window
          shape. Drawn only in it, and under any modal. -->
-    <button id="fullscreen-exit" class="fullscreen-exit" type="button" aria-label="전체화면 끝내기" title="전체화면 끝내기">
+    <button id="fullscreen-exit" class="fullscreen-exit" type="button" aria-label="{{fullscreen.exit}}" title="{{fullscreen.exit}}">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
       </svg>

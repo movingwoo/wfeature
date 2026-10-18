@@ -21,7 +21,7 @@ are written in Korean for players; everything here is English.
 
 | Document | Use it for |
 | --- | --- |
-| [Web host](../web/README.md) | The page: keypad, settings, game controllers, fullscreen, text input, PWA. |
+| [Web host](../web/README.md) | The page: keypad, settings, game controllers, fullscreen, text input, PWA, and `text.properties`, where all of its words are. |
 | [mobile](../mobile/README.md) | The Android and iOS shells and their build scripts. |
 | [packaging](../packaging/README.md) | What a release archive carries beside the server binary. |
 | [Runtime data](../var/README.md) | The ignored `var/` layout: games, added games, saves, logs, reports. |

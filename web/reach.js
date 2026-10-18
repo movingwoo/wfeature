@@ -7,12 +7,13 @@
 // resource.", in English and different in every browser. That is nothing a
 // player can act on, so it is replaced by the one thing it means. The
 // browser's error stays on as the cause, for the console.
-export const UNREACHABLE = "서버에 연결하지 못했습니다. 연결을 확인한 뒤 다시 시도하세요.";
+
+import { phrase } from "./text.js";
 
 export const reach = async (fetcher, url, options) => {
   try {
     return await fetcher(url, options);
   } catch (error) {
-    throw new Error(UNREACHABLE, { cause: error });
+    throw new Error(phrase("network.unreachable"), { cause: error });
   }
 };
