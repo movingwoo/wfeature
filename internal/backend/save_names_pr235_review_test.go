@@ -102,7 +102,7 @@ func TestASaveWindowsStoredWithoutItsEndingIsRead(t *testing.T) {
 // syllables, 450 bytes, is stored and read there, and so is one an earlier
 // build stored under such a name; one of 256 characters is refused.
 func TestASaveNameIsMeasuredAsTheHostMeasuresIt(t *testing.T) {
-	if saveNameLength(strings.Repeat("가", 255)) != 255 || saveNameLength("\U0001F600") != 2 && saveNamesInUnits {
+	if saveNamesInUnits && (saveNameLength(strings.Repeat("가", 255)) != 255 || saveNameLength("\U0001F600") != 2) {
 		t.Fatal("a name is not measured in UTF-16 units")
 	}
 	if !saveNamesInUnits {
@@ -141,11 +141,14 @@ func TestANameForASegmentNoKeyHoldsIsNoEncodedName(t *testing.T) {
 
 // A key whose path, written out below the save directory, is longer than the
 // host opens has no save: a read finds none rather than meeting the file
-// system's error, and a write is refused up front with the limit named.
+// system's error, and a write is refused up front with the limit named. The
+// macOS and iOS limit is forced on every host: written out, a key of 512 bytes
+// made of this segment stays below the 4,095 bytes Linux opens, and Windows
+// checks none.
 func TestASavePathLongerThanTheHostOpensIsNoSave(t *testing.T) {
-	if maxSavePathBytes == 0 {
-		t.Skip("this host opens a path of any length a key makes")
-	}
+	limit := maxSavePathBytes
+	maxSavePathBytes = savePathLimit("darwin")
+	t.Cleanup(func() { maxSavePathBytes = limit })
 	segment := "a" + strings.Repeat("́", 30)
 	key := strings.TrimSuffix(strings.Repeat(segment+"/", 1+maxSavePathBytes/(len(encodeSaveName(segment))+1)), "/")
 	if _, err := NormalizeSaveKey(key); err != nil {
