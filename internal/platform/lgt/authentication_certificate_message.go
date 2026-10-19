@@ -28,15 +28,17 @@ type certificateMessageRevision struct {
 	port    uint16
 }
 
-// certificateMessageRevisions are keyed by the application identifier the
-// descriptor carries; the compatibility registry must still name the module's
-// full digest before a session uses one.
+// certificateMessageRevisions are keyed by the SHA-256 of the native module
+// whose client they describe. The digest names the code exactly, so the
+// descriptor's identifier, and how an archive spells it, select nothing; the
+// compatibility registry must still name the same digest before a session uses
+// a revision.
 var certificateMessageRevisions = map[string]certificateMessageRevision{
-	"00028E76": {
+	"e73ff5c0e4ea82d53291faec14bc9a33ac9d85bc95124f6058d523ee5621fea1": {
 		version: "V.1.0.1", code: [2]byte{4, 0},
 		dial: 0x2d5c1, socket: 0x2d471, address: 0xfa4273d3, port: 0x1d3b,
 	},
-	"000316d9": {
+	"c3abb052c4eda11bba233e1bf21641fe04c5fb276b8fda9af4f581a1d7b1be8c": {
 		version: "LGT_WIPIC_1.0.0", code: [2]byte{4, 0x29}, product: "0003060B",
 		dial: 0x1ddf5, socket: 0x1e1c5, address: 0xfc4273d3, port: 0x223b,
 	},
@@ -46,12 +48,10 @@ func newCertificateMessageNetwork(archive *Archive, identity, model string) *not
 	if archive == nil {
 		return nil
 	}
-	revision, known := certificateMessageRevisions[archive.Descriptor.AID]
-	if !known {
-		return nil
-	}
 	digest := sha256.Sum256(archive.Module)
-	if !compatibility.HasFix("lgt", compatibility.NativeModule, hex.EncodeToString(digest[:]), compatibility.LGTCertificateMessage) {
+	module := hex.EncodeToString(digest[:])
+	revision, known := certificateMessageRevisions[module]
+	if !known || !compatibility.HasFix("lgt", compatibility.NativeModule, module, compatibility.LGTCertificateMessage) {
 		return nil
 	}
 	return certificateMessageNetwork(revision, identity, model)

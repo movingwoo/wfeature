@@ -344,7 +344,7 @@ the guest set and save its own certificate-present flag. Responses are deferred
 to a service boundary; no external connection or carrier credential is created.
 Unknown exchanges still fail, and the authentication diagnostic opt-out disables
 this behavior. See the [protocol evidence](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility)
-and [the second revision](history/lgt.md#lgt-qa-2026-10-19-certificate-message-second-revision).
+and [the second revision](history/lgt.md#lgt-new-archives-2026-10-19-certificate-message).
 
 MC_mdaClipFree returns a C clip's record to the platform arena. A clip keeps at
 most 64 undelivered callback transitions; a full queue drops the oldest. The C

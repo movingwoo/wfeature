@@ -47,6 +47,7 @@ This consolidation adds no execution or acceptance evidence.
 - [LGT rendering, input and pacing QA — 2026-09-20](#lgt-qa-2026-09-20)
 - [LGT startup, rendering, and media QA — 2026-09-21](#lgt-qa-2026-09-21)
 - [LGT key callback hang — 2026-09-23](#lgt-key-callback-hang-2026-09-23)
+- [Newly added archives — 2026-10-19](#lgt-new-archives-2026-10-19)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -7237,53 +7238,6 @@ as does the opt-in real-archive session selection/opt-out test
 archive and debug/release save directories were not modified, and no server
 was restarted.
 
-<a id="lgt-qa-2026-10-19-certificate-message-second-revision"></a>
-
-### Certificate message: a second revision (2026-10-19)
-
-A newly added LGT archive (AID `000316d9`, native module SHA-256
-`c3abb052c4eda11bba233e1bf21641fe04c5fb276b8fda9af4f581a1d7b1be8c`) reached its
-title and then stopped on its missing-certificate prompt: declining returned to
-the title, and accepting failed the dial and returned there too. Its startup
-reader checks `cert.c2s`; with no file it clears a 76-byte record and asks to
-connect. With a file it reads exactly 76 bytes, decrypts them with a key the
-module carries, and compares the subscriber number at offset 1 (failure 5001)
-and two client strings at offsets 13 and 33 (5002, 5003) against the values its
-own client reports. The writer builds the same record from those values and
-saves it after the server's final reply. Nothing in the archive packages a
-certificate, so a session cannot supply one without the client's own values;
-answering the exchange lets the guest build and save its own record.
-
-The exchange is the one `lgt.certificate_message` already answers, with the
-same frame layout. A diagnostic build that accepted the dial for this module
-recorded the guest's own requests (connect `0x65, 0xfc4273d3, 0x223b, 0x1e1c5`,
-dial callback `0x1ddf5`):
-
-- first request, 73 bytes: the same header, client field `LGT_WIPIC_1.0.0`
-  where the first revision sends `V.1.0.1`, then the session number;
-- second request, 79 bytes: the same header with code word `04 29` where the
-  first revision sends `04 00`, the handset model, a zero byte, and the product
-  field `0003060B`, which the first revision leaves empty.
-
-A second run with another subscriber number changed only the number in the
-first request. The client field, code word, product field, callbacks and
-endpoint are therefore per-revision constants, kept in
-`certificateMessageRevisions` beside the first revision's; the registry entry
-`lgt-certificate-message-002` names this module's digest, and both are required.
-The replies are unchanged: the five-byte acknowledgement and the local
-informational message.
-
-Route, debug build, fresh save: two notices, the remote-save question
-(declining it, then confirming the follow-up), the title, the certificate
-prompt (Yes). The guest shows `[인증 성공]` with the local message, writes its
-76-byte `cert.c2s`, and asks its own customer-information consent; declining it
-returns to the title. A new process on a copy of that save shows no remote-save
-or certificate question, reaches the main menu at tick 1,908 and the game
-selection screen after `게임시작`. `TestCertificateMessageSecondRevisionRequests` pins
-the recorded requests and the socket contract; the other module and an
-unregistered digest under either identifier are refused. Remote saves,
-ranking and purchases remain unavailable.
-
 <a id="lgt-qa-2026-09-21-rendering-follow-up-new-game-restored-map-and-dialogue-bounds"></a>
 
 ### Rendering follow-up: new game, restored map, and dialogue bounds
@@ -7549,7 +7503,12 @@ baked slot 10 in its first worker, and on `Card.getDisplay()` in its first
   The call site asks slot 15 (`size`) for a length, allocates a `String[]` that
   long, passes it and keeps it. The elements go to the front of the array; a
   null array throws `NullPointerException` and a short one
-  `ArrayIndexOutOfBoundsException`, both as guest throws.
+  `ArrayIndexOutOfBoundsException`, both as guest throws. A primitive array,
+  which the declared parameter keeps a verified caller from passing, stops the
+  title with a runtime error instead of taking the references as numbers; an
+  `int[]` is as wide as an `Object[]`, so the check reads the array's type
+  rather than its width. `System.arraycopy` shares that view of an array and
+  refuses a copy between references and numbers the same way.
 - `Card.getDisplay` returns the default display singleton.
 
 With these the title reaches its notices, title, menu, slot selection, opening
@@ -7570,7 +7529,7 @@ run. Each new answer has a unit test.
 
 - A title whose server certificate was missing could not leave its title
   screen; its exchange is the second revision recorded in
-  [certificate message](#lgt-qa-2026-09-21-certificate-message-second-revision).
+  [certificate message](#lgt-new-archives-2026-10-19-certificate-message).
 - Two titles try a network authentication at start, fail the dial and show
   their own failure notice, then continue to the title and play. That is the
   documented
@@ -7584,3 +7543,53 @@ run. Each new answer has a unit test.
   to continue without the remote save.
 - A KTF title asks to fetch a missing certificate. Declining reaches the menu,
   style selection and play.
+
+<a id="lgt-new-archives-2026-10-19-certificate-message"></a>
+
+### Certificate message: a second revision
+
+The title (native module SHA-256
+`c3abb052c4eda11bba233e1bf21641fe04c5fb276b8fda9af4f581a1d7b1be8c`) reached its
+title and then stopped on its missing-certificate prompt: declining returned to
+the title, and accepting failed the dial and returned there too. Its startup
+reader checks `cert.c2s`; with no file it clears a 76-byte record and asks to
+connect. With a file it reads exactly 76 bytes, decrypts them with a key the
+module carries, and compares the subscriber number at offset 1 (failure 5001)
+and two client strings at offsets 13 and 33 (5002, 5003) against the values its
+own client reports. The writer builds the same record from those values and
+saves it after the server's final reply. Nothing in the archive packages a
+certificate, so a session cannot supply one without the client's own values;
+answering the exchange lets the guest build and save its own record.
+
+The exchange is the one `lgt.certificate_message` already answers, with the
+same frame layout. A diagnostic build that accepted the dial for this module
+recorded the guest's own requests (connect `0x65, 0xfc4273d3, 0x223b, 0x1e1c5`,
+dial callback `0x1ddf5`):
+
+- first request, 73 bytes: the same header, client field `LGT_WIPIC_1.0.0`
+  where the first revision sends `V.1.0.1`, then the session number;
+- second request, 79 bytes: the same header with code word `04 29` where the
+  first revision sends `04 00`, the handset model, a zero byte, and the product
+  field `0003060B`, which the first revision leaves empty.
+
+A second run with another subscriber number changed only the number in the
+first request. The client field, code word, product field, callbacks and
+endpoint are therefore per-revision constants, kept in
+`certificateMessageRevisions` beside the first revision's. That table is keyed
+by the module digest, not the descriptor's application identifier: the digest
+names the code exactly, and an identifier would add a second key that could
+disagree with it or differ only in letter case. The registry entry
+`lgt-certificate-message-002` names the same digest, and a test requires every
+revision in the table to be registered. The replies are unchanged: the
+five-byte acknowledgement and the local informational message.
+
+Route, debug build, fresh save: two notices, the remote-save question
+(declining it, then confirming the follow-up), the title, the certificate
+prompt (Yes). The guest shows `[인증 성공]` with the local message, writes its
+76-byte `cert.c2s`, and asks its own customer-information consent; declining it
+returns to the title. A new process on a copy of that save shows no remote-save
+or certificate question, reaches the main menu at tick 1,908 and the game
+selection screen after `게임시작`. `TestCertificateMessageRevisionRequests` pins
+both revisions' recorded requests and socket contracts as fixed bytes, both
+revisions run the fragment and changed-byte checks, and an unregistered module
+is refused. Remote saves, ranking and purchases remain unavailable.

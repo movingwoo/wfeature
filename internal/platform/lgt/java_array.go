@@ -284,38 +284,34 @@ func (client *Client) storeJavaArrayReference(array, index, value uint32) error 
 func javaArrayCopy(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	source, sourceFrom := arguments[0], arguments[1]
-	target, targetFrom, count := arguments[2], arguments[3], arguments[4]
-	sourceBytes, err := client.javaArrayElementBytes(source)
+	sourceFrom, targetFrom, count := arguments[1], arguments[3], arguments[4]
+	source, err := client.javaArrayElements(arguments[0])
 	if err != nil {
 		return 0, fmt.Errorf("the source: %w", err)
 	}
-	targetBytes, err := client.javaArrayElementBytes(target)
+	target, err := client.javaArrayElements(arguments[2])
 	if err != nil {
 		return 0, fmt.Errorf("the target: %w", err)
 	}
-	if sourceBytes != targetBytes {
-		return 0, fmt.Errorf("a copy between %d-byte and %d-byte elements", sourceBytes, targetBytes)
+	if source.Width != target.Width {
+		return 0, fmt.Errorf("a copy between %d-byte and %d-byte elements", source.Width, target.Width)
 	}
-	sourceBlock, sourceLength, err := client.javaArrayBlock(source)
-	if err != nil {
-		return 0, err
+	// The language answers this one with ArrayStoreException; copying would
+	// hand the title a number as a reference, or a reference as a number.
+	if source.Reference != target.Reference {
+		return 0, fmt.Errorf("a copy between references and numbers")
 	}
-	targetBlock, targetLength, err := client.javaArrayBlock(target)
-	if err != nil {
-		return 0, err
-	}
-	if uint64(sourceFrom)+uint64(count) > uint64(sourceLength) ||
-		uint64(targetFrom)+uint64(count) > uint64(targetLength) {
+	if uint64(sourceFrom)+uint64(count) > uint64(source.Length) ||
+		uint64(targetFrom)+uint64(count) > uint64(target.Length) {
 		return 0, fmt.Errorf("%d elements from %d of %d into %d of %d is past an end",
-			count, sourceFrom, sourceLength, targetFrom, targetLength)
+			count, sourceFrom, source.Length, targetFrom, target.Length)
 	}
 	if count == 0 {
 		return 0, nil
 	}
-	data := make([]byte, uint64(count)*uint64(sourceBytes))
-	from := sourceBlock + javaArrayLengthWords*4 + sourceFrom*sourceBytes
-	to := targetBlock + javaArrayLengthWords*4 + targetFrom*targetBytes
+	data := make([]byte, uint64(count)*uint64(source.Width))
+	from := source.Block + javaArrayLengthWords*4 + sourceFrom*source.Width
+	to := target.Block + javaArrayLengthWords*4 + targetFrom*target.Width
 	if err := client.core.Memory().Read(from, data); err != nil {
 		return 0, err
 	}
@@ -326,14 +322,50 @@ func javaArrayCopy(
 
 // javaArrayElementBytes answers how wide one element of an array object is.
 func (client *Client) javaArrayElementBytes(object uint32) (uint32, error) {
-	class, ok := client.javaClassOfObject(object)
-	if !ok {
-		return 0, fmt.Errorf("the array at %#x was not issued here", object)
-	}
-	if class.ElementBytes == 0 {
-		return 0, fmt.Errorf("%s is not an array type", class.Name)
+	class, err := client.javaArrayClassOf(object)
+	if err != nil {
+		return 0, err
 	}
 	return class.ElementBytes, nil
+}
+
+// javaArrayClassOf answers the type of an array object this platform issued.
+func (client *Client) javaArrayClassOf(object uint32) (*javaRuntimeClass, error) {
+	class, ok := client.javaClassOfObject(object)
+	if !ok {
+		return nil, fmt.Errorf("the array at %#x was not issued here", object)
+	}
+	if class.ElementBytes == 0 {
+		return nil, fmt.Errorf("%s is not an array type", class.Name)
+	}
+	return class, nil
+}
+
+// javaArrayView is an array as a bulk copy sees it: how wide its elements
+// are, where they are, how many there are, and whether they are references.
+// An int[] or a float[] is as wide as an array of references, so the width
+// alone cannot tell them apart.
+type javaArrayView struct {
+	Width, Block, Length uint32
+	Reference            bool
+}
+
+// javaArrayElements answers the view of an array object this platform issued.
+// Its name is its descriptor, so an element that is an object or another array
+// is a reference.
+func (client *Client) javaArrayElements(object uint32) (javaArrayView, error) {
+	class, err := client.javaArrayClassOf(object)
+	if err != nil {
+		return javaArrayView{}, err
+	}
+	block, length, err := client.javaArrayBlock(object)
+	if err != nil {
+		return javaArrayView{}, err
+	}
+	return javaArrayView{
+		Width: class.ElementBytes, Block: block, Length: length,
+		Reference: len(class.Name) > 1 && (class.Name[1] == 'L' || class.Name[1] == '['),
+	}, nil
 }
 
 // javaArrayBlock answers where an array's elements are and how many there are.

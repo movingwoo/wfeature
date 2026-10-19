@@ -10,10 +10,54 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
+)
+
+// The native modules of the two local revisions, as the registry names them.
+const (
+	firstCertificateMessageModule  = "e73ff5c0e4ea82d53291faec14bc9a33ac9d85bc95124f6058d523ee5621fea1"
+	secondCertificateMessageModule = "c3abb052c4eda11bba233e1bf21641fe04c5fb276b8fda9af4f581a1d7b1be8c"
 )
 
 func TestCertificateMessageSequenceAndFragments(t *testing.T) {
-	n := certificateMessageNetwork(certificateMessageRevisions["00028E76"], "01012345678", "Fixture")
+	for _, module := range []string{firstCertificateMessageModule, secondCertificateMessageModule} {
+		t.Run(module[:8], func(t *testing.T) {
+			testCertificateMessageSequenceAndFragments(t, certificateMessageNetwork(certificateMessageRevisions[module], "01012345678", "Fixture"))
+		})
+	}
+	revision := certificateMessageRevisions[firstCertificateMessageModule]
+	if certificateMessageNetwork(revision, "invalid", "Fixture") != nil || certificateMessageNetwork(revision, "01012345678", "") != nil || certificateMessageNetwork(revision, "01012345678", strings.Repeat("x", 50)) != nil || certificateMessageNetwork(revision, "01012345678", "a\x00b") != nil {
+		t.Fatal("invalid session identity accepted")
+	}
+	if newCertificateMessageNetwork(&Archive{Descriptor: Descriptor{AID: "00028E76"}, Module: []byte("other revision")}, "01012345678", "Fixture") != nil {
+		t.Fatal("unknown module matched")
+	}
+	if newCertificateMessageNetwork(nil, "01012345678", "Fixture") != nil {
+		t.Fatal("unknown archive matched")
+	}
+	for module := range certificateMessageRevisions {
+		if !compatibility.HasFix("lgt", compatibility.NativeModule, module, compatibility.LGTCertificateMessage) {
+			t.Fatalf("revision %s is not registered", module)
+		}
+	}
+	for _, changed := range []certificateMessageRevision{
+		{code: revision.code, dial: revision.dial},
+		{version: strings.Repeat("v", 20), dial: revision.dial},
+		{version: revision.version, product: strings.Repeat("p", 20)},
+	} {
+		if certificateMessageNetwork(changed, "01012345678", "Fixture") != nil {
+			t.Fatalf("revision %+v with an unbounded field accepted", changed)
+		}
+	}
+}
+
+// Each stage's request is accepted in any two fragments and answered once, and
+// any changed, extended or reordered request is refused.
+func testCertificateMessageSequenceAndFragments(t *testing.T, n *notificationNetwork) {
+	t.Helper()
+	if n == nil {
+		t.Fatal("revision rejected")
+	}
 	for stage := 0; stage < 2; stage++ {
 		expected := n.certificateRequests[stage]
 		for split := 1; split < len(expected); split++ {
@@ -56,67 +100,59 @@ func TestCertificateMessageSequenceAndFragments(t *testing.T) {
 			}
 		}
 	}
-	revision := certificateMessageRevisions["00028E76"]
-	if certificateMessageNetwork(revision, "invalid", "Fixture") != nil || certificateMessageNetwork(revision, "01012345678", "") != nil || certificateMessageNetwork(revision, "01012345678", strings.Repeat("x", 50)) != nil || certificateMessageNetwork(revision, "01012345678", "a\x00b") != nil {
-		t.Fatal("invalid session identity accepted")
-	}
-	for _, aid := range []string{"00028E76", "000316d9"} {
-		if newCertificateMessageNetwork(&Archive{Descriptor: Descriptor{AID: aid}, Module: []byte("other revision")}, "01012345678", "Fixture") != nil {
-			t.Fatalf("unknown module for %s matched", aid)
-		}
-	}
-	if newCertificateMessageNetwork(nil, "01012345678", "Fixture") != nil {
-		t.Fatal("unknown archive matched")
-	}
-	for _, changed := range []certificateMessageRevision{
-		{code: revision.code, dial: revision.dial},
-		{version: strings.Repeat("v", 20), dial: revision.dial},
-		{version: revision.version, product: strings.Repeat("p", 20)},
-	} {
-		if certificateMessageNetwork(changed, "01012345678", "Fixture") != nil {
-			t.Fatalf("revision %+v with an unbounded field accepted", changed)
-		}
-	}
 }
 
-// The second revision's two requests, as its client wrote them for this
-// session identity and model: the client field, the code word and the product
-// field after the model are what separate it from the first revision.
-func TestCertificateMessageSecondRevisionRequests(t *testing.T) {
-	n := certificateMessageNetwork(certificateMessageRevisions["000316d9"], "01000000000", "Emulator")
-	if n == nil {
-		t.Fatal("revision rejected")
-	}
-	observed := [2]string{
-		"004900000003f9000002054c47545f57495049435f312e302e300000000000303130303030303030303000" +
-			"000000000000000000000000000000000000000000000000000000000000",
-		"004f0014000c0429456d756c61746f72000000000000000000000000000000000000000000000000000000" +
-			"000000000000000000000000000000003030303330363042000000000000000000000000",
-	}
-	for stage, want := range observed {
-		if got := hex.EncodeToString(n.certificateRequests[stage]); got != want {
-			t.Fatalf("stage %d request\n got %s\nwant %s", stage, got, want)
+// Each revision's two requests, as its client wrote them for this session
+// identity and model, and the socket contract its code passes. The bytes are
+// fixed here rather than derived from the revision table: the client field,
+// the code word and the product field after the model are what separate the
+// two revisions.
+func TestCertificateMessageRevisionRequests(t *testing.T) {
+	for _, revision := range []struct {
+		module   string
+		observed [2]string
+		contract notificationContract
+	}{
+		{
+			module: firstCertificateMessageModule,
+			observed: [2]string{
+				"004900000003f900000205562e312e302e3100000000000000000000000000303130303030303030303000" +
+					"000000000000000000000000000000000000000000000000000000000000",
+				"004f0014000c0400456d756c61746f72000000000000000000000000000000000000000000000000000000" +
+					"000000000000000000000000000000000000000000000000000000000000000000000000",
+			},
+			contract: notificationContract{dials: [2]uint32{0x2d5c1, 0x2d5c1}, socketCallback: 0x2d471, address: 0xfa4273d3, port: 0x1d3b},
+		},
+		{
+			module: secondCertificateMessageModule,
+			observed: [2]string{
+				"004900000003f9000002054c47545f57495049435f312e302e300000000000303130303030303030303000" +
+					"000000000000000000000000000000000000000000000000000000000000",
+				"004f0014000c0429456d756c61746f72000000000000000000000000000000000000000000000000000000" +
+					"000000000000000000000000000000003030303330363042000000000000000000000000",
+			},
+			contract: notificationContract{dials: [2]uint32{0x1ddf5, 0x1ddf5}, socketCallback: 0x1e1c5, address: 0xfc4273d3, port: 0x223b},
+		},
+	} {
+		n := certificateMessageNetwork(certificateMessageRevisions[revision.module], "01000000000", "Emulator")
+		if n == nil {
+			t.Fatalf("revision %s rejected", revision.module)
 		}
-	}
-	if n.contract.dials != [2]uint32{0x1ddf5, 0x1ddf5} || n.contract.socketCallback != 0x1e1c5 ||
-		n.contract.address != 0xfc4273d3 || n.contract.port != 0x223b {
-		t.Fatalf("socket contract %+v", n.contract)
-	}
-	s := &notificationSocketState{}
-	if !n.writeRequest(s, n.certificateRequests[0]) || !bytes.Equal(s.pendingResponse, []byte{0, 5, 0, 0, 0}) {
-		t.Fatal("first request not acknowledged")
-	}
-	s.pendingResponse = nil
-	other := bytes.Clone(n.certificateRequests[1])
-	other[60] = '1'
-	if n.writeRequest(s, other) {
-		t.Fatal("a different product field was accepted")
+		for stage, want := range revision.observed {
+			if got := hex.EncodeToString(n.certificateRequests[stage]); got != want {
+				t.Fatalf("revision %s stage %d request\n got %s\nwant %s", revision.module, stage, got, want)
+			}
+		}
+		revision.contract.protocol = localCertificateMessageProtocol
+		if n.contract != revision.contract {
+			t.Fatalf("revision %s socket contract %+v", revision.module, n.contract)
+		}
 	}
 }
 
 func TestCertificateMessageSocketDeferredDeliveryAndClose(t *testing.T) {
 	c := fixtureClient(t)
-	n := certificateMessageNetwork(certificateMessageRevisions["00028E76"], "01012345678", "Fixture")
+	n := certificateMessageNetwork(certificateMessageRevisions[firstCertificateMessageModule], "01012345678", "Fixture")
 	n.active = true
 	c.notificationNetwork = n
 	cb := notificationReportingCallback(t, c)

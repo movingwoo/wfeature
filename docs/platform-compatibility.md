@@ -59,7 +59,7 @@ each entry is the authoritative index; this table groups them by fix.
 | `lgt.wide_graphics_context` | 4 | Selects the 56-byte graphics context ABI instead of the compact default | [below](#lgt-wide-graphics-context) |
 | `lgt.wide_exclusive_clip` | 1 | Keeps the wide context's clip ends exclusive | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-second-color-report-wide-context-proof) |
 | `lgt.save_subscriber_identity` | 1 | Lets a recognized save reader accept a foreign subscriber identity | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison) |
-| `lgt.certificate_message` | 2 | Selects the recognized two-stage local certificate exchange | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility), [second revision](history/lgt.md#lgt-qa-2026-10-19-certificate-message-second-revision) |
+| `lgt.certificate_message` | 2 | Selects the recognized two-stage local certificate exchange | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility), [second revision](history/lgt.md#lgt-new-archives-2026-10-19-certificate-message) |
 
 `skt.tutorial_name_cache` replaces a redundant phase assignment in an in-memory
 class copy when one verified code revision returns from its tutorial equipment

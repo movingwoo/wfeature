@@ -548,8 +548,11 @@ func TestJavaJletEventQueueIsOneObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	class, known := client.javaClassOfObject(first)
-	if first == 0 || first != second || !known || class.Name != "org/kwis/msp/lcdui/EventQueue" {
-		t.Fatalf("queues %#x and %#x (%v %q)", first, second, known, class.Name)
+	if first == 0 || first != second || !known {
+		t.Fatalf("queues %#x and %#x (issued here: %v)", first, second, known)
+	}
+	if class.Name != "org/kwis/msp/lcdui/EventQueue" {
+		t.Fatalf("queue class %q", class.Name)
 	}
 }
 

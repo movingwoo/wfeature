@@ -331,11 +331,29 @@ func TestJavaVectorCopyIntoSlotFillsTheFrontOfTheArray(t *testing.T) {
 			t.Fatalf("array %#x: expected %s, got %v", target, want, err)
 		}
 	}
+	// An int[] is as wide as the references, so only its type refuses them.
 	bytesArray, err := client.newJavaByteArray(make([]byte, 16))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := slot.Method.Implementat(client, nil, nil, []uint32{vector, bytesArray}); err == nil {
-		t.Fatal("a byte array took references")
+	ints, err := client.javaArrayType(1, "I", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	numbers, err := client.allocateJavaArray(ints.Object, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []uint32{bytesArray, numbers} {
+		if _, err := slot.Method.Implementat(client, nil, nil, []uint32{vector, target}); err == nil {
+			t.Fatalf("primitive array %#x took references", target)
+		}
+	}
+	numbersBlock, _, err := client.javaArrayBlock(numbers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first, err := client.readWord(numbersBlock + javaArrayLengthWords*4); err != nil || first != 0 {
+		t.Fatalf("refused int[] written: %#x, %v", first, err)
 	}
 }

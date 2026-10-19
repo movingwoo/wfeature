@@ -116,7 +116,11 @@ func javaVectorAt(
 // javaVectorCopyInto is `copyInto(Object[] anArray)`: every element, in order,
 // into the start of the array. The language throws NullPointerException for a
 // null array and an index exception for one too short to take them all, and
-// both arrive as guest throws.
+// both arrive as guest throws. Its ArrayStoreException, for an element the
+// array's type cannot hold, needs the store check storeJavaArrayReference
+// explains this platform cannot make. A primitive array is refused rather than
+// written: the declared parameter keeps a verified caller from passing one,
+// and an int[] or float[] would take the references as numbers.
 func javaVectorCopyInto(
 	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -127,26 +131,22 @@ func javaVectorCopyInto(
 	if arguments[1] == 0 {
 		return 0, client.throwJavaPlatform(thread, javaThrowNullClass, ": copying a vector into a null array")
 	}
-	width, err := client.javaArrayElementBytes(arguments[1])
+	array, err := client.javaArrayElements(arguments[1])
 	if err != nil {
 		return 0, err
 	}
-	if width != 4 {
-		return 0, fmt.Errorf("a vector copied into an array of %d-byte elements", width)
+	if !array.Reference || array.Width != 4 {
+		return 0, fmt.Errorf("a vector copied into an array of %d-byte numbers", array.Width)
 	}
-	block, length, err := client.javaArrayBlock(arguments[1])
-	if err != nil {
-		return 0, err
-	}
-	if uint64(len(held)) > uint64(length) {
+	if uint64(len(held)) > uint64(array.Length) {
 		return 0, client.throwJavaPlatform(thread, javaThrowArrayClass,
-			fmt.Sprintf(": %d elements into an array of %d", len(held), length))
+			fmt.Sprintf(": %d elements into an array of %d", len(held), array.Length))
 	}
 	data := make([]byte, 4*len(held))
 	for index, element := range held {
 		binary.LittleEndian.PutUint32(data[4*index:], element)
 	}
-	return 0, client.core.Memory().Write(block+javaArrayLengthWords*4, data)
+	return 0, client.core.Memory().Write(array.Block+javaArrayLengthWords*4, data)
 }
 
 // javaVectorSetAt replaces an existing element without changing the size or
