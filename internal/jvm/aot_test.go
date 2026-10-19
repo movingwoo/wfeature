@@ -239,17 +239,18 @@ func TestVMResolvesAOTAndRuntimeAssignability(t *testing.T) {
 	}
 }
 
-// HoldsAOTClass answers whether registering a class again would change
-// anything, and HasAOTClassAt whether an address names a class; neither copies
-// the class out.
-func TestTheVMSaysWhetherItHoldsAnAOTClassAsGiven(t *testing.T) {
+// AOTClassRevision changes whenever the class at an address is registered
+// again, answers nothing for an alias or an empty address, and comes back new
+// for every class a restored heap brings; HasAOTClassAt says whether an
+// address names a class, alias or not. Neither copies the class out.
+func TestTheVMNumbersEachRegistrationOfAnAOTClass(t *testing.T) {
 	vm := New(nil, Options{})
 	class := AOTClassMetadata{
 		Address: 0x1000, Name: "game/Example", InstanceSize: 8, VTableAddress: 0x3000, VTable: []uint32{0x4000},
 		Methods: []AOTMethodMetadata{{Address: 0x4000, Name: "run", Descriptor: "()V", Body: 0x5000}},
 	}
-	if vm.HoldsAOTClass(class) || vm.HasAOTClassAt(0x1000) {
-		t.Fatal("an empty VM says it holds the class")
+	if _, ok := vm.AOTClassRevision(0x1000); ok || vm.HasAOTClassAt(0x1000) {
+		t.Fatal("an empty VM answers for the class")
 	}
 	if err := vm.RegisterAOTClass(class); err != nil {
 		t.Fatal(err)
@@ -257,23 +258,37 @@ func TestTheVMSaysWhetherItHoldsAnAOTClassAsGiven(t *testing.T) {
 	if err := vm.RegisterAOTAddressAlias(0x2000, "game/Example"); err != nil {
 		t.Fatal(err)
 	}
-	if !vm.HoldsAOTClass(class) || !vm.HasAOTClassAt(0x1000) || !vm.HasAOTClassAt(0x2000) || vm.HasAOTClassAt(0x3000) {
-		t.Fatal("the registered class is not held as given")
+	first, ok := vm.AOTClassRevision(0x1000)
+	if !ok || !vm.HasAOTClassAt(0x1000) || !vm.HasAOTClassAt(0x2000) || vm.HasAOTClassAt(0x3000) {
+		t.Fatal("the registered class is not answered for")
+	}
+	if _, ok := vm.AOTClassRevision(0x2000); ok {
+		t.Fatal("an alias answers a revision of the class registered elsewhere")
+	}
+	other := AOTClassMetadata{Address: 0x6000, Name: "game/Other"}
+	if err := vm.RegisterAOTClass(other); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := vm.AOTClassRevision(0x1000); again != first {
+		t.Fatalf("registering another class changed this one's revision from %d to %d", first, again)
 	}
 	changed := class
 	changed.VTable = []uint32{0x4004}
-	if vm.HoldsAOTClass(changed) {
-		t.Fatal("a class with another vtable is said to be held")
-	}
-	aliased := class
-	aliased.Address = 0x2000
-	if vm.HoldsAOTClass(aliased) {
-		t.Fatal("an alias is said to hold the class registered elsewhere")
-	}
 	if err := vm.RegisterAOTClass(changed); err != nil {
 		t.Fatal(err)
 	}
-	if !vm.HoldsAOTClass(changed) || vm.HoldsAOTClass(class) {
-		t.Fatal("registering the class again did not change what is held")
+	second, ok := vm.AOTClassRevision(0x1000)
+	if !ok || second == first {
+		t.Fatalf("registering the class again kept revision %d", first)
+	}
+	saved, err := vm.CaptureHeapState(nil, HeapCodec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.RestoreHeapState(saved, HeapCodec{}); err != nil {
+		t.Fatal(err)
+	}
+	if restored, ok := vm.AOTClassRevision(0x1000); !ok || restored == first || restored == second {
+		t.Fatalf("the restored class has revision %d (%t), one a registration before it had", restored, ok)
 	}
 }

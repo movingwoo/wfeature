@@ -214,6 +214,7 @@ func (vm *VM) DefineClassFile(data []byte) error {
 	}
 	vm.mu.Lock()
 	clear(vm.declaringFields)
+	clear(vm.instanceAnswers)
 	vm.mu.Unlock()
 	return nil
 }
@@ -234,8 +235,10 @@ func (vm *VM) defineClass(definition ClassDefinition, builtin bool) error {
 	vm.mu.Lock()
 	defer vm.mu.Unlock()
 	// A class that arrives now can be the one a field reference resolves to,
-	// so what was worked out before it existed is thrown away.
+	// or one a cast's walk could not load before, so what was worked out
+	// before it existed is thrown away.
 	clear(vm.declaringFields)
+	clear(vm.instanceAnswers)
 	if len(constants) > 0 {
 		if vm.definedConstants == nil {
 			vm.definedConstants = make(map[string][]definedConstant)

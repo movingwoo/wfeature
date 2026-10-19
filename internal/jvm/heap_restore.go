@@ -417,9 +417,15 @@ func (vm *VM) restoreHeapState(saved HeapState, codec HeapCodec, threadsAllowed 
 	vm.mu.Lock()
 	vm.aotMu.Lock()
 	vm.statics, vm.classMonitors, vm.declaringFields = statics, monitors, make(map[fieldKey]fieldResolution)
+	vm.instanceAnswers = make(map[instanceKey]bool)
 	vm.internedStrings, vm.internedStringBytes = interned, internedBytes
 	vm.classObjects = classObjects
 	vm.aotClasses, vm.aotAddresses, vm.aotObjects = classes, aliases, bindings
+	vm.aotRevisions = make(map[string]uint64, len(classes))
+	for name := range classes {
+		vm.aotRevision++
+		vm.aotRevisions[name] = vm.aotRevision
+	}
 	vm.threads, vm.mainThread = threads, objects[saved.MainThread]
 	vm.initialized, vm.initErrors = initialized, make(map[string]error)
 	vm.nextObject.Store(saved.NextObject)

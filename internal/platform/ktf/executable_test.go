@@ -157,49 +157,10 @@ func TestInitializationBindsJavaObjectsToJVM(t *testing.T) {
 }
 
 func TestInitializationRegistersAOTClassMetadataWithJVM(t *testing.T) {
-	client, err := LoadClient(ClientImage{Name: "client.bin0", Data: syntheticInitializableClient()}, armcore.CoreOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime, err := newInitializationRuntime(client)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	classAddress, err := runtime.allocate(20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	className, _ := runtime.allocateBytes([]byte("game/Example\x00"))
-	methodName, _ := runtime.allocateBytes(append([]byte{0}, []byte("(I)I+run\x00")...))
-	fieldName, _ := runtime.allocateBytes(append([]byte{0}, []byte("I+value\x00")...))
-	methodAddress, _ := runtime.allocate(28)
-	fieldAddress, _ := runtime.allocate(16)
-	methodTable, _ := runtime.allocateWords([]uint32{methodAddress, 0})
-	fieldTable, _ := runtime.allocateWords([]uint32{fieldAddress, 0})
-	vtable, _ := runtime.allocateWords([]uint32{methodAddress})
-	descriptor, _ := runtime.allocate(36)
-
-	writeTestWords(t, client, methodAddress, []uint32{0x101001, classAddress, 0, methodName, 0, 0x00010000, 0})
-	writeTestWords(t, client, fieldAddress, []uint32{0x0001, classAddress, fieldName, 4})
-	descriptorData := make([]byte, 36)
-	binary.LittleEndian.PutUint32(descriptorData[0:], className)
-	binary.LittleEndian.PutUint32(descriptorData[12:], methodTable)
-	binary.LittleEndian.PutUint32(descriptorData[20:], fieldTable)
-	binary.LittleEndian.PutUint16(descriptorData[24:], 1)
-	binary.LittleEndian.PutUint16(descriptorData[26:], 8)
-	binary.LittleEndian.PutUint16(descriptorData[28:], 0x21)
-	if err := client.Core().Memory().Write(descriptor, descriptorData); err != nil {
-		t.Fatal(err)
-	}
-	classData := make([]byte, 20)
-	binary.LittleEndian.PutUint32(classData[0:], classAddress+4)
-	binary.LittleEndian.PutUint32(classData[8:], descriptor)
-	binary.LittleEndian.PutUint32(classData[12:], vtable)
-	binary.LittleEndian.PutUint16(classData[16:], 1)
-	if err := client.Core().Memory().Write(classAddress, classData); err != nil {
-		t.Fatal(err)
-	}
+	runtime, client := newAOTFixtureRuntime(t)
+	fixture := writeAOTClassFixture(t, runtime, client, "game/Example")
+	classAddress, vtable := fixture.class, fixture.vtable
+	methodAddress, methodName, fieldAddress, fieldName := fixture.method, fixture.methodName, fixture.field, fixture.fieldName
 
 	registerContext := armcore.NewContext()
 	registerContext.Registers[0] = classAddress

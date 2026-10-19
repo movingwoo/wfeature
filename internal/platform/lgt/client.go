@@ -1,6 +1,7 @@
 package lgt
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -1052,21 +1053,46 @@ func (client *Client) writeWord(address, value uint32) error {
 // readCString reads a NUL-terminated guest string with a bound, because a
 // pointer into uninitialized memory would otherwise read to the end of the
 // mapping.
+//
+// It reads a chunk at a time. A byte at a time, every byte paid a whole memory
+// read — its lock and its validation — and a line drawn with a length of -1
+// or a format handed to sprintk is read this way every time it is used. The
+// answers are the byte-at-a-time ones: a chunk that cannot be read whole,
+// because it runs past the end of a mapping the string ends inside, is read
+// again a byte at a time, so an unreadable byte before the terminator fails
+// with the error that byte's own read gives, and a string that runs off the
+// top of the address space carries on at zero as it always has.
 func (client *Client) readCString(address uint32) (string, error) {
 	if address == 0 {
 		return "", nil
 	}
 	const limit = 4096
-	buffer := make([]byte, 0, 64)
-	one := make([]byte, 1)
-	for offset := uint32(0); offset < limit; offset++ {
-		if err := client.core.Memory().Read(address+offset, one); err != nil {
-			return "", err
+	memory := client.core.Memory()
+	// The bytes gather on the stack, so the string made of them is the one
+	// allocation a name of a few hundred bytes costs.
+	var held [256]byte
+	text := held[:0]
+	var chunk [64]byte
+	for offset := uint32(0); offset < limit; offset += uint32(len(chunk)) {
+		part := chunk[:]
+		end := -1
+		if err := memory.Read(address+offset, part); err != nil {
+			for index := range part {
+				if err := memory.Read(address+offset+uint32(index), part[index:index+1]); err != nil {
+					return "", err
+				}
+				if part[index] == 0 {
+					end = index
+					break
+				}
+			}
+		} else {
+			end = bytes.IndexByte(part, 0)
 		}
-		if one[0] == 0 {
-			return string(buffer), nil
+		if end >= 0 {
+			return string(append(text, part[:end]...)), nil
 		}
-		buffer = append(buffer, one[0])
+		text = append(text, part...)
 	}
 	return "", fmt.Errorf("LGT string at %#x is not terminated within %d bytes", address, limit)
 }

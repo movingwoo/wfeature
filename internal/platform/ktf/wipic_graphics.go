@@ -503,16 +503,13 @@ func (runtime *initializationRuntime) wipicReadString(pointer uint32, length int
 			return nil, fmt.Errorf("read KTF draw string: %w", err)
 		}
 	} else {
-		for offset := uint32(0); offset < 1024*unit; offset += unit {
-			chunk := make([]byte, unit)
-			if err := memory.Read(pointer+offset, chunk); err != nil {
-				return nil, fmt.Errorf("read KTF draw string: %w", err)
-			}
-			if chunk[0] == 0 && (unit == 1 || chunk[1] == 0) {
-				break
-			}
-			data = append(data, chunk...)
+		// Up to 1024 units: a longer run draws its first 1024 rather than
+		// failing.
+		text, _, err := readGuestString(memory, pointer, 1024*unit, unit)
+		if err != nil {
+			return nil, fmt.Errorf("read KTF draw string: %w", err)
 		}
+		data = text
 	}
 	if unicode {
 		units := make([]uint16, len(data)/2)
@@ -793,33 +790,14 @@ func (runtime *initializationRuntime) wipicCopyFramebuffer(thread *armcore.Threa
 	if !ok {
 		return 0, nil
 	}
-	memory := runtime.client.core.Memory()
-	for line := int32(0); line < height; line++ {
-		fromY := sourceY + line
-		toY := destinationY + line
-		if fromY < 0 || toY < 0 || uint32(fromY) >= source.height || uint32(toY) >= destination.height {
-			continue
-		}
-		for column := int32(0); column < width; column++ {
-			fromX := sourceX + column
-			toX := destinationX + column
-			if fromX < 0 || toX < 0 || uint32(fromX) >= source.width || uint32(toX) >= destination.width {
-				continue
-			}
-			if !clip.contains(toX, toY) {
-				continue
-			}
-			var data [2]byte
-			if err := memory.Read(source.pixels+uint32(fromY)*source.bpl+uint32(fromX)*2, data[:]); err != nil {
-				return 0, err
-			}
-			address := destination.pixels + uint32(toY)*destination.bpl + uint32(toX)*2
-			if err := runtime.blendPixel(op, address, binary.LittleEndian.Uint16(data[:])); err != nil {
-				return 0, err
-			}
-		}
-	}
-	return 0, nil
+	// This call has never taken the snapshot wipicBlitClipped does: a copy
+	// inside one surface reads each source pixel as the copy reaches it, so
+	// an overlapping one carries what it has already drawn along with it.
+	return 0, runtime.drawFramebufferCopy(&framebufferCopy{
+		destination: destination, source: source, clip: clip, op: op,
+		destinationX: destinationX, destinationY: destinationY, sourceX: sourceX, sourceY: sourceY,
+		width: width, height: height,
+	})
 }
 
 // decodeGuestImage decodes the encoded image formats KTF archives carry. BMP
@@ -1249,7 +1227,6 @@ func (runtime *initializationRuntime) wipicBlitClipped(destination wipicFramebuf
 	if !ok {
 		return nil
 	}
-	memory := runtime.client.core.Memory()
 	// A copy inside one surface reads pixels the same copy is about to write.
 	// Reading them straight from memory smears the leading edge across the
 	// rectangle, so an overlapping self-copy reads from a snapshot taken
@@ -1259,36 +1236,296 @@ func (runtime *initializationRuntime) wipicBlitClipped(destination wipicFramebuf
 	if err != nil {
 		return err
 	}
-	for line := int32(0); line < height; line++ {
-		fromY := sourceY + line
-		toY := destinationY + line
-		if fromY < 0 || toY < 0 || uint32(fromY) >= source.height || uint32(toY) >= destination.height {
+	return runtime.drawFramebufferCopy(&framebufferCopy{
+		destination: destination, source: source, clip: clip, op: op, opacity: opacity, snapshot: snapshot,
+		destinationX: destinationX, destinationY: destinationY, sourceX: sourceX, sourceY: sourceY,
+		width: width, height: height,
+	})
+}
+
+// framebufferCopy is one rectangle copy clipCopy has narrowed, so every row
+// and column of it lands inside both surfaces. snapshot is the source
+// rectangle read before the copy began, laid out as blitSourceSnapshot
+// describes, or nil when the copy reads its source from memory as it goes.
+type framebufferCopy struct {
+	destination, source        wipicFramebuffer
+	clip                       wipicClip
+	op                         wipicPixelOp
+	opacity                    blitOpacity
+	snapshot                   []byte
+	destinationX, destinationY int32
+	sourceX, sourceY           int32
+	width, height              int32
+}
+
+// copyRowSpan is how many pixels of a row are read and written at once. It
+// bounds the scratch a row needs, so the scratch stays on the stack whatever
+// width a surface record claims, and a 240-pixel screen row is one span.
+const copyRowSpan = 256
+
+// copyRowScratch is the host copy of one span: its source pixels, the
+// destination pixels an operation combines them with, and which of them the
+// source's transparency lets through.
+type copyRowScratch struct {
+	source      [copyRowSpan * 2]byte
+	destination [copyRowSpan * 2]byte
+	drawn       [copyRowSpan]bool
+}
+
+// drawFramebufferCopy draws a narrowed copy a span of a row at a time.
+//
+// **What it draws, the order it asks a guest operation in, and every byte and
+// transparency mark it leaves behind are those of the pixel-at-a-time walk it
+// replaced**, which is still here as copyPixels. A span is read whole,
+// combined on the host and written back as one store per run of drawn pixels
+// wherever that cannot answer differently from the walk, and walked wherever
+// it could; copyRow says which is which.
+//
+// The walk crossed into guest memory two or three times a pixel, and each
+// Memory.Read or Memory.Write takes the memory lock and validates its range
+// however few bytes it moves, so that fixed cost was the copy. On an M1,
+// BenchmarkWIPICBlitRows put a 32x32 sprite at 33µs walked and 1.3µs by rows,
+// the same sprite with transparent corners at 30µs and 2.7µs, through a guest
+// operation whose answers are cached at 53µs and 10µs, and a 240x320 screen
+// at 2.5ms and 19µs.
+func (runtime *initializationRuntime) drawFramebufferCopy(blit *framebufferCopy) error {
+	if !blit.rowsAddressable() {
+		for line := int32(0); line < blit.height; line++ {
+			if err := runtime.copyPixels(blit, line, 0, blit.width); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	var scratch copyRowScratch
+	for line := int32(0); line < blit.height; line++ {
+		first, end, ok := blit.clippedColumns(line)
+		if !ok {
 			continue
 		}
-		for column := int32(0); column < width; column++ {
-			fromX := sourceX + column
-			toX := destinationX + column
-			if fromX < 0 || toX < 0 || uint32(fromX) >= source.width || uint32(toX) >= destination.width {
-				continue
-			}
-			if !clip.contains(toX, toY) {
-				continue
-			}
-			if !opacity.source.opaqueAt(int(fromX), int(fromY)) {
-				continue
-			}
-			var data [2]byte
-			if snapshot != nil {
-				copy(data[:], snapshot[(int(line)*int(width)+int(column))*2:])
-			} else if err := memory.Read(source.pixels+uint32(fromY)*source.bpl+uint32(fromX)*2, data[:]); err != nil {
+		for start := first; start < end; start += copyRowSpan {
+			stop := min(start+copyRowSpan, end)
+			drawn, err := runtime.copyRow(blit, line, start, stop, &scratch)
+			if err != nil {
 				return err
 			}
-			address := destination.pixels + uint32(toY)*destination.bpl + uint32(toX)*2
-			if err := runtime.blendPixel(op, address, binary.LittleEndian.Uint16(data[:])); err != nil {
-				return err
+			if start+drawn < stop {
+				if err := runtime.copyPixels(blit, line, start+drawn, stop); err != nil {
+					return err
+				}
 			}
-			opacity.destination.markOpaque(int(toX), int(toY))
 		}
+	}
+	return nil
+}
+
+// rowsAddressable reports whether every row of the copy is a plain run of
+// bytes in both surfaces. clipCopy keeps every pixel inside both, so the only
+// copy that fails this is one whose record places its pixels so near the top
+// of the address space that the walk's 32-bit address sums wrap past it — a
+// record no allocation of this platform's makes — and that copy is walked a
+// pixel at a time, exactly as it always was.
+func (blit *framebufferCopy) rowsAddressable() bool {
+	if blit.width <= 0 || blit.height <= 0 ||
+		blit.destinationX < 0 || blit.destinationY < 0 || blit.sourceX < 0 || blit.sourceY < 0 ||
+		int64(blit.destinationX)+int64(blit.width) > int64(blit.destination.width) ||
+		int64(blit.destinationY)+int64(blit.height) > int64(blit.destination.height) ||
+		int64(blit.sourceX)+int64(blit.width) > int64(blit.source.width) ||
+		int64(blit.sourceY)+int64(blit.height) > int64(blit.source.height) {
+		return false
+	}
+	if framebufferRectangleEnd(blit.destination, blit.destinationX, blit.destinationY, blit.width, blit.height) > 1<<32 {
+		return false
+	}
+	return blit.snapshot != nil ||
+		framebufferRectangleEnd(blit.source, blit.sourceX, blit.sourceY, blit.width, blit.height) <= 1<<32
+}
+
+// framebufferRectangleEnd is one past the last byte a rectangle of a surface
+// reaches, as a 64-bit sum.
+func framebufferRectangleEnd(framebuffer wipicFramebuffer, x, y, width, height int32) uint64 {
+	return uint64(framebuffer.pixels) + uint64(y+height-1)*uint64(framebuffer.bpl) + uint64(x+width)*2
+}
+
+// clippedColumns answers the columns of one row of the copy that survive the
+// clip, as [first, end) in the copy's own columns, and false when none do. The
+// walk tests every pixel against the clip, and what a rectangle keeps of a row
+// is one stretch of it, so the pixels outside cost nothing here.
+func (blit *framebufferCopy) clippedColumns(line int32) (int32, int32, bool) {
+	first, end := int64(0), int64(blit.width)
+	if blit.clip.active() {
+		toY := blit.destinationY + line
+		if toY < blit.clip.top || toY >= blit.clip.bottom {
+			return 0, 0, false
+		}
+		first = max(first, int64(blit.clip.left)-int64(blit.destinationX))
+		end = min(end, int64(blit.clip.right)-int64(blit.destinationX))
+	}
+	if first >= end {
+		return 0, 0, false
+	}
+	return int32(first), int32(end), true
+}
+
+// copyRow draws columns [first, end) of one row, all of them inside the clip,
+// from one read of the source span — and, when an operation combines pixels,
+// one of the destination span — and one store per run of drawn pixels. It
+// answers how many leading columns it drew, and the caller walks the rest.
+//
+// It draws none, having changed nothing, when reading the span whole could
+// answer differently from the walk:
+//
+//   - The source comes from memory and its span starts before the
+//     destination's and reaches into it. The walk reads each source pixel
+//     after writing the pixels to its left, so it reads what this row has
+//     just drawn; MC_grpCopyFrameBuffer inside one surface does exactly that.
+//     A source span that starts at or after the destination's is never
+//     reached by the writes to a pixel's left, and a disjoint one by none.
+//   - The source's transparency mask is the destination's own, the row reads
+//     and marks the same line, and the copy moves right by less than the
+//     span. The walk marks each pixel it draws before testing the next, so a
+//     pixel to the right can be let through by a mark this row made.
+//   - Either span does not read back. The walk reads only the pixels it
+//     draws, and meets a fault, if there is one, at the pixel that has it.
+//
+// **A guest operation is only ever run by the walk.** A span is drawn here up
+// to the first pair the operation has not answered yet — no guest code runs
+// before that, so nothing can move under the span — and the walk takes over at
+// that pair, asking the guest with the same arguments in the same order the
+// walk always did.
+func (runtime *initializationRuntime) copyRow(blit *framebufferCopy, line, first, end int32, scratch *copyRowScratch) (int32, error) {
+	count := int(end - first)
+	fromX, fromY := blit.sourceX+first, blit.sourceY+line
+	toX, toY := blit.destinationX+first, blit.destinationY+line
+	sourceAddress := blit.source.pixels + uint32(fromY)*blit.source.bpl + uint32(fromX)*2
+	destinationAddress := blit.destination.pixels + uint32(toY)*blit.destination.bpl + uint32(toX)*2
+	if blit.snapshot == nil && sourceAddress < destinationAddress &&
+		uint64(sourceAddress)+uint64(count)*2 > uint64(destinationAddress) {
+		return 0, nil
+	}
+	if mask := blit.opacity.source; mask != nil && mask == blit.opacity.destination && fromY == toY {
+		if shift := int64(blit.destinationX) - int64(blit.sourceX); shift > 0 && shift < int64(count) {
+			return 0, nil
+		}
+	}
+	memory := runtime.client.core.Memory()
+	var source []byte
+	if blit.snapshot != nil {
+		offset := (int(line)*int(blit.width) + int(first)) * 2
+		source = blit.snapshot[offset : offset+count*2]
+	} else {
+		source = scratch.source[:count*2]
+		if memory.Read(sourceAddress, source) != nil {
+			return 0, nil
+		}
+	}
+	// Which pixels the source's transparency lets through; nil when it has
+	// none, and every pixel is drawn.
+	var drawn []bool
+	if mask := blit.opacity.source; mask != nil {
+		drawn = scratch.drawn[:count]
+		for column := range drawn {
+			drawn[column] = mask.opaqueAt(int(fromX)+column, int(fromY))
+		}
+	}
+	pixels := source
+	if blit.op.active() {
+		pixels = scratch.destination[:count*2]
+		if memory.Read(destinationAddress, pixels) != nil {
+			return 0, nil
+		}
+		for column := 0; column < count; column++ {
+			if drawn != nil && !drawn[column] {
+				continue
+			}
+			value, answered := runtime.cachedPixelOp(blit.op,
+				binary.LittleEndian.Uint16(source[column*2:]), binary.LittleEndian.Uint16(pixels[column*2:]))
+			if !answered {
+				count = column
+				break
+			}
+			binary.LittleEndian.PutUint16(pixels[column*2:], value)
+		}
+	}
+	for column := 0; column < count; {
+		if drawn != nil && !drawn[column] {
+			column++
+			continue
+		}
+		run := count
+		if drawn != nil {
+			run = column + 1
+			for run < count && drawn[run] {
+				run++
+			}
+		}
+		if err := runtime.writeCopyRun(blit, destinationAddress, pixels, column, run, toX, toY); err != nil {
+			return int32(run), err
+		}
+		column = run
+	}
+	return int32(count), nil
+}
+
+// writeCopyRun stores the drawn columns [first, end) of a span, whose first
+// pixel is at address, and marks them in the destination's transparency mask
+// as the walk marks each pixel it writes. A run the surface refuses is written
+// again a pixel at a time, so the pixels before the refused one are drawn and
+// marked and the error names that pixel: where the walk would have stopped.
+func (runtime *initializationRuntime) writeCopyRun(blit *framebufferCopy, address uint32, pixels []byte, first, end int, toX, toY int32) error {
+	memory := runtime.client.core.Memory()
+	mask := blit.opacity.destination
+	if memory.Write(address+uint32(first)*2, pixels[first*2:end*2]) != nil {
+		for column := first; column < end; column++ {
+			if err := memory.Write(address+uint32(column)*2, pixels[column*2:column*2+2]); err != nil {
+				return err
+			}
+			mask.markOpaque(int(toX)+column, int(toY))
+		}
+		return nil
+	}
+	if mask != nil {
+		for column := first; column < end; column++ {
+			mask.markOpaque(int(toX)+column, int(toY))
+		}
+	}
+	return nil
+}
+
+// copyPixels draws columns [first, end) of one row of a copy a pixel at a
+// time: each pixel's source read, operation, write and mark happen before the
+// next pixel is looked at. Every copy was drawn this way before rows were read
+// whole, and copyRow hands it each stretch where reading whole could differ.
+func (runtime *initializationRuntime) copyPixels(blit *framebufferCopy, line, first, end int32) error {
+	memory := runtime.client.core.Memory()
+	fromY := blit.sourceY + line
+	toY := blit.destinationY + line
+	if fromY < 0 || toY < 0 || uint32(fromY) >= blit.source.height || uint32(toY) >= blit.destination.height {
+		return nil
+	}
+	for column := first; column < end; column++ {
+		fromX := blit.sourceX + column
+		toX := blit.destinationX + column
+		if fromX < 0 || toX < 0 || uint32(fromX) >= blit.source.width || uint32(toX) >= blit.destination.width {
+			continue
+		}
+		if !blit.clip.contains(toX, toY) {
+			continue
+		}
+		if !blit.opacity.source.opaqueAt(int(fromX), int(fromY)) {
+			continue
+		}
+		var data [2]byte
+		if blit.snapshot != nil {
+			copy(data[:], blit.snapshot[(int(line)*int(blit.width)+int(column))*2:])
+		} else if err := memory.Read(blit.source.pixels+uint32(fromY)*blit.source.bpl+uint32(fromX)*2, data[:]); err != nil {
+			return err
+		}
+		address := blit.destination.pixels + uint32(toY)*blit.destination.bpl + uint32(toX)*2
+		if err := runtime.blendPixel(blit.op, address, binary.LittleEndian.Uint16(data[:])); err != nil {
+			return err
+		}
+		blit.opacity.destination.markOpaque(int(toX), int(toY))
 	}
 	return nil
 }

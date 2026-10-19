@@ -32,7 +32,8 @@ func readGuestStringByByte(memory *armcore.Memory, address, limit uint32) ([]byt
 // A string read a chunk at a time reads as it did a byte at a time: the same
 // bytes, the same answer about the terminator, and the same error, wherever
 // the string starts and ends against a chunk, a page, the end of a mapping
-// and the end of the address space.
+// and the end of the address space. The walk underneath answers the same
+// length and leaves a string shorter than its buffer there.
 func TestAGuestStringReadsAsItDidAByteAtATime(t *testing.T) {
 	memory := armcore.NewMemory()
 	const (
@@ -84,10 +85,19 @@ func TestAGuestStringReadsAsItDidAByteAtATime(t *testing.T) {
 	for _, start := range starts {
 		for _, limit := range []uint32{0, 1, 63, 64, 65, 97, 128, 200, 4096} {
 			want, wantTerminated, wantErr := readGuestStringByByte(memory, start, limit)
-			got, gotTerminated, gotErr := readGuestString(memory, start, limit)
+			got, gotTerminated, gotErr := readGuestString(memory, start, limit, 1)
 			if fmt.Sprint(gotErr) != fmt.Sprint(wantErr) || gotTerminated != wantTerminated || !bytes.Equal(got, want) {
 				t.Fatalf("at %#x for %d bytes: read %q, %t, %v; a byte at a time read %q, %t, %v",
 					start, limit, got, gotTerminated, gotErr, want, wantTerminated, wantErr)
+			}
+			var buffer [guestStringBuffer]byte
+			length, terminated, err := scanGuestString(memory, start, limit, 1, &buffer)
+			if fmt.Sprint(err) != fmt.Sprint(wantErr) || err == nil && (terminated != wantTerminated || int(length) != len(want)) {
+				t.Fatalf("at %#x for %d bytes: walked %d, %t, %v; a byte at a time read %q, %t, %v",
+					start, limit, length, terminated, err, want, wantTerminated, wantErr)
+			}
+			if err == nil && len(want) < len(buffer) && !bytes.Equal(buffer[:len(want)], want) {
+				t.Fatalf("at %#x for %d bytes: the walk left %q in its buffer, want %q", start, limit, buffer[:len(want)], want)
 			}
 		}
 	}

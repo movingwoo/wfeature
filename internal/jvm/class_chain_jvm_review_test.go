@@ -1,7 +1,6 @@
 package jvm
 
 import (
-	"bytes"
 	"testing"
 	"time"
 )
@@ -10,26 +9,7 @@ import (
 // caller names, including itself: the shape a corrupted or crafted archive can
 // carry and no compiler emits.
 func bareClass(name, super string) []byte {
-	var out bytes.Buffer
-	writeTestU2(&out, 0xcafe)
-	writeTestU2(&out, 0xbabe)
-	writeTestU2(&out, 0)
-	writeTestU2(&out, 49)
-	writeTestU2(&out, 5) // #1 Utf8 name, #2 Class #1, #3 Utf8 super, #4 Class #3
-	for index, text := range []string{name, super} {
-		out.WriteByte(1)
-		writeTestU2(&out, uint16(len(text)))
-		out.WriteString(text)
-		out.WriteByte(7)
-		writeTestU2(&out, uint16(2*index+1))
-	}
-	writeTestU2(&out, 0x0021) // public super
-	writeTestU2(&out, 2)      // this_class
-	writeTestU2(&out, 4)      // super_class
-	for range 4 {             // interfaces, fields, methods, attributes
-		writeTestU2(&out, 0)
-	}
-	return out.Bytes()
+	return classImplementing(name, super, 0x0021) // public super
 }
 
 // A superclass chain that comes back on itself is refused where it is walked,
