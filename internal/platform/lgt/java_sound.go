@@ -223,6 +223,18 @@ func javaClipSetVolume(
 	return javaTrue, nil
 }
 
+// javaClipGetVolume is `Clip.getVolume()`: the level setVolume last left, the
+// same one the C block's `MC_mdaClipGetVolume` reads for this clip.
+func javaClipGetVolume(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	clip, err := client.javaClip(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return uint32(clip.volume), nil
+}
+
 // javaPlayerPlay is `Player.play(Clip, boolean repeat)`, and the pair below are
 // `stop` and `resume`. They answer whether the request was taken, which is what
 // the specification's `boolean` is.

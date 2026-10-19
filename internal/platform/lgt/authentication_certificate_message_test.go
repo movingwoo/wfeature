@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"os"
 	"strings"
 	"testing"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestCertificateMessageSequenceAndFragments(t *testing.T) {
-	n := certificateMessageNetwork("01012345678", "Fixture")
+	n := certificateMessageNetwork(certificateMessageRevisions["00028E76"], "01012345678", "Fixture")
 	for stage := 0; stage < 2; stage++ {
 		expected := n.certificateRequests[stage]
 		for split := 1; split < len(expected); split++ {
@@ -55,17 +56,67 @@ func TestCertificateMessageSequenceAndFragments(t *testing.T) {
 			}
 		}
 	}
-	if certificateMessageNetwork("invalid", "Fixture") != nil || certificateMessageNetwork("01012345678", "") != nil || certificateMessageNetwork("01012345678", strings.Repeat("x", 50)) != nil || certificateMessageNetwork("01012345678", "a\x00b") != nil {
+	revision := certificateMessageRevisions["00028E76"]
+	if certificateMessageNetwork(revision, "invalid", "Fixture") != nil || certificateMessageNetwork(revision, "01012345678", "") != nil || certificateMessageNetwork(revision, "01012345678", strings.Repeat("x", 50)) != nil || certificateMessageNetwork(revision, "01012345678", "a\x00b") != nil {
 		t.Fatal("invalid session identity accepted")
 	}
-	if newCertificateMessageNetwork(nil, "01012345678", "Fixture") != nil || newCertificateMessageNetwork(&Archive{Descriptor: Descriptor{AID: "00028E76"}, Module: []byte("other revision")}, "01012345678", "Fixture") != nil {
+	for _, aid := range []string{"00028E76", "000316d9"} {
+		if newCertificateMessageNetwork(&Archive{Descriptor: Descriptor{AID: aid}, Module: []byte("other revision")}, "01012345678", "Fixture") != nil {
+			t.Fatalf("unknown module for %s matched", aid)
+		}
+	}
+	if newCertificateMessageNetwork(nil, "01012345678", "Fixture") != nil {
 		t.Fatal("unknown archive matched")
+	}
+	for _, changed := range []certificateMessageRevision{
+		{code: revision.code, dial: revision.dial},
+		{version: strings.Repeat("v", 20), dial: revision.dial},
+		{version: revision.version, product: strings.Repeat("p", 20)},
+	} {
+		if certificateMessageNetwork(changed, "01012345678", "Fixture") != nil {
+			t.Fatalf("revision %+v with an unbounded field accepted", changed)
+		}
+	}
+}
+
+// The second revision's two requests, as its client wrote them for this
+// session identity and model: the client field, the code word and the product
+// field after the model are what separate it from the first revision.
+func TestCertificateMessageSecondRevisionRequests(t *testing.T) {
+	n := certificateMessageNetwork(certificateMessageRevisions["000316d9"], "01000000000", "Emulator")
+	if n == nil {
+		t.Fatal("revision rejected")
+	}
+	observed := [2]string{
+		"004900000003f9000002054c47545f57495049435f312e302e300000000000303130303030303030303000" +
+			"000000000000000000000000000000000000000000000000000000000000",
+		"004f0014000c0429456d756c61746f72000000000000000000000000000000000000000000000000000000" +
+			"000000000000000000000000000000003030303330363042000000000000000000000000",
+	}
+	for stage, want := range observed {
+		if got := hex.EncodeToString(n.certificateRequests[stage]); got != want {
+			t.Fatalf("stage %d request\n got %s\nwant %s", stage, got, want)
+		}
+	}
+	if n.contract.dials != [2]uint32{0x1ddf5, 0x1ddf5} || n.contract.socketCallback != 0x1e1c5 ||
+		n.contract.address != 0xfc4273d3 || n.contract.port != 0x223b {
+		t.Fatalf("socket contract %+v", n.contract)
+	}
+	s := &notificationSocketState{}
+	if !n.writeRequest(s, n.certificateRequests[0]) || !bytes.Equal(s.pendingResponse, []byte{0, 5, 0, 0, 0}) {
+		t.Fatal("first request not acknowledged")
+	}
+	s.pendingResponse = nil
+	other := bytes.Clone(n.certificateRequests[1])
+	other[60] = '1'
+	if n.writeRequest(s, other) {
+		t.Fatal("a different product field was accepted")
 	}
 }
 
 func TestCertificateMessageSocketDeferredDeliveryAndClose(t *testing.T) {
 	c := fixtureClient(t)
-	n := certificateMessageNetwork("01012345678", "Fixture")
+	n := certificateMessageNetwork(certificateMessageRevisions["00028E76"], "01012345678", "Fixture")
 	n.active = true
 	c.notificationNetwork = n
 	cb := notificationReportingCallback(t, c)

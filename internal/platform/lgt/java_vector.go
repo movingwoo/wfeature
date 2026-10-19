@@ -2,6 +2,7 @@ package lgt
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -110,6 +111,42 @@ func javaVectorAt(
 		return 0, fmt.Errorf("element %d of a vector of %d", index, len(held))
 	}
 	return held[index], nil
+}
+
+// javaVectorCopyInto is `copyInto(Object[] anArray)`: every element, in order,
+// into the start of the array. The language throws NullPointerException for a
+// null array and an index exception for one too short to take them all, and
+// both arrive as guest throws.
+func javaVectorCopyInto(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if arguments[1] == 0 {
+		return 0, client.throwJavaPlatform(thread, javaThrowNullClass, ": copying a vector into a null array")
+	}
+	width, err := client.javaArrayElementBytes(arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	if width != 4 {
+		return 0, fmt.Errorf("a vector copied into an array of %d-byte elements", width)
+	}
+	block, length, err := client.javaArrayBlock(arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	if uint64(len(held)) > uint64(length) {
+		return 0, client.throwJavaPlatform(thread, javaThrowArrayClass,
+			fmt.Sprintf(": %d elements into an array of %d", len(held), length))
+	}
+	data := make([]byte, 4*len(held))
+	for index, element := range held {
+		binary.LittleEndian.PutUint32(data[4*index:], element)
+	}
+	return 0, client.core.Memory().Write(block+javaArrayLengthWords*4, data)
 }
 
 // javaVectorSetAt replaces an existing element without changing the size or
