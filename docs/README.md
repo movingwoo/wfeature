@@ -4,7 +4,8 @@ Start with the maintained references below. `history/` preserves call traces,
 measurements, rejected approaches, and older implementation descriptions;
 its claims apply to their recorded revision and may be superseded. The ignored
 root `TODO.md` is the local work queue. The root `README.md` and `CHANGELOG.md`
-are written in Korean for players; everything here is English.
+are written in Korean for players; everything here is English. `images/` holds
+the page screenshots the root `README.md` shows.
 
 ## Running and developing
 
