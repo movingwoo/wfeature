@@ -2,6 +2,7 @@ package jvm
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 	"weak"
@@ -115,6 +116,37 @@ func (vm *VM) AOTClass(name string) (AOTClassMetadata, bool) {
 		return AOTClassMetadata{}, false
 	}
 	return cloneAOTClass(metadata), true
+}
+
+// HasAOTClassAt reports whether a class is registered at address, its own or
+// an alias, without copying it out as AOTClassAt does.
+func (vm *VM) HasAOTClassAt(address uint32) bool {
+	if vm == nil || address == 0 {
+		return false
+	}
+	vm.aotMu.RLock()
+	_, ok := vm.aotAddresses[address]
+	vm.aotMu.RUnlock()
+	return ok
+}
+
+// HoldsAOTClass reports whether the class registered at metadata's own address
+// is exactly metadata, so that registering it again would change nothing.
+func (vm *VM) HoldsAOTClass(metadata AOTClassMetadata) bool {
+	if vm == nil || metadata.Address == 0 {
+		return false
+	}
+	vm.aotMu.RLock()
+	defer vm.aotMu.RUnlock()
+	name, ok := vm.aotAddresses[metadata.Address]
+	if !ok || name != metadata.Name {
+		return false
+	}
+	current, ok := vm.aotClasses[name]
+	return ok && current.Address == metadata.Address && current.SuperName == metadata.SuperName &&
+		current.AccessFlags == metadata.AccessFlags && current.InstanceSize == metadata.InstanceSize &&
+		current.VTableAddress == metadata.VTableAddress && slices.Equal(current.VTable, metadata.VTable) &&
+		slices.Equal(current.Methods, metadata.Methods) && slices.Equal(current.Fields, metadata.Fields)
 }
 
 func (vm *VM) AOTClassAt(address uint32) (AOTClassMetadata, bool) {

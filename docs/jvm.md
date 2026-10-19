@@ -62,6 +62,8 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
   A visited worklist bounds each query to `MaxFrames` distinct type loads and
   65,536 inheritance edges (`maxInstanceRelations`), so cycles and repeated
   branches cannot create unbounded work; an exhausted query answers false. The
+  worklist is its own visited set and starts in a buffer on the stack, turning
+  into a set only past sixteen types, so an ordinary query allocates nothing. The
   same relations govern native listener checks and checkpoint validation. An
   array is an instance of its own type, `Object`, `Cloneable` and
   `Serializable` only (no covariance)

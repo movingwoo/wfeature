@@ -407,14 +407,41 @@ func (memory *Memory) Load(address uint32, data []byte) error {
 	return memory.write(address, data, 0, "load", true)
 }
 
-// Read copies guest memory out for the Host. The lock is exclusive although
-// nothing is written to the guest: validation and the page lookup refresh the
-// last-mapping and page caches, and two readers doing that at once — a
-// debugger's connection beside the session — would tear them.
+// Read copies guest memory out for the Host. Readers share the lock, so a
+// read may only look at the last-mapping and page caches, never refresh them:
+// two readers refreshing them at once — a debugger's connection beside the
+// session — would tear them, which is why the lock was made exclusive for a
+// while. Exclusive, every read paid a writer's lock, and the Host reads a
+// sprite a pixel at a time: that lock was most of the 12% more instructions a
+// tick a light KTF title retired than on 0.5.2. The caches belong to the
+// guest's own accesses, which hold the lock exclusively for a quantum and
+// refresh them there; a read that misses them scans the mappings and walks
+// the page directory, which is two loads.
 func (memory *Memory) Read(address uint32, destination []byte) error {
-	memory.mu.Lock()
-	defer memory.mu.Unlock()
-	return memory.readLocked(address, destination, PermissionRead, "read")
+	memory.mu.RLock()
+	defer memory.mu.RUnlock()
+	return memory.readShared(address, destination)
+}
+
+// readShared is readLocked for a caller holding the lock shared: it consults
+// the caches and writes none of them.
+func (memory *Memory) readShared(address uint32, destination []byte) error {
+	if err := memory.validateShared(address, uint64(len(destination)), PermissionRead, "read"); err != nil {
+		return err
+	}
+	for offset := 0; offset < len(destination); {
+		current := address + uint32(offset)
+		page := memory.pageFor(current)
+		pageOffset := int(current & memoryPageMask)
+		length := min(len(destination)-offset, int(memoryPageSize)-pageOffset)
+		if page == nil || page.data == nil {
+			clear(destination[offset : offset+length])
+		} else {
+			copy(destination[offset:offset+length], page.data[pageOffset:pageOffset+length])
+		}
+		offset += length
+	}
+	return nil
 }
 
 // Write is how this platform stores into the guest's address space. It is
@@ -486,6 +513,40 @@ func (memory *Memory) validateLocked(address uint32, size uint64, required Permi
 		(required == 0 || cached.permission&required == required) {
 		return nil
 	}
+	if err := memory.scanMappings(address, size, required, operation); err != nil {
+		return err
+	}
+	for _, mapping := range memory.maps {
+		if mapping.start <= uint64(address) && end <= mapping.end &&
+			(required == 0 || mapping.permission&required == required) {
+			memory.lastMapping = mapping
+			break
+		}
+	}
+	return nil
+}
+
+// validateShared is validateLocked for a caller holding the lock shared: the
+// last-mapping cache is read and not refreshed.
+func (memory *Memory) validateShared(address uint32, size uint64, required Permission, operation string) error {
+	if size == 0 {
+		return nil
+	}
+	end := uint64(address) + size
+	if end > guestAddressEnd {
+		return &AccessError{Operation: operation, Address: address, Size: size, Cause: ErrAddressOverflow}
+	}
+	if cached := memory.lastMapping; cached.start <= uint64(address) && end <= cached.end &&
+		(required == 0 || cached.permission&required == required) {
+		return nil
+	}
+	return memory.scanMappings(address, size, required, operation)
+}
+
+// scanMappings checks a range that may span several mappings against all of
+// them, and changes nothing.
+func (memory *Memory) scanMappings(address uint32, size uint64, required Permission, operation string) error {
+	end := uint64(address) + size
 	for current := uint64(address); current < end; {
 		coveredUntil := current
 		mappedUntil := current
@@ -506,13 +567,6 @@ func (memory *Memory) validateLocked(address uint32, size uint64, required Permi
 			return &AccessError{Operation: operation, Address: address, Size: size, Cause: cause}
 		}
 		current = coveredUntil
-	}
-	for _, mapping := range memory.maps {
-		if mapping.start <= uint64(address) && end <= mapping.end &&
-			(required == 0 || mapping.permission&required == required) {
-			memory.lastMapping = mapping
-			break
-		}
 	}
 	return nil
 }

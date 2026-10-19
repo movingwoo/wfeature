@@ -238,3 +238,42 @@ func TestVMResolvesAOTAndRuntimeAssignability(t *testing.T) {
 		t.Fatal("IsSubclassOf() did not reject an AOT hierarchy cycle")
 	}
 }
+
+// HoldsAOTClass answers whether registering a class again would change
+// anything, and HasAOTClassAt whether an address names a class; neither copies
+// the class out.
+func TestTheVMSaysWhetherItHoldsAnAOTClassAsGiven(t *testing.T) {
+	vm := New(nil, Options{})
+	class := AOTClassMetadata{
+		Address: 0x1000, Name: "game/Example", InstanceSize: 8, VTableAddress: 0x3000, VTable: []uint32{0x4000},
+		Methods: []AOTMethodMetadata{{Address: 0x4000, Name: "run", Descriptor: "()V", Body: 0x5000}},
+	}
+	if vm.HoldsAOTClass(class) || vm.HasAOTClassAt(0x1000) {
+		t.Fatal("an empty VM says it holds the class")
+	}
+	if err := vm.RegisterAOTClass(class); err != nil {
+		t.Fatal(err)
+	}
+	if err := vm.RegisterAOTAddressAlias(0x2000, "game/Example"); err != nil {
+		t.Fatal(err)
+	}
+	if !vm.HoldsAOTClass(class) || !vm.HasAOTClassAt(0x1000) || !vm.HasAOTClassAt(0x2000) || vm.HasAOTClassAt(0x3000) {
+		t.Fatal("the registered class is not held as given")
+	}
+	changed := class
+	changed.VTable = []uint32{0x4004}
+	if vm.HoldsAOTClass(changed) {
+		t.Fatal("a class with another vtable is said to be held")
+	}
+	aliased := class
+	aliased.Address = 0x2000
+	if vm.HoldsAOTClass(aliased) {
+		t.Fatal("an alias is said to hold the class registered elsewhere")
+	}
+	if err := vm.RegisterAOTClass(changed); err != nil {
+		t.Fatal(err)
+	}
+	if !vm.HoldsAOTClass(changed) || vm.HoldsAOTClass(class) {
+		t.Fatal("registering the class again did not change what is held")
+	}
+}

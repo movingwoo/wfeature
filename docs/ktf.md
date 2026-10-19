@@ -51,6 +51,19 @@ callback does not consume a guest worker grant, so a self-requeueing UI cannot
 starve a receiver; each round retains the configured worker limit and the
 existing serial callback pacing.
 
+A title registers the same AOT class record again and again, and a second
+registration refreshes the class from the record: a vtable the title changed
+in between is the one the class has from then on. What reading a record read
+is kept, its spans joined by address where they meet; registering it again
+reads those spans back and compares them, and only a record whose bytes
+changed, or a class the VM no longer holds as it was read, is parsed and
+validated whole again. Names in the records are read a chunk at a time, not a
+byte at a time. On a light title the rereading, a byte per memory read, was
+most of what the server did for it. Whether a native call that is ending
+answers sixty-four bits is looked up by its stub's address; it used to be found
+by walking every stub, which on the title that calls natives most often was half
+of the server's CPU.
+
 A native body in a current image can publish a 32-bit result in the
 environment instead of `r0`: it writes the value at offset 40, then tag 2 at
 offset 36 (`native_return.go`). The tag is cleared on entry, a nested scope

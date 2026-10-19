@@ -1,10 +1,13 @@
 package ktf
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -117,18 +120,49 @@ func (unwind *aotExceptionUnwind) Error() string {
 	)
 }
 
+// registerAOTClass registers the class record a title hands it, and refreshes
+// the class when the title registers it again: a second registration re-reads
+// the record, so a vtable the title changed in between is the one the class
+// has from then on.
+//
+// A title registers the same classes over and over — a light KTF title did it
+// so often that reading the records again, every name in them included, and
+// validating what they said was most of what the server did for it. So what a
+// read read is kept: the spans of guest memory it took, in order. When the
+// same record comes again, those spans are read and compared, which costs a
+// few reads and no parsing; the class read from them would be the one the VM
+// already holds, so registering it would change nothing, and nothing is
+// registered. Any byte that differs, or a class the VM no longer holds as it
+// was, sends the record down the whole read again.
 func (runtime *initializationRuntime) registerAOTClass(ctx context.Context, thread *armcore.Thread) (uint32, error) {
 	address, err := thread.Register(0)
 	if err != nil {
 		return 0, err
 	}
+	if read := runtime.aotClassReads[address]; read != nil && runtime.initializedClasses[address] &&
+		runtime.aotClassReadHolds(read) && runtime.client.vm.HoldsAOTClass(read.metadata) {
+		runtime.registerAOTAncestors(address)
+		runtime.callbacks.RegisteredClasses++
+		return 0, nil
+	}
+	read := &aotClassRead{}
+	runtime.aotReading = read
 	metadata, err := runtime.readAOTClass(address)
+	runtime.aotReading = nil
 	if err != nil {
+		delete(runtime.aotClassReads, address)
 		return 0, fmt.Errorf("read registered KTF Java class at %#x: %w", address, err)
 	}
 	if err := runtime.client.vm.RegisterAOTClass(metadata); err != nil {
+		delete(runtime.aotClassReads, address)
 		return 0, fmt.Errorf("register KTF AOT class %s: %w", metadata.Name, err)
 	}
+	read.metadata = metadata
+	read.compact()
+	if runtime.aotClassReads == nil {
+		runtime.aotClassReads = make(map[uint32]*aotClassRead)
+	}
+	runtime.aotClassReads[address] = read
 	runtime.registerAOTAncestors(address)
 	runtime.callbacks.RegisteredClasses++
 	if err := runtime.runAOTClassInitializer(ctx, thread, metadata); err != nil {
@@ -341,7 +375,7 @@ func (runtime *initializationRuntime) registerAOTAncestors(address uint32) {
 			return
 		}
 		visited[parent] = true
-		if _, ok := runtime.client.vm.AOTClassAt(parent); !ok {
+		if !runtime.client.vm.HasAOTClassAt(parent) {
 			if _, err := runtime.registerAOTClassRecord(parent); err != nil {
 				runtime.client.log("KTF AOT parent class not registered", "class", fmt.Sprintf("%#x", address), "parent", fmt.Sprintf("%#x", parent), "error", err)
 				return
@@ -1779,5 +1813,86 @@ func (runtime *initializationRuntime) readAOTBytes(address uint32, size uint64, 
 	if err := runtime.client.core.Memory().Read(address, data); err != nil {
 		return nil, fmt.Errorf("read %s at %#x: %w", label, address, err)
 	}
+	if runtime.aotReading != nil {
+		runtime.aotReading.note(address, data, false)
+	}
 	return data, nil
+}
+
+// aotClassRead is what reading one class record read: the spans of guest
+// memory it took, in the order it took them, and the class it read from them.
+// Reading a record is a function of those bytes and nothing else — every
+// address it follows comes out of a span read before — so the same bytes in
+// the same spans read as the same class.
+type aotClassRead struct {
+	spans    []aotReadSpan
+	metadata jvm.AOTClassMetadata
+}
+
+type aotReadSpan struct {
+	address uint32
+	data    []byte
+}
+
+// note adds bytes a read took at address, with the terminating zero after them
+// for a string, which is what decided where the string ended. A span that
+// continues the one before it, as a pointer table's words do, joins it.
+func (read *aotClassRead) note(address uint32, data []byte, terminated bool) {
+	length := uint64(len(data))
+	if terminated {
+		length++
+	}
+	if last := len(read.spans) - 1; last >= 0 &&
+		uint64(read.spans[last].address)+uint64(len(read.spans[last].data)) == uint64(address) &&
+		uint64(len(read.spans[last].data))+length <= maxPlatformAllocation {
+		read.spans[last].data = append(read.spans[last].data, data...)
+	} else {
+		read.spans = append(read.spans, aotReadSpan{address: address, data: append(make([]byte, 0, length), data...)})
+	}
+	if terminated {
+		read.spans[len(read.spans)-1].data = append(read.spans[len(read.spans)-1].data, 0)
+	}
+}
+
+// compact sorts a read's spans by address and joins those that overlap or
+// meet. What a read depended on is which bytes it took, not the order it took
+// them in, so a class whose records were read one at a time — a method record,
+// then its name, then the next record — is checked again in a few reads of
+// the regions those lie in: the records sit side by side, and so do the names.
+// Two spans that overlap were read from the same memory at the same moment, so
+// where they overlap they agree.
+func (read *aotClassRead) compact() {
+	if len(read.spans) < 2 {
+		return
+	}
+	slices.SortStableFunc(read.spans, func(a, b aotReadSpan) int { return cmp.Compare(a.address, b.address) })
+	joined := read.spans[:1]
+	for _, span := range read.spans[1:] {
+		last := &joined[len(joined)-1]
+		end := uint64(last.address) + uint64(len(last.data))
+		if uint64(span.address) > end || end-uint64(last.address)+uint64(len(span.data)) > maxPlatformAllocation {
+			joined = append(joined, span)
+			continue
+		}
+		if spanEnd := uint64(span.address) + uint64(len(span.data)); spanEnd > end {
+			last.data = append(last.data, span.data[end-uint64(span.address):]...)
+		}
+	}
+	read.spans = joined
+}
+
+// aotClassReadHolds reports whether guest memory still holds, span for span,
+// what a class read took from it.
+func (runtime *initializationRuntime) aotClassReadHolds(read *aotClassRead) bool {
+	memory := runtime.client.core.Memory()
+	for _, span := range read.spans {
+		if cap(runtime.aotReadScratch) < len(span.data) {
+			runtime.aotReadScratch = make([]byte, len(span.data))
+		}
+		current := runtime.aotReadScratch[:len(span.data)]
+		if memory.Read(span.address, current) != nil || !bytes.Equal(current, span.data) {
+			return false
+		}
+	}
+	return true
 }
