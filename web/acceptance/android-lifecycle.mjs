@@ -909,9 +909,12 @@ try {
   // F: the same reopening while the game the finished server holds is parked
   // and is a title whose destroyApp never returns. A drain that closed parked
   // games ahead of its deadline never ended, and the app waited on it for
-  // ever; now that destroyApp is ended when it has run its fifteen seconds,
-  // within the drain's twenty-second deadline, the old server ends on its own,
-  // and the new activity starts the next one after it. The page lets go of its session first, as a page the app has
+  // ever; now that destroyApp is ended when it has run its fifteen seconds
+  // (backend.EndingBound), the old server ends on its own well within the
+  // drain's deadline (webhost.StopDeadline, 35 s), and the new activity
+  // starts the next one after it. The 21 s the check allows is that ending
+  // and a margin, short of the deadline, so a drain that only ended at its
+  // deadline does not pass. The page lets go of its session first, as a page the app has
   // hidden or a tab that closed does, so the game is parked when the drain
   // begins: finishing the activity with the game attached reaches the drain
   // before the page's own parking does. The server's lines after its SIGTERM
@@ -932,7 +935,7 @@ try {
     for (let i = 0; i < 40 && !(parked = serverLog(leaving).includes("session parked")); i++) await pause(250);
     const since = deviceNow();
     // As in E, with the wait for the old pid long enough to see the drain's
-    // deadline pass and the app's own bound (30 s) after it.
+    // deadline pass and the app's own bound (40 s) after it.
     const [, destroyedAt, relaunchedAt, goneAt] = tryAdb("shell", [
       `since=$(date +%s.%3N)`,
       `input keyevent KEYCODE_BACK`,
@@ -940,7 +943,7 @@ try {
       `destroyed=$(date +%s.%3N)`,
       `am start -n ${app}/.MainActivity >/dev/null 2>&1`,
       `relaunched=$(date +%s.%3N)`,
-      `end=$(($(date +%s) + 45)); while [ -e /proc/${old} ] && [ $(date +%s) -lt $end ]; do sleep 0.05; done`,
+      `end=$(($(date +%s) + 50)); while [ -e /proc/${old} ] && [ $(date +%s) -lt $end ]; do sleep 0.05; done`,
       `echo "$since $destroyed $relaunched $(date +%s.%3N)"`,
     ].join("; ")).split(/\s+/).map(Number);
     let now = null;
@@ -986,11 +989,11 @@ try {
   // activity: the second's BACK leaves it, its pid and its game, and the first
   // one's page takes the game back — at once, or with its own button when it
   // came back before the second let go of the game.
+  // The task's history lists each live instance once; a finished one can
+  // still be named elsewhere in the dump, as the last one paused.
+  const instances = () => tryAdb("shell", "dumpsys", "activity", "activities").split("\n")
+    .filter(line => /^\s*\* Hist\s+#\d+: ActivityRecord\{/.test(line) && line.includes(`${app}/.MainActivity`)).length;
   {
-    // The task's history lists each live instance once; a finished one can
-    // still be named elsewhere in the dump, as the last one paused.
-    const instances = () => tryAdb("shell", "dumpsys", "activity", "activities").split("\n")
-      .filter(line => /^\s*\* Hist\s+#\d+: ActivityRecord\{/.test(line) && line.includes(`${app}/.MainActivity`)).length;
     await launch();
     const first = await prepare(canvas);
     first.close();
@@ -1025,9 +1028,69 @@ try {
       old, now: now?.pid ?? null, two, left, destroyed, secondServed, secondState, offered, firstPlaying, servers: servers(),
       serverLog: serverLog(since), events: lifecycleEvents(since).map(({ event }) => event),
     };
+    const server = sameServer({ status: { pid: old } }, { status: now, servers: run.servers, log: run.serverLog });
     check("G a second activity over the first shares the server: finishing it leaves the server and its game to the first",
-      run.two === 2 && run.destroyed && run.left === 1 && run.secondServed && run.old > 0 && run.now === run.old &&
-        run.servers.length === 1 && run.servers[0] === String(run.old) && run.firstPlaying, run);
+      run.two === 2 && run.destroyed && run.left === 1 && run.secondServed && server && run.firstPlaying, { ...run, sameServer: server });
+  }
+
+  // H: the same two activities, the second made over the first while the
+  // first waits for a server a finished activity ended. When that server
+  // ends, the first lets its start go, since it is not the one shown, and the
+  // second starts the next server and shows its page. Finishing the second
+  // gives the server back to the first, which used to keep saying it was
+  // waiting for the old server, over a live one, until its task was removed:
+  // nothing started it again. Now it starts again and shows the page.
+  {
+    await launch();
+    const page = await shown();
+    if (!(await page.until(ready))) throw new Error("the page did not come up ready");
+    await page.evaluate(start(hang));
+    if (!(await page.until(playing))) throw new Error("the hang fixture did not start");
+    await pause(1500);
+    const old = (await status())?.pid;
+    const leaving = deviceNow();
+    await page.evaluate(`location.href = "about:blank"`).catch(() => {});
+    page.close();
+    for (let i = 0; i < 40 && !serverLog(leaving).includes("session parked"); i++) await pause(250);
+    const since = deviceNow();
+    tryAdb("shell", [
+      `since=$(date +%s.%3N)`,
+      `input keyevent KEYCODE_BACK`,
+      `i=0; until logcat -b events -d -v epoch -t "$since" | grep -q 'wm_on_destroy_called.*${app}.MainActivity'; do i=$((i+1)); [ $i -ge 200 ] && break; sleep 0.02; done`,
+      `am start -n ${app}/.MainActivity >/dev/null 2>&1`,
+    ].join("; "));
+    let waited = false;
+    for (let i = 0; i < 40 && !(waited = appLog(since).some(line => line.text.startsWith("waiting for the server a finished activity ended"))); i++) await pause(250);
+    tryAdb("shell", "am", "start", "-W", "-n", `${app}/.MainActivity`, "-a", `${app}.LIFECYCLE_SECOND`);
+    let two = 0;
+    for (let i = 0; i < 40 && (two = instances()) < 2; i++) await pause(250);
+    let next = null;
+    for (let i = 0; i < 240; i++) {
+      next = await status();
+      if (next?.pid > 0 && next.pid !== old) break;
+      await pause(250);
+    }
+    const second = await shown().catch(() => null);
+    const secondReady = Boolean(await second?.until(`(${ready}) || (${playing})`, 20000));
+    second?.close();
+    const backAt = deviceNow();
+    tryAdb("shell", "input", "keyevent", "KEYCODE_BACK");
+    let destroyed = false;
+    for (let i = 0; i < 80 && !(destroyed = lifecycleEvents(backAt).some(({ event }) => event === "wm_on_destroy_called")); i++) await pause(250);
+    const first = await shown().catch(() => null);
+    const firstReady = Boolean(await first?.until(`(${ready}) || (${playing})`, 20000));
+    first?.close();
+    const now = await status();
+    const run = {
+      old, next: next?.pid ?? null, now: now?.pid ?? null, waited, two, left: instances(), destroyed, secondReady, firstReady,
+      startedAgain: appLog(backAt).some(line => line.text.startsWith("the activity shown again has no page")),
+      servers: servers(), appLog: appLog(since).map(line => `${Math.round((line.at - Number(since)) * 1000)} ${line.text}`),
+      serverLog: serverLog(backAt), events: lifecycleEvents(since).map(({ event }) => event),
+    };
+    const server = sameServer({ status: { pid: run.next } }, { status: now, servers: run.servers, log: run.serverLog });
+    check("H the first activity, shown again when the second one made over it while both waited for an ending server finishes, starts again and shows the page over that one's server",
+      run.waited && run.two === 2 && run.secondReady && run.destroyed && run.left === 1 && run.startedAgain && run.firstReady &&
+        run.next > 0 && run.next !== run.old && server, { ...run, sameServer: server });
   }
 } catch (error) {
   result.notes.push(`stopped: ${String(error.stack ?? error)}`);

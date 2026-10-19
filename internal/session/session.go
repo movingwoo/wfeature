@@ -1331,15 +1331,9 @@ func (s *Session) resume(ctx context.Context) error {
 	return ErrNotRunning
 }
 
-// EndingBound is how long a title's own ending may run on every platform: a
-// KTF title's service call may wait so long, an SKT title's destroyApp may run
-// so long, and closing a session gives an LGT title's destroyClet as much. A
-// Host stopping its games waits past it (webhost.StopDeadline).
-const EndingBound = 15 * time.Second
-
 // closeWait is how long closing a session gives an LGT title's destroyClet:
-// a close ends in bounded time on every platform.
-var closeWait = EndingBound
+// a close ends in bounded time on every platform (backend.EndingBound).
+var closeWait = backend.EndingBound
 
 // Close ends the session. It is safe to call more than once, and safe to call
 // on a session whose game already exited.

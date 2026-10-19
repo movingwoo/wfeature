@@ -159,6 +159,15 @@ picker.
     text input dialog, or a panel drawn over the game on a narrow screen is up,
     controller keys do not reach the game; the button on `설정` still closes the
     settings.
+  - **A question takes the controller.** While a confirmation or the text
+    input dialog is up, the controls bound to the directions move the focus
+    between its answers and stop at either end — the safe answer is first and
+    has the focus, so going round sent LEFT from it to the answer that goes
+    through — the one bound to `확인` presses the answer in focus (or focuses the
+    first when none is), and the one bound to `취소` presses the first, which is
+    always the safe one. The focus the controller moves is drawn
+    (`[data-pad]` in `style.css`); the mark goes with a pointer or a key in
+    the dialog, and with the question itself, however it was answered.
   - **Remapping.** `🕹️ 게임패드 매핑 변경` appears in the settings once a
     controller has been used here (a browser shows a page no controller until
     one of its buttons is pressed) and lists a row per control with a menu of
@@ -545,7 +554,7 @@ offline, where it comes up and then fails on an import. `service-worker.test.mjs
 therefore compares the list against what `index.html` names and what the module
 graph from `app.js` reaches; two modules had already drifted out of it. A
 change to the list wants the cache name bumped with it. The shell cache is
-`wfeature-pwa-v60` (the constant in `service-worker.js`). The `wfeature-pwa-`
+`wfeature-pwa-v61` (the constant in `service-worker.js`). The `wfeature-pwa-`
 prefix, introduced in version 35, keeps already-installed workers from deleting
 it through their broad `wfeature-shell-*` cleanup. Activation removes legacy
 shell caches and strictly older `wfeature-pwa-vN` versions, preserving future

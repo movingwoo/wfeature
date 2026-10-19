@@ -326,10 +326,21 @@ try {
   await page.locator("#restart").click();
   assert.equal(await asking(), true);
   assert.equal(await focused(), "confirm-cancel", "the safe answer has the focus");
+  // The directions stop at either end. Going round, left from the safe answer
+  // — the way to it — landed on the one that goes through.
+  await button(14, 1); await button(14, 0);
+  assert.equal(await focused(), "confirm-cancel", "left from the first answer stays on it");
+  await button(12, 1); await button(12, 0);
+  assert.equal(await focused(), "confirm-cancel", "so does up");
+  await page.evaluate(() => document.activeElement?.blur());
+  await button(14, 1); await button(14, 0);
+  assert.equal(await focused(), "confirm-cancel", "with no answer in focus, left goes to the first one");
   await button(15, 1); await button(15, 0);
   assert.equal(await focused(), "confirm-accept", "right moves to the answer that goes through");
   assert.equal(await page.locator("#confirm-accept").evaluate(e => getComputedStyle(e).outlineStyle), "solid",
     "the answer the controller moved to is shown");
+  await button(15, 1); await button(15, 0);
+  assert.equal(await focused(), "confirm-accept", "right from the last answer stays on it");
   await axes([-1, 0, 0, 0]);
   await axes([0, 0, 0, 0]);
   assert.equal(await focused(), "confirm-cancel", "the left stick moves back");
@@ -340,6 +351,21 @@ try {
   await button(0, 1); await button(0, 0);
   assert.equal(await asking(), false, "A presses the safe answer in focus");
   assert.equal(await playing(), true);
+  // A question answered from outside the dialog — Escape, the backdrop —
+  // takes the controller's mark with it, so the next question's focus is not
+  // shown as one the controller moved.
+  await page.locator("#restart").click();
+  await button(15, 1); await button(15, 0);
+  assert.equal(await page.locator("#confirm-dialog").evaluate(e => "pad" in e.dataset), true);
+  await page.keyboard.press("Escape");
+  assert.equal(await asking(), false, "Escape backs out");
+  await page.waitForFunction(() => !("pad" in document.querySelector("#confirm-dialog").dataset));
+  await page.locator("#restart").click();
+  assert.equal(await focused(), "confirm-cancel");
+  assert.equal(await page.locator("#confirm-dialog").evaluate(e => "pad" in e.dataset), false,
+    "the next question's focus is not shown as the controller's");
+  await button(1, 1); await button(1, 0);
+  assert.equal(await asking(), false);
   await expectSent([], "the game behind the question is sent nothing");
   await page.locator("#restart").click();
   await button(15, 1); await button(15, 0);
@@ -347,7 +373,7 @@ try {
   await page.waitForFunction(() => document.querySelector("#restart").classList.contains("hidden"));
   assert.equal(await asking(), false);
   await expectSent([], "the press that went through reaches no game");
-  result.checks.push("a question is answered with the controller: directions move, B backs out, A presses the answer in focus");
+  result.checks.push("a question is answered with the controller: directions move and stop at either end, B backs out, A presses the answer in focus");
 
   await page.evaluate(() => { window.disconnectPad(2); window.disconnectPad(1); window.disconnectPad(0); });
   await settle();

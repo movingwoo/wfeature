@@ -90,6 +90,12 @@ var (
 	// different game. It is deliberately not the same error as damage: the
 	// bytes are fine and the fix is to find the right file.
 	ErrSavePackIdentity = errors.New("backend: this save backup belongs to a different game")
+	// ErrSaveBackupEmpty means a restore was given entries and none of them
+	// is a save: an earlier build's backup of a converted folder holding only
+	// the record of its names. Restored, it would have removed every save the
+	// game has and called that a success, which is what an empty backup is
+	// refused for.
+	ErrSaveBackupEmpty = errors.New("backend: this save backup holds no save")
 )
 
 // SaveIdentity is the identity a backup carries: the raw SHA-256 of the game
@@ -344,6 +350,9 @@ func ReadSaveTree(root string) ([]SaveEntry, error) {
 	if err != nil {
 		return nil, err
 	}
+	if names.naming == namingConverting {
+		return nil, refuseSaveNamesListing(root, names)
+	}
 	choice := saveEntryChoice{}
 	err = walkSaveTree(root, func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -497,6 +506,9 @@ func WriteSaveTree(root string, entries []SaveEntry) (written int, removed int, 
 	if err != nil {
 		return 0, 0, fmt.Errorf("backend: the save backup cannot be restored whole: %w", err)
 	}
+	if len(normalized) == 0 && len(entries) > 0 {
+		return 0, 0, ErrSaveBackupEmpty
+	}
 	ordered, err := validateSnapshotSaves(normalized)
 	if err != nil {
 		return 0, 0, fmt.Errorf("backend: the save backup cannot be restored whole: %w", err)
@@ -515,8 +527,8 @@ func WriteSaveTree(root string, entries []SaveEntry) (written int, removed int, 
 	if err != nil {
 		return 0, 0, err
 	}
-	if names.naming == namingEarlier {
-		return 0, 0, refuseEarlierSaveNames(root, names)
+	if names.refusesWrites() {
+		return 0, 0, refuseSaveNamesWrite(root, names)
 	}
 	judged, err := store.storableSaveEntries(ordered, names)
 	if err != nil {
@@ -551,18 +563,14 @@ func WriteSaveTree(root string, entries []SaveEntry) (written int, removed int, 
 // backup what it says of a folder, that the names beside it are encoded, so
 // they are read as an encoded folder's names are (see saveEntryKey) and the
 // record is no entry. Of two entries that read as one key the encoded one is
-// kept, as a listing keeps it when it cannot tell which was written later. A
-// backup without the record is answered as it is.
+// kept, as a listing keeps it when it cannot tell which was written later (see
+// saveEntryChoice). A backup without the record is answered as it is.
 func keysOfAConvertedFolder(entries []SaveEntry) ([]SaveEntry, error) {
 	if !slices.ContainsFunc(entries, func(entry SaveEntry) bool { return entry.Key == saveNamesRecord }) {
 		return entries, nil
 	}
-	type read struct {
-		entry   SaveEntry
-		encoded bool
-	}
-	keys := make(map[string]read, len(entries))
-	order := make([]string, 0, len(entries))
+	choice := saveEntryChoice{}
+	data := make(map[string][]byte, len(entries))
 	for _, entry := range entries {
 		if entry.Key == saveNamesRecord {
 			continue
@@ -571,18 +579,13 @@ func keysOfAConvertedFolder(entries []SaveEntry) ([]SaveEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-		kept, seen := keys[key]
-		if seen && (kept.encoded || !encoded) {
-			continue
+		if choice.offer(key, entry.Key, encoded, nil) {
+			data[key] = entry.Data
 		}
-		if !seen {
-			order = append(order, key)
-		}
-		keys[key] = read{entry: SaveEntry{Key: key, Data: entry.Data}, encoded: encoded}
 	}
-	answered := make([]SaveEntry, 0, len(order))
-	for _, key := range order {
-		answered = append(answered, keys[key].entry)
+	answered := make([]SaveEntry, 0, len(choice))
+	for _, key := range choice.keys() {
+		answered = append(answered, SaveEntry{Key: key, Data: data[key]})
 	}
 	return answered, nil
 }

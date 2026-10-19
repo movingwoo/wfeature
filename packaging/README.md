@@ -20,14 +20,16 @@ a third: clearing the quarantine flag the rest of the folder inherited from the
 download (`xattr -dr com.apple.quarantine .`), which is the failure a
 first-time user hits with an unsigned binary. Each `start` passes its own
 arguments on to the server. The Windows one runs the server in its own window
-with `cmd /k`, so a startup error stays readable and closing the window stops
-the server.
+with `cmd /k`, so a startup error stays readable. Ctrl-C in the window stops
+the server after its drain; closing the window stops it too, but Windows ends
+the process about five seconds after the window closes, whatever the drain is
+doing (see `docs/running.md`).
 
 **`stop` and `status` are one line each, because the work is in the binary.**
 `wfeature-server status` and `wfeature-server stop` ask `/api/status` what is on
 the port — the only way to tell this server from a stranger holding it, since a
 released binary's path says nothing about what it is — and stop it through
-`/api/shutdown`, which drains as closing the window does. Nothing is stopped
+`/api/shutdown`, which drains as Ctrl-C does. Nothing is stopped
 without that answer. Both take an optional port (`stop 11542`), because the
 archive has no place to keep run state that survives being moved, and the port
 is what the user is asking about. See `internal/launcher` and

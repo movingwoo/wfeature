@@ -771,10 +771,7 @@ func (session *Session) Close() {
 	// WIPI transitions a Jlet to destroyed through destroyApp. A callback
 	// failure cannot refuse an unconditional close, but keeping it in the
 	// lifecycle diagnostics explains cleanup a title could not finish.
-	timeout := session.Client.waitAllowance()
-	if timeout > serviceDefaultWait {
-		timeout = serviceDefaultWait
-	}
+	timeout := min(session.Client.waitAllowance(), backend.EndingBound)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	_ = session.lifecycleResult(session.Client.DestroyApp(ctx), jletDestroyApp)

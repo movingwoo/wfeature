@@ -12,9 +12,12 @@ import (
 // A server that has exited before its parent waited for it is a zombie until
 // the parent does: its pid still answers signal zero. It holds no port and no
 // file any more, so a stop must count it as ended. Taken for a running one, a
-// stop waited out every one of its bounds, 45 seconds, signalled and killed
-// it, and then reported that the server would not stop.
+// stop waited out every one of its three bounds (drainWait each), signalled
+// and killed it, and then reported that the server would not stop.
 func TestAnExitedProcessNotYetCollectedHasEnded(t *testing.T) {
+	if !processStateKnown {
+		t.Skip("this system is not asked about a process's state; a pid that answers is taken for a running process")
+	}
 	// The test binary with no test to run exits at once.
 	command := exec.Command(os.Args[0], "-test.run=^$")
 	if err := command.Start(); err != nil {

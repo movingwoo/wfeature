@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // A Host service call — a timer callback, a key delivery, a card paint — runs
@@ -71,11 +73,12 @@ var ErrServiceWaitLimit = errors.New("KTF Host service call waited past its wait
 const serviceDefaultSteps = 500_000_000
 
 // serviceDefaultWait is how long one Host service call may spend waiting on
-// the session clock. The longest observed legitimate wait is a title's opening
-// sequence at 5.2 seconds; three times that leaves room for a slower handset
-// setting without letting a guest that polls a clock it will never satisfy
-// freeze the Host for longer than a person would wait before reloading.
-const serviceDefaultWait = 15 * time.Second
+// the session clock (backend.WaitBound). The longest observed legitimate wait
+// is a title's opening sequence at 5.2 seconds; three times that leaves room
+// for a slower handset setting without letting a guest that polls a clock it
+// will never satisfy freeze the Host for longer than a person would wait
+// before reloading.
+const serviceDefaultWait = backend.WaitBound
 
 // beginHostService opens a service scope on the client thread and answers the
 // function that closes it. Scopes nest: an inner scope keeps the allowance the

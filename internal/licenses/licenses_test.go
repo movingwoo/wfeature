@@ -39,10 +39,11 @@ func TestNoticesCarryEveryBundledComponent(t *testing.T) {
 		{"hqx's copyright", "Christopher Serr"},
 		{"the page's copy of hqx's tables", "web/hqx-patterns.js"},
 		// The Go modules carry one licence text between them, so what proves
-		// a component is still named is its own heading. x/sys is here
-		// because x/image's rasteriser reaches it on the amd64 targets: it
-		// is nobody's import in this repository and is linked into three of
-		// the five release archives all the same.
+		// a component is still named is its own heading. x/sys is linked
+		// into four of the five release archives, all but linux/arm64: the
+		// launcher asks macOS about a process through it, the launcher and
+		// the save lock use it on Windows, and x/image's rasteriser reaches
+		// it on the amd64 targets.
 		{"the text module's notice", "## golang.org/x/text"},
 		{"the image module's notice", "## golang.org/x/image"},
 		{"the system module's notice", "## golang.org/x/sys"},

@@ -237,6 +237,11 @@ func (s *Server) importSavePack(writer http.ResponseWriter, request *http.Reques
 	defer s.releaseSaveDirectory(directory)
 
 	written, removed, err := backend.WriteSaveTree(directory, pack.Entries)
+	if errors.Is(err, backend.ErrSaveBackupEmpty) {
+		s.logger.Warn("refused an empty save import", "game", label)
+		writeError(writer, http.StatusUnprocessableEntity, s.phrase("savepack.backup-empty"))
+		return
+	}
 	if err != nil {
 		s.logger.Error("a save import failed partway", "game", label,
 			"written", written, "error", err)
