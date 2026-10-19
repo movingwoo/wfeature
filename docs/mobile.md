@@ -104,11 +104,11 @@ that a game is not ended by something that is not an ending.
   again while the server it ended is still draining. The ended server is
   kept (`MainActivity.ending`), and the next activity starts a server only once
   that one has ended, saying 이전 실행을 마치는 중... meanwhile. The drain is
-  what writes the games' exit-time saves, and the server bounds it: ten
-  seconds for its games, attached and parked side by side, a close still
-  running then named in its log and left behind, and every platform bounds a
-  title's own ending (`destroyApp`, `destroyClet`) at fifteen seconds. An old
-  process still there after 30 seconds will not end on its own, and the app
+  what writes the games' exit-time saves, and the server bounds it: every
+  platform bounds a title's own ending (`destroyApp`, `destroyClet`) at
+  fifteen seconds, and the drain gives its games, attached and parked side by
+  side, twenty, a close still running then named in its log and left behind.
+  An old process still there after 30 seconds will not end on its own, and the app
   ends it (`destroyForcibly`). Before, a parked game was closed ahead of the
   drain's deadline, so one whose `destroyApp` never returned kept the old
   server, and the app's 이전 실행을 마치는 중..., for ever. Before that, the new
@@ -119,11 +119,18 @@ that a game is not ended by something that is not an ending.
   from `/proc`), so neither a server still draining nor another program
   listening on the port passes for the new one.
 
-  Only the activity created last starts or ends a server. Opened again
-  before Android has delivered the finished activity's `onDestroy`, the app
-  takes over the server still running, and the finished activity's late
-  `onDestroy` leaves it alone instead of ending the game under the new page;
-  a start still waiting for an older activity launches nothing.
+  Only the activity created last starts a server, and the server ends with
+  the last activity left. Opened again before Android has delivered the
+  finished activity's `onDestroy`, the app takes over the server still
+  running, and the finished activity's late `onDestroy` leaves it alone
+  instead of ending the game under the new page; a start still waiting for an
+  older activity launches nothing. A launch that is not the launcher's own
+  gets a second activity over the first in the default launch mode, and the
+  two share the server: finishing the second leaves the server and its game to
+  the first, whose page takes the game back — at once, or, when it came back
+  before the second let go of the game, by offering it back as a second tab of
+  a browser does. Before, the second's `onDestroy` ended the server, and the
+  first one's page came back with nothing behind it.
 
   BACK on a task started from the home screen does not finish the activity on
   Android 12 and later: Android moves the task to the back. The activity only
@@ -247,6 +254,16 @@ SDK; a local build with Xcode 27, or a runner that moves to it, stopped at
 launch. Checked on 2026-10-15 in the iOS 27 and 26.5 simulators with a 27 SDK
 build: without the scene the app stops at launch on iOS 27, and with it the app
 starts on both, loads the page and runs a game.
+
+**Only the app's own window plays.** A display the phone is connected to — a
+cable, AirPlay — opens a scene of its own (`windowExternalDisplayNonInteractive`),
+and the app delegate gives the play delegate to the `windowApplication` scene
+only. Given it as well, the display's scene made a window with a second page,
+which took the game from the phone's page as a second tab would, where the
+display had mirrored the phone before the app had scenes; without a delegate the
+scene shows nothing of its own and the display mirrors the screen. This has not
+been seen on a display: the simulator connects one only from its menu, and the
+change was checked by building for the simulator and the device.
 
 `UIFileSharingEnabled` puts the games and saves in the Files app, so an archive
 can arrive either from the page's own ＋ 게임 추가 button or by being dropped

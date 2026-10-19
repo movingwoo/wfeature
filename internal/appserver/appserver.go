@@ -146,7 +146,7 @@ func (s *Server) Close() error {
 	if s == nil || s.httpServer == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), webhost.StopDeadline)
 	defer cancel()
 	games := make(chan struct{})
 	go func() {

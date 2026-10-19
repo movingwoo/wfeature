@@ -39,10 +39,11 @@ const askTimeout = 2 * time.Second
 
 // drainWait is how long a stop waits for the server to finish what it was
 // doing — a save being written is the case that matters — before it stops
-// asking politely. The server bounds its own drain at ten seconds, so this is
-// a margin past that rather than the same number: a wait that ran out as the
-// drain did would signal a server that was about to exit on its own.
-const drainWait = 15 * time.Second
+// asking politely. The server bounds its own drain at twenty seconds
+// (webhost.StopDeadline), past the fifteen a title's own ending may run, so
+// this is a margin past that rather than the same number: a wait that ran out
+// as the drain did would signal a server that was about to exit on its own.
+const drainWait = 25 * time.Second
 
 // State is what was found on a port.
 type State int

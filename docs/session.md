@@ -110,11 +110,13 @@ page's `stop` does, and the server waits for that before it exits. The HTTP
 server's shutdown does not reach a session socket, so without this a connected
 game would end with the process, and what its title had written and not yet
 handed to the save store (a file it left open, keys a native package keeps until
-a frame ends) would be lost. The wait for both shares the shutdown's ten-second
-deadline; a close that has not ended by then is named in the log and left
-behind. A close is bounded on its own too: a title's ending (`destroyApp`,
-`destroyClet`, a Jlet's `destroyApp`) runs for fifteen seconds at most, after
-which its call is ended and the close stores what the title wrote. Parked games
+a frame ends) would be lost. A close is bounded on its own: a title's ending
+(`destroyApp`, `destroyClet`, a Jlet's `destroyApp`) runs for fifteen seconds
+at most, after which its call is ended and the close stores what the title
+wrote. The wait for both shares the shutdown's twenty-second deadline, which
+outlasts that bound; a close that has not ended by then is named in the log and
+left behind. The deadline was ten seconds, shorter than the bound, so a title
+whose ending took between ten and fifteen seconds was left behind. Parked games
 used to be closed one after another under the server's lock before the wait
 began, so one whose `destroyApp` never returned kept the server from ever
 stopping. Once a stop has begun, nothing starts, resumes or parks. Ordinary
@@ -608,9 +610,15 @@ listing, an export and a conversion pass over it, and a restore leaves it.
 
 On Windows a key an earlier build stored with a `.` or space at the end of a
 segment is under the name without it, which Win32 made: a read of `fs/save.`
-that finds nothing under its own names reads `fs/save`, where it is. That file
-is also the save of the key `fs/save`, which shared it there, so it is never
-moved; the key's first write goes to its own name.
+that finds nothing under its own names reads `fs/save`, where it is. A key with
+bytes that are not UTF-8 — an LGT or KTF C title's EUC-KR file name — is under
+the name with U+FFFD for each of them, which Go's UTF-16 made of it: a read of
+`fs/\xbc\xbc.dat` that finds nothing under its own names reads the file named
+U+FFFD U+FFFD `.dat`. Such a file is also the save of every other key Win32
+spelled the same — `fs/save`, or a key with other such bytes in the same
+places — which shared it there, so it is never moved; the key's first write
+goes to its own name. Both readings are tested with the Windows rule forced on,
+on macOS; neither has run on Windows.
 
 A folder whose names are encoded holds the file `.wfeature-names#1`, written
 before its first name with a `#`. No key is ever stored under that name, in any
@@ -638,8 +646,16 @@ is most of them, is left byte for byte as it is until a key that needs a `#` is
 stored. A folder that cannot be converted, because it cannot be
 written or not all of it can be listed, is read as the earlier build left it,
 each name by its exact spelling, and writing to it is refused until it can be
-converted. An earlier name whose encoded name would be longer than a file
-system stores stays as it is, still reads as its own key and is written there.
+converted. A name the conversion cannot move — a file locked in the Finder, or
+one another program holds open on Windows — stays where it is, with everything
+below it, when they read as their own keys in a converted folder: it is read
+there, a write of its key goes to the key's own name, and every other name is
+converted. One that would read as another key there (`#Top`) cannot stay; the
+names that had moved go back, and the folder is read as the earlier build left
+it until the name can move. Before, the conversion stopped at that name, and
+every operation on the folder failed finishing it. An earlier name whose
+encoded name would be longer than a file system stores stays as it is, still
+reads as its own key and is written there.
 
 An earlier build can write into a converted folder too, when a player goes back
 to it: it does not know `#Save` and writes its key `Save` under that name. When
@@ -657,7 +673,13 @@ that is the only deterministic answer, and the data cannot be split.
 
 `.wfs` packs carry keys, not paths. A pack exported by an earlier build imports
 unchanged, and the export of a converted folder is byte for byte the export an
-earlier build made of the same saves.
+earlier build made of the same saves. The one exception is a pack an earlier
+build made of a folder this build had converted: that build took every name for
+its own key, so the pack carries the folder's names (`rms/#Save`) and its
+`.wfeature-names#1`. The import reads those names as the folder's are read —
+`rms/#Save` is `rms/Save`, the record is no entry, and of two names of one key
+the encoded one is restored — rather than restoring `rms/#Save` and removing the
+`rms/Save` the title reads.
 
 A name an earlier build writes into a converted folder afterwards — an earlier
 version run again, or files copied in by hand — reads as its own key when the

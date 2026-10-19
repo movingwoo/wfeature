@@ -93,6 +93,15 @@ func (s *Server) resumeSession(token string, owner *sessionRunner) (*parkedSessi
 	return parked, true
 }
 
+// StopDeadline bounds stopping a server: how long its drain waits for the
+// games it holds to close. Every platform lets a title's own ending — an SKT
+// destroyApp, an LGT destroyClet, a KTF service call — run for fifteen seconds
+// (session.EndingBound), and a drain that gave up first left a title behind
+// that was still ending, with whatever it had not yet stored. So this is past
+// that bound. A Host that waits for a stopping server waits longer still: the
+// launcher's stop, and the Android app before it starts the next server.
+const StopDeadline = session.EndingBound + 5*time.Second
+
 // CloseSessions ends every game the server holds, and is what stopping the
 // server has to call. The HTTP server's own shutdown neither closes nor waits
 // for a hijacked connection, and a session socket is one: a game left running

@@ -45,8 +45,16 @@ esac
 binary="build/$profile/wfeature-server"
 log_file="var/run/server-$profile.log"
 
+# The binary is built again whenever a source is newer than it, not only when
+# it is missing. A checkout serves its own web/ from disk, and the server is
+# what fills in the page's phrases: after a pull, a binary older than the
+# checkout served the new page with {{key}} in place of every phrase it did not
+# know, until somebody thought to run ./build.sh.
 if [ ! -x "$binary" ]; then
 	echo "$binary is missing; building it first."
+	./build.sh "$profile" >/dev/null
+elif [ -n "$(find cmd internal web go.mod go.sum -newer "$binary" -type f 2>/dev/null | head -n 1)" ]; then
+	echo "$binary is older than the sources; building it again."
 	./build.sh "$profile" >/dev/null
 fi
 

@@ -33,6 +33,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -94,18 +95,28 @@ public class MainActivity extends Activity {
 
     /**
      * The activity the app shows now: the one created last. A start still in
-     * flight for an older one does not launch a server, and an older one's
-     * ending does not stop the server a newer one took over, as one finishing
-     * late behind a reopened app would. Guarded by the class lock.
+     * flight for an older one does not launch a server. Guarded by the class
+     * lock.
      */
     private static MainActivity current;
 
     /**
+     * Every activity not gone for good, oldest first, which share the one
+     * server. Android can show a second over the first — a launch that is not
+     * the launcher's own gets another instance in the default launch mode — and
+     * an activity finishing late behind the app opened again is one of two for
+     * a moment. The server ends with the last of them: ended by the first to
+     * finish, it left the other's page with nothing behind it. A recreated
+     * activity leaves and its next instance joins. Guarded by the class lock.
+     */
+    private static final ArrayList<MainActivity> alive = new ArrayList<>();
+
+    /**
      * How long a reopened activity waits for the server a finished one ended.
-     * The server bounds its own drain (ten seconds for its games, and a
-     * game's close is bounded too), so a process still alive past this will
-     * not end on its own, and it is ended: it can write no save any more, and
-     * the app would otherwise never show its page.
+     * The server bounds its own drain (twenty seconds for its games, past the
+     * fifteen a game's own ending may run), so a process still alive past
+     * this will not end on its own, and it is ended: it can write no save any
+     * more, and the app would otherwise never show its page.
      */
     private static final long ENDING_WAIT_SECONDS = 30;
 
@@ -135,6 +146,7 @@ public class MainActivity extends Activity {
 
         synchronized (MainActivity.class) {
             current = this;
+            alive.add(this);
         }
         new Thread(this::startServerAndShow).start();
     }
@@ -613,22 +625,26 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         closePage();
         super.onDestroy();
-        // A recreation is not an ending: the next instance finds the server
-        // and the game in it still running. Ending it here closed the game the
-        // player was in whenever a split screen or an attached keyboard
-        // rebuilt the activity, and the new instance raced the old process for
-        // the port.
-        if (isChangingConfigurations()) {
-            return;
-        }
         synchronized (MainActivity.class) {
-            finished = true;
-            // A newer activity has taken the server over: this one finished
-            // late, behind the app reopened, and the server is that one's now.
-            if (current != this) {
+            alive.remove(this);
+            // A recreation is not an ending: the next instance finds the
+            // server and the game in it still running. Ending it here closed
+            // the game the player was in whenever a split screen or an
+            // attached keyboard rebuilt the activity, and the new instance
+            // raced the old process for the port.
+            if (isChangingConfigurations()) {
                 return;
             }
-            current = null;
+            finished = true;
+            if (current == this) {
+                current = alive.isEmpty() ? null : alive.get(alive.size() - 1);
+            }
+            // Another activity still shows the page — the one this was shown
+            // over, or one opened while this was finishing — and the server
+            // and its game are that one's now.
+            if (!alive.isEmpty()) {
+                return;
+            }
             if (server != null) {
                 // The session drains on its own when the process goes; what
                 // must not happen is the process outliving the app that
