@@ -41,6 +41,7 @@ KTF · LGT · SKT (GNEX/GVM 포함)
 | Android | `.apk` 설치 | 출처를 알 수 없는 앱 허용 |
 | iOS | `.ipa` 사이드로드 | AltStore·Sideloadly로 본인 Apple ID 서명 |
 
+![게임 선택 화면](docs/images/main.webp)
 
 폴더에 직접 파일을 넣거나 **＋ 게임 추가** 버튼을 통해 파일을 넣을 수 있습니다.
 운영체제별 안내는 압축 안의 `README.txt`에 있습니다.
@@ -69,6 +70,8 @@ KTF · LGT · SKT (GNEX/GVM 포함)
 
 임의로 **설정 → ⌨️ 키보드 매핑 변경**에서 커스텀할 수 있습니다.
 
+![키보드 매핑 변경](docs/images/keyboard-mapping.webp)
+
 </details>
 
 <details>
@@ -91,6 +94,8 @@ KTF · LGT · SKT (GNEX/GVM 포함)
  
 **설정 → 🕹️ 게임패드 매핑 변경**에서 커스텀할 수 있습니다.
 
+![게임패드 매핑 변경](docs/images/gamepad-mapping.webp)
+
 </details>
 
 <details>
@@ -110,6 +115,8 @@ KTF · LGT · SKT (GNEX/GVM 포함)
 - **🎯 치트** — 게임 메모리 값 찾기·고정
 - **🔄 재시작** — 게임 선택 화면으로 돌아가기
 
+![설정 패널](docs/images/settings.webp)
+
 </details>
 
 <details>
@@ -121,6 +128,8 @@ KTF · LGT · SKT (GNEX/GVM 포함)
 
 1. 버튼이나 빈 칸을 누르고 넣을 키를 고릅니다.
 2. **여러 칸 선택**으로 칸을 고르고 **합치기**를 누르면 병합 가능합니다.
+
+![키패드 세부 조정](docs/images/keypad-mapping.webp)
 
 </details>
 
@@ -144,6 +153,8 @@ KTF · LGT · SKT (GNEX/GVM 포함)
 1. 바꾸려는 값을 치트 패널에 넣고 **이 값으로 찾기**를 누릅니다.
 2. 게임에서 값을 바꾼 뒤 새 값으로 다시 찾습니다. 후보가 줄어들 때까지 반복합니다.
 3. 찾은 주소를 **고정**하면 값이 유지됩니다. 값을 편집하면 변경됩니다.
+
+![치트 패널](docs/images/cheat.webp)
 
 </details>
 
