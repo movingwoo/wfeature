@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -500,6 +501,16 @@ type initializationRuntime struct {
 	// wipic_usermem.go.
 	userMemoryInterface uint32
 	userMemoryPools     map[uint32]*userMemoryPool
+	// aotClassReads keeps, for each class record registerAOTClass registered,
+	// what reading the record read; aotReading collects one while a read runs.
+	// See registerAOTClass.
+	aotClassReads  map[uint32]*aotClassRead
+	aotReading     *aotClassRead
+	aotReadScratch []byte
+	// stubKeys is the key of each stub in stubs, by the stub's address, which
+	// is the only thing a native call that is ending still has in hand. See
+	// nativeCallIsWide.
+	stubKeys map[uint32]uint64
 }
 
 // countDiagnostic records a bounded per-name event count so acceptance probes
@@ -652,6 +663,7 @@ func newInitializationRuntime(client *Client) (*initializationRuntime, error) {
 		collectAt:      collectionFloor,
 		codeCursor:     uint64(platformCodeBase),
 		stubs:          make(map[uint64]uint32),
+		stubKeys:       make(map[uint32]uint64),
 		classes:        make(map[string]uint32),
 		loadedClasses:  make(map[string]uint32),
 		nativeMethods:  make(map[uint32]runtimeJavaInvocation),
@@ -2611,22 +2623,25 @@ func (runtime *initializationRuntime) registerJavaString(thread *armcore.Thread)
 // method whose return type occupies two words. Only a method this platform
 // implements can be answered for: a native compiled into the module returns
 // through the module's own convention, and nothing here knows its descriptor.
+// nativeCallIsWide reports whether the native call that entered at address
+// answers sixty-four bits. The stub is found by its address in stubKeys; every
+// stub has an address of its own. It used to be found by walking every stub
+// the runtime had made, once for every native call that ended, and on a title
+// that calls natives that often the walk was half of the server's CPU.
 func (runtime *initializationRuntime) nativeCallIsWide(address uint32) bool {
-	for key, stub := range runtime.stubs {
-		if stub != address || uint32(key>>32) != svcCategoryRuntimeJava {
-			continue
-		}
-		invocation, ok := runtime.nativeMethods[uint32(key)]
-		if !ok {
-			return false
-		}
-		methodType, err := jvm.ParseMethodDescriptor(invocation.method.descriptor)
-		if err != nil {
-			return false
-		}
-		return methodType.Return.Slots() == 2
+	key, ok := runtime.stubKeys[address]
+	if !ok || uint32(key>>32) != svcCategoryRuntimeJava {
+		return false
 	}
-	return false
+	invocation, ok := runtime.nativeMethods[uint32(key)]
+	if !ok {
+		return false
+	}
+	methodType, err := jvm.ParseMethodDescriptor(invocation.method.descriptor)
+	if err != nil {
+		return false
+	}
+	return methodType.Return.Slots() == 2
 }
 
 // describeNativeCall names the body a native call is entering. Most of these
@@ -2666,6 +2681,7 @@ func (runtime *initializationRuntime) stub(category, id uint32) (uint32, error) 
 	}
 	runtime.codeCursor += stubSize
 	runtime.stubs[key] = address | 1
+	runtime.stubKeys[address|1] = key
 	return address | 1, nil
 }
 
@@ -2708,44 +2724,70 @@ func (runtime *initializationRuntime) allocateBytes(data []byte) (uint32, error)
 }
 
 func (runtime *initializationRuntime) readCString(address uint32, limit uint32) (string, error) {
-	data := make([]byte, 0, min(limit, 128))
-	for offset := uint32(0); offset < limit; offset++ {
-		current := uint64(address) + uint64(offset)
-		if current >= uint64(1)<<32 {
-			return "", fmt.Errorf("string address overflows guest memory")
-		}
-		var value [1]byte
-		if err := runtime.client.core.Memory().Read(uint32(current), value[:]); err != nil {
-			return "", err
-		}
-		if value[0] == 0 {
-			return string(data), nil
-		}
-		data = append(data, value[0])
+	data, terminated, err := readGuestString(runtime.client.core.Memory(), address, limit)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("string at %#x exceeds %d bytes", address, limit)
+	if !terminated {
+		return "", fmt.Errorf("string at %#x exceeds %d bytes", address, limit)
+	}
+	if runtime.aotReading != nil {
+		runtime.aotReading.note(address, data, true)
+	}
+	return string(data), nil
 }
 
 // readBoundedString reads at most limit bytes, stopping early at a terminator.
 // Running to the bound is the expected end rather than an error: the caller
 // asked for a fixed count of bytes, not for a C string.
 func (runtime *initializationRuntime) readBoundedString(address, limit uint32) ([]byte, error) {
+	data, _, err := readGuestString(runtime.client.core.Memory(), address, limit)
+	return data, err
+}
+
+// guestStringChunk is how many bytes readGuestString asks memory for at once.
+// The names a title registers its classes, methods and fields under are a few
+// dozen bytes, so one read usually holds the whole of one.
+const guestStringChunk = 64
+
+// readGuestString reads the bytes at address up to a terminating zero or limit
+// bytes, whichever comes first, and reports whether it met the terminator.
+//
+// It reads a chunk at a time. A byte at a time, as it used to, every byte paid
+// a whole memory read — its lock and its validation — and registering a class
+// reads every name the class has: on a light KTF title that was a third of the
+// server's CPU. The answers are the byte-at-a-time ones: a chunk that cannot be
+// read whole, because it runs past the end of a mapping the string ends inside,
+// is read again a byte at a time, so the string reads as before and an
+// unreadable byte before the terminator fails with the error that byte's own
+// read gives.
+func readGuestString(memory *armcore.Memory, address, limit uint32) ([]byte, bool, error) {
 	data := make([]byte, 0, min(limit, 128))
-	for offset := uint32(0); offset < limit; offset++ {
+	var chunk [guestStringChunk]byte
+	for offset := uint32(0); offset < limit; {
 		current := uint64(address) + uint64(offset)
 		if current >= uint64(1)<<32 {
-			return nil, fmt.Errorf("string address overflows guest memory")
+			return nil, false, fmt.Errorf("string address overflows guest memory")
 		}
-		var value [1]byte
-		if err := runtime.client.core.Memory().Read(uint32(current), value[:]); err != nil {
-			return nil, err
+		length := uint32(min(uint64(guestStringChunk), uint64(limit-offset), uint64(1)<<32-current))
+		part := chunk[:length]
+		if err := memory.Read(uint32(current), part); err != nil {
+			for index := range part {
+				if err := memory.Read(uint32(current)+uint32(index), part[index:index+1]); err != nil {
+					return nil, false, err
+				}
+				if part[index] == 0 {
+					return append(data, part[:index]...), true, nil
+				}
+			}
 		}
-		if value[0] == 0 {
-			break
+		if end := bytes.IndexByte(part, 0); end >= 0 {
+			return append(data, part[:end]...), true, nil
 		}
-		data = append(data, value[0])
+		data = append(data, part...)
+		offset += length
 	}
-	return data, nil
+	return data, false, nil
 }
 
 // wipicGetExecNames answers MC_knlGetExecNames, which lists the executables a

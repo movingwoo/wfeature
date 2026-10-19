@@ -112,8 +112,9 @@ func TestACallFrameClaimingAnImpossibleOverrunIsRefused(t *testing.T) {
 	}
 }
 
-// Host reads go through the last-mapping and page caches, which they refresh.
-// Two of them at once must not race on those caches; run with -race.
+// Host reads share the lock and look at the last-mapping and page caches the
+// guest's accesses keep, refreshing neither. Two of them at once must not race
+// on those caches; run with -race.
 func TestConcurrentHostReadsDoNotRace(t *testing.T) {
 	memory := NewMemory()
 	for _, base := range []uint32{0x10000, 0x40000} {

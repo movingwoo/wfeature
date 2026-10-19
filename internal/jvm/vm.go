@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1256,8 +1257,15 @@ func (vm *VM) isInstance(object *Object, target string) bool {
 	if len(object.ClassName) > 0 && object.ClassName[0] == '[' {
 		return target == "java/lang/Cloneable" || target == "java/io/Serializable"
 	}
-	pending := []string{object.ClassName}
-	seen := map[string]bool{object.ClassName: true}
+	// The classes still to look at, in the order they were met, and every one
+	// met so far: the walk never drops a name, so the list is also the set of
+	// names seen, searched where it is until it outgrows the buffer it starts
+	// in. A slice and a map made for every cast that is not to the object's
+	// own class cost a SKT title's checkcast a third more, and its instanceof
+	// nearly twice as much, as the superclass chain alone used to.
+	var buffer [16]string
+	pending := append(buffer[:0], object.ClassName)
+	var seen map[string]bool
 	relations := 0
 	for next := 0; next < len(pending); next++ {
 		if next >= vm.config.MaxFrames {
@@ -1282,10 +1290,26 @@ func (vm *VM) isInstance(object *Object, target string) bool {
 			if parent == target {
 				return true
 			}
-			if parent != ObjectClass && !seen[parent] {
-				seen[parent] = true
-				pending = append(pending, parent)
+			if parent == ObjectClass {
+				continue
 			}
+			if seen != nil {
+				if seen[parent] {
+					continue
+				}
+			} else if slices.Contains(pending, parent) {
+				continue
+			}
+			if seen == nil && len(pending) == len(buffer) {
+				seen = make(map[string]bool, 4*len(buffer))
+				for _, held := range pending {
+					seen[held] = true
+				}
+			}
+			if seen != nil {
+				seen[parent] = true
+			}
+			pending = append(pending, parent)
 		}
 	}
 	return false

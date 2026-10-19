@@ -89,6 +89,14 @@ rules; instruction fetch and direct Host memory helpers remain strictly aligned.
 Architectural exception modes, banked registers, interrupts, privileged
 exception returns and cycle-accurate timing are not implemented.
 
+A run of guest instructions holds the memory lock exclusively and keeps the
+last-mapping and page caches. Host reads (`Memory.Read`) share the lock: they
+consult those caches and refresh neither, so a debugger's reads beside the
+session's cannot tear them, and a read costs a shared lock rather than an
+exclusive one. The exclusive lock was most of the 12% more instructions a tick
+that a light KTF title, which has its sprites read a pixel at a time, retired
+than on 0.5.2.
+
 ## Diagnostics and performance
 
 `CommittedRegions` exposes committed spans for bounded scanners such as the
@@ -113,6 +121,22 @@ reproduces it exactly — accesses before the pointer advances they walk, values
 the body reloads read from where it reloads them, and no destination over a
 word the run treats as fixed — and declines everything else. Unrecognized
 shapes retain interpreter execution.
+
+Recognizers are asked in Thumb state only, and a loop that leaves from the middle
+of its body — a conditional `bx lr` before the branch back — is no shape they
+read. Looked at on 2026-10-19 and left so: one LGT Clet spends 88% of its guest
+instructions in two such ARM loops of its own library, a byte fill that counts
+an index up to a limit and the byte tail of its `memcpy`, and costs about 11 ms
+of CPU a tick on the development Mac, inside a 16 ms frame. A static scan of the
+162 LGT modules in the local corpus found those loops, and any other ARM loop of
+that shape, in that title alone (two copies of it). Standing in for them would
+put a recognizer call on every backward branch taken in ARM state, which every
+ARM title pays for: the Thumb hook costs 2 to 6% of a run where it never fires,
+of which keeping refusals in the decode entry won back about half on some
+titles and nothing on others (see `fill_loop.go`). A report of the title running too slow is
+what would change the answer, and the answer then is a stand-in for exactly
+those two loops.
+
 `Backend` is the execution seam, and the interpreter is the conformance oracle.
 Only the interpreter is registered by default. A future backend must agree on
 registers, memory, stop reason and retired instruction counts at every boundary.

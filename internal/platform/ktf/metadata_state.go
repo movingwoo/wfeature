@@ -517,6 +517,10 @@ func (runtime *initializationRuntime) restoreMetadataState(saved runtimeMetadata
 	}
 	runtime.arena, runtime.classArena = result.arena, result.classArena
 	runtime.codeCursor, runtime.stubs = result.codeCursor, result.stubs
+	runtime.stubKeys = make(map[uint32]uint64, len(runtime.stubs))
+	for key, address := range runtime.stubs {
+		runtime.stubKeys[address] = key
+	}
 	runtime.classes, runtime.loadedClasses, runtime.moduleClassByName = result.classes, result.loadedClasses, result.moduleClassByName
 	runtime.nativeMethods, runtime.nextNativeMethod = result.nativeMethods, result.nextNativeMethod
 	runtime.initializedClasses, runtime.linkedModuleClasses = result.initializedClasses, result.linkedModuleClasses
