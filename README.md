@@ -4,9 +4,9 @@
 
 # W-Feature
 
-**WIPI 피처폰 게임 에뮬레이터**
+**WIPI 에뮬레이터**
 
-KTF · LGT · SKT (GNEX/GVM 포함)
+KTF · LGT · SKT 피쳐폰 게임 지원
 
 [![Release](https://img.shields.io/github/v/release/movingwoo/wfeature?style=flat-square)](https://github.com/movingwoo/wfeature/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
@@ -44,9 +44,9 @@ KTF · LGT · SKT (GNEX/GVM 포함)
 <img src="docs/images/main.webp" width="300" alt="게임 선택 화면">
 
 폴더에 직접 파일을 넣거나 **＋ 게임 추가** 버튼을 통해 파일을 넣을 수 있습니다.
-운영체제별 안내는 압축 안의 `README.txt`에 있습니다.
+운영체제별 안내는 각 압축파일 내 `README.txt`를 확인해주세요.
 
-소스에서 실행하려면 Go 1.26 이상이 필요하며 자세한 내용은 [`docs/running.md`](docs/running.md)에 있습니다.
+소스코드를 다운받아 구동하려면 Go 1.26 이상이 필요하며 자세한 내용은 [`docs/running.md`](docs/running.md)에 있습니다.
 
 ## 사용법
 
@@ -120,7 +120,7 @@ KTF · LGT · SKT (GNEX/GVM 포함)
 </details>
 
 <details>
-<summary><b>키패드 편집</b></summary>
+<summary><b>가상 키패드 편집</b></summary>
 
 <br>
 
