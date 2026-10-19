@@ -45,17 +45,26 @@ esac
 binary="build/$profile/wfeature-server"
 log_file="var/run/server-$profile.log"
 
-# The binary is built again whenever a source is newer than it, not only when
-# it is missing. A checkout serves its own web/ from disk, and the server is
-# what fills in the page's phrases: after a pull, a binary older than the
-# checkout served the new page with {{key}} in place of every phrase it did not
-# know, until somebody thought to run ./build.sh.
-if [ ! -x "$binary" ]; then
-	echo "$binary is missing; building it first."
-	./build.sh "$profile" >/dev/null
-elif [ -n "$(find cmd internal web go.mod go.sum -newer "$binary" -type f 2>/dev/null | head -n 1)" ]; then
-	echo "$binary is older than the sources; building it again."
-	./build.sh "$profile" >/dev/null
+# The binary is built on every start, not only when it is missing. A checkout
+# serves its own web/ from disk, and the server is what fills in the page's
+# phrases: after a pull, a binary older than the checkout served the new page
+# with {{key}} in place of every phrase it did not know, until somebody thought
+# to run ./build.sh. Go knows what went into the binary — the fonts it embeds,
+# the flags the Makefile gives it, a file a pull deleted — and an up-to-date
+# one is left as it is, so asking it is the whole of the check; a list of
+# directories to compare dates against missed the fonts and the Makefile.
+# Without Go there is nothing to ask, and a binary that is there runs as it is.
+if command -v go >/dev/null 2>&1; then
+	if ! built="$(./build.sh "$profile" 2>&1)"; then
+		echo "start.sh: building $binary failed:" >&2
+		echo "$built" | sed 's/^/  /' >&2
+		exit 1
+	fi
+elif [ ! -x "$binary" ]; then
+	echo "start.sh: $binary is missing, and Go is not installed to build it" >&2
+	exit 1
+else
+	echo "start.sh: Go is not installed, so $binary runs as it was built."
 fi
 
 mkdir -p "$(dirname "$log_file")"

@@ -192,6 +192,34 @@ func TestSavePackRefusesAnotherGamesBackupAndADamagedOne(t *testing.T) {
 	}
 }
 
+// An earlier build's backup of a converted folder that held nothing but the
+// record of its names is one entry long, so it passed the refusal of an empty
+// backup, and that entry is no save: the restore wrote nothing, removed every
+// save and answered success. It is refused as an empty one is.
+func TestSavePackRefusesABackupOfOnlyTheNamesRecord(t *testing.T) {
+	server, directory, identity, game := savePackFixture(t)
+	writeSavePackSaves(t, directory)
+	container, err := backend.EncodeSavePack(backend.SavePack{Identity: identity, Entries: []backend.SaveEntry{
+		{Key: ".wfeature-names#1", Data: []byte("wfeature save names 1\nencoded\n")},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := savePackRequest(t, server, http.MethodPost, game, container)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d; body %q", recorder.Code, http.StatusUnprocessableEntity, recorder.Body.String())
+	}
+	if !saysSentence(t, "savepack.backup-empty", recorder.Body.String()) {
+		t.Errorf("body = %q, want it to say the backup is empty", recorder.Body.String())
+	}
+	store := backend.NewDirectorySaveStore(directory)
+	for key, want := range savePackSaves {
+		if got, ok := store.LoadSave(key); !ok || string(got) != want {
+			t.Errorf("the refused import changed %q", key)
+		}
+	}
+}
+
 // A restore is the moment the backup describes. An entry that is in the tree
 // and not in the backup came from a later point in the story, and leaving it
 // beside the restored entries builds a state the game never wrote.

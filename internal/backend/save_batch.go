@@ -69,8 +69,8 @@ func (store *DirectorySaveStore) storeSaves(entries map[string][]byte, rename fu
 	if err != nil {
 		return err
 	}
-	if names.naming == namingEarlier {
-		return refuseEarlierSaveNames(store.root, names)
+	if names.refusesWrites() {
+		return refuseSaveNamesWrite(store.root, names)
 	}
 	if err := os.MkdirAll(store.root, 0755); err != nil {
 		return err

@@ -396,7 +396,13 @@ seventeenth, a question answered with the controller (directions move between
 the answers, B backs out, A presses the one in focus), and all seventeen passed
 in Chromium and WebKit with a release server built from this tree; the
 0.6.0-pre release server failed the new check at its first step, where the
-controller could not move the focus off 취소. It is not evidence about a
+controller could not move the focus off 취소. Later that day the check also
+required the directions to stop at either end (LEFT and UP on 취소, and with no
+answer in focus, stay on or go to 취소; RIGHT on the last answer stays there)
+and Escape to take the controller's mark with the question; all seventeen
+passed in Chromium and WebKit with a release server built from `main` with
+#241, #242 and the follow-ups of #241's review, and the #241 page failed at
+LEFT on 취소, which went round to the answer that goes through. It is not evidence about a
 physical controller or an operating system's mapping of one. How a browser
 hands over a controller it does not recognise was read from the browsers'
 sources, not observed: Chrome numbers a HID axis by its usage less 0x30 on
@@ -501,14 +507,16 @@ It checks seven things:
   and starts the app. A drain with nothing in flight is over in well under a
   second, before the new activity gets as far as starting a server, so the
   script leaves a game upload in flight that never sends its whole body (and
-  is never written); the drain waits for it until its twenty-second deadline.
+  is never written); the drain waits for it until its deadline
+  (`webhost.StopDeadline`; see [`session.md`](session.md#stopping-bounds)).
   Three times, as for the finish;
 - the same reopening while the server holds parked the hang-destroy fixture
   (`internal/platform/skt/testdata/hang-destroy-skt.zip`), whose `destroyApp`
   waits for a notification nobody sends: the old server ends on its own once
-  that `destroyApp` has run out its fifteen seconds, within the drain's twenty
-  of `onDestroy`, the app has not had to end it, and the next server
-  starts after it. The page lets go of its session first (it is sent to
+  that `destroyApp` has run out its fifteen seconds, within 21 seconds of
+  `onDestroy` — that ending and a margin, short of the drain's 35-second
+  deadline, so a drain that only ended at its deadline fails — the app has not
+  had to end it, and the next server starts after it. The page lets go of its session first (it is sent to
   `about:blank`) and the script waits for `session parked`: finished with the
   game attached, the activity reaches the drain before the page's own parking
   does, and the drain then closes the game through its runner, which the
@@ -516,10 +524,15 @@ It checks seven things:
   the log, since `Process.destroy()` closes the pipe they go to;
 - a second activity over the first, which `am start` with the component and
   an action of its own makes in the default launch mode, shares the server:
-  BACK finishes the second, and the server keeps its pid and its game, one
-  activity is left, and the first one's page plays the game again, at once or
-  through its own 이 화면에서 이어하기 button when it came back before the second let
-  go of the game.
+  BACK finishes the second, and the server keeps its pid and its game — and no
+  server started in between, by the app's log — one activity is left, and the
+  first one's page plays the game again, at once or through its own 이 화면에서
+  이어하기 button when it came back before the second let go of the game;
+- the same two activities, the second made while the first waits for the
+  server a finished activity ended (the hang fixture parked, as above): when
+  that server ends the second starts the next one and shows its page, and its
+  BACK leaves one activity, whose start runs again (the app logs it) and whose
+  page comes up over the second's server, with no other server started.
 
 On 2026-10-16, on the Pixel 10 Pro image of Android 17 (SDK 37) with web view
 155, the app built from this tree passed all fifteen checks in two runs. Every
@@ -580,6 +593,20 @@ offered it back instead, which is why the step now presses its button when it
 does. The 0.6.0-pre APK, taken through the same step by hand (`am start` with
 the component and an action, then BACK on the second activity), was left with
 no server: `pidof libwfeature.so` answered nothing after the BACK.
+
+Later on 2026-10-19, on the same image with its own web view 149 after a fresh
+boot, the app built from the follow-ups of the review of #241 passed all
+twenty-two checks. Opened again during the drain, its old server ended
+34.7–35.2 s after `onDestroy`, held by the upload in flight to the drain's
+35-second deadline, and the next one started after it, 3 of 3; with the hang
+fixture parked the old server ended 15.0 s after `onDestroy` and the app did
+not have to end it. In the new step the first activity started again when the
+second finished and showed its page over the second's server. The app from
+`9a4b696`, run the same way as a control, passed the other twenty-one and
+failed that one: both activities waited for the old server, the second started
+the next server and showed its page, and after its BACK the first showed no
+page and nothing started it again. Its drain ended at its own twenty-second
+deadline (19.9–20.0 s).
 
 ### The iOS app on a simulator
 

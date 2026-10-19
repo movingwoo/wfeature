@@ -113,15 +113,36 @@ handed to the save store (a file it left open, keys a native package keeps until
 a frame ends) would be lost. A close is bounded on its own: a title's ending
 (`destroyApp`, `destroyClet`, a Jlet's `destroyApp`) runs for fifteen seconds
 at most, after which its call is ended and the close stores what the title
-wrote. The wait for both shares the shutdown's twenty-second deadline, which
-outlasts that bound; a close that has not ended by then is named in the log and
-left behind. The deadline was ten seconds, shorter than the bound, so a title
-whose ending took between ten and fifteen seconds was left behind. Parked games
-used to be closed one after another under the server's lock before the wait
-began, so one whose `destroyApp` never returned kept the server from ever
-stopping. Once a stop has begun, nothing starts, resumes or parks. Ordinary
-saves and quick save slots survive, and a later page can return to the slot's
-moment after starting the game.
+wrote. Parked games used to be closed one after another under the server's lock
+before the wait began, so one whose `destroyApp` never returned kept the server
+from ever stopping. Once a stop has begun, nothing starts, resumes or parks.
+Ordinary saves and quick save slots survive, and a later page can return to the
+slot's moment after starting the game.
+
+<a id="stopping-bounds"></a>
+
+**How long a stop waits is derived from two bounds**, which every platform
+holds a title's code to and which `internal/backend/bounds.go` keeps in one
+place, so that each wait below moves with them:
+
+| Bound | Value | What it is |
+|---|---|---|
+| `backend.WaitBound` | 15 s | one call a title makes waiting on the clock (a KTF service call; the longest legitimate one is 5.2 s), and so the longest a round of an attached game can still be running when the stop comes |
+| `backend.EndingBound` | 15 s | a title's own ending: SKT `destroyApp` (`destroyWait`), LGT `destroyClet` (`closeWait`), a KTF Jlet's `destroyApp` |
+| `webhost.StopDeadline` | `WaitBound` + `EndingBound` + 5 s = 35 s | the drain: the games, attached and parked side by side, and the server's own requests; a close still running then is named in the log and left behind |
+| launcher `drainWait` | `StopDeadline` + 5 s = 40 s | how long `stop` waits for the drain before it signals, at each of its three steps |
+| Android `ENDING_WAIT_SECONDS` | 40 s | how long a reopened app waits for the server a finished activity ended; a test holds it past `StopDeadline` |
+
+The deadline was ten seconds, shorter than an ending, and then the ending plus
+five seconds; an attached game finishes the round it is in before its ending,
+so a round that had waited past those five left the title behind, still ending,
+before the store after it. A stop with nothing slow in it is over in well under
+a second; a title has to wait out both bounds for the deadline to matter, and a
+request that stalls — an upload a phone stopped sending — holds the stop until
+it. On
+Windows, closing the server's console window ends the process about five
+seconds after the window closes, whatever the drain is doing (see
+[`running.md`](running.md#stopping-a-server)).
 
 <a id="ktf-checkpoints"></a>
 
@@ -609,20 +630,35 @@ exFAT and FAT, `._` and its name in the AppleDouble format, is no save: a
 listing, an export and a conversion pass over it, and a restore leaves it.
 
 On Windows a key an earlier build stored with a `.` or space at the end of a
-segment is under the name without it, which Win32 made: a read of `fs/save.`
-that finds nothing under its own names reads `fs/save`, where it is. A key with
+segment is under the name Win32 made of it: every `.` and space dropped from
+the end of the last segment, and a single `.` from the end of any other — so a
+read of `fs/save.` or `fs./save` that finds nothing under its own names reads
+`fs/save`, where it is. A key whose directory segment ends in a space or in more
+than one `.` (`fs /save`, `fs../save`) was never stored: the directory was made
+under the name with all of them dropped, and the path through the segment as
+written reached none, so such a key has no earlier save to read. A key with
 bytes that are not UTF-8 — an LGT or KTF C title's EUC-KR file name — is under
-the name with U+FFFD for each of them, which Go's UTF-16 made of it: a read of
-`fs/\xbc\xbc.dat` that finds nothing under its own names reads the file named
-U+FFFD U+FFFD `.dat`. Such a file is also the save of every other key Win32
-spelled the same — `fs/save`, or a key with other such bytes in the same
-places — which shared it there, so it is never moved; the key's first write
-goes to its own name. Both readings are tested with the Windows rule forced on,
-on macOS; neither has run on Windows.
+the name Go's UTF-16 made of it, as a listing reads it back: U+FFFD for each such
+byte, so a read of `fs/\xbc\xbc.dat` that finds nothing under its own names
+reads the file named U+FFFD U+FFFD `.dat`; and two bytes that encode a high
+surrogate beside two that encode a low one as the one character the pair makes
+(the EUC-KR `立고가.dat` is U+2C021 `.dat`). Such a file is also the save of every
+other key Win32 spelled the same — `fs/save`, or a key with other such bytes in
+the same places — which shared it there, so it is never moved, and never
+written: the key's first write goes to its own name, and a restore that holds a
+key whose own name is too long and that only such a file holds is refused
+before it writes anything. A folder read as the earlier build left it reads
+these names too, as that build did. The readings are tested with the Windows
+rule forced on, on macOS; none has run on Windows.
 
 A folder whose names are encoded holds the file `.wfeature-names#1`, written
 before its first name with a `#`. No key is ever stored under that name, in any
-spelling of its case, and listings, exports and imports pass over it. It decides
+spelling of its case, and listings, exports and imports pass over it. A key
+spelled so, or as one of a conversion's temporary names
+(`.wfeature-names#1-` and a number), is stored at its encoded name like any
+other and is never looked up as an earlier name of the record: a read of it
+through the save API answered the record as a save and moved it away, and the
+folder's names read as an earlier build's from then on. It decides
 the one kind of name that reads two ways: `#Top` is the key `#Top` an earlier
 build wrote, or the key `Top` this build wrote. In a folder without the file
 every name is its own key. The file belongs with the saves and moves with the
@@ -640,22 +676,44 @@ A folder an earlier build wrote is converted in place by the first operation on
 it — a game reading its saves, a listing, an export — before anything else
 happens. Every name the encoding changes moves to a temporary name and then to
 its encoded name, and `.wfeature-names#1` lists them while it runs, so a
-conversion stopped anywhere finishes on the next operation. Nothing is removed
-and nothing is written over. A folder with no name the encoding changes, which
-is most of them, is left byte for byte as it is until a key that needs a `#` is
-stored. A folder that cannot be converted, because it cannot be
-written or not all of it can be listed, is read as the earlier build left it,
-each name by its exact spelling, and writing to it is refused until it can be
-converted. A name the conversion cannot move — a file locked in the Finder, or
-one another program holds open on Windows — stays where it is, with everything
-below it, when they read as their own keys in a converted folder: it is read
-there, a write of its key goes to the key's own name, and every other name is
-converted. One that would read as another key there (`#Top`) cannot stay; the
-names that had moved go back, and the folder is read as the earlier build left
-it until the name can move. Before, the conversion stopped at that name, and
-every operation on the folder failed finishing it. An earlier name whose
-encoded name would be longer than a file system stores stays as it is, still
-reads as its own key and is written there.
+conversion stopped anywhere — the process killed between any two of its steps
+— finishes on the next operation. Nothing is written over. A folder with no
+name the encoding changes, which is most of them, is left byte for byte as it
+is until a key that needs a `#` is stored. A folder that cannot be converted,
+because it cannot be written or not all of it can be listed, is read as the
+earlier build left it, each name by its exact spelling, and writing to it is
+refused until it can be converted.
+
+A name the conversion cannot move — a file locked in the Finder, or one another
+program holds open on Windows — undoes it: the names that had moved go back,
+the record goes, and the folder is read as the earlier build left it, each save
+readable and a write refused, until the name can move. Before, the conversion
+stopped at that name and every operation on the folder failed finishing it.
+For a while the conversion left a name that read as its own key where it was
+and converted the rest, but on a host that ignores case such a name is another
+key's encoded name: `#save` stood where `Save` was to go, the second pass failed
+on it and the folder could not be read again, lock or no lock; and `Save` was
+read and written for the key `save`, whose first write replaced `Save`'s
+progress. An undo that finds an earlier name put back while the conversion was
+stopped — an earlier build that wrote the key again, a copy, a sync client —
+leaves that entry, which is the later one, and the moved file goes; a moved
+directory gives the one there each name it lacks, the same way below. That is
+the one thing a conversion removes. A conversion that could not be carried out
+is not tried again for ten seconds unless the folder changes: every try of one
+a name stops renames each name twice and writes the record, about 25 ms on a
+Finder-locked file against 0.13 ms for the operation itself.
+
+A conversion that can neither finish nor be undone — a temporary name that
+cannot move again, either way — is read through its record: each name it moves
+is looked up where the record says it can be by then, every other name by its
+exact spelling, and every read goes on. A write, an export and a checkpoint are
+refused until a later operation finishes the conversion. Before, every
+operation on the folder failed, and a title that took the failed read for no
+save could start over and then, once the folder converted, write over the
+progress it had not been shown.
+
+An earlier name whose encoded name would be longer than a file system stores
+stays as it is, still reads as its own key and is written there.
 
 An earlier build can write into a converted folder too, when a player goes back
 to it: it does not know `#Save` and writes its key `Save` under that name. When
@@ -679,7 +737,8 @@ its own key, so the pack carries the folder's names (`rms/#Save`) and its
 `.wfeature-names#1`. The import reads those names as the folder's are read —
 `rms/#Save` is `rms/Save`, the record is no entry, and of two names of one key
 the encoded one is restored — rather than restoring `rms/#Save` and removing the
-`rms/Save` the title reads.
+`rms/Save` the title reads. Such a pack holding nothing but the record is
+refused as an empty one is: restored, it wrote nothing and removed every save.
 
 A name an earlier build writes into a converted folder afterwards — an earlier
 version run again, or files copied in by hand — reads as its own key when the

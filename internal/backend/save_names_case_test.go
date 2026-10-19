@@ -437,13 +437,21 @@ func TestADirectoryWithoutUpperCaseOrHashIsLeftAsItIs(t *testing.T) {
 }
 
 // A conversion is a run of renames and three writes of its record, and a
-// process can stop after any of them. Each is made to fail in turn, which
-// leaves the disk as a stop right before it would; the next operation finishes
-// the conversion, and every save reads with its bytes under its own key.
+// process can be killed before any of them. Each is made to panic in turn,
+// which leaves the disk exactly as a kill right before it would: the next
+// operation takes the conversion up from its record and finishes it, and every
+// save reads with its bytes under its own key. A kill during the first pass
+// leaves part of the names under their temporary ones, and the record says so,
+// which is the resume that matters most.
+//
+// Each step is then made to fail instead, as a name that cannot move fails
+// it. The operation that meets it never answers a wrong save, and the next
+// one, once the name can move, finishes the conversion.
 //
 // The names are chosen so that one directory takes the name another one left:
 // "#A" is the encoded name of "A", "###A" that of "#A".
 func TestAConversionThatStopsAnywhereFinishes(t *testing.T) {
+	retrySaveNamesAtOnce(t)
 	saves := map[string]string{
 		"x/###A/#B": "one", "x/#A/#B": "two", "x/A": "three", "x/b": "four",
 		"Top/Mid/Low": "five", "Top/other": "six",
@@ -463,29 +471,54 @@ func TestAConversionThatStopsAnywhereFinishes(t *testing.T) {
 	}{saveNamesRename, saveNamesWrite}
 	resume := func() { saveNamesRename, saveNamesWrite = original.rename, original.write }
 	t.Cleanup(resume)
-	// stopAt makes one step of a conversion fail, counting renames and record
+	// stopAt makes one step of a conversion stop, counting renames and record
 	// writes together from one, and answers how many steps have been taken.
-	stopAt := func(stop int) *int {
+	// A step that stops either fails or, as a kill does, never returns.
+	type killed struct{}
+	stopAt := func(stop int, kill bool) *int {
 		taken := new(int)
-		stopped := errors.New("the process stopped here")
+		stopped := errors.New("the name cannot move")
+		step := func() error {
+			if *taken++; *taken != stop {
+				return nil
+			}
+			if kill {
+				panic(killed{})
+			}
+			return stopped
+		}
 		saveNamesRename = func(from, to string) error {
-			if *taken++; *taken == stop {
-				return stopped
+			if err := step(); err != nil {
+				return err
 			}
 			return original.rename(from, to)
 		}
 		saveNamesWrite = func(path string, data []byte) error {
-			if *taken++; *taken == stop {
-				return stopped
+			if err := step(); err != nil {
+				return err
 			}
 			return original.write(path, data)
 		}
 		return taken
 	}
+	// operate runs one operation of the store, and answers whether it was
+	// killed.
+	operate := func(run func()) (dead bool) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if _, ok := recovered.(killed); !ok {
+					panic(recovered)
+				}
+				dead = true
+			}
+		}()
+		run()
+		return false
+	}
 
 	parent := t.TempDir()
 	leftoverBuild(t, parent, state)
-	taken := stopAt(0)
+	taken := stopAt(0, false)
 	wantSaves(t, NewDirectorySaveStore(filepath.Join(parent, "owner")), saves)
 	steps := *taken
 	resume()
@@ -495,11 +528,44 @@ func TestAConversionThatStopsAnywhereFinishes(t *testing.T) {
 	}
 	leftoverExpect(t, parent, converted, "after an uninterrupted conversion")
 
+	resumedFirstPass := 0
 	for stop := 1; stop <= steps; stop++ {
 		parent := t.TempDir()
 		leftoverBuild(t, parent, state)
 		root := filepath.Join(parent, "owner")
-		stopAt(stop)
+		stopAt(stop, true)
+		if !operate(func() { _, _, _ = NewDirectorySaveStore(root).ReadSave("x/A") }) {
+			t.Fatalf("kill %d: the operation was not killed", stop)
+		}
+		resume()
+		if recorded, plan, err := readSaveNamesRecord(root); err == nil && recorded == saveNamesMoving {
+			moved := 0
+			for index := range plan {
+				if present, _ := saveNameExists(saveNamesTemporaryPath(root, plan, index)); present {
+					moved++
+				}
+			}
+			if moved > 0 && moved < len(plan) {
+				resumedFirstPass++
+			}
+		}
+		listed, err := ReadSaveTree(root)
+		if err != nil {
+			t.Fatalf("kill %d: the next operation: %v", stop, err)
+		}
+		wantEntries(t, listed, saves, "the listing after the kill")
+		wantSaves(t, NewDirectorySaveStore(root), saves)
+		leftoverExpect(t, parent, converted, "after the conversion finished")
+	}
+	if resumedFirstPass == 0 {
+		t.Fatal("no kill left a first pass partly done to resume")
+	}
+
+	for stop := 1; stop <= steps; stop++ {
+		parent := t.TempDir()
+		leftoverBuild(t, parent, state)
+		root := filepath.Join(parent, "owner")
+		stopAt(stop, false)
 		// Whatever this answers, it is never a wrong save.
 		for key, want := range saves {
 			if data, found, err := NewDirectorySaveStore(root).ReadSave(key); err == nil && (!found || string(data) != want) {
@@ -521,6 +587,7 @@ func TestAConversionThatStopsAnywhereFinishes(t *testing.T) {
 // the earlier build left it, each name by its exact spelling, and nothing is
 // written to it. Once it can be written, the next operation converts it.
 func TestAnEarlierDirectoryThatCannotBeWrittenIsReadAsItIs(t *testing.T) {
+	retrySaveNamesAtOnce(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows does not refuse a write by directory mode bits")
 	}

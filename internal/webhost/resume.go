@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/session"
 )
 
@@ -94,13 +95,17 @@ func (s *Server) resumeSession(token string, owner *sessionRunner) (*parkedSessi
 }
 
 // StopDeadline bounds stopping a server: how long its drain waits for the
-// games it holds to close. Every platform lets a title's own ending — an SKT
-// destroyApp, an LGT destroyClet, a KTF service call — run for fifteen seconds
-// (session.EndingBound), and a drain that gave up first left a title behind
-// that was still ending, with whatever it had not yet stored. So this is past
-// that bound. A Host that waits for a stopping server waits longer still: the
-// launcher's stop, and the Android app before it starts the next server.
-const StopDeadline = session.EndingBound + 5*time.Second
+// games it holds to close. A game with its page attached first finishes the
+// round it is in, which can be waiting on the clock for as long as a title's
+// call may (backend.WaitBound), and then runs its title's own ending — an SKT
+// destroyApp, an LGT destroyClet, a KTF destroyApp — for as long as every
+// platform lets it (backend.EndingBound), and stores what it wrote after
+// that. A drain that gave up first left a title behind that was still ending,
+// with whatever it had not yet stored: at the ending's bound plus five
+// seconds, a round that had waited past those five did. So this is past the
+// two together. A Host that waits for a stopping server waits longer still:
+// the launcher's stop, and the Android app before it starts the next server.
+const StopDeadline = backend.WaitBound + backend.EndingBound + 5*time.Second
 
 // CloseSessions ends every game the server holds, and is what stopping the
 // server has to call. The HTTP server's own shutdown neither closes nor waits

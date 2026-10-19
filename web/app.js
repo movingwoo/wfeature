@@ -660,21 +660,28 @@ const initInput = () => {
   // looks like now — so it is read once a frame while one is connected, and
   // not at all otherwise. gamepad.js holds what counts as a press.
   const shown = id => document.getElementById(id)?.classList.contains("visible") === true;
+  // The question on screen, if there is one: the page's own confirmation or
+  // the text input a title asked for.
+  const question = () => {
+    if (shown("confirm-dialog")) return document.getElementById("confirm-dialog");
+    const text = document.getElementById("text-input-dialog");
+    return text?.open ? text : null;
+  };
   // A dialog takes every control. A panel drawn over the game — the settings
   // or the cheats on a narrow screen — takes the game's keys and leaves the
   // controller the button that closes it.
-  const dialogOpen = () => shown("confirm-dialog") || document.getElementById("text-input-dialog")?.open === true;
+  const dialogOpen = () => question() !== null;
   const overGame = id => !panelsDocked() && shown(id);
   // The controller answers the question the dialog takes it for: its
   // directions move between the answers, the control bound to OK presses the
   // one in focus, and the one bound to CLR presses the first, which is always
   // the safe one. Without this a controller could neither go through nor back
   // out of a question, and the player had to reach for the screen.
-  const question = () => {
-    if (shown("confirm-dialog")) return document.getElementById("confirm-dialog");
-    const text = document.getElementById("text-input-dialog");
-    return text?.open ? text : null;
-  };
+  //
+  // The directions stop at either end rather than go round. The safe answer
+  // is first and has the focus, so LEFT or UP — the way to it — went round to
+  // the last answer, the one that goes through, and the next press of A
+  // restarted the game, deleted it or imported over its saves.
   const answerQuestion = name => {
     const dialog = question();
     const answers = [...(dialog?.querySelectorAll(".confirm-actions button") ?? [])]
@@ -691,17 +698,24 @@ const initInput = () => {
       delete dialog.dataset.pad;
       button.click();
     };
-    if (name === "LEFT" || name === "UP") focus(answers[at > 0 ? at - 1 : answers.length - 1]);
-    else if (name === "RIGHT" || name === "DOWN") focus(answers[at >= 0 ? (at + 1) % answers.length : 0]);
+    if (name === "LEFT" || name === "UP") focus(answers[Math.max(at - 1, 0)]);
+    else if (name === "RIGHT" || name === "DOWN") focus(answers[at >= 0 ? Math.min(at + 1, answers.length - 1) : 0]);
     else if (name === "OK" && at >= 0) press(answers[at]);
     else if (name === "OK") focus(answers[0]);
     else if (name === "CLR") press(answers[0]);
   };
+  // The mark goes with a pointer or a key inside the dialog, and with the
+  // question itself: Escape and the backdrop answer it from outside the
+  // dialog, and a mark left behind showed the next question's focus as one
+  // the controller had moved.
   for (const id of ["confirm-dialog", "text-input-dialog"]) {
     const dialog = document.getElementById(id);
     const unmark = () => { if (dialog) delete dialog.dataset.pad; };
     dialog?.addEventListener("pointerdown", unmark);
     dialog?.addEventListener("keydown", unmark, true);
+    if (dialog && typeof MutationObserver === "function") {
+      new MutationObserver(unmark).observe(dialog, { attributes: true, attributeFilter: ["class", "open"] });
+    }
   }
   const pads = createPadInput({
     latch: holds.latch,

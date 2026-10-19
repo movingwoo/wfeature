@@ -104,12 +104,12 @@ that a game is not ended by something that is not an ending.
   again while the server it ended is still draining. The ended server is
   kept (`MainActivity.ending`), and the next activity starts a server only once
   that one has ended, saying 이전 실행을 마치는 중... meanwhile. The drain is
-  what writes the games' exit-time saves, and the server bounds it: every
-  platform bounds a title's own ending (`destroyApp`, `destroyClet`) at
-  fifteen seconds, and the drain gives its games, attached and parked side by
-  side, twenty, a close still running then named in its log and left behind.
-  An old process still there after 30 seconds will not end on its own, and the app
-  ends it (`destroyForcibly`). Before, a parked game was closed ahead of the
+  what writes the games' exit-time saves, and the server bounds it (the
+  bounds, and the deadline they make, are in
+  [`session.md`](session.md#stopping-bounds)). An old process still there
+  after the app's own wait, `ENDING_WAIT_SECONDS`, which a test holds past
+  that deadline, will not end on its own, and the app ends it
+  (`destroyForcibly`). Before, a parked game was closed ahead of the
   drain's deadline, so one whose `destroyApp` never returned kept the old
   server, and the app's 이전 실행을 마치는 중..., for ever. Before that, the new
   server started with the new activity and took the port the moment the old
@@ -130,7 +130,13 @@ that a game is not ended by something that is not an ending.
   the first, whose page takes the game back — at once, or, when it came back
   before the second let go of the game, by offering it back as a second tab of
   a browser does. Before, the second's `onDestroy` ended the server, and the
-  first one's page came back with nothing behind it.
+  first one's page came back with nothing behind it. The first may have let
+  its own start go when the second was made over it while both waited for a
+  server still draining — the second then started the server, and the first
+  stopped waiting — so when the second finishes, the first, shown again with
+  no page, starts again and shows it. Without that it kept saying 이전 실행을
+  마치는 중... over a live server and the game parked in it until its task was
+  removed.
 
   BACK on a task started from the home screen does not finish the activity on
   Android 12 and later: Android moves the task to the back. The activity only

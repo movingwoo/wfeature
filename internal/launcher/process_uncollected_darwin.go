@@ -2,6 +2,10 @@ package launcher
 
 import "golang.org/x/sys/unix"
 
+// processStateKnown says processUncollected asks this system about a
+// process's state.
+const processStateKnown = true
+
 // processStateZombie is SZOMB in <sys/proc.h>: exited, awaiting collection by
 // the parent.
 const processStateZombie = 5

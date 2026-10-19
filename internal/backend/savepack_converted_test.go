@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -60,4 +61,20 @@ func TestAnEarlierBuildsExportIsReadAsItsFolderWasRead(t *testing.T) {
 		t.Fatalf("the import without the record: %v", err)
 	}
 	wantSaves(t, NewDirectorySaveStore(plain), map[string]string{"rms/#Save": "a key with a hash"})
+}
+
+// A converted folder an earlier build exported with nothing in it but the
+// record is a backup of one entry, which passes the refusal of an empty one,
+// and that entry is no save. Restored, it wrote nothing, removed every save
+// the game had and answered success: the empty restore that refusal is for.
+func TestAnEarlierBuildsExportOfOnlyTheRecordIsRefused(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "owner")
+	state := []string{"owner/rms/save=progress", "owner/rms/index=save"}
+	leftoverBuild(t, parent, state)
+	written, removed, err := WriteSaveTree(root, []SaveEntry{{Key: saveNamesRecord, Data: []byte(saveNamesHeader + "\nencoded\n")}})
+	if !errors.Is(err, ErrSaveBackupEmpty) || written != 0 || removed != 0 {
+		t.Fatalf("the import wrote %d, removed %d, answered %v; want ErrSaveBackupEmpty and nothing touched", written, removed, err)
+	}
+	leftoverExpect(t, parent, state, "after the refused import")
 }

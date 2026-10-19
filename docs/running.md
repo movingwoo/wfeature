@@ -18,7 +18,7 @@ The Go code cross-compiles and vets clean for the five release targets in the
 files (`internal/backend/save_lock_unix.go`, `save_lock_windows.go`, and
 `save_lock_other.go` for a system with no known lock), error classification,
 the signals that stop the server (`SIGTERM`, and `SIGHUP` from a closed terminal
-window; `SIGPIPE` is ignored) and the launcher's look at whether a stopped
+window unless the server was started ignoring it; `SIGPIPE` is ignored) and the launcher's look at whether a stopped
 server's process is still running (`internal/launcher/process_*.go`). It has no hardcoded `/tmp` and no hand-built path separators: every
 path goes through `filepath.Join`, and save keys that cross the Host boundary
 are slash-separated names normalized on both sides. The one `exec.Command` in a
@@ -207,11 +207,13 @@ at once on different ports.
 
 - `build.sh` reports only the CLI and server binaries it builds; other
   executables in the output directory are not build profiles.
-- `start.sh` builds the profile if `build/<profile>/wfeature-server` is
-  missing or older than any file under `cmd/`, `internal/` or `web/`, or
-  `go.mod` or `go.sum` — a binary older than a pulled checkout serves its new
-  `web/` with `{{key}}` in place of the phrases it does not know — starts it
-  in the background with its log in
+- `start.sh` builds the profile on every start — a binary older than a pulled
+  checkout serves its new `web/` with `{{key}}` in place of the phrases it does
+  not know — and Go leaves an up-to-date binary as it is, in about a third of a
+  second here. Go is what knows every input: a list of directories to compare
+  dates against missed the fonts the binary embeds, the Makefile's flags and a
+  file a pull deleted. Without Go a binary that is there runs as it was built.
+  It starts the server in the background with its log in
   `var/run/server-<profile>.log` (truncated on each start), waits for the
   server to log its address, and prints what `status` reports. A server that
   exits at once has its log printed and `start.sh` exits 1. Arguments after
@@ -231,11 +233,24 @@ connected, so what a title wrote reaches the save folder before the process
 ends. `stop` reports the server stopped once the process it named has exited,
 not when its port goes quiet: the drain closes the listener first and closes
 the games after, so a `start` that followed a quiet port could run beside a
-server still holding their save folders. It waits up to 25 seconds, past the
-server's own 20-second drain, which outlasts the 15 seconds a title's own
-ending may run. Only a server that does not answer is
-signalled, and only one that ignores the signal is forced; a forced stop
-closes nothing. All output of `status` and `stop` is English.
+server still holding their save folders. It waits past the server's own drain
+deadline, which outlasts a title's round and its ending (the numbers, and the
+bounds they come from, are in [`session.md`](session.md#stopping-bounds)). Only
+a server that does not answer is signalled, and only one that ignores the
+signal is forced; a forced stop closes nothing. All output of `status` and
+`stop` is English.
+
+<a id="stopping-a-server"></a>
+
+Closing the window a server runs in is the other way a player stops it. On
+macOS and Linux that hangs up its terminal: the server receives `SIGHUP` and
+drains as on Ctrl-C. A server started with the hangup ignored — `nohup
+./start.sh &` over SSH, so that it outlives the login — keeps it ignored and
+stays up. **Windows ends the process about five seconds after its console
+window closes**, whatever the drain is doing: the server is told (Go delivers
+the closing console as `SIGTERM`) and drains, but a game whose ending, or the
+round before it, takes longer loses what it had not stored. Ctrl-C in the
+window, or `stop.bat`, waits for the drain.
 
 ### /api/status
 
@@ -255,7 +270,7 @@ build.
 
 ### /api/shutdown
 
-`POST /api/shutdown` stops the server the way closing its window does: it stops
+`POST /api/shutdown` stops the server the way Ctrl-C does: it stops
 accepting, answers `{"stopping":true}` with 202, finishes what is in flight,
 closes the games it holds, and exits. **Only a caller on this machine may use
 it**, because the server binds every interface and a stop anyone on the network
@@ -275,7 +290,8 @@ and could not tell this server from a stranger. One implementation in
 graceful stop rather than a `taskkill`.
 
 A checkout has no Windows equivalent of these scripts; the PowerShell block
-above and closing the window are the procedure there. A release archive carries
+above and Ctrl-C in its window are the procedure there (closing the window cuts
+the drain short; see [above](#stopping-a-server)). A release archive carries
 `start`, `stop` and `status` for all three systems (see
 [`packaging/README.md`](../packaging/README.md)).
 

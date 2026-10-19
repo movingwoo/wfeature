@@ -6,6 +6,10 @@ import (
 	"strconv"
 )
 
+// processStateKnown says processUncollected asks this system about a
+// process's state.
+const processStateKnown = true
+
 // processUncollected reports whether a pid is a process that has exited and
 // that its parent has not yet waited for: its state in /proc is Z, or X while
 // it is being collected. The state follows the command name, which is in

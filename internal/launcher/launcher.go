@@ -27,6 +27,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/movingwoo/wfeature/internal/webhost"
 )
 
 // DefaultPort is the port the page, the documentation and every launcher use.
@@ -39,11 +41,10 @@ const askTimeout = 2 * time.Second
 
 // drainWait is how long a stop waits for the server to finish what it was
 // doing — a save being written is the case that matters — before it stops
-// asking politely. The server bounds its own drain at twenty seconds
-// (webhost.StopDeadline), past the fifteen a title's own ending may run, so
+// asking politely. The server bounds its own drain (webhost.StopDeadline), so
 // this is a margin past that rather than the same number: a wait that ran out
 // as the drain did would signal a server that was about to exit on its own.
-const drainWait = 25 * time.Second
+const drainWait = webhost.StopDeadline + 5*time.Second
 
 // State is what was found on a port.
 type State int

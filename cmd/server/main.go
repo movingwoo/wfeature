@@ -468,8 +468,18 @@ func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger, 
 	// time limit, until the server stops — was never closed, and what its
 	// title had not yet handed to the save store went with the process.
 	// Windows delivers a closing console as SIGTERM, and ends the process a
-	// few seconds later whatever this does.
-	signalled, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	// few seconds later whatever this does (see docs/running.md).
+	//
+	// A hangup the server was started ignoring stays ignored. That is `nohup`,
+	// or a shell's `trap '' HUP`, and it is how a server on a headless machine
+	// is kept up past the session that started it: asked for, the signal is
+	// no longer ignored, and logging out stopped the server it was meant to
+	// outlive.
+	signals := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if !signal.Ignored(syscall.SIGHUP) {
+		signals = append(signals, syscall.SIGHUP)
+	}
+	signalled, stop := signal.NotifyContext(context.Background(), signals...)
 	defer stop()
 	// A log nobody reads any more must not end the drain. The Android app
 	// stops the server with Process.destroy(), which sends SIGTERM and then

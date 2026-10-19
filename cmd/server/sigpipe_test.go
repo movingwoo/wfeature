@@ -38,34 +38,54 @@ func TestServerHelperProcess(t *testing.T) {
 // error ends a Go program with SIGPIPE: the drain that closes every game, and
 // with it the games' last saves, never ran. A server whose log is gone must
 // still drain and exit as asked.
-func TestAServerWhoseLogPipeClosedStillDrains(t *testing.T) {
-	command, logs := startServerHelper(t)
-	// The pipe goes first, so the server meets it closed on its next line.
-	logs.Close()
-	if err := command.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
-	wantDrained(t, command, "SIGTERM")
-}
-
+//
 // Closing the window a server runs in — the way the release archives'
 // READMEs tell a player to stop it — hangs up its terminal, and the server
 // receives SIGHUP. Unhandled, that ended the process on the spot, without the
 // drain: a game whose tab had been closed waits parked until the server stops,
 // and what its title had not yet stored went with the process. The window is
 // gone by then, so the log has nowhere to go either.
-func TestAHangupDrainsTheServer(t *testing.T) {
-	command, logs := startServerHelper(t)
-	logs.Close()
+func TestASignalAfterTheLogPipeClosedDrainsTheServer(t *testing.T) {
+	for _, signal := range []syscall.Signal{syscall.SIGTERM, syscall.SIGHUP} {
+		t.Run(signal.String(), func(t *testing.T) {
+			command, logs, _ := startServerHelper(t, false)
+			// The pipe goes first, so the server meets it closed on its next
+			// line.
+			logs.Close()
+			if err := command.Process.Signal(signal); err != nil {
+				t.Fatal(err)
+			}
+			wantDrained(t, command, signal.String())
+		})
+	}
+}
+
+// A server started with its hangup ignored — `nohup ./wfeature-server &` over
+// SSH on a headless machine, so that it outlives the login — keeps it ignored.
+// Asking for the signal un-ignored it, and logging out stopped the server.
+func TestAHangupIgnoredAtTheStartLeavesTheServerUp(t *testing.T) {
+	command, _, url := startServerHelper(t, true)
 	if err := command.Process.Signal(syscall.SIGHUP); err != nil {
 		t.Fatal(err)
 	}
-	wantDrained(t, command, "SIGHUP")
+	time.Sleep(time.Second)
+	response, err := http.Get(url + "/api/status")
+	if err != nil {
+		command.Process.Kill()
+		command.Wait()
+		t.Fatalf("the server stopped answering after a hangup it was started ignoring: %v", err)
+	}
+	response.Body.Close()
+	if err := command.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	wantDrained(t, command, "SIGTERM")
 }
 
 // startServerHelper runs the server as a child process on a free port and
-// answers once it serves, with the pipe it logs to.
-func startServerHelper(t *testing.T) (*exec.Cmd, io.ReadCloser) {
+// answers once it serves, with the pipe it logs to and its address. Asked to,
+// it starts the server with its hangup ignored, as `nohup` does.
+func startServerHelper(t *testing.T, hangupIgnored bool) (*exec.Cmd, io.ReadCloser, string) {
 	t.Helper()
 	root := t.TempDir()
 	arguments := strings.Join([]string{
@@ -76,6 +96,9 @@ func startServerHelper(t *testing.T) (*exec.Cmd, io.ReadCloser) {
 		"-logs", filepath.Join(root, "logs"),
 	}, "\x1f")
 	command := exec.Command(os.Args[0], "-test.run=^TestServerHelperProcess$")
+	if hangupIgnored {
+		command = exec.Command("/bin/sh", "-c", `trap '' HUP; exec "$0" -test.run='^TestServerHelperProcess$'`, os.Args[0])
+	}
 	command.Env = append(os.Environ(), serverHelperArguments+"="+arguments)
 	logs, err := command.StderrPipe()
 	if err != nil {
@@ -129,7 +152,7 @@ func startServerHelper(t *testing.T) (*exec.Cmd, io.ReadCloser) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return command, logs
+	return command, logs, strings.TrimSuffix(url, "/")
 }
 
 // wantDrained waits for a server that was sent a signal to end, and fails the

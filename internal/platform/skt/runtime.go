@@ -261,13 +261,13 @@ func (runtime *Runtime) renewGuestSteps() error {
 }
 
 // destroyWait is how long the destroyApp a closing session asks for may run,
-// which is as long as a KTF title's service call may wait. Past it no step
-// window is renewed and the machine's waits and sleeps are let go, so the
+// the ending every platform gives a title (backend.EndingBound). Past it no
+// step window is renewed and the machine's waits and sleeps are let go, so the
 // call ends and the session closes, storing what the title wrote as any
 // ending does. A destroyApp that looped or waited for ever otherwise held
 // the close for ever: a parked game a page had left, a server stopping, and an
 // app reopened behind it waiting on that server.
-var destroyWait = 15 * time.Second
+var destroyWait = backend.EndingBound
 
 // clockMillis is the millisecond timestamp RMS stamps stores with, and the one
 // System.currentTimeMillis answers with. They are one clock on purpose: a

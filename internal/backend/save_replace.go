@@ -172,5 +172,8 @@ func (store *DirectorySaveStore) SnapshotSaves() ([]SaveEntry, error) {
 	if err != nil {
 		return nil, err
 	}
+	if names.naming == namingConverting {
+		return nil, refuseSaveNamesListing(store.root, names)
+	}
 	return readSnapshotSaves(store.root, names.naming)
 }

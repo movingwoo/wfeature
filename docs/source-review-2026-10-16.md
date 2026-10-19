@@ -6316,8 +6316,9 @@ The candidates no verifier checked all held, and are fixed:
 These follow-ups left limits of their own:
 
 - A stopping server still leaves behind a title whose ending takes between 10
-  and 15 seconds: the drain's deadline is shorter than the platforms' bound. A
-  parked game that a start, a takeover or a second park of its token ends is
+  and 15 seconds: the drain's deadline is shorter than the platforms' bound.
+  Closed since: the deadline is past a round's wait and the ending together
+  ([session](session.md#stopping-bounds)). A parked game that a start, a takeover or a second park of its token ends is
   still closed under the server's lock, so one whose ending never returns holds
   the lock for those 15 seconds.
 - Q09 and `ERROR_INVALID_NAME` have not run on Windows: the first is tested

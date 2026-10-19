@@ -113,18 +113,26 @@ public class MainActivity extends Activity {
 
     /**
      * How long a reopened activity waits for the server a finished one ended.
-     * The server bounds its own drain (twenty seconds for its games, past the
-     * fifteen a game's own ending may run), so a process still alive past
-     * this will not end on its own, and it is ended: it can write no save any
-     * more, and the app would otherwise never show its page.
+     * The server bounds its own drain (webhost.StopDeadline; see
+     * docs/session.md), so a process still alive past this will not end on
+     * its own, and it is ended: it can write no save any more, and the app
+     * would otherwise never show its page. A test in internal/webhost holds
+     * this past that deadline.
      */
-    private static final long ENDING_WAIT_SECONDS = 30;
+    private static final long ENDING_WAIT_SECONDS = 40;
 
     /**
      * Set when this activity is gone for good rather than recreated, so a
      * start still in flight does not leave a server nobody will end.
      */
     private boolean finished;
+
+    /**
+     * Whether this activity's start — the thread that starts or finds the
+     * server and then shows the page — is still running. Guarded by the class
+     * lock.
+     */
+    private boolean starting;
     private ValueCallback<Uri[]> pendingFiles;
     private byte[] pendingExport;
     private static final int PICK_FILE = 1;
@@ -147,6 +155,7 @@ public class MainActivity extends Activity {
         synchronized (MainActivity.class) {
             current = this;
             alive.add(this);
+            starting = true;
         }
         new Thread(this::startServerAndShow).start();
     }
@@ -167,6 +176,17 @@ public class MainActivity extends Activity {
      */
     private void startServerAndShow() {
         try {
+            showServer();
+        } finally {
+            // However it ended, it is over, and onDestroy may make another.
+            synchronized (MainActivity.class) {
+                starting = false;
+            }
+        }
+    }
+
+    private void showServer() {
+        try {
             int port = SERVER_PORT;
             File root = dataRoot();
             // Launching and the check that nothing is still draining happen
@@ -176,6 +196,9 @@ public class MainActivity extends Activity {
                 Process previous;
                 synchronized (MainActivity.class) {
                     if (finished || current != this) {
+                        // The activity shown over this one starts the
+                        // server; if it finishes first, this one is started
+                        // again (see onDestroy).
                         return;
                     }
                     if (ending != null && ending.isAlive()) {
@@ -205,8 +228,10 @@ public class MainActivity extends Activity {
                 return;
             }
             String url = "http://127.0.0.1:" + port;
+            // A start made again (see onDestroy) can find the page already
+            // shown by the one before it, whose last step was still queued.
             runOnUiThread(() -> {
-                if (!isDestroyed()) {
+                if (!isDestroyed() && webView == null) {
                     showPage(url);
                 }
             });
@@ -638,6 +663,16 @@ public class MainActivity extends Activity {
             finished = true;
             if (current == this) {
                 current = alive.isEmpty() ? null : alive.get(alive.size() - 1);
+                // The activity shown again may have let its own start go
+                // when this one was created over it, while both waited for a
+                // server still draining: this one went on to start the
+                // server, and that one stopped. Its page is not up, and with
+                // the server kept for it, nothing else would ever show it.
+                if (current != null && !current.starting && current.webView == null) {
+                    Log.i(TAG, "the activity shown again has no page; its start runs again");
+                    current.starting = true;
+                    new Thread(current::startServerAndShow).start();
+                }
             }
             // Another activity still shows the page — the one this was shown
             // over, or one opened while this was finishing — and the server
