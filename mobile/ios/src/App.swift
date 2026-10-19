@@ -28,11 +28,20 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     // life cycle is required for apps built with this SDK" before anything is
     // drawn — and an app built with an older SDK only works because UIKit still
     // excuses it. Scenes exist since iOS 13, below this app's minimum.
+    //
+    // Only the app's own window plays. A display the phone is connected to — a
+    // cable, AirPlay — opens a scene of its own role, and one given the play
+    // delegate made a window there with a second page, which took the game from
+    // the phone's page as a second tab would, where the display used to mirror
+    // the phone. Left without a delegate, that scene shows nothing of its own,
+    // and the display mirrors the screen as it did before the app had scenes.
     func application(_ application: UIApplication,
                      configurationForConnecting session: UISceneSession,
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {
         let configuration = UISceneConfiguration(name: nil, sessionRole: session.role)
-        configuration.delegateClass = PlaySceneDelegate.self
+        if session.role == .windowApplication {
+            configuration.delegateClass = PlaySceneDelegate.self
+        }
         return configuration
     }
 

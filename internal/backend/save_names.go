@@ -575,9 +575,10 @@ const (
 	// its own key.
 	namingEncoded
 	// namingEarlier: the directory still holds names an earlier build wrote,
-	// and they could not be converted, because it cannot be written. Every name
-	// is the key it was written for, looked up by its exact spelling, and
-	// nothing is written there.
+	// and they could not be converted, because it cannot be written or one of
+	// them can neither move nor stay where it is. Every name is the key it was
+	// written for, looked up by its exact spelling, and nothing is written
+	// there.
 	namingEarlier
 )
 
@@ -605,7 +606,8 @@ var (
 // in it needs a '#' it reads the same either way and is left exactly as it is:
 // the record is written only when a key that needs one is stored. Otherwise
 // its names are converted, which writes the record, and only a directory the
-// conversion cannot write is read as the earlier build left it.
+// conversion cannot write, or one holding a name that could neither move nor
+// stay (see convertSaveNames), is read as the earlier build left it.
 func (store *DirectorySaveStore) settleSaveNames() (saveNames, error) {
 	if store == nil || store.root == "" {
 		return saveNames{}, fmt.Errorf("save store has no root")
@@ -619,6 +621,9 @@ func (store *DirectorySaveStore) settleSaveNames() (saveNames, error) {
 		return saveNames{naming: namingEncoded}, nil
 	case saveNamesMoving, saveNamesPlacing:
 		if err := convertSaveNames(store.root, plan, state); err != nil {
+			if undone := (*saveNamesUndone)(nil); errors.As(err, &undone) {
+				return saveNames{naming: namingEarlier, blocked: undone.cause}, nil
+			}
 			return saveNames{}, fmt.Errorf("finish converting the save names in %s: %w", store.root, err)
 		}
 		return saveNames{naming: namingEncoded}, nil
@@ -653,6 +658,9 @@ func (store *DirectorySaveStore) settleSaveNames() (saveNames, error) {
 		return saveNames{naming: namingEarlier, blocked: err}, nil
 	}
 	if err := convertSaveNames(store.root, plan, saveNamesMoving); err != nil {
+		if undone := (*saveNamesUndone)(nil); errors.As(err, &undone) {
+			return saveNames{naming: namingEarlier, blocked: undone.cause}, nil
+		}
 		return saveNames{}, fmt.Errorf("convert the save names in %s: %w", store.root, err)
 	}
 	return saveNames{naming: namingEncoded}, nil
@@ -881,6 +889,14 @@ func probeSaveNameDirectories(root string, plan []string) error {
 // entries below it are reached through that name. Nothing is removed and
 // nothing is written over: a name the encoded name is already taken by stops
 // the conversion with the names where they are.
+//
+// A name the first pass cannot move stays under its earlier name, with the
+// names below it, when they all read as their own keys in an encoded
+// directory; otherwise every name goes back and the directory reads as the
+// earlier build left it (see undoSaveNames). Either way one name that cannot
+// move — a file locked in the Finder, or one another program holds open on
+// Windows — no longer takes every other save of the game with it, as it did
+// when the conversion stopped there and every later operation failed.
 func convertSaveNames(root string, plan []string, state saveNamesState) error {
 	if state == saveNamesMoving {
 		touched := make(map[string]bool)
@@ -905,7 +921,22 @@ func convertSaveNames(root string, plan []string, state saveNamesState) error {
 				continue
 			}
 			if err := saveNamesRename(source, temporary); err != nil {
-				return err
+				// A name that cannot move — a file locked in the Finder, one
+				// another program holds open on Windows — stays where it is
+				// when it reads as its own key in an encoded directory, with
+				// everything below it: it is read there and a write goes to
+				// its encoded name (see locateSave), so it costs no other save
+				// anything. One that would read as another key cannot stay,
+				// and the conversion is undone.
+				if !saveNamesStay(plan, index) {
+					return undoSaveNames(root, plan, err)
+				}
+				if err := moveSaveNamesBack(root, plan, func(other string) bool {
+					return strings.HasPrefix(other, path+"/")
+				}); err != nil {
+					return err
+				}
+				continue
 			}
 			touched[directory] = true
 		}
@@ -953,6 +984,81 @@ func convertSaveNames(root string, plan []string, state saveNamesState) error {
 	syncSaveNameDirectories(touched)
 	return writeSaveNamesRecord(root, saveNamesEncoded, nil)
 }
+
+// saveNamesStay reports whether the name at one index of a conversion, which
+// could not move, can stay where it is in the encoded directory the
+// conversion leaves: it and every name below it that the conversion moves read
+// there as their own keys (see readSaveName). "#Top", which an encoded
+// directory reads as the key "Top", cannot.
+func saveNamesStay(plan []string, index int) bool {
+	path := plan[index]
+	for _, other := range plan {
+		if other != path && !strings.HasPrefix(other, path+"/") {
+			continue
+		}
+		name := saveNameBase(other)
+		if key, _ := readSaveName(name); key != name {
+			return false
+		}
+	}
+	return true
+}
+
+// moveSaveNamesBack gives the names of a conversion that have moved to their
+// temporary names, and that the test picks, their own names back. It goes
+// from the end of the list: a directory comes back before the names below it,
+// which then lie under its own name again.
+func moveSaveNamesBack(root string, plan []string, picked func(path string) bool) error {
+	touched := make(map[string]bool)
+	for index := len(plan) - 1; index >= 0; index-- {
+		path := plan[index]
+		if !picked(path) {
+			continue
+		}
+		directory := filepath.Join(root, filepath.FromSlash(saveNameParent(path)))
+		temporary := filepath.Join(directory, saveNamesTemporary(index))
+		moved, err := saveNameExists(temporary)
+		if err != nil {
+			return err
+		}
+		if !moved {
+			continue
+		}
+		if err := saveNamesRename(temporary, filepath.Join(directory, saveNameBase(path))); err != nil {
+			return err
+		}
+		touched[directory] = true
+	}
+	syncSaveNameDirectories(touched)
+	return nil
+}
+
+// undoSaveNames puts every name of a conversion back where an earlier build
+// left it and removes the record, so that the directory reads as that build
+// left it (namingEarlier) rather than refusing every operation until the name
+// that stopped it can move. The answer is a saveNamesUndone carrying what
+// stopped it; a name that cannot be put back leaves the record, and the next
+// operation takes the conversion up again.
+func undoSaveNames(root string, plan []string, cause error) error {
+	if err := moveSaveNamesBack(root, plan, func(string) bool { return true }); err != nil {
+		return errors.Join(cause, err)
+	}
+	if err := os.Remove(filepath.Join(root, saveNamesRecord)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return errors.Join(cause, err)
+	}
+	syncDirectory(root)
+	return &saveNamesUndone{cause: cause}
+}
+
+// saveNamesUndone is a conversion that met a name it could not move and that
+// could not stay, and put every name back.
+type saveNamesUndone struct{ cause error }
+
+func (undone *saveNamesUndone) Error() string {
+	return fmt.Sprintf("a save name could not be converted, and the conversion was undone: %v", undone.cause)
+}
+
+func (undone *saveNamesUndone) Unwrap() error { return undone.cause }
 
 // syncSaveNameDirectories flushes the directories a pass renamed in, so the
 // record that follows never reaches the disk ahead of the names it describes.
@@ -1218,8 +1324,8 @@ func (store *DirectorySaveStore) locateSave(name string, names saveNames, write 
 	} else {
 		earlier, found = findEarlierSave(store.root, segments)
 	}
-	if !found && !present && !write && saveNamesStripTrailing {
-		if at, stripped := store.strippedSave(segments, names); stripped {
+	if !found && !present && !write && saveNamesWin32 {
+		if at, spelled := store.win32Save(segments, names); spelled {
 			return at, true, nil
 		}
 	}
@@ -1241,40 +1347,65 @@ func (store *DirectorySaveStore) locateSave(name string, names saveNames, write 
 	return path, true, nil
 }
 
-// saveNamesStripTrailing says the host drops a '.' or ' ' at the end of a path
-// segment, as Win32 does: an earlier build there stored the key "save." as
-// "save", and the key "SAVE    " as "SAVE".
-var saveNamesStripTrailing = runtime.GOOS == "windows"
+// saveNamesWin32 says the host changes a path segment as Win32 does (see
+// win32SaveName): an earlier build there stored the key "save." as "save",
+// "SAVE    " as "SAVE", and an LGT or KTF C title's EUC-KR file name, whose
+// bytes are not UTF-8, with U+FFFD for them.
+var saveNamesWin32 = runtime.GOOS == "windows"
 
-// strippedSave finds, for a key that has no save, the entry an earlier build
-// on a host that drops a segment's ending left for it: under each segment
-// without the dots and spaces at its end, as written then or encoded since.
-// That file is also the save of the key the shorter name is, which the two
-// keys shared there, so it is read where it is and never moved: the key's own
-// first write goes to its encoded name, and the other key keeps its file.
-func (store *DirectorySaveStore) strippedSave(segments []string, names saveNames) (string, bool) {
-	stripped := make([]string, len(segments))
+// win32Save finds, for a key that has no save, the entry an earlier build on
+// a host that changes names as Win32 does left for it: under each segment as
+// Win32 spelled it, as written then or encoded since. That file is also the
+// save of every other key Win32 spelled the same — the key without the
+// ending, a key with other bytes outside UTF-8 where this one has its own —
+// which shared it there, so it is read where it is and never moved: the key's
+// own first write goes to its encoded name, and the others keep the file.
+func (store *DirectorySaveStore) win32Save(segments []string, names saveNames) (string, bool) {
+	spelled := make([]string, len(segments))
 	changed := false
 	for index, segment := range segments {
-		stripped[index] = strings.TrimRight(segment, ". ")
-		if stripped[index] == "" {
+		spelled[index] = win32SaveName(segment)
+		if spelled[index] == "" {
 			return "", false
 		}
-		changed = changed || stripped[index] != segment
+		changed = changed || spelled[index] != segment
 	}
 	if !changed {
 		return "", false
 	}
 	if names.naming == namingEncoded {
-		at := filepath.Join(store.root, filepath.FromSlash(encodeSaveKey(strings.Join(stripped, "/"))))
+		at := filepath.Join(store.root, filepath.FromSlash(encodeSaveKey(strings.Join(spelled, "/"))))
 		if regularSaveFile(at) {
 			return at, true
 		}
 	}
-	if at, exists, _ := exactSavePath(store.root, stripped); exists && regularSaveFile(at) {
+	if at, exists, _ := exactSavePath(store.root, spelled); exists && regularSaveFile(at) {
 		return at, true
 	}
 	return "", false
+}
+
+// win32SaveName is the name Win32 stored a segment under for an earlier build.
+// Go hands Win32 a path in UTF-16, where every byte that is not UTF-8 becomes
+// U+FFFD and three that encode a lone surrogate stay that surrogate, which a
+// listing reads back as the same three bytes; Win32 then drops the dots and
+// spaces at the end.
+func win32SaveName(segment string) string {
+	var name strings.Builder
+	for index := 0; index < len(segment); {
+		r, size := utf8.DecodeRuneInString(segment[index:])
+		switch rest := segment[index:]; {
+		case r != utf8.RuneError || size != 1:
+			name.WriteString(rest[:size])
+		case len(rest) >= 3 && rest[0] == 0xed && rest[1] >= 0xa0 && rest[1] <= 0xbf && rest[2] >= 0x80 && rest[2] <= 0xbf:
+			name.WriteString(rest[:3])
+			size = 3
+		default:
+			name.WriteRune(utf8.RuneError)
+		}
+		index += size
+	}
+	return strings.TrimRight(name.String(), ". ")
 }
 
 // laterSaveFile reports whether the file at one path was written after the

@@ -65,7 +65,9 @@ const harness = ({ bindings = loadPadBindings(null), raw = {}, allows = () => tr
   });
   const acts = [];
   const seen = [];
+  const answers = [];
   let flowing = true;
+  let asked = false;
   const input = createPadInput({
     latch: holds.latch,
     lift: holds.lift,
@@ -74,6 +76,8 @@ const harness = ({ bindings = loadPadBindings(null), raw = {}, allows = () => tr
     bindingsFor: pad => (pad.standard ? bindings : raw[pad.id] ?? {}),
     game: () => flowing,
     allows,
+    asking: () => asked,
+    answer: name => answers.push(name),
     activity: info => seen.push(info),
   });
   return {
@@ -81,7 +85,9 @@ const harness = ({ bindings = loadPadBindings(null), raw = {}, allows = () => tr
     holds,
     acts,
     seen,
+    answers,
     flow: on => { flowing = on; },
+    ask: on => { asked = on; },
     // What the game was sent since the last look.
     take: () => sent.splice(0),
   };
@@ -391,6 +397,49 @@ test("keys stop while the page holds input back and do not press on their own af
   hold(pad, 0);
   h.input.poll([pad]);
   assert.deepEqual(h.take(), ["+OK"]);
+});
+
+test("a question takes the controller and is answered with it", () => {
+  const h = harness();
+  const pad = controller();
+  h.ask(true);
+  hold(pad, 15);
+  h.input.poll([pad]);
+  letGoOf(pad, 15);
+  h.input.poll([pad]);
+  stick(pad, 0, -1, 0);
+  h.input.poll([pad]);
+  stick(pad, 0, 0, 0);
+  h.input.poll([pad]);
+  hold(pad, 0);
+  h.input.poll([pad]);
+  hold(pad, 9);
+  h.input.poll([pad]);
+  assert.deepEqual(h.answers, ["RIGHT", "LEFT", "OK", SETTINGS],
+    "the direction pad and the left stick move, A is OK, and a page control is the question's too");
+  assert.deepEqual(h.take(), [], "the game behind the question is sent nothing");
+  assert.deepEqual(h.acts, [], "no page control runs behind it either");
+  letGoOf(pad, 9);
+  h.ask(false);
+  h.input.poll([pad]);
+  assert.deepEqual(h.take(), [], "the press that answered does not reach the game after");
+  letGoOf(pad, 0);
+  h.input.poll([pad]);
+  hold(pad, 0);
+  h.input.poll([pad]);
+  assert.deepEqual(h.take(), ["+OK"]);
+});
+
+test("a key held when a question comes up is let go", () => {
+  const h = harness();
+  const pad = controller();
+  hold(pad, 0);
+  h.input.poll([pad]);
+  assert.deepEqual(h.take(), ["+OK"]);
+  h.ask(true);
+  h.input.poll([pad]);
+  assert.deepEqual(h.take(), ["-OK"]);
+  assert.deepEqual(h.answers, [], "a control already down when the question came is no answer");
 });
 
 test("a control held across a reset is dead until it is let go", () => {

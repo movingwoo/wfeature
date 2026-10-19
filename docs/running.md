@@ -16,8 +16,10 @@ The Go code cross-compiles and vets clean for the five release targets in the
 `linux/arm64`, `windows/amd64`) and for the phone builds, `android/arm64` and
 `ios/arm64`. Its `syscall` use is confined to file locks behind per-OS build
 files (`internal/backend/save_lock_unix.go`, `save_lock_windows.go`, and
-`save_lock_other.go` for a system with no known lock), error classification and
-`SIGTERM`. It has no hardcoded `/tmp` and no hand-built path separators: every
+`save_lock_other.go` for a system with no known lock), error classification,
+the signals that stop the server (`SIGTERM`, and `SIGHUP` from a closed terminal
+window; `SIGPIPE` is ignored) and the launcher's look at whether a stopped
+server's process is still running (`internal/launcher/process_*.go`). It has no hardcoded `/tmp` and no hand-built path separators: every
 path goes through `filepath.Join`, and save keys that cross the Host boundary
 are slash-separated names normalized on both sides. The one `exec.Command` in a
 shipped binary is `internal/launcher`'s, which opens a browser; the developer
@@ -206,7 +208,10 @@ at once on different ports.
 - `build.sh` reports only the CLI and server binaries it builds; other
   executables in the output directory are not build profiles.
 - `start.sh` builds the profile if `build/<profile>/wfeature-server` is
-  missing, starts it in the background with its log in
+  missing or older than any file under `cmd/`, `internal/` or `web/`, or
+  `go.mod` or `go.sum` — a binary older than a pulled checkout serves its new
+  `web/` with `{{key}}` in place of the phrases it does not know — starts it
+  in the background with its log in
   `var/run/server-<profile>.log` (truncated on each start), waits for the
   server to log its address, and prints what `status` reports. A server that
   exits at once has its log printed and `start.sh` exits 1. Arguments after
@@ -226,8 +231,9 @@ connected, so what a title wrote reaches the save folder before the process
 ends. `stop` reports the server stopped once the process it named has exited,
 not when its port goes quiet: the drain closes the listener first and closes
 the games after, so a `start` that followed a quiet port could run beside a
-server still holding their save folders. It waits up to 15 seconds, past the
-server's own 10-second drain. Only a server that does not answer is
+server still holding their save folders. It waits up to 25 seconds, past the
+server's own 20-second drain, which outlasts the 15 seconds a title's own
+ending may run. Only a server that does not answer is
 signalled, and only one that ignores the signal is forced; a forced stop
 closes nothing. All output of `status` and `stop` is English.
 

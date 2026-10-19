@@ -385,6 +385,10 @@ const sameSet = (a, b) => a.size === b.size && [...a].every(item => b.has(item))
 //   - bindingsFor answers the table a controller reads;
 //   - game says whether keys may reach the game at all, and allows whether a
 //     page control may run — both are the page's state, not a controller's;
+//   - asking says whether a question is on screen, and answer hears, while one
+//     is, the key or control a newly pressed control is bound to: a question
+//     takes every control, and without this a controller could neither go
+//     through nor back out of one;
 //   - activity hears which controls of a controller are lit, for the panel.
 export const createPadInput = ({
   latch,
@@ -394,6 +398,8 @@ export const createPadInput = ({
   bindingsFor = () => ({}),
   game = () => true,
   allows = () => true,
+  asking = () => false,
+  answer = () => {},
   activity = () => {},
 }) => {
   const pads = new Map();
@@ -441,7 +447,8 @@ export const createPadInput = ({
     state.held = held;
     const lit = new Set([...held].filter(input => !state.dead.has(input)));
     const table = bindingsFor(describe(state)) ?? {};
-    const flowing = game();
+    const asked = asking();
+    const flowing = game() && !asked;
     if (!flowing) letGo(state);
 
     // Releases before presses, so a key moved from one control to another is
@@ -458,6 +465,10 @@ export const createPadInput = ({
         if (was === now) continue;
         const id = `pad:${state.index}:${name}`;
         const bound = now ? table[now] ?? "" : "";
+        if (asked) {
+          if (bound) answer(bound);
+          continue;
+        }
         if (bound && !isPadAction(bound) && flowing) {
           state.keys.add(id);
           moveTo(id, bound);
@@ -471,6 +482,10 @@ export const createPadInput = ({
       if (state.lit.has(input) || stickOf(input)) continue;
       const bound = table[input] ?? "";
       if (!bound) continue;
+      if (asked) {
+        answer(bound);
+        continue;
+      }
       if (isPadAction(bound)) {
         if (allows(bound)) act(bound);
         continue;

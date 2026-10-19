@@ -545,7 +545,7 @@ offline, where it comes up and then fails on an import. `service-worker.test.mjs
 therefore compares the list against what `index.html` names and what the module
 graph from `app.js` reaches; two modules had already drifted out of it. A
 change to the list wants the cache name bumped with it. The shell cache is
-`wfeature-pwa-v59` (the constant in `service-worker.js`). The `wfeature-pwa-`
+`wfeature-pwa-v60` (the constant in `service-worker.js`). The `wfeature-pwa-`
 prefix, introduced in version 35, keeps already-installed workers from deleting
 it through their broad `wfeature-shell-*` cleanup. Activation removes legacy
 shell caches and strictly older `wfeature-pwa-vN` versions, preserving future

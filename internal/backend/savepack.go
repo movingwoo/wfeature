@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -492,6 +493,10 @@ func WriteSaveTree(root string, entries []SaveEntry) (written int, removed int, 
 		}
 		normalized = append(normalized, SaveEntry{Key: key, Data: entry.Data})
 	}
+	normalized, err = keysOfAConvertedFolder(normalized)
+	if err != nil {
+		return 0, 0, fmt.Errorf("backend: the save backup cannot be restored whole: %w", err)
+	}
 	ordered, err := validateSnapshotSaves(normalized)
 	if err != nil {
 		return 0, 0, fmt.Errorf("backend: the save backup cannot be restored whole: %w", err)
@@ -534,6 +539,52 @@ func WriteSaveTree(root string, entries []SaveEntry) (written int, removed int, 
 	// they did not cause.
 	removed, err = pruneSaveTree(root, keep, names.naming)
 	return written, removed, err
+}
+
+// keysOfAConvertedFolder answers the keys of the entries of a backup an earlier
+// build made of a folder this build had converted. That build read every name
+// in the folder as its own key, the names record among them, so the backup
+// carries the folder's names rather than its keys — "rms/#Save" for the key
+// "rms/Save" — and the record. Restored as they were, the names became keys
+// no title asks for and the record a save of its own, and the restore then
+// removed the save under the key the title does read. The record says of the
+// backup what it says of a folder, that the names beside it are encoded, so
+// they are read as an encoded folder's names are (see saveEntryKey) and the
+// record is no entry. Of two entries that read as one key the encoded one is
+// kept, as a listing keeps it when it cannot tell which was written later. A
+// backup without the record is answered as it is.
+func keysOfAConvertedFolder(entries []SaveEntry) ([]SaveEntry, error) {
+	if !slices.ContainsFunc(entries, func(entry SaveEntry) bool { return entry.Key == saveNamesRecord }) {
+		return entries, nil
+	}
+	type read struct {
+		entry   SaveEntry
+		encoded bool
+	}
+	keys := make(map[string]read, len(entries))
+	order := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Key == saveNamesRecord {
+			continue
+		}
+		key, encoded, err := saveEntryKey(entry.Key, namingEncoded)
+		if err != nil {
+			return nil, err
+		}
+		kept, seen := keys[key]
+		if seen && (kept.encoded || !encoded) {
+			continue
+		}
+		if !seen {
+			order = append(order, key)
+		}
+		keys[key] = read{entry: SaveEntry{Key: key, Data: entry.Data}, encoded: encoded}
+	}
+	answered := make([]SaveEntry, 0, len(order))
+	for _, key := range order {
+		answered = append(answered, keys[key].entry)
+	}
+	return answered, nil
 }
 
 // saveTreeHasRoomFor reports an entry the live tree has the wrong shape for: a

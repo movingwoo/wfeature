@@ -316,6 +316,39 @@ try {
   assert.deepEqual(hatTable, { "h9-up": "UP", "h9-right": "RIGHT", "h9-down": "DOWN", "h9-left": "LEFT" });
   result.checks.push("an unrecognised controller's hat switch is a direction pad of four rows");
 
+  // A question takes the controller: its directions move between the
+  // answers, the control bound to 취소 backs out, and the one bound to the
+  // centre key presses the answer in focus. Without this a controller could
+  // neither go through nor back out of one.
+  const asking = () => page.locator("#confirm-dialog").evaluate(e => e.classList.contains("visible"));
+  const focused = () => page.evaluate(() => document.activeElement?.id ?? "");
+  const playing = () => page.locator("#restart").evaluate(e => !e.classList.contains("hidden"));
+  await page.locator("#restart").click();
+  assert.equal(await asking(), true);
+  assert.equal(await focused(), "confirm-cancel", "the safe answer has the focus");
+  await button(15, 1); await button(15, 0);
+  assert.equal(await focused(), "confirm-accept", "right moves to the answer that goes through");
+  assert.equal(await page.locator("#confirm-accept").evaluate(e => getComputedStyle(e).outlineStyle), "solid",
+    "the answer the controller moved to is shown");
+  await axes([-1, 0, 0, 0]);
+  await axes([0, 0, 0, 0]);
+  assert.equal(await focused(), "confirm-cancel", "the left stick moves back");
+  await button(1, 1); await button(1, 0);
+  assert.equal(await asking(), false, "B backs out");
+  assert.equal(await playing(), true, "backing out keeps the game");
+  await page.locator("#restart").click();
+  await button(0, 1); await button(0, 0);
+  assert.equal(await asking(), false, "A presses the safe answer in focus");
+  assert.equal(await playing(), true);
+  await expectSent([], "the game behind the question is sent nothing");
+  await page.locator("#restart").click();
+  await button(15, 1); await button(15, 0);
+  await button(0, 1); await button(0, 0);
+  await page.waitForFunction(() => document.querySelector("#restart").classList.contains("hidden"));
+  assert.equal(await asking(), false);
+  await expectSent([], "the press that went through reaches no game");
+  result.checks.push("a question is answered with the controller: directions move, B backs out, A presses the answer in focus");
+
   await page.evaluate(() => { window.disconnectPad(2); window.disconnectPad(1); window.disconnectPad(0); });
   await settle();
   assert.equal(await page.locator("#pad-bindings-status").textContent(), phrase("pad.waiting"));

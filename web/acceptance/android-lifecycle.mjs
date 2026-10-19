@@ -43,14 +43,18 @@
 // - Opened again right after it was finished, while the server it ended is
 //   still draining (the BACK, the wait for onDestroy and the new start are one
 //   command on the device, and an upload left in flight holds the old drain
-//   to its ten-second deadline), the app starts the next server only once the
+//   to its twenty-second deadline), the app starts the next server only once the
 //   old one has ended, the old game's destroyApp record is written, and the
 //   page is the new server's. Three times, as for the finish.
 // - Opened again the same way while the server holds parked a title whose
 //   destroyApp never returns (the page let go of its session first), the old
-//   server still ends, at its drain's ten-second deadline with that close
-//   left behind, and the next server starts after it without the app having
-//   to end the old one.
+//   server still ends, once that destroyApp has run out the fifteen seconds
+//   every title's ending gets and within its drain's twenty-second deadline,
+//   and the next server starts after it without the app having to end the old
+//   one.
+// - A second activity shown over the first by a launch that is not the
+//   launcher's own shares the server with it: finishing the second leaves the
+//   server, its pid and its game to the first, whose page takes the game back.
 //
 // The pages are read through the web view's DevTools socket, one page at a
 // time, and no DevTools client is attached while a change is made. Playwright
@@ -822,7 +826,7 @@ try {
   // A drain with nothing in flight ends in a fraction of a second, sooner
   // than the new activity gets as far as starting a server, so the old server
   // is given a request in flight to wait for, as a game upload that stopped
-  // halfway would be: the drain waits for it until its own ten-second
+  // halfway would be: the drain waits for it until its own twenty-second
   // deadline. The body never arrives in full, so nothing is written.
   const inFlight = () => new Promise(done => {
     const socket = connect({ host: "127.0.0.1", port: Number(serverForward) }, () => {
@@ -905,9 +909,9 @@ try {
   // F: the same reopening while the game the finished server holds is parked
   // and is a title whose destroyApp never returns. A drain that closed parked
   // games ahead of its deadline never ended, and the app waited on it for
-  // ever; now the drain leaves that close behind at its ten-second deadline,
-  // the old server ends on its own, and the new activity starts the next one
-  // after it. The page lets go of its session first, as a page the app has
+  // ever; now that destroyApp is ended when it has run its fifteen seconds,
+  // within the drain's twenty-second deadline, the old server ends on its own,
+  // and the new activity starts the next one after it. The page lets go of its session first, as a page the app has
   // hidden or a tab that closed does, so the game is parked when the drain
   // begins: finishing the activity with the game attached reaches the drain
   // before the page's own parking does. The server's lines after its SIGTERM
@@ -968,10 +972,62 @@ try {
       appLog: own.map(line => `${Math.round((line.at - Number(since)) * 1000)} ${line.text}`),
       serverLog: serverLog(leaving), events,
     };
-    check("F opened again while the finished server holds a parked game whose destroyApp never returns: the old server ends at its drain's deadline and the next one starts after it",
+    check("F opened again while the finished server holds a parked game whose destroyApp never returns: the old server ends within its drain's deadline and the next one starts after it",
       run.exercised && run.waited && !run.forced && run.startedAfterOldEnded &&
-        run.timesMs.oldGone - run.timesMs.destroyed <= 15000 && run.new > 0 && run.new !== run.old &&
+        run.timesMs.oldGone - run.timesMs.destroyed <= 21000 && run.new > 0 && run.new !== run.old &&
         run.servers.length === 1 && run.servers[0] === String(run.new) && run.pageReady, run);
+  }
+
+  // G: a second activity over the first. A launch that is not the launcher's
+  // own — here a component with an action of its own — gets another instance
+  // in the default launch mode, over the one shown, and the two share the one
+  // server. Finishing the second used to end that server, and the first one's
+  // page came back with nothing behind it. Now the server ends with the last
+  // activity: the second's BACK leaves it, its pid and its game, and the first
+  // one's page takes the game back — at once, or with its own button when it
+  // came back before the second let go of the game.
+  {
+    // The task's history lists each live instance once; a finished one can
+    // still be named elsewhere in the dump, as the last one paused.
+    const instances = () => tryAdb("shell", "dumpsys", "activity", "activities").split("\n")
+      .filter(line => /^\s*\* Hist\s+#\d+: ActivityRecord\{/.test(line) && line.includes(`${app}/.MainActivity`)).length;
+    await launch();
+    const first = await prepare(canvas);
+    first.close();
+    const old = (await status())?.pid;
+    tryAdb("shell", "am", "start", "-W", "-n", `${app}/.MainActivity`, "-a", `${app}.LIFECYCLE_SECOND`);
+    let two = 0;
+    for (let i = 0; i < 40 && (two = instances()) < 2; i++) await pause(250);
+    // The second one's page comes from the same server; whether it shows the
+    // game or the picker is the page's business.
+    const second = await shown().catch(() => null);
+    const secondServed = Boolean(await second?.until(`document.readyState === "complete" && !!document.getElementById("game-start")`, 15000));
+    const secondState = second ? await second.evaluate(state).catch(() => null) : null;
+    second?.close();
+    const since = deviceNow();
+    tryAdb("shell", "input", "keyevent", "KEYCODE_BACK");
+    let destroyed = false;
+    for (let i = 0; i < 80 && !(destroyed = lifecycleEvents(since).some(({ event }) => event === "wm_on_destroy_called")); i++) await pause(250);
+    await pause(1500);
+    const left = instances();
+    const now = await status();
+    // The first one's page comes back while the second may still hold the
+    // game. It then offers the game back rather than taking it, as a second
+    // tab of a browser does, and its own button takes it back.
+    const back = await shown().catch(() => null);
+    const offering = `!document.getElementById("session-return").classList.contains("hidden")`;
+    const cameBack = Boolean(await back?.until(`(${playing}) || (${offering})`, 20000));
+    const offered = cameBack && !(await back.evaluate(playing)) && await back.evaluate(offering);
+    if (offered) await back.evaluate(`document.getElementById("session-takeover").click()`);
+    const firstPlaying = Boolean(await back?.until(playing, 20000));
+    back?.close();
+    const run = {
+      old, now: now?.pid ?? null, two, left, destroyed, secondServed, secondState, offered, firstPlaying, servers: servers(),
+      serverLog: serverLog(since), events: lifecycleEvents(since).map(({ event }) => event),
+    };
+    check("G a second activity over the first shares the server: finishing it leaves the server and its game to the first",
+      run.two === 2 && run.destroyed && run.left === 1 && run.secondServed && run.old > 0 && run.now === run.old &&
+        run.servers.length === 1 && run.servers[0] === String(run.old) && run.firstPlaying, run);
   }
 } catch (error) {
   result.notes.push(`stopped: ${String(error.stack ?? error)}`);

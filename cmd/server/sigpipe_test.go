@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -38,6 +39,34 @@ func TestServerHelperProcess(t *testing.T) {
 // with it the games' last saves, never ran. A server whose log is gone must
 // still drain and exit as asked.
 func TestAServerWhoseLogPipeClosedStillDrains(t *testing.T) {
+	command, logs := startServerHelper(t)
+	// The pipe goes first, so the server meets it closed on its next line.
+	logs.Close()
+	if err := command.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	wantDrained(t, command, "SIGTERM")
+}
+
+// Closing the window a server runs in — the way the release archives'
+// READMEs tell a player to stop it — hangs up its terminal, and the server
+// receives SIGHUP. Unhandled, that ended the process on the spot, without the
+// drain: a game whose tab had been closed waits parked until the server stops,
+// and what its title had not yet stored went with the process. The window is
+// gone by then, so the log has nowhere to go either.
+func TestAHangupDrainsTheServer(t *testing.T) {
+	command, logs := startServerHelper(t)
+	logs.Close()
+	if err := command.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	wantDrained(t, command, "SIGHUP")
+}
+
+// startServerHelper runs the server as a child process on a free port and
+// answers once it serves, with the pipe it logs to.
+func startServerHelper(t *testing.T) (*exec.Cmd, io.ReadCloser) {
+	t.Helper()
 	root := t.TempDir()
 	arguments := strings.Join([]string{
 		"-addr", "127.0.0.1:0",
@@ -100,19 +129,20 @@ func TestAServerWhoseLogPipeClosedStillDrains(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	return command, logs
+}
 
-	// The pipe goes first, so the server meets it closed on its next line.
-	logs.Close()
-	if err := command.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
+// wantDrained waits for a server that was sent a signal to end, and fails the
+// test unless it ended by its drain: not by a signal, and with exit 0.
+func wantDrained(t *testing.T, command *exec.Cmd, sent string) {
+	t.Helper()
 	done := make(chan error, 1)
 	go func() { done <- command.Wait() }()
 	select {
 	case <-done:
 	case <-time.After(30 * time.Second):
 		command.Process.Kill()
-		t.Fatal("the server did not end within 30s of SIGTERM")
+		t.Fatalf("the server did not end within 30s of %s", sent)
 	}
 	status := command.ProcessState.Sys().(syscall.WaitStatus)
 	if status.Signaled() {

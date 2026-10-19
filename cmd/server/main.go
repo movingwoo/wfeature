@@ -460,7 +460,16 @@ func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger, 
 
 	// Ctrl-C during a save write should still finish the write, so the server
 	// stops accepting and drains rather than dropping its connections.
-	signalled, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	//
+	// Closing the window the server runs in is the other way a player stops
+	// it, and the release archives' READMEs say so. On macOS and Linux that
+	// hangs up its terminal, and an unhandled SIGHUP ended the process on the
+	// spot: no drain, so a game whose tab had been closed — parked, with no
+	// time limit, until the server stops — was never closed, and what its
+	// title had not yet handed to the save store went with the process.
+	// Windows delivers a closing console as SIGTERM, and ends the process a
+	// few seconds later whatever this does.
+	signalled, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	// A log nobody reads any more must not end the drain. The Android app
 	// stops the server with Process.destroy(), which sends SIGTERM and then
@@ -489,10 +498,11 @@ func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger, 
 }
 
 // drain stops accepting and finishes what is in flight, which is what makes a
-// stop safe during a save write. Both ways of asking end here: the signal a
-// window's Ctrl-C sends, and the local request POST /api/shutdown makes.
+// stop safe during a save write. Every way of asking ends here: the signals a
+// window's Ctrl-C, a terminate and a closed window send, and the local request
+// POST /api/shutdown makes.
 func drain(httpServer *http.Server, handler *webhost.Server, logger *slog.Logger) error {
-	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdown, cancel := context.WithTimeout(context.Background(), webhost.StopDeadline)
 	defer cancel()
 	// Shutdown neither closes nor waits for a hijacked connection, and a
 	// session socket is one. A game whose page is still attached therefore has

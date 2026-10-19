@@ -665,6 +665,44 @@ const initInput = () => {
   // controller the button that closes it.
   const dialogOpen = () => shown("confirm-dialog") || document.getElementById("text-input-dialog")?.open === true;
   const overGame = id => !panelsDocked() && shown(id);
+  // The controller answers the question the dialog takes it for: its
+  // directions move between the answers, the control bound to OK presses the
+  // one in focus, and the one bound to CLR presses the first, which is always
+  // the safe one. Without this a controller could neither go through nor back
+  // out of a question, and the player had to reach for the screen.
+  const question = () => {
+    if (shown("confirm-dialog")) return document.getElementById("confirm-dialog");
+    const text = document.getElementById("text-input-dialog");
+    return text?.open ? text : null;
+  };
+  const answerQuestion = name => {
+    const dialog = question();
+    const answers = [...(dialog?.querySelectorAll(".confirm-actions button") ?? [])]
+      .filter(button => !button.disabled && !button.hidden);
+    if (!answers.length) return;
+    const at = answers.indexOf(document.activeElement);
+    // The focus a controller moves is shown, which a browser does not do for
+    // a focus a script moved after a click; see .confirm-actions in style.css.
+    const focus = button => {
+      dialog.dataset.pad = "";
+      button.focus();
+    };
+    const press = button => {
+      delete dialog.dataset.pad;
+      button.click();
+    };
+    if (name === "LEFT" || name === "UP") focus(answers[at > 0 ? at - 1 : answers.length - 1]);
+    else if (name === "RIGHT" || name === "DOWN") focus(answers[at >= 0 ? (at + 1) % answers.length : 0]);
+    else if (name === "OK" && at >= 0) press(answers[at]);
+    else if (name === "OK") focus(answers[0]);
+    else if (name === "CLR") press(answers[0]);
+  };
+  for (const id of ["confirm-dialog", "text-input-dialog"]) {
+    const dialog = document.getElementById(id);
+    const unmark = () => { if (dialog) delete dialog.dataset.pad; };
+    dialog?.addEventListener("pointerdown", unmark);
+    dialog?.addEventListener("keydown", unmark, true);
+  }
   const pads = createPadInput({
     latch: holds.latch,
     lift: holds.lift,
@@ -674,6 +712,8 @@ const initInput = () => {
     game: () => !keypadArranging && !dialogOpen() && !overGame("settings-panel") && !overGame("cheat-panel"),
     allows: name => !keypadArranging && !dialogOpen() && !overGame("cheat-panel") &&
       (name === SETTINGS || !overGame("settings-panel")),
+    asking: () => !keypadArranging && question() !== null,
+    answer: answerQuestion,
     activity: info => showPadActivity(info),
   });
   let reading = false;

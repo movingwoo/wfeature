@@ -75,9 +75,9 @@ func TestADecomposedListingIsTheComposedKey(t *testing.T) {
 // the key until the key's own first write, which goes to the key's encoded
 // name, and the file stays the save of "fs/save", which shared it.
 func TestASaveWindowsStoredWithoutItsEndingIsRead(t *testing.T) {
-	strip := saveNamesStripTrailing
-	saveNamesStripTrailing = true
-	t.Cleanup(func() { saveNamesStripTrailing = strip })
+	win32 := saveNamesWin32
+	saveNamesWin32 = true
+	t.Cleanup(func() { saveNamesWin32 = win32 })
 	for _, record := range []bool{false, true} {
 		parent := t.TempDir()
 		state := []string{"owner/fs/save=stored without its dot", "owner/jdb/SAVE=stored without its spaces"}
