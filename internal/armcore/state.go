@@ -62,10 +62,9 @@ func (memory *Memory) ValidateRange(address uint32, size uint64, permission Perm
 	if size > guestAddressEnd-uint64(address) {
 		return &AccessError{Operation: "validate restored view", Address: address, Size: size, Cause: ErrAddressOverflow}
 	}
-	// validateLocked may refresh the last-mapping cache.
-	memory.mu.Lock()
-	defer memory.mu.Unlock()
-	return memory.validateLocked(address, size, permission, "validate restored view")
+	memory.mu.RLock()
+	defer memory.mu.RUnlock()
+	return memory.validateShared(address, size, permission, "validate restored view")
 }
 
 func (core *Core) CaptureState() (CoreState, error) {

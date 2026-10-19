@@ -214,6 +214,7 @@ type VM struct {
 	// chain actually declares the field it names. It is cleared whenever a
 	// class is defined, because a class that arrives later can be the answer.
 	declaringFields   map[fieldKey]fieldResolution
+	instanceAnswers   map[instanceKey]bool // see isInstance; guarded by mu
 	classMonitors     map[string]*monitor
 	nextExecution     atomic.Uint64
 	nextObject        atomic.Uint32
@@ -228,6 +229,8 @@ type VM struct {
 	checkpointWake    chan struct{} // guarded by threadMu
 	aotClasses        map[string]AOTClassMetadata
 	aotAddresses      map[uint32]string
+	aotRevisions      map[string]uint64 // by class name; see AOTClassRevision
+	aotRevision       uint64            // the last revision given out
 	aotObjects        map[uint32]aotBinding
 	aotInvoker        AOTInvoker
 	contextAOTInvoker ContextAOTInvoker
@@ -312,12 +315,14 @@ func New(source ClassSource, options Options) *VM {
 		internedStrings: make(map[string]*Object),
 		classObjects:    make(map[string]*Object),
 		declaringFields: make(map[fieldKey]fieldResolution),
+		instanceAnswers: make(map[instanceKey]bool),
 		classMonitors:   make(map[string]*monitor),
 		threads:         make(map[*Object]*guestThread),
 		closed:          make(chan struct{}),
 		checkpointWake:  make(chan struct{}),
 		aotClasses:      make(map[string]AOTClassMetadata),
 		aotAddresses:    make(map[uint32]string),
+		aotRevisions:    make(map[string]uint64),
 		aotObjects:      make(map[uint32]aotBinding),
 		initializing:    make(map[string]bool),
 		initialized:     make(map[string]bool),
@@ -1247,6 +1252,28 @@ func (vm *VM) IsInstance(object *Object, target string) bool {
 // MaxFrames. Repeated edges still cost work even when their type was visited.
 const maxInstanceRelations = 1 << 16
 
+// instanceKey is a class and a type isInstance was asked whether its
+// instances are.
+type instanceKey struct {
+	class, target string
+}
+
+// maxInstanceAnswers bounds the answers isInstance keeps. Class names and
+// targets both come from an archive, which bounds neither how many classes it
+// has nor how many types it casts to; at the bound the answers are thrown
+// away and found again.
+const maxInstanceAnswers = 1 << 12
+
+// isInstance answers whether object is an instance of target. Where a class
+// stands in the hierarchy does not change once it is loaded, so the answer
+// for a class and a target is kept, and a title that casts the same objects
+// to the same types every frame walks the hierarchy once: a walk costs a load
+// for every class on the way, a kept answer one map lookup, and on an M1
+// BenchmarkInstanceQuery put a kept answer at 18 ns against 22 ns walked for
+// the superclass, 52 ns for an interface it implements and 98 ns for a type
+// the class is not. A class defined later can change an answer — a name that
+// would not load may load now — so defining one throws the answers away, as
+// it does the field resolutions.
 func (vm *VM) isInstance(object *Object, target string) bool {
 	if object == nil {
 		return false
@@ -1257,6 +1284,26 @@ func (vm *VM) isInstance(object *Object, target string) bool {
 	if len(object.ClassName) > 0 && object.ClassName[0] == '[' {
 		return target == "java/lang/Cloneable" || target == "java/io/Serializable"
 	}
+	key := instanceKey{class: object.ClassName, target: target}
+	vm.mu.RLock()
+	answer, ok := vm.instanceAnswers[key]
+	vm.mu.RUnlock()
+	if ok {
+		return answer
+	}
+	answer = vm.walkInstance(object.ClassName, target)
+	vm.mu.Lock()
+	if len(vm.instanceAnswers) >= maxInstanceAnswers {
+		clear(vm.instanceAnswers)
+	}
+	vm.instanceAnswers[key] = answer
+	vm.mu.Unlock()
+	return answer
+}
+
+// walkInstance walks the hierarchy above className, superclasses and
+// superinterfaces both, looking for target.
+func (vm *VM) walkInstance(className, target string) bool {
 	// The classes still to look at, in the order they were met, and every one
 	// met so far: the walk never drops a name, so the list is also the set of
 	// names seen, searched where it is until it outgrows the buffer it starts
@@ -1264,7 +1311,7 @@ func (vm *VM) isInstance(object *Object, target string) bool {
 	// own class cost a SKT title's checkcast a third more, and its instanceof
 	// nearly twice as much, as the superclass chain alone used to.
 	var buffer [16]string
-	pending := append(buffer[:0], object.ClassName)
+	pending := append(buffer[:0], className)
 	var seen map[string]bool
 	relations := 0
 	for next := 0; next < len(pending); next++ {

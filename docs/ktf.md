@@ -54,15 +54,27 @@ existing serial callback pacing.
 A title registers the same AOT class record again and again, and a second
 registration refreshes the class from the record: a vtable the title changed
 in between is the one the class has from then on. What reading a record read
-is kept, its spans joined by address where they meet; registering it again
-reads those spans back and compares them, and only a record whose bytes
-changed, or a class the VM no longer holds as it was read, is parsed and
-validated whole again. Names in the records are read a chunk at a time, not a
-byte at a time. On a light title the rereading, a byte per memory read, was
-most of what the server did for it. Whether a native call that is ending
-answers sixty-four bits is looked up by its stub's address; it used to be found
-by walking every stub, which on the title that calls natives most often was half
-of the server's CPU.
+is kept, its spans sorted and joined by address in one buffer of exactly their
+size, with the revision the VM gave the class (`AOTClassRevision`).
+Registering the record again compares those spans with guest memory in place
+(`Memory.Holds`); only a record whose bytes changed, or a class registered
+since, is parsed and validated whole again, and its ancestors are walked only
+then. A static field's last word is its value, not an offset, so a store to a
+static changes nothing a read depends on, and the field's offset is zero. The
+records are untrusted, so one read may note 1 MiB and all kept reads 16 MiB
+(`maxAOTClassReadBytes`, `maxAOTClassReadsBytes`); a class past either is read
+whole at every registration. On a light title the rereading, a byte per
+memory read, was most of what the server did for it. Every KTF reader of a
+terminated guest string — the names in class records, text drawn with no
+length, the native C library's strings, the `strlen` and `strcpy` hooks —
+shares one scan that reads a chunk at a time (`scanGuestString`) and answers
+what reading a byte, or a UTF-16 unit, at a time answered; a string that runs
+off the top of the address space is refused rather than carried on at address
+zero, which no KTF client maps. The runtime Java method behind a
+native call is found by its stub's address, both to know whether the call
+answers sixty-four bits and to name it in an error that a Java exception
+unwinding through it carries; it used to be found by walking every stub, which
+on the title that calls natives most often was half of the server's CPU.
 
 A native body in a current image can publish a 32-bit result in the
 environment instead of `r0`: it writes the value at offset 40, then tag 2 at
@@ -117,6 +129,21 @@ reports itself animated. KTF Java printable ASCII uses five-pixel advances;
 Korean syllables retain ten-pixel advances. Measurement, anchors, and
 rendering agree. NUL padding draws nothing and advances zero. Native WIPI-C
 text retains its own metrics.
+
+Image draws, `MC_grpCopyArea` and `MC_grpCopyFrameBuffer` copy a row at a time:
+one read of each source span of up to 256 pixels, one of the destination when
+a pixel operation combines them, and one write per run of drawn pixels
+(`drawFramebufferCopy`). The result is the pixel-at-a-time walk's to the byte,
+transparency marks and pixel-operation calls included
+(`TestWIPICCopyRowsMatchThePixelWalk`). The walk still draws what a whole span
+could draw differently: the rest of a span from the first pixel pair a guest
+pixel operation has not answered yet (only the walk runs guest code), a copy
+inside one surface whose source span reaches into its destination from the
+left, which `MC_grpCopyFrameBuffer` smears as before, a transparency mask that
+is both the source's and the destination's and marks pixels the same row tests
+later, and a span that faults. Walked, a 32×32 sprite
+cost 33 µs and a 240×320 screen copy 2.5 ms on an M1; by rows, 1.3 µs and
+19 µs.
 
 The screen is the Host's choice, 240×320 by default (`-screen WxH` in the
 CLI). The `__adf__` `DisplaySize` field is not used: in the measured local

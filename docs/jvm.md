@@ -63,7 +63,11 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
   65,536 inheritance edges (`maxInstanceRelations`), so cycles and repeated
   branches cannot create unbounded work; an exhausted query answers false. The
   worklist is its own visited set and starts in a buffer on the stack, turning
-  into a set only past sixteen types, so an ordinary query allocates nothing. The
+  into a set only past sixteen types, so an ordinary query allocates nothing
+  (`TestInstanceQueriesAllocateNothing`). The answer for a class and a target
+  is kept, so a repeated cast is one map lookup; defining a class throws the
+  answers away, and at 4,096 kept answers (`maxInstanceAnswers`) they are
+  thrown away and found again. The
   same relations govern native listener checks and checkpoint validation. An
   array is an instance of its own type, `Object`, `Cloneable` and
   `Serializable` only (no covariance)

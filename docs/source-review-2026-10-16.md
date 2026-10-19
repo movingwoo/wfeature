@@ -3100,7 +3100,15 @@ matched; these are what did not.
   SVC handlers. The stub is a dev-only CLI feature and a harmful torn write
   needs a narrow interleaving, so I rate it low.
 - **Fixed:** `Memory.Read` takes the exclusive lock, as ValidateRange does,
-  because validation and the page lookup refresh shared caches.
+  because validation and the page lookup refresh shared caches. Historical
+  since 2026-10-19 (PR #242 and its review follow-up): the exclusive lock cost
+  a light KTF title most of the 12% more instructions a tick it retired than on
+  0.5.2, so `Memory.Read`, `Memory.Holds` and `ValidateRange` share the lock
+  again and refresh no cache instead. They read the last-mapping cache without
+  writing it and find pages through the page directory rather than the page
+  cache. `TestConcurrentHostReadsDoNotRace` reads, under `-race`, two mappings
+  whose pages share page-cache ways, which is where a read through the page
+  cache would race. See [ARM core](armcore.md).
 
 ### R080 Table-blit and byte-blend analysers accept pre-incremented pointers
 

@@ -1,6 +1,7 @@
 package armcore
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math/bits"
 	"slices"
@@ -408,40 +409,57 @@ func (memory *Memory) Load(address uint32, data []byte) error {
 }
 
 // Read copies guest memory out for the Host. Readers share the lock, so a
-// read may only look at the last-mapping and page caches, never refresh them:
-// two readers refreshing them at once — a debugger's connection beside the
-// session — would tear them, which is why the lock was made exclusive for a
-// while. Exclusive, every read paid a writer's lock, and the Host reads a
-// sprite a pixel at a time: that lock was most of the 12% more instructions a
-// tick a light KTF title retired than on 0.5.2. The caches belong to the
-// guest's own accesses, which hold the lock exclusively for a quantum and
-// refresh them there; a read that misses them scans the mappings and walks
-// the page directory, which is two loads.
+// read may only look at the last-mapping cache, never refresh it, and it does
+// not use the page cache at all, whose lookup is itself a refresh: two readers
+// refreshing either at once — a debugger's connection beside the session —
+// would tear them, which is why the lock was made exclusive for a while.
+// Exclusive, every read paid a writer's lock, and the Host reads a sprite a
+// pixel at a time: that lock was most of the 12% more instructions a tick a
+// light KTF title retired than on 0.5.2. The caches belong to the guest's own
+// accesses, which hold the lock exclusively for a quantum and refresh them
+// there; a read finds its pages by walking the page directory, which is two
+// loads, and scans the mappings when the last-mapping cache does not cover it.
 func (memory *Memory) Read(address uint32, destination []byte) error {
 	memory.mu.RLock()
 	defer memory.mu.RUnlock()
-	return memory.readShared(address, destination)
+	return memory.readPages(address, destination, PermissionRead, "read", true)
 }
 
-// readShared is readLocked for a caller holding the lock shared: it consults
-// the caches and writes none of them.
-func (memory *Memory) readShared(address uint32, destination []byte) error {
-	if err := memory.validateShared(address, uint64(len(destination)), PermissionRead, "read"); err != nil {
-		return err
-	}
-	for offset := 0; offset < len(destination); {
-		current := address + uint32(offset)
-		page := memory.pageFor(current)
-		pageOffset := int(current & memoryPageMask)
-		length := min(len(destination)-offset, int(memoryPageSize)-pageOffset)
-		if page == nil || page.data == nil {
-			clear(destination[offset : offset+length])
-		} else {
-			copy(destination[offset:offset+length], page.data[pageOffset:pageOffset+length])
+// Span is a run of bytes at a guest address.
+type Span struct {
+	Address uint32
+	Data    []byte
+}
+
+// Holds reports whether guest memory still holds every span's bytes at the
+// span's address. It is Read and a comparison without the copy: the spans are
+// compared where the pages keep them, under one shared lock for all of them,
+// and like Read it refreshes no cache. A span that is not readable does not
+// hold.
+func (memory *Memory) Holds(spans []Span) bool {
+	memory.mu.RLock()
+	defer memory.mu.RUnlock()
+	for _, span := range spans {
+		if memory.validateShared(span.Address, uint64(len(span.Data)), PermissionRead, "read") != nil {
+			return false
 		}
-		offset += length
+		for offset := 0; offset < len(span.Data); {
+			current := span.Address + uint32(offset)
+			page := memory.pageFor(current)
+			pageOffset := int(current & memoryPageMask)
+			length := min(len(span.Data)-offset, int(memoryPageSize)-pageOffset)
+			want := span.Data[offset : offset+length]
+			if page == nil || page.data == nil {
+				if slices.ContainsFunc(want, func(value byte) bool { return value != 0 }) {
+					return false
+				}
+			} else if !bytes.Equal(want, page.data[pageOffset:pageOffset+length]) {
+				return false
+			}
+			offset += length
+		}
 	}
-	return nil
+	return true
 }
 
 // Write is how this platform stores into the guest's address space. It is
@@ -483,12 +501,32 @@ func (memory *Memory) write(address uint32, data []byte, required Permission, op
 }
 
 func (memory *Memory) readLocked(address uint32, destination []byte, required Permission, operation string) error {
-	if err := memory.validateLocked(address, uint64(len(destination)), required, operation); err != nil {
+	return memory.readPages(address, destination, required, operation, false)
+}
+
+// readPages validates a range and copies it out of the pages, reading zero
+// where no page is committed. It is every read's one loop: a caller holding
+// the lock shared validates without refreshing the last-mapping cache and
+// finds the pages through the directory, and one holding it exclusively
+// refreshes the cache and goes through the page cache, which remembers them.
+func (memory *Memory) readPages(address uint32, destination []byte, required Permission, operation string, shared bool) error {
+	var err error
+	if shared {
+		err = memory.validateShared(address, uint64(len(destination)), required, operation)
+	} else {
+		err = memory.validateLocked(address, uint64(len(destination)), required, operation)
+	}
+	if err != nil {
 		return err
 	}
 	for offset := 0; offset < len(destination); {
 		current := address + uint32(offset)
-		page := memory.pageAt(current)
+		var page *memoryPage
+		if shared {
+			page = memory.pageFor(current)
+		} else {
+			page = memory.pageAt(current)
+		}
 		pageOffset := int(current & memoryPageMask)
 		length := min(len(destination)-offset, int(memoryPageSize)-pageOffset)
 		if page == nil || page.data == nil {
@@ -501,21 +539,17 @@ func (memory *Memory) readLocked(address uint32, destination []byte, required Pe
 	return nil
 }
 
+// validateLocked checks a range for a caller holding the lock exclusively,
+// and remembers the mapping that covers it whole, if one does, in the
+// last-mapping cache.
 func (memory *Memory) validateLocked(address uint32, size uint64, required Permission, operation string) error {
-	if size == 0 {
-		return nil
-	}
-	end := uint64(address) + size
-	if end > guestAddressEnd {
-		return &AccessError{Operation: operation, Address: address, Size: size, Cause: ErrAddressOverflow}
-	}
-	if cached := memory.lastMapping; cached.start <= uint64(address) && end <= cached.end &&
-		(required == 0 || cached.permission&required == required) {
+	if memory.lastMappingCovers(address, size, required) {
 		return nil
 	}
 	if err := memory.scanMappings(address, size, required, operation); err != nil {
 		return err
 	}
+	end := uint64(address) + size
 	for _, mapping := range memory.maps {
 		if mapping.start <= uint64(address) && end <= mapping.end &&
 			(required == 0 || mapping.permission&required == required) {
@@ -529,24 +563,29 @@ func (memory *Memory) validateLocked(address uint32, size uint64, required Permi
 // validateShared is validateLocked for a caller holding the lock shared: the
 // last-mapping cache is read and not refreshed.
 func (memory *Memory) validateShared(address uint32, size uint64, required Permission, operation string) error {
-	if size == 0 {
-		return nil
-	}
-	end := uint64(address) + size
-	if end > guestAddressEnd {
-		return &AccessError{Operation: operation, Address: address, Size: size, Cause: ErrAddressOverflow}
-	}
-	if cached := memory.lastMapping; cached.start <= uint64(address) && end <= cached.end &&
-		(required == 0 || cached.permission&required == required) {
+	if memory.lastMappingCovers(address, size, required) {
 		return nil
 	}
 	return memory.scanMappings(address, size, required, operation)
+}
+
+// lastMappingCovers reports whether a range needs no scan: it is empty, or it
+// lies inside the mapping the last-mapping cache holds, with the permission it
+// needs. It is the one check both validations make first, and small enough to
+// be made where they are called.
+func (memory *Memory) lastMappingCovers(address uint32, size uint64, required Permission) bool {
+	cached := memory.lastMapping
+	return size == 0 || cached.start <= uint64(address) && uint64(address)+size <= cached.end &&
+		(required == 0 || cached.permission&required == required)
 }
 
 // scanMappings checks a range that may span several mappings against all of
 // them, and changes nothing.
 func (memory *Memory) scanMappings(address uint32, size uint64, required Permission, operation string) error {
 	end := uint64(address) + size
+	if end > guestAddressEnd {
+		return &AccessError{Operation: operation, Address: address, Size: size, Cause: ErrAddressOverflow}
+	}
 	for current := uint64(address); current < end; {
 		coveredUntil := current
 		mappedUntil := current

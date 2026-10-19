@@ -97,6 +97,17 @@ type pixelOpCache struct {
 	results  map[uint32]uint16
 }
 
+// pixelOpKey is the pair of pixels a cached answer is filed under.
+func pixelOpKey(source, destination uint16) uint32 {
+	return uint32(source)<<16 | uint32(destination)
+}
+
+// answers reports whether the cache holds what op has said, rather than what
+// another operation or another parameter did.
+func (cache *pixelOpCache) answers(op wipicPixelOp) bool {
+	return cache != nil && cache.function == op.function && cache.param == op.param
+}
+
 // applyPixelOp answers what a draw must write, given what it wanted to write
 // and what the framebuffer already holds.
 func (runtime *initializationRuntime) applyPixelOp(op wipicPixelOp, source, destination uint16) (uint16, error) {
@@ -109,9 +120,9 @@ func (runtime *initializationRuntime) applyPixelOp(op wipicPixelOp, source, dest
 	if !op.active() {
 		return source, nil
 	}
-	key := uint32(source)<<16 | uint32(destination)
+	key := pixelOpKey(source, destination)
 	cache := runtime.pixelOps
-	if cache == nil || cache.function != op.function || cache.param != op.param {
+	if !cache.answers(op) {
 		cache = &pixelOpCache{function: op.function, param: op.param, results: make(map[uint32]uint16)}
 		runtime.pixelOps = cache
 	}
@@ -146,10 +157,31 @@ func (runtime *initializationRuntime) applyPixelOp(op wipicPixelOp, source, dest
 	return result, nil
 }
 
-// blendPixel is the write half of every drawing call that honours a context:
-// read what is there, ask the operation, and write its answer. A context
-// without an operation writes the source pixel, which is what every draw did
-// before there was one.
+// cachedPixelOp answers what applyPixelOp would without running any guest
+// code, and reports false when the answer needs the guest. XOR and a context
+// without an operation are arithmetic; a guest operation answers here only
+// from what it has already said. Nothing changes either way, the cache
+// included, which is what lets a copy work out a whole row before it writes
+// any of it — see copyRow.
+func (runtime *initializationRuntime) cachedPixelOp(op wipicPixelOp, source, destination uint16) (uint16, bool) {
+	if op.xor {
+		return source ^ destination, true
+	}
+	if !op.active() {
+		return source, true
+	}
+	if !runtime.pixelOps.answers(op) {
+		return 0, false
+	}
+	result, ok := runtime.pixelOps.results[pixelOpKey(source, destination)]
+	return result, ok
+}
+
+// blendPixel is the write half of every drawing call that honours a context a
+// pixel at a time: read what is there, ask the operation, and write its
+// answer. A context without an operation writes the source pixel, which is
+// what every draw did before there was one. A copy works a row at a time and
+// comes here only for the pixels it walks; see drawFramebufferCopy.
 func (runtime *initializationRuntime) blendPixel(op wipicPixelOp, address uint32, source uint16) error {
 	memory := runtime.client.core.Memory()
 	value := source

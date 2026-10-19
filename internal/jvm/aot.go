@@ -2,7 +2,6 @@ package jvm
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"unicode/utf8"
 	"weak"
@@ -65,6 +64,8 @@ func (vm *VM) RegisterAOTClass(metadata AOTClassMetadata) error {
 	}
 	vm.aotClasses[metadata.Name] = metadata
 	vm.aotAddresses[metadata.Address] = metadata.Name
+	vm.aotRevision++
+	vm.aotRevisions[metadata.Name] = vm.aotRevision
 	return nil
 }
 
@@ -130,23 +131,23 @@ func (vm *VM) HasAOTClassAt(address uint32) bool {
 	return ok
 }
 
-// HoldsAOTClass reports whether the class registered at metadata's own address
-// is exactly metadata, so that registering it again would change nothing.
-func (vm *VM) HoldsAOTClass(metadata AOTClassMetadata) bool {
-	if vm == nil || metadata.Address == 0 {
-		return false
+// AOTClassRevision answers the revision of the class registered at address
+// under its own address, not an alias, and whether there is one. Every
+// registration gives the class it registers a revision no class had before,
+// so a platform that kept the revision a registration gave can tell, without
+// copying the class out and comparing it, that the VM still holds exactly what
+// that registration registered.
+func (vm *VM) AOTClassRevision(address uint32) (uint64, bool) {
+	if vm == nil || address == 0 {
+		return 0, false
 	}
 	vm.aotMu.RLock()
 	defer vm.aotMu.RUnlock()
-	name, ok := vm.aotAddresses[metadata.Address]
-	if !ok || name != metadata.Name {
-		return false
+	name, ok := vm.aotAddresses[address]
+	if !ok || vm.aotClasses[name].Address != address {
+		return 0, false
 	}
-	current, ok := vm.aotClasses[name]
-	return ok && current.Address == metadata.Address && current.SuperName == metadata.SuperName &&
-		current.AccessFlags == metadata.AccessFlags && current.InstanceSize == metadata.InstanceSize &&
-		current.VTableAddress == metadata.VTableAddress && slices.Equal(current.VTable, metadata.VTable) &&
-		slices.Equal(current.Methods, metadata.Methods) && slices.Equal(current.Fields, metadata.Fields)
+	return vm.aotRevisions[name], true
 }
 
 func (vm *VM) AOTClassAt(address uint32) (AOTClassMetadata, bool) {

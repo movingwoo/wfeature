@@ -502,14 +502,15 @@ type initializationRuntime struct {
 	userMemoryInterface uint32
 	userMemoryPools     map[uint32]*userMemoryPool
 	// aotClassReads keeps, for each class record registerAOTClass registered,
-	// what reading the record read; aotReading collects one while a read runs.
-	// See registerAOTClass.
-	aotClassReads  map[uint32]*aotClassRead
-	aotReading     *aotClassRead
-	aotReadScratch []byte
+	// what reading the record read, and aotClassReadBytes what they cost
+	// together; aotReading collects one while a read runs. See
+	// registerAOTClass.
+	aotClassReads     map[uint32]*aotClassRead
+	aotClassReadBytes int
+	aotReading        *aotClassRead
 	// stubKeys is the key of each stub in stubs, by the stub's address, which
 	// is the only thing a native call that is ending still has in hand. See
-	// nativeCallIsWide.
+	// runtimeJavaNativeAt.
 	stubKeys map[uint32]uint64
 }
 
@@ -2619,46 +2620,47 @@ func (runtime *initializationRuntime) registerJavaString(thread *armcore.Thread)
 	return object, nil
 }
 
-// nativeCallIsWide reports that the native at this address is a runtime Java
-// method whose return type occupies two words. Only a method this platform
-// implements can be answered for: a native compiled into the module returns
-// through the module's own convention, and nothing here knows its descriptor.
-// nativeCallIsWide reports whether the native call that entered at address
-// answers sixty-four bits. The stub is found by its address in stubKeys; every
-// stub has an address of its own. It used to be found by walking every stub
-// the runtime had made, once for every native call that ended, and on a title
-// that calls natives that often the walk was half of the server's CPU.
-func (runtime *initializationRuntime) nativeCallIsWide(address uint32) bool {
+// runtimeJavaNativeAt answers the runtime Java method whose stub a native
+// call entered at address. Only a method this platform implements is found: a
+// native compiled into the module has no stub here. The stub is found by its
+// address in stubKeys; every stub has an address of its own. It used to be
+// found by walking every stub the runtime had made, once for every native call
+// that ended, and on a title that calls natives that often the walk was half
+// of the server's CPU.
+func (runtime *initializationRuntime) runtimeJavaNativeAt(address uint32) (runtimeJavaMethod, bool) {
 	key, ok := runtime.stubKeys[address]
 	if !ok || uint32(key>>32) != svcCategoryRuntimeJava {
-		return false
+		return runtimeJavaMethod{}, false
 	}
 	invocation, ok := runtime.nativeMethods[uint32(key)]
+	return invocation.method, ok
+}
+
+// nativeCallIsWide reports whether the native call that entered at address
+// answers sixty-four bits: a runtime Java method whose return type occupies
+// two words. A native compiled into the module returns through the module's
+// own convention, and nothing here knows its descriptor, so it is never wide.
+// Only the return type is read out of the descriptor, which every native call
+// that ends asks for, and which the whole parse would first look up by a hash
+// of the descriptor.
+func (runtime *initializationRuntime) nativeCallIsWide(address uint32) bool {
+	method, ok := runtime.runtimeJavaNativeAt(address)
 	if !ok {
 		return false
 	}
-	methodType, err := jvm.ParseMethodDescriptor(invocation.method.descriptor)
-	if err != nil {
-		return false
-	}
-	return methodType.Return.Slots() == 2
+	returnType, err := jvm.ReturnTypeOf(method.descriptor)
+	return err == nil && returnType.Slots() == 2
 }
 
 // describeNativeCall names the body a native call is entering. Most of these
 // addresses are this runtime's own stubs, and a report that gives the address
 // alone leaves the one question a nested failure raises — which method is
-// re-entering — answerable only by reading the allocator's order.
+// re-entering — answerable only by reading the allocator's order. Every Java
+// exception that unwinds through a runtime Java native is reported here on its
+// way, so the method is found as nativeCallIsWide finds it.
 func (runtime *initializationRuntime) describeNativeCall(address uint32) string {
-	for key, stub := range runtime.stubs {
-		if stub != address {
-			continue
-		}
-		if uint32(key>>32) != svcCategoryRuntimeJava {
-			continue
-		}
-		if invocation, ok := runtime.nativeMethods[uint32(key)]; ok {
-			return fmt.Sprintf("%s.%s%s at %#x", invocation.method.class, invocation.method.name, invocation.method.descriptor, address)
-		}
+	if method, ok := runtime.runtimeJavaNativeAt(address); ok {
+		return fmt.Sprintf("%s.%s%s at %#x", method.class, method.name, method.descriptor, address)
 	}
 	return fmt.Sprintf("at %#x", address)
 }
@@ -2724,12 +2726,25 @@ func (runtime *initializationRuntime) allocateBytes(data []byte) (uint32, error)
 }
 
 func (runtime *initializationRuntime) readCString(address uint32, limit uint32) (string, error) {
-	data, terminated, err := readGuestString(runtime.client.core.Memory(), address, limit)
+	memory := runtime.client.core.Memory()
+	// The walk reads a name onto the stack, so the string made of it is the
+	// only allocation a name shorter than the buffer costs.
+	var buffer [guestStringBuffer]byte
+	length, terminated, err := scanGuestString(memory, address, limit, 1, &buffer)
 	if err != nil {
 		return "", err
 	}
 	if !terminated {
 		return "", fmt.Errorf("string at %#x exceeds %d bytes", address, limit)
+	}
+	var data []byte
+	if length < guestStringBuffer {
+		data = buffer[:length]
+	} else {
+		data = make([]byte, length)
+		if err := memory.Read(address, data); err != nil {
+			return "", err
+		}
 	}
 	if runtime.aotReading != nil {
 		runtime.aotReading.note(address, data, true)
@@ -2741,53 +2756,127 @@ func (runtime *initializationRuntime) readCString(address uint32, limit uint32) 
 // Running to the bound is the expected end rather than an error: the caller
 // asked for a fixed count of bytes, not for a C string.
 func (runtime *initializationRuntime) readBoundedString(address, limit uint32) ([]byte, error) {
-	data, _, err := readGuestString(runtime.client.core.Memory(), address, limit)
+	data, _, err := readGuestString(runtime.client.core.Memory(), address, limit, 1)
 	return data, err
 }
 
-// guestStringChunk is how many bytes readGuestString asks memory for at once.
-// The names a title registers its classes, methods and fields under are a few
-// dozen bytes, so one read usually holds the whole of one.
+// guestStringChunk is how many bytes scanGuestString asks memory for in its
+// first read. The names a title registers its classes, methods and fields
+// under, and the lines it draws, are a few dozen bytes, so one read usually
+// holds the whole of one.
 const guestStringChunk = 64
 
-// readGuestString reads the bytes at address up to a terminating zero or limit
-// bytes, whichever comes first, and reports whether it met the terminator.
+// guestStringBuffer is the buffer scanGuestString walks a string through,
+// which its readers hold on the stack: a string shorter than it is read once,
+// and a longer one again in one piece once its end is known. Every read after
+// the first asks for as much of it as is left, because a string that outruns
+// the first read is more likely a buffer the title filled than a name, and
+// strlen is asked about buffers kilobytes long.
+const guestStringBuffer = 256
+
+// errGuestStringOverflow is the answer for a string that runs off the top of
+// the address space before it ends.
+var errGuestStringOverflow = errors.New("string address overflows guest memory")
+
+// scanGuestString is the walk every KTF reader of a terminated guest string
+// makes. It finds where the string at address ends — at its first zero unit,
+// or after limit bytes, whichever comes first — and answers how many bytes
+// come before that end and whether the end was a terminator. A unit is a byte,
+// or two for UTF-16 text, whose terminator is a zero halfword; limit is
+// counted in bytes, a whole number of units. A string shorter than buffer is
+// in buffer on return; for any other, buffer holds whatever the walk read into
+// it last.
 //
-// It reads a chunk at a time. A byte at a time, as it used to, every byte paid
-// a whole memory read — its lock and its validation — and registering a class
-// reads every name the class has: on a light KTF title that was a third of the
-// server's CPU. The answers are the byte-at-a-time ones: a chunk that cannot be
-// read whole, because it runs past the end of a mapping the string ends inside,
-// is read again a byte at a time, so the string reads as before and an
-// unreadable byte before the terminator fails with the error that byte's own
-// read gives.
-func readGuestString(memory *armcore.Memory, address, limit uint32) ([]byte, bool, error) {
-	data := make([]byte, 0, min(limit, 128))
-	var chunk [guestStringChunk]byte
-	for offset := uint32(0); offset < limit; {
-		current := uint64(address) + uint64(offset)
-		if current >= uint64(1)<<32 {
-			return nil, false, fmt.Errorf("string address overflows guest memory")
+// It reads a chunk at a time. A byte at a time, every byte paid a whole memory
+// read — its lock and its validation — and registering a class reads every
+// name the class has: on a light KTF title that was a third of the server's
+// CPU, and the strings drawn every frame paid it again. The answers are the
+// unit-at-a-time ones: a chunk that cannot be read whole, because it runs past
+// the end of a mapping the string ends inside, is read again a unit at a time,
+// so the string reads as before and an unreadable unit before the terminator
+// fails with the error that unit's own read gives.
+//
+// A string that reaches the top of the address space without ending is
+// refused rather than carried on at address zero. Neither KTF client maps the
+// first page of the address space or the last, so no string a title built can
+// run off the top, and a pointer that wraps is better refused than followed
+// into memory that was never a string.
+func scanGuestString(memory *armcore.Memory, address, limit, unit uint32, buffer *[guestStringBuffer]byte) (uint32, bool, error) {
+	// A unit is one byte or two, so a whole number of them is a mask away.
+	whole := ^(uint64(unit) - 1)
+	walk := uint64(limit) & whole
+	size := uint64(guestStringChunk)
+	for offset := uint64(0); offset < walk; {
+		current := uint64(address) + offset
+		if current+uint64(unit) > uint64(1)<<32 {
+			return 0, false, errGuestStringOverflow
 		}
-		length := uint32(min(uint64(guestStringChunk), uint64(limit-offset), uint64(1)<<32-current))
-		part := chunk[:length]
+		// The string is read into place while it fits in buffer, so it is
+		// there if it ends before buffer does. Past that the caller reads it
+		// again in one piece, and buffer is only where each chunk lands.
+		start := uint64(0)
+		if offset < guestStringBuffer {
+			start = offset
+		}
+		span := min(size, guestStringBuffer-start, walk-offset, uint64(1)<<32-current) & whole
+		part := buffer[start : start+span]
+		end := -1
 		if err := memory.Read(uint32(current), part); err != nil {
-			for index := range part {
-				if err := memory.Read(uint32(current)+uint32(index), part[index:index+1]); err != nil {
-					return nil, false, err
+			// The chunk runs past the end of a mapping, which the string
+			// may end before.
+			for index := 0; index < len(part); index += int(unit) {
+				piece := part[index : index+int(unit)]
+				if err := memory.Read(uint32(current)+uint32(index), piece); err != nil {
+					return 0, false, err
 				}
-				if part[index] == 0 {
-					return append(data, part[:index]...), true, nil
+				if piece[0] == 0 && (unit == 1 || piece[1] == 0) {
+					end = index
+					break
 				}
 			}
+		} else if unit == 1 {
+			end = bytes.IndexByte(part, 0)
+		} else {
+			end = guestStringWideEnd(part)
 		}
-		if end := bytes.IndexByte(part, 0); end >= 0 {
-			return append(data, part[:end]...), true, nil
+		if end >= 0 {
+			return uint32(offset) + uint32(end), true, nil
 		}
-		data = append(data, part...)
-		offset += length
+		offset += span
+		size = guestStringBuffer
 	}
-	return data, false, nil
+	return uint32(walk), false, nil
+}
+
+// guestStringWideEnd answers where the first zero UTF-16 unit in part starts,
+// or -1 when part holds none.
+func guestStringWideEnd(part []byte) int {
+	for index := 0; index+1 < len(part); index += 2 {
+		if part[index] == 0 && part[index+1] == 0 {
+			return index
+		}
+	}
+	return -1
+}
+
+// readGuestString reads the guest string at address as scanGuestString walks
+// it, into a slice of its own exactly as long as the string, and reports
+// whether it met the terminator. The slice has room for one byte more,
+// because a string read to be copied back into the guest goes back with its
+// terminator after it.
+func readGuestString(memory *armcore.Memory, address, limit, unit uint32) ([]byte, bool, error) {
+	var buffer [guestStringBuffer]byte
+	length, terminated, err := scanGuestString(memory, address, limit, unit, &buffer)
+	if err != nil {
+		return nil, false, err
+	}
+	data := make([]byte, length, int(length)+1)
+	if length < guestStringBuffer {
+		copy(data, buffer[:length])
+	} else if err := memory.Read(address, data); err != nil {
+		return nil, false, err
+	}
+	return data, terminated, nil
 }
 
 // wipicGetExecNames answers MC_knlGetExecNames, which lists the executables a

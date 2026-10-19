@@ -143,3 +143,79 @@ func TestTheInstanceWalkAnswersAsItDidWithSets(t *testing.T) {
 		vm.Close()
 	}
 }
+
+// An ordinary query allocates nothing, whether it walks the hierarchy or
+// finds the answer kept from the last time it was asked.
+func TestInstanceQueriesAllocateNothing(t *testing.T) {
+	const iface = 0x0601 // public, interface, abstract
+	vm := New(mapClassSource{
+		"Listener": classImplementing("Listener", ObjectClass, iface),
+		"Base":     classImplementing("Base", ObjectClass, 0x0021, "Listener"),
+		"Game":     classImplementing("Game", "Base", 0x0021),
+	}, Options{})
+	defer vm.Close()
+	object := &Object{ClassName: "Game"}
+	for _, target := range []string{"Listener", "Base", "Unrelated"} {
+		want := target != "Unrelated"
+		if got := vm.isInstance(object, target); got != want {
+			t.Fatalf("Game instanceof %s = %t, want %t", target, got, want)
+		}
+		if walked := testing.AllocsPerRun(10, func() { vm.walkInstance("Game", target) }); walked != 0 {
+			t.Fatalf("walking from Game to %s allocated %.0f times", target, walked)
+		}
+		if kept := testing.AllocsPerRun(10, func() { vm.isInstance(object, target) }); kept != 0 {
+			t.Fatalf("asking again whether Game is a %s allocated %.0f times", target, kept)
+		}
+	}
+}
+
+// A kept answer goes when a class is defined that changes it, and the kept
+// answers never outgrow their bound.
+func TestKeptInstanceAnswersFollowDefinitionsAndStayBounded(t *testing.T) {
+	vm := New(mapClassSource{"Target": classImplementing("Target", ObjectClass, 0x0021)}, Options{})
+	defer vm.Close()
+	late := &Object{ClassName: "Late"}
+	if vm.isInstance(late, "Target") {
+		t.Fatal("a class that is not there is an instance of Target")
+	}
+	if err := vm.DefineClass(ClassDefinition{Name: "Late", SuperName: "Target", Access: AccessPublic}); err != nil {
+		t.Fatal(err)
+	}
+	if !vm.isInstance(late, "Target") {
+		t.Fatal("the answer kept before Late was defined outlived its definition")
+	}
+	for index := range maxInstanceAnswers + 10 {
+		vm.isInstance(late, fmt.Sprintf("Other%d", index))
+		if kept := len(vm.instanceAnswers); kept > maxInstanceAnswers {
+			t.Fatalf("%d answers kept, past the bound of %d", kept, maxInstanceAnswers)
+		}
+	}
+}
+
+// BenchmarkInstanceQuery compares a cast answered by walking the hierarchy
+// with the same cast answered from the kept answers, for a superclass two up,
+// an interface a superclass implements and a type the class is not.
+func BenchmarkInstanceQuery(b *testing.B) {
+	const iface = 0x0601 // public, interface, abstract
+	vm := New(mapClassSource{
+		"Listener": classImplementing("Listener", ObjectClass, iface),
+		"Other":    classImplementing("Other", ObjectClass, iface),
+		"Screen":   classImplementing("Screen", ObjectClass, 0x0021),
+		"Base":     classImplementing("Base", "Screen", 0x0021, "Listener"),
+		"Game":     classImplementing("Game", "Base", 0x0021),
+	}, Options{})
+	b.Cleanup(vm.Close)
+	object := &Object{ClassName: "Game"}
+	for _, target := range []string{"Base", "Screen", "Listener", "Other"} {
+		b.Run("walk/"+target, func(b *testing.B) {
+			for b.Loop() {
+				vm.walkInstance("Game", target)
+			}
+		})
+		b.Run("kept/"+target, func(b *testing.B) {
+			for b.Loop() {
+				vm.isInstance(object, target)
+			}
+		})
+	}
+}

@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -29,11 +30,25 @@ func nativeCallIsWideByWalk(runtime *initializationRuntime, address uint32) bool
 	return false
 }
 
-// A native call's width is found by its stub's address, and answers as the
-// walk over every stub did: for natives answering a long, a double, an int and
-// nothing, for a stub of another category at an address of its own, for
-// addresses that are no stub, and for a runtime restored from a checkpoint,
-// whose stubs come back without the stub calls that made them.
+// describeNativeCallByWalk is how a native call was named before the stubs
+// were indexed by address, kept as the answer the index has to give.
+func describeNativeCallByWalk(runtime *initializationRuntime, address uint32) string {
+	for key, stub := range runtime.stubs {
+		if stub != address || uint32(key>>32) != svcCategoryRuntimeJava {
+			continue
+		}
+		if invocation, ok := runtime.nativeMethods[uint32(key)]; ok {
+			return fmt.Sprintf("%s.%s%s at %#x", invocation.method.class, invocation.method.name, invocation.method.descriptor, address)
+		}
+	}
+	return fmt.Sprintf("at %#x", address)
+}
+
+// A native call's width and name are found by its stub's address, and answer
+// as the walk over every stub did: for natives answering a long, a double, an
+// int and nothing, for a stub of another category at an address of its own,
+// for addresses that are no stub, and for a runtime restored from a
+// checkpoint, whose stubs come back without the stub calls that made them.
 func TestANativeCallsWidthIsFoundByItsStub(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	var addresses []uint32
@@ -55,6 +70,12 @@ func TestANativeCallsWidthIsFoundByItsStub(t *testing.T) {
 		if got := runtime.nativeCallIsWide(address); got != want[address] {
 			t.Fatalf("nativeCallIsWide(%#x) = %t, the walk over every stub said %t", address, got, want[address])
 		}
+		if got, walked := runtime.describeNativeCall(address), describeNativeCallByWalk(runtime, address); got != walked {
+			t.Fatalf("describeNativeCall(%#x) = %q, the walk over every stub said %q", address, got, walked)
+		}
+	}
+	if got := runtime.describeNativeCall(addresses[0]); got != fmt.Sprintf("probe/Wide.call()J at %#x", addresses[0]) {
+		t.Fatalf("describeNativeCall() = %q", got)
 	}
 	if !want[addresses[0]] || want[addresses[3]] || !want[addresses[6]] || want[addresses[9]] {
 		t.Fatalf("the widths are not the descriptors' own: %v", want)

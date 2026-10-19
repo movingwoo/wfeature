@@ -521,6 +521,7 @@ func (runtime *initializationRuntime) restoreMetadataState(saved runtimeMetadata
 	for key, address := range runtime.stubs {
 		runtime.stubKeys[address] = key
 	}
+	runtime.aotClassReads, runtime.aotClassReadBytes = nil, 0
 	runtime.classes, runtime.loadedClasses, runtime.moduleClassByName = result.classes, result.loadedClasses, result.moduleClassByName
 	runtime.nativeMethods, runtime.nextNativeMethod = result.nativeMethods, result.nextNativeMethod
 	runtime.initializedClasses, runtime.linkedModuleClasses = result.initializedClasses, result.linkedModuleClasses

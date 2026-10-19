@@ -317,33 +317,20 @@ func hookArguments(thread *armcore.Thread) (uint32, uint32, uint32, error) {
 	return first, second, third, nil
 }
 
-// hookStringChunk bounds one read while scanning for a terminator, so a string
-// that is never terminated fails instead of reading the address space.
-const hookStringChunk = 256
-
+// guestStringLength measures the string at start for the strlen and strcpy
+// hooks, with the scan every KTF string reader shares (scanGuestString).
+// maxGuestStringLength bounds the walk, so a string that is never terminated
+// fails instead of reading the address space.
 func guestStringLength(memory *armcore.Memory, start uint32) (uint32, error) {
-	buffer := make([]byte, hookStringChunk)
-	for length := uint32(0); length < maxGuestStringLength; {
-		if err := memory.Read(start+length, buffer); err != nil {
-			// A chunk that runs off the end of a mapping is read byte by byte
-			// so a string ending near the boundary still resolves.
-			for index := 0; index < hookStringChunk; index++ {
-				single := buffer[:1]
-				if err := memory.Read(start+length+uint32(index), single); err != nil {
-					return 0, err
-				}
-				if single[0] == 0 {
-					return length + uint32(index), nil
-				}
-			}
-			return 0, err
-		}
-		if index := bytes.IndexByte(buffer, 0); index >= 0 {
-			return length + uint32(index), nil
-		}
-		length += hookStringChunk
+	var buffer [guestStringBuffer]byte
+	length, terminated, err := scanGuestString(memory, start, maxGuestStringLength, 1, &buffer)
+	if err != nil {
+		return 0, err
 	}
-	return 0, fmt.Errorf("KTF guest string at %#x is not terminated within %d bytes", start, maxGuestStringLength)
+	if !terminated {
+		return 0, fmt.Errorf("KTF guest string at %#x is not terminated within %d bytes", start, maxGuestStringLength)
+	}
+	return length, nil
 }
 
 const maxGuestStringLength = 1 << 20

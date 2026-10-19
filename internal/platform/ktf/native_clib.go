@@ -83,18 +83,14 @@ func (platform *NativePlatform) readString(address uint32) ([]byte, error) {
 	if address == 0 {
 		return nil, fmt.Errorf("KTF native library call on a null string")
 	}
-	text := make([]byte, 0, 64)
-	buffer := make([]byte, 1)
-	for offset := uint32(0); offset < nativeMaxString; offset++ {
-		if err := platform.client.core.Memory().Read(address+offset, buffer); err != nil {
-			return nil, fmt.Errorf("read KTF native string at %#x: %w", address, err)
-		}
-		if buffer[0] == 0 {
-			return text, nil
-		}
-		text = append(text, buffer[0])
+	text, terminated, err := readGuestString(platform.client.core.Memory(), address, nativeMaxString, 1)
+	if err != nil {
+		return nil, fmt.Errorf("read KTF native string at %#x: %w", address, err)
 	}
-	return nil, fmt.Errorf("KTF native string at %#x is not terminated within %d bytes", address, nativeMaxString)
+	if !terminated {
+		return nil, fmt.Errorf("KTF native string at %#x is not terminated within %d bytes", address, nativeMaxString)
+	}
+	return text, nil
 }
 
 // memoryCompare answers the platform table's comparison. The module only ever

@@ -104,13 +104,14 @@ func TestHookedStrlenStopsAtTheTerminator(t *testing.T) {
 	if length := callHook(t, client, runtime, hookStrlen, hookScratch); length != 0 {
 		t.Fatalf("strlen of an empty string = %d, want 0", length)
 	}
-	// A string longer than one chunk still resolves.
-	long := append(bytes.Repeat([]byte{'a'}, hookStringChunk+7), 0)
+	// A string longer than the scan's first read and its buffer still
+	// resolves.
+	long := append(bytes.Repeat([]byte{'a'}, guestStringBuffer+7), 0)
 	if err := client.core.Memory().Write(hookScratch, long); err != nil {
 		t.Fatal(err)
 	}
-	if length := callHook(t, client, runtime, hookStrlen, hookScratch); length != uint32(hookStringChunk+7) {
-		t.Fatalf("strlen across chunks = %d, want %d", length, hookStringChunk+7)
+	if length := callHook(t, client, runtime, hookStrlen, hookScratch); length != uint32(guestStringBuffer+7) {
+		t.Fatalf("strlen across chunks = %d, want %d", length, guestStringBuffer+7)
 	}
 }
 

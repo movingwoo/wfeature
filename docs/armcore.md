@@ -90,12 +90,18 @@ Architectural exception modes, banked registers, interrupts, privileged
 exception returns and cycle-accurate timing are not implemented.
 
 A run of guest instructions holds the memory lock exclusively and keeps the
-last-mapping and page caches. Host reads (`Memory.Read`) share the lock: they
-consult those caches and refresh neither, so a debugger's reads beside the
-session's cannot tear them, and a read costs a shared lock rather than an
-exclusive one. The exclusive lock was most of the 12% more instructions a tick
-that a light KTF title, which has its sprites read a pixel at a time, retired
-than on 0.5.2.
+last-mapping and page caches. Host reads (`Memory.Read`, and `Memory.Holds`,
+which compares spans with guest memory where the pages keep them) share the
+lock and write no cache: they read the last-mapping cache and find pages
+through the page directory, two loads, not through the page cache, whose
+lookup refreshes it. A debugger's reads beside the session's therefore cannot
+tear either cache, and a read costs a shared lock rather than an exclusive one.
+The exclusive lock was most of the 12% more instructions a tick that a light
+KTF title, which has its sprites read a pixel at a time, retired than on 0.5.2.
+Host and guest reads copy through one loop (`readPages`), and both validations
+start with one check of the last-mapping cache (`lastMappingCovers`), small
+enough to be made inline, before they scan the mappings; only an exclusive
+holder refreshes the caches.
 
 ## Diagnostics and performance
 

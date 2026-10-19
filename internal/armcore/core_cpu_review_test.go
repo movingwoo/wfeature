@@ -112,12 +112,18 @@ func TestACallFrameClaimingAnImpossibleOverrunIsRefused(t *testing.T) {
 	}
 }
 
-// Host reads share the lock and look at the last-mapping and page caches the
-// guest's accesses keep, refreshing neither. Two of them at once must not race
-// on those caches; run with -race.
+// Host reads share the lock: they read the last-mapping cache the guest's
+// accesses keep and write no cache at all. Two of them at once must not race;
+// run with -race. The two mappings lie a whole number of page-cache ways
+// apart, so their pages share ways, and a read that went through the page
+// cache, which refreshes a way on every miss, would race here.
 func TestConcurrentHostReadsDoNotRace(t *testing.T) {
 	memory := NewMemory()
-	for _, base := range []uint32{0x10000, 0x40000} {
+	bases := []uint32{0x100000, 0x100000 + dataPageWays<<memoryPageShift}
+	for _, base := range bases {
+		if dataPageWay(base>>memoryPageShift) != dataPageWay(bases[0]>>memoryPageShift) {
+			t.Fatalf("mapping %#x does not share the first mapping's page-cache way", base)
+		}
 		if err := memory.Map(base, 0x2000, PermissionReadWrite); err != nil {
 			t.Fatal(err)
 		}
@@ -126,7 +132,7 @@ func TestConcurrentHostReadsDoNotRace(t *testing.T) {
 		}
 	}
 	var group sync.WaitGroup
-	for _, base := range []uint32{0x10000, 0x40000} {
+	for _, base := range bases {
 		group.Add(1)
 		go func(base uint32) {
 			defer group.Done()
@@ -138,6 +144,10 @@ func TestConcurrentHostReadsDoNotRace(t *testing.T) {
 				}
 				if err := memory.Read(base+0x1000, buffer); err != nil {
 					t.Error(err)
+					return
+				}
+				if !memory.Holds([]Span{{Address: base, Data: []byte{1, 2, 3, 4}}, {Address: base + 0x1000, Data: buffer}}) {
+					t.Error("guest memory does not hold what was written and read")
 					return
 				}
 			}
