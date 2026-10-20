@@ -131,6 +131,7 @@ func StartNativeSession(ctx context.Context, data []byte, options NativeSessionO
 	platform.AttachSaves(options.SaveStore)
 	platform.AttachAudio(options.AudioSink)
 	platform.audio.SetLogger(options.Logger)
+	platform.SetLogger(options.Logger)
 	if err := platform.Boot(ctx); err != nil {
 		return nil, err
 	}

@@ -221,7 +221,9 @@ Its open makes a missing file in mode 4, BREW's create, and in mode 8, its
 append, which BREW refuses and which ends here as the modules' retry with 4
 does. Read-write (2) and read (1) open a file that is there and are refused for
 one that is not, and the titles fall back on their own (defaults, or mode 4 and
-then a write). A stored file
+then a write); a refused open that could write is logged once for its name, at
+debug level, so a title that took it for a save written shows in the run's log.
+A stored file
 with nothing in it, which the package does not carry and this play did not
 make, is missing to every call on the name — open, existence, information and
 create — so a title sees one answer whichever it asks, and the empty entry is

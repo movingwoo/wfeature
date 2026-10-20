@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -85,6 +86,11 @@ type NativePlatform struct {
 	// session this one displaced by a quick load: a file it made is its own,
 	// with or without anything in it. See NativePlatform.contents.
 	made map[string]bool
+	// logger is where the platform says what a title did that a run should be
+	// able to find afterwards, and refusedWrites the names it has said it of;
+	// see NativePlatform.reportRefusedWrite. A nil logger says nothing.
+	logger        *slog.Logger
+	refusedWrites map[string]bool
 	// unsaved names the entries of written the store has not been given yet.
 	// See NativePlatform.keep.
 	unsaved map[string]bool

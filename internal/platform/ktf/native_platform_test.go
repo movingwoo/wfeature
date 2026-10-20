@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"image/color"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -311,11 +312,19 @@ func TestNativeOpenMakesAFileOnlyInTheEmptyingAndAppendingModes(t *testing.T) {
 	store := memorySaveStore{}
 	platform := newTestNativePlatform(t, nil)
 	platform.AttachSaves(store)
+	var log bytes.Buffer
+	platform.SetLogger(slog.New(slog.NewTextHandler(&log, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	name := nativeString(t, platform, "option.dat")
-	for _, mode := range []uint32{nativeModeRead, 2, 3} {
+	for _, mode := range []uint32{nativeModeRead, 2, 3, 2} {
 		if object := nativeCall(t, platform.openFile, 0, name, mode); object != 0 {
 			t.Errorf("mode %d opened a file that is not there", mode)
 		}
+	}
+	// A refused open that could write is in the run's log, once for the name,
+	// so a title that took it for a save written does not lose it unseen. A
+	// refused read is a title asking, and is not.
+	if got := strings.Count(log.String(), "open for writing refused"); got != 1 || !strings.Contains(log.String(), "name=option.dat") {
+		t.Errorf("the refused writable opens were logged %d times: %q", got, log.String())
 	}
 	platform.FlushSaves()
 	if _, ok := platform.written["option.dat"]; ok || len(store) != 0 {

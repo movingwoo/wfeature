@@ -513,6 +513,7 @@ func restoreNativeState(archive *NativeArchive, saved nativeState, options Nativ
 		return nil, err
 	}
 	platform.audio.SetLogger(options.Logger)
+	platform.SetLogger(options.Logger)
 	if err := platform.audio.RebasePlaybackClock(saved.Elapsed, saved.Speed); err != nil {
 		return nil, err
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"path"
 	"slices"
 	"strconv"
@@ -208,6 +209,30 @@ func (platform *NativePlatform) installFiles() error {
 	return nil
 }
 
+// SetLogger gives the platform somewhere to say what a title did that a run
+// should be able to find afterwards. A nil logger says nothing.
+func (platform *NativePlatform) SetLogger(logger *slog.Logger) {
+	platform.logger = logger
+}
+
+// reportRefusedWrite says, once for a name, that an open that could write was
+// refused because the file is not there. Read-write is refused for a missing
+// file on the handsets this package was written for, and both generations of
+// its modules take the refusal as their cue — their defaults, or a retry that
+// makes the file. A title that instead took the open for a save written would
+// lose that save, and the run's log is where that shows rather than nowhere.
+func (platform *NativePlatform) reportRefusedWrite(key string, mode uint32) {
+	if platform.logger == nil || platform.refusedWrites[key] {
+		return
+	}
+	if platform.refusedWrites == nil {
+		platform.refusedWrites = map[string]bool{}
+	}
+	platform.refusedWrites[key] = true
+	platform.logger.Debug("KTF native open for writing refused: the file is not there, and only modes 4 and 8 make one",
+		"name", key, "mode", mode)
+}
+
 // AttachSaves gives the platform somewhere to keep what the title writes.
 // Without one a save lives for the session and no longer, which is what a
 // probe wants and not what a player does.
@@ -376,6 +401,9 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 			// A file that is not there is a refusal, not a failure, for every
 			// mode but the two that make it. The module opens names it may
 			// not have and answers for itself what to do about it.
+			if writable {
+				platform.reportRefusedWrite(key, mode)
+			}
 			return 0, nil
 		}
 		// The module treats a refused create as the end of the run rather

@@ -9243,7 +9243,13 @@ making one. Mode 8 is BREW's append, which refuses a missing file as read-write
 does, and the first version refused it too. The review asked what that costs a
 module not in the corpus that appends without retrying; the decision was to
 make the file there, which is where the 2005 module's retry with 4 ends anyway,
-and to keep refusing read-write, which a title reads its settings through.
+and to keep refusing read-write, which a title reads its settings through. A
+refused open that could write is now logged once for its name at debug level,
+so a title that took the refusal for a save written is found in the run's log
+rather than losing that save unseen. In a browser over a save tree holding the
+empty settings file, the title starts at 50 ms, draws its fireworks on a black
+sky, reaches stage selection, logs its one refused read-write open of the
+settings, and the empty file is gone from the tree.
 
 <a id="ktf-native-settings-2026-10-20-migration"></a>
 
