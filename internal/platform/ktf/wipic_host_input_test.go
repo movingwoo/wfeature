@@ -287,7 +287,7 @@ func keyRecordingCard(t *testing.T, s *Session, class string) *[][2]int32 {
 // The editor of a title of unknown shape is offered on a card pushed over the
 // one it was activated on. A carrier that card does not hand to the input
 // method is pressed and released there like any key, the commit fails, and
-// the offer stands.
+// the offer waits for the player's next press.
 func TestCInputUnknownEditorIsOfferedOnANewCard(t *testing.T) {
 	s, text, _ := cInputFixture(t)
 	events := keyRecordingCard(t, s, "test/Overlay")
@@ -304,11 +304,15 @@ func TestCInputUnknownEditorIsOfferedOnANewCard(t *testing.T) {
 	if len(*text) != 0 || len(s.Client.runtime.cInput.pending) != 0 {
 		t.Fatalf("an unreached carrier left text %q pending %x", *text, s.Client.runtime.cInput.pending)
 	}
-	if _, err := s.TextInput(t.Context()); err != nil {
-		t.Fatalf("offer after an unreached carrier: %v", err)
+	if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("offer right after an unreached carrier: %v", err)
 	}
 	if err := edit.Commit(t.Context(), "A"); !errors.Is(err, backend.ErrTextInputChanged) || len(*events) != 2 {
 		t.Fatalf("the spent edit answered %v and sent %v", err, *events)
+	}
+	pressCardKey(t, s.Client.runtime, KeyDown)
+	if _, err := s.TextInput(t.Context()); err != nil {
+		t.Fatalf("offer after the player's press: %v", err)
 	}
 }
 
@@ -364,29 +368,48 @@ func TestCInputUnknownEditorStaysOfferedAfterAPress(t *testing.T) {
 
 // A widget that ignores the carrier — the editor is gone, the screen changed
 // — sees it as a key: its press, then its release, so the key is not left
-// down. The commit fails and the editor stays offered.
-func TestCInputUnreachedCarrierIsReleasedAndLeavesInputOffered(t *testing.T) {
+// down. The commit fails, the editor is no longer active, and nothing is
+// offered until there is new evidence of a field, so a retry cannot hand the
+// game the key again: a press of the player's, or a call into the input
+// method, brings the relaxed offer back.
+func TestCInputUnreachedCarrierIsReleasedAndWithdrawsTheOffer(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	s := &Session{Client: client}
 	events := keyRecordingCard(t, s, "test/IgnoringCInputCard")
 	if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 3); err != nil {
 		t.Fatal(err)
 	}
-	edit, err := s.TextInput(t.Context())
-	if err != nil {
-		t.Fatal(err)
+	commit := func() {
+		t.Helper()
+		edit, err := s.TextInput(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := edit.Commit(t.Context(), "AB"); !errors.Is(err, backend.ErrTextInputChanged) {
+			t.Fatalf("commit into a widget that ignores its carrier: %v", err)
+		}
 	}
-	if err := edit.Commit(t.Context(), "AB"); !errors.Is(err, backend.ErrTextInputChanged) {
-		t.Fatalf("commit into a widget that ignores its carrier: %v", err)
-	}
+	commit()
 	if want := [][2]int32{{KeyPressed, cInputCarrier}, {KeyReleased, cInputCarrier}}; !reflect.DeepEqual(*events, want) {
 		t.Fatalf("key events = %v, want %v", *events, want)
 	}
-	if len(runtime.cInput.pending) != 0 || !runtime.cInput.active {
+	if len(runtime.cInput.pending) != 0 || runtime.cInput.active {
 		t.Fatalf("after the unreached carrier: pending %x active %v", runtime.cInput.pending, runtime.cInput.active)
 	}
+	if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("offer right after an unreached carrier: %v", err)
+	}
+	pressCardKey(t, runtime, KeyDown)
+	*events = nil
+	commit()
+	if want := [][2]int32{{KeyPressed, cInputCarrier}, {KeyReleased, cInputCarrier}}; !reflect.DeepEqual(*events, want) {
+		t.Fatalf("key events after a press = %v, want %v", *events, want)
+	}
+	if _, err := cInputCall(t, runtime, wipicIMGetCurrentMode); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.TextInput(t.Context()); err != nil {
-		t.Fatalf("offer after an unreached carrier: %v", err)
+		t.Fatalf("offer after the title called its input method: %v", err)
 	}
 }
 

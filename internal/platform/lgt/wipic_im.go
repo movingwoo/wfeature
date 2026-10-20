@@ -32,7 +32,7 @@ func (client *Client) handleInputMethod(thread *armcore.Thread, slot uint32) err
 	answer := func(value uint32) error { return thread.SetRegister(0, value) }
 	// Any call in the block is a title that edits text through the platform
 	// automaton, which is what the Host's text input is offered on.
-	client.cTextInput.used = true
+	client.cTextInput.used, client.cTextInput.unreached = true, false
 
 	switch slot {
 	case slotIMGetSupportedModeCount:
@@ -122,6 +122,13 @@ type cTextInputState struct {
 	// completed string, or the same key routed again — belong to that
 	// delivery and are not a key the player pressed.
 	delivering bool
+	// unreached records that the Host's last carrier reached no automaton:
+	// the game took it as the key it is, so nothing on the screen takes keys
+	// through the input method. Input is offered again once the title calls
+	// the input method or the player presses a key, which is what can bring
+	// a field up; without it every retry of the commit would hand the game
+	// another key. It is the Host's own note and no part of a checkpoint.
+	unreached bool
 }
 
 type inputBuffer struct {

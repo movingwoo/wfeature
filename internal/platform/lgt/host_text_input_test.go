@@ -317,14 +317,122 @@ func TestTextInputChoosesAnUnfocusedFieldOnlyWhenItIsTheOnlyOne(t *testing.T) {
 	if _, err := javaComponentShow(false)(client, t.Context(), client.thread, []uint32{shell}); err != nil {
 		t.Fatal(err)
 	}
+	paintJavaTextReads(t, client, loose)
 	if got := target(); got != "loose" {
 		t.Fatalf("the only field in no shell, with the shell hidden: %q", got)
 	}
-	newJavaTextField(t, client, "other")
+	other := newJavaTextField(t, client, "other")
+	paintJavaTextReads(t, client, loose, other)
 	if got := target(); got != "" {
 		t.Fatalf("two fields in no shell offered %q", got)
 	}
 	_ = field
+}
+
+// paintJavaTextReads stands in for a paint of the pushed card that reads the
+// text of objects, the way a title drawing its own field does.
+func paintJavaTextReads(t *testing.T, client *Client, objects ...uint32) {
+	t.Helper()
+	runtime := client.javaRuntimeState()
+	if runtime.card == 0 {
+		runtime.card = 0x7000
+	}
+	runtime.beginTextReads()
+	for _, object := range objects {
+		if _, err := javaTextComponentGetString(client, t.Context(), client.thread, []uint32{object}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.endTextReads(runtime.card, true)
+}
+
+// A field in no shell is offered on the evidence that the card on the screen
+// read it while it last painted text: one the title built and never drew, or
+// one it dropped for a new one that the collector has not reached yet, is not.
+// A frame that reads no text keeps the evidence, another card's paint does not
+// carry it, and a collected field leaves it.
+func TestTextInputOffersAFieldInNoShellOnlyWhenThePaintReadsIt(t *testing.T) {
+	session, shell, _ := focusedJavaTextFixture(t, javaWidgetTextField, javaTextConstraintAny, "shown")
+	client := session.client
+	runtime := client.javaRun
+	runtime.focusedWidget = 0
+	if _, err := javaComponentShow(false)(client, t.Context(), client.thread, []uint32{shell}); err != nil {
+		t.Fatal(err)
+	}
+	target := func() string {
+		t.Helper()
+		edit, err := session.TextInput(context.Background())
+		if errors.Is(err, backend.ErrNoTextInput) {
+			return ""
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return edit.Text
+	}
+	helper := newJavaTextField(t, client, "helper")
+	if got := target(); got != "" {
+		t.Fatalf("a field never drawn was offered: %q", got)
+	}
+	old := newJavaTextField(t, client, "old name")
+	paintJavaTextReads(t, client, old)
+	if got := target(); got != "old name" {
+		t.Fatalf("the field the paint read: %q", got)
+	}
+	// The dialog opens again with a new field; the old one is still held.
+	name := newJavaTextField(t, client, "new name")
+	paintJavaTextReads(t, client, name)
+	if got := target(); got != "new name" {
+		t.Fatalf("the field the paint read now: %q", got)
+	}
+	paintJavaTextReads(t, client)
+	if got := target(); got != "new name" {
+		t.Fatalf("a paint that read no text dropped the field: %q", got)
+	}
+	card := runtime.card
+	runtime.card = card + 0x100
+	if got := target(); got != "" {
+		t.Fatalf("a field read by a card no longer on the screen was offered: %q", got)
+	}
+	runtime.card = card
+	runtime.forgetTextReads([]uint32{name})
+	if got := target(); got != "" {
+		t.Fatalf("a collected field was offered: %q", got)
+	}
+	_ = helper
+}
+
+// A focused field on the screen that cannot take a Host edit keeps the edit
+// from any field beside it; a focus left behind a hidden shell does not.
+func TestTextInputDoesNotPassAFocusedFieldOverForAnother(t *testing.T) {
+	session, shell, field := focusedJavaTextFixture(t, javaWidgetTextField, javaTextConstraintAny, "focused")
+	client := session.client
+	beside := newJavaTextField(t, client, "beside")
+	if _, err := javaComponentAddChild(client, t.Context(), client.thread, []uint32{shell, beside}); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newTestObject(t, client, javaInputMethodHandlerClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.javaWidgetState(field).inputHandler = handler
+	client.javaWidgetState(handler).listener = 0x1234
+	if edit, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("a field beside a focused one that refuses was offered: %+v %v", edit, err)
+	}
+	loose := newJavaTextField(t, client, "loose")
+	paintJavaTextReads(t, client, loose)
+	if edit, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("a drawn field was offered in place of the focused one: %+v %v", edit, err)
+	}
+	// Behind a hidden shell the focus says nothing about the screen.
+	if _, err := javaComponentShow(false)(client, t.Context(), client.thread, []uint32{shell}); err != nil {
+		t.Fatal(err)
+	}
+	edit, err := session.TextInput(context.Background())
+	if err != nil || edit.Text != "loose" {
+		t.Fatalf("with the focused field hidden: %+v %v", edit, err)
+	}
 }
 
 // A title can repeat its notifications and select its input mode on every

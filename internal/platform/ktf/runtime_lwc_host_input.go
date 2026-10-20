@@ -339,6 +339,8 @@ func (client *Client) componentTextInput(target textInputTarget) *backend.TextIn
 // nothing, needs no focus from a field that is the only one read, and keeps
 // what the last paint that read any text published: a frame that reads none,
 // or a paint that fails, says nothing about a field the frame before it drew.
+// It keeps it for the card that painted it, and only while that card is on
+// top: a card pushed over it, or one that replaced it, draws its own screen.
 // Several fields read and none of them focused still offer nothing.
 
 // maxPaintTextReads bounds how many distinct text components one paint is
@@ -351,22 +353,32 @@ func (runtime *initializationRuntime) beginTextReads() {
 	runtime.paintTextReads, runtime.paintTextOverflow = nil, false
 }
 
-// endTextReads publishes what the paint read once it returned. A paint that
-// failed published nothing a Host could rely on. The relaxed rule's set
-// changes only on a paint that read text, and is emptied by one that read
-// more than a name screen does.
-func (runtime *initializationRuntime) endTextReads(painted bool) {
+// endTextReads publishes what a paint of card read once it returned. A paint
+// that failed published nothing a Host could rely on. The relaxed rule's set
+// changes only on a paint that read text, which also records the card, and is
+// emptied by one that read more than a name screen does.
+func (runtime *initializationRuntime) endTextReads(card *jvm.Object, painted bool) {
 	runtime.paintedText = nil
 	if painted && !runtime.paintTextOverflow {
 		runtime.paintedText = runtime.paintTextReads
 	}
 	switch {
 	case painted && runtime.paintTextOverflow:
-		runtime.lastPaintedText = nil
+		runtime.lastPaintedText, runtime.lastPaintedCard = nil, nil
 	case len(runtime.paintedText) > 0:
-		runtime.lastPaintedText = runtime.paintedText
+		runtime.lastPaintedText, runtime.lastPaintedCard = runtime.paintedText, card
 	}
 	runtime.paintTextReads, runtime.paintTextOverflow = nil, false
+}
+
+// forgetRemovedCardText drops the relaxed rule's set once the card that
+// painted it has left the display. It would never be offered again, since the
+// rule asks for that card on top and a card pushed again paints again, and
+// holding it would keep the card and its fields from the object collector.
+func (runtime *initializationRuntime) forgetRemovedCardText() {
+	if card := runtime.lastPaintedCard; card != nil && !slices.Contains(runtime.displayCards, card) {
+		runtime.lastPaintedText, runtime.lastPaintedCard = nil, nil
+	}
 }
 
 // noteTextRead records a text component read while a card paints.
@@ -398,10 +410,14 @@ func (runtime *initializationRuntime) drawnTextComponent() *jvm.Object {
 }
 
 // relaxedDrawnTextComponent answers the field the relaxed rule offers: of the
-// fields in the last set a paint published, the only focused one, or else the
-// only one. Components that are not LWC fields — a button's label, a vendor
-// field — are not fields a Host edit can go to here, and do not count.
+// fields in the last set a paint published, while the card that painted it is
+// on top, the only focused one, or else the only one. Components that are not
+// LWC fields — a button's label, a vendor field — are not fields a Host edit
+// can go to here, and do not count.
 func (client *Client) relaxedDrawnTextComponent() *jvm.Object {
+	if card := client.runtime.lastPaintedCard; card == nil || card != client.runtime.topCard() {
+		return nil
+	}
 	var fields, focused []*jvm.Object
 	for _, component := range client.runtime.lastPaintedText {
 		if _, vendor, ok := client.lwcTextInputKind(component); !ok || vendor {
@@ -467,11 +483,7 @@ func (runtime *initializationRuntime) activeVendorTextInput() (vendorTextInputSt
 	}
 	form := runtime.runtimeObjects[runtimeKFCShownFormObject]
 	field := runtime.runtimeObjects[runtimeKFCActiveFieldObject]
-	if form == nil || field == nil || runtime.uniqueVendorTextField(form) != field {
-		return vendorTextInputState{}, false
-	}
-	shown, err := form.Fields[componentShownField].Int32()
-	if err != nil || shown == 0 {
+	if form == nil || field == nil || runtime.uniqueVendorTextField(form) != field || !componentShown(form) {
 		return vendorTextInputState{}, false
 	}
 	event, ok := runtimeComponentEventListenerState(field)

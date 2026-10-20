@@ -171,7 +171,8 @@ repeat is dropped rather than sent as a second press, because two local titles
 dash on every press (`internal/session`). Native Clets do not expose a general
 pointer-event contract. Host text entry supports LWC fields — the focused one,
 or the only one on screen — and the WIPI-C input-method append path, offered on
-every screen once a title has used its input method; it does not infer
+every screen once a title has used its input method, except after a commit that
+reached no widget until the next key or input-method call; it does not infer
 arbitrary game-owned fields. Host text must be encodable in KSC5601; other characters
 are refused. See [native text input](native-text-input.md).
 

@@ -131,7 +131,16 @@ func runtimeInputMethodNotifyKeyInput(runtime *initializationRuntime, vm *jvm.VM
 	// The character in flight is delivered to the handler it was composed for,
 	// whatever key carried it; a carrier forwarded anywhere else is left for
 	// the Host to find undelivered.
-	if pending := runtime.javaInput.pending; pending != nil && pending.handler == receiver {
+	if pending := runtime.javaInput.pending; pending != nil {
+		if pending.handler != receiver {
+			// The title hands its keys to this field now, so this is the
+			// field that is open. The carrier is the Host's and types nothing
+			// here: it was no key the player pressed, and the character it
+			// carries was composed for another field. Processed, so the title
+			// does not take it as a key of its own either.
+			runtime.touchInputMethod(receiver, true)
+			return jvm.IntValue(1), nil
+		}
 		// Taken once the array that carries it exists: making the array can
 		// be refused, and the character stays for the next key rather than
 		// being lost with the refusal.
@@ -166,6 +175,13 @@ func runtimeInputMethodNotifyKeyInput(runtime *initializationRuntime, vm *jvm.VM
 		return jvm.IntValue(0), nil
 	}
 	return jvm.IntValue(1), nil
+}
+
+// hostCarrierInFlight reports whether the press being delivered carries a Host
+// character, for a title's own field or for the C input method, rather than
+// being a key the player pressed.
+func (runtime *initializationRuntime) hostCarrierInFlight() bool {
+	return runtime.javaInput.pending != nil || len(runtime.cInput.pending) != 0
 }
 
 // inputMethodTypesDigits answers whether a digit key types its digit: in the
@@ -258,6 +274,7 @@ func (runtime *initializationRuntime) touchInputMethod(handler *jvm.Object, took
 	if open != handler && !took && runtime.javaInput.keyTaken {
 		handler.Fields[inputMethodResetField] = jvm.IntValue(1)
 	}
+	offered, offeredCard := runtime.offeredInputMethod()
 	runtime.runtimeObjects[inputMethodOpenObject] = handler
 	runtime.runtimeObjects[inputMethodOfferedObject] = handler
 	if card != nil {
@@ -267,14 +284,29 @@ func (runtime *initializationRuntime) touchInputMethod(handler *jvm.Object, took
 		delete(runtime.runtimeObjects, inputMethodCardObject)
 		delete(runtime.runtimeObjects, inputMethodOfferedCardObject)
 	}
-	runtime.javaInput.revision++
+	// Opening again the field already offered on this card changes nothing a
+	// composition was taken against: it is the same field, and the press that
+	// opens it may be a Host character reaching it. Spending the composition
+	// there would end a commit after its first character.
+	if offered != handler || offeredCard != card {
+		runtime.javaInput.revision++
+	}
 }
 
 // closeInputMethod forgets the open field. The offered one stays; see
-// inputMethodOfferedObject.
+// inputMethodOfferedObject. A checkpoint taken before there was an offered
+// field holds only the open one, which is recorded as offered here, before
+// the open record that stands in for it is gone.
 func (runtime *initializationRuntime) closeInputMethod() {
-	if runtime.runtimeObjects[inputMethodOpenObject] == nil {
+	open := runtime.runtimeObjects[inputMethodOpenObject]
+	if open == nil {
 		return
+	}
+	if runtime.runtimeObjects[inputMethodOfferedObject] == nil {
+		runtime.runtimeObjects[inputMethodOfferedObject] = open
+		if card := runtime.runtimeObjects[inputMethodCardObject]; card != nil {
+			runtime.runtimeObjects[inputMethodOfferedCardObject] = card
+		}
 	}
 	delete(runtime.runtimeObjects, inputMethodOpenObject)
 	delete(runtime.runtimeObjects, inputMethodCardObject)
@@ -441,9 +473,20 @@ func (client *Client) titleFieldTextInput(target textInputTarget) *backend.TextI
 				if !consumed {
 					// The title did not hand the carrier to this field, which is
 					// a press the field did not see: it closes the open field and
-					// spends this composition, and leaves the offered field for
-					// the next snapshot.
-					runtime.unseenPress()
+					// spends this composition. A title whose field is still on
+					// its screen hands that field every key, the carrier
+					// included, so the field also stops being offered — a
+					// handler the title has moved on from would otherwise be
+					// offered, and fail, at every commit. A reset field behind
+					// its message stays open and offered, and a field the title
+					// handed the carrier to instead is the one offered now; see
+					// runtimeInputMethodNotifyKeyInput.
+					if offered, _ := runtime.offeredInputMethod(); offered == handler {
+						runtime.unseenPress()
+						if runtime.runtimeObjects[inputMethodOpenObject] != handler {
+							runtime.withdrawInputMethod(handler)
+						}
+					}
 					return backend.ErrTextInputChanged
 				}
 				delivered = true

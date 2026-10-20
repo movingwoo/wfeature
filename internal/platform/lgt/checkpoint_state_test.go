@@ -871,6 +871,10 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			// Reclaimed records wait only while the store refuses them, and a
 			// quick save stores them first or is refused.
 			"collectedDatabases": boundary,
+			// A checkpoint is never taken inside a paint, and the text the
+			// last paint read is read again by the next one.
+			"painting": boundary, "paintTextReads": boundary, "paintTextOverflow": boundary,
+			"paintedText": rebuilt, "paintedTextCard": rebuilt,
 		},
 		"javaWorker": {
 			"armThread": recorded, "stackBase": recorded, "grant": rebuilt, "events": rebuilt, "wakeAt": recorded,
@@ -937,10 +941,13 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 		"pendingNetConnect": {
 			"offline": recorded, "generation": recorded, "callback": recorded, "param": recorded, "dueAt": recorded,
 		},
-		"pendingEvent":    {"kind": recorded, "param1": recorded, "param2": recorded},
-		"cTextInputState": {"used": recorded, "revision": recorded, "calls": recorded, "pending": recorded, "delivering": boundary},
-		"pixelOpCache":    {"results": recorded},
-		"guestClock":      {"mu": rebuilt, "elapsed": recorded, "origin": rebuilt, "steps": rebuilt, "baseline": recorded},
+		"pendingEvent": {"kind": recorded, "param1": recorded, "param2": recorded},
+		// That the Host's last carrier reached nothing is the Host's own
+		// note; a load offers input again, as the player's next key would.
+		"cTextInputState": {"used": recorded, "revision": recorded, "calls": recorded, "pending": recorded, "delivering": boundary,
+			"unreached": host},
+		"pixelOpCache": {"results": recorded},
+		"guestClock":   {"mu": rebuilt, "elapsed": recorded, "origin": rebuilt, "steps": rebuilt, "baseline": recorded},
 		"arena": {
 			"base": rebuilt, "limit": rebuilt, "cursor": recorded, "free": recorded, "sizes": recorded,
 			"outstanding": rebuilt,

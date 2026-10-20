@@ -181,9 +181,11 @@ func TestLGTCInputIsOfferedOnceTheTitleUsesTheInputMethod(t *testing.T) {
 	if _, err := session.TextInput(t.Context()); err != nil {
 		t.Fatalf("key that bypassed the automaton withdrew input: %v", err)
 	}
-	// A commit there reaches no widget: it fails, the game sees a whole tap
-	// of the carrier key rather than a press that stays down, and input is
-	// still offered for the screen the player moves to next.
+	// A commit there reaches no widget: it fails, and the game sees a whole
+	// tap of the carrier key rather than a press that stays down. Input then
+	// waits for new evidence of a field, so neither a retry nor a new edit
+	// hands the game the key again; the player's next press is such
+	// evidence, and input is offered for the screen the player moves to.
 	if err := edit.Commit(t.Context(), "ab"); !errors.Is(err, backend.ErrTextInputChanged) {
 		t.Fatalf("unrouted carrier: %v", err)
 	}
@@ -193,12 +195,19 @@ func TestLGTCInputIsOfferedOnceTheTitleUsesTheInputMethod(t *testing.T) {
 	if err := c.deliverEvents(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	if err := edit.Commit(t.Context(), "ab"); !errors.Is(err, backend.ErrTextInputChanged) || len(c.events) != 0 {
+		t.Fatalf("retry after an unrouted carrier: %v, queued %+v", err, c.events)
+	}
+	if _, err := session.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("input offered right after an unrouted carrier: %v", err)
+	}
+	press('#')
 	if err := c.writeWord(fixtureRouteKeys, 0); err != nil {
 		t.Fatal(err)
 	}
 	edit, err = session.TextInput(t.Context())
 	if err != nil {
-		t.Fatalf("input withdrawn after an unrouted carrier: %v", err)
+		t.Fatalf("input after the player's press: %v", err)
 	}
 	if err := edit.Commit(t.Context(), "ab"); err != nil {
 		t.Fatal(err)
@@ -242,17 +251,37 @@ func TestLGTCInputOfferSurvivesARecordThatHadItClosed(t *testing.T) {
 	if !saved.Client.TextInput.Active || saved.Client.TextInput.Calls != 1 {
 		t.Fatalf("recorded %+v, want a title that has called the automaton once", saved.Client.TextInput)
 	}
-	saved.Client.TextInput.Active = false
-	if checkpoint.Runtime, err = backend.EncodeCheckpointRecord(saved); err != nil {
-		t.Fatal(err)
-	}
-	other := boundarySaves(t, store)
-	restored, err := prepareFixtureCheckpoint(t, archive, checkpoint, other).Commit(ctx, nil, other)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer restored.Close(context.Background())
-	if _, err := restored.TextInput(ctx); err != nil {
-		t.Fatalf("input after loading the older record: %v", err)
+	// An older record of a title that had called the automaton, of one that
+	// had only listed or selected its modes while starting, and of one that
+	// had shown no sign of the input method at all.
+	for _, older := range []struct {
+		name        string
+		calls       uint64
+		table, mode uint32
+		offered     bool
+	}{
+		{"called the automaton", saved.Client.TextInput.Calls, 0, 0, true},
+		{"listed its modes", 0, 0x1000, 0, true},
+		{"selected a mode", 0, 0, 2, true},
+		{"no input method", 0, 0, 0, false},
+	} {
+		record := saved
+		record.Client.TextInput.Active = false
+		record.Client.TextInput.Calls = older.calls
+		record.Client.InputModeTable, record.Client.InputMode = older.table, older.mode
+		encoded := checkpoint
+		if encoded.Runtime, err = backend.EncodeCheckpointRecord(record); err != nil {
+			t.Fatal(err)
+		}
+		other := boundarySaves(t, store)
+		restored, err := prepareFixtureCheckpoint(t, archive, encoded, other).Commit(ctx, nil, other)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = restored.TextInput(ctx)
+		_ = restored.Close(context.Background())
+		if older.offered && err != nil || !older.offered && !errors.Is(err, backend.ErrNoTextInput) {
+			t.Fatalf("%s: input after loading the older record: %v", older.name, err)
+		}
 	}
 }

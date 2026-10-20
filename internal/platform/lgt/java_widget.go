@@ -282,6 +282,7 @@ const (
 func javaTextComponentGetString(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
+	client.javaRuntimeState().noteTextRead(arguments[0])
 	return client.newJavaString(client.javaWidgetState(arguments[0]).text)
 }
 

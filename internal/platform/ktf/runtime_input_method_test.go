@@ -237,10 +237,12 @@ func TestInputMethodHandlerWithoutAListenerProcessesNothing(t *testing.T) {
 // nothing, because a title hands only presses to its field.
 //
 // Closed that way the field is still offered, because a field on the screen
-// that nobody can type into is the worse mistake: a commit into a field that
-// really closed fails without reaching its listener, and leaves the offer
-// standing. An edit taken before a press the field missed is spent by it. Only
-// the title taking the listener away ends the offer.
+// that nobody can type into is the worse mistake. A title whose field is still
+// on its screen hands it every key, the Host's carrier included, so a commit
+// the field does not take shows it really closed: that commit fails without
+// reaching the listener, and ends the offer until the title hands the field a
+// key again. An edit taken before a press the field missed is spent by it. The
+// title taking the listener away ends the offer too.
 func TestATitleOwnedFieldStaysOfferedUntilItsListenerIsRemoved(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	session := &Session{Client: client}
@@ -288,8 +290,8 @@ func TestATitleOwnedFieldStaysOfferedUntilItsListenerIsRemoved(t *testing.T) {
 	if err := edit.Commit(t.Context(), "a"); !errors.Is(err, backend.ErrTextInputChanged) || len(*edits) != 0 {
 		t.Fatalf("a commit into the closed field answered %v, edits %+v", err, *edits)
 	}
-	if !available() {
-		t.Fatal("a commit the field did not take ended the offer")
+	if available() {
+		t.Fatal("a field that did not take the carrier is still offered")
 	}
 	// A title that opens its field again hands it a key, and the field is open
 	// again.
@@ -371,14 +373,10 @@ func TestHostTextReachesATitleOwnedFieldThroughItsKeys(t *testing.T) {
 	if !reflect.DeepEqual(*edits, want) || runtime.runtimeObjects[inputMethodOpenObject] != nil {
 		t.Fatalf("edits = %+v, open = %v", *edits, runtime.runtimeObjects[inputMethodOpenObject])
 	}
-	// The title kept its listener, so the closed field is still offered, and
-	// what is committed into it is refused at the first key it does not take.
-	edit, err = session.TextInput(t.Context())
-	if err != nil {
-		t.Fatalf("a field closed with its listener in place is no longer offered: %v", err)
-	}
-	if err := edit.Commit(t.Context(), "c"); !errors.Is(err, backend.ErrTextInputChanged) || !reflect.DeepEqual(*edits, want) {
-		t.Fatalf("a commit into the closed field answered %v, edits %+v", err, *edits)
+	// The carrier the field did not take showed it closed, so it is no longer
+	// offered although the title kept its listener.
+	if _, err := session.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("a field that refused the carrier is still offered: %v", err)
 	}
 }
 
@@ -457,7 +455,8 @@ func TestAResetFieldStaysOpenBehindItsMessage(t *testing.T) {
 }
 
 // A checkpoint taken before the offered field existed restores only the open
-// one, and the open one is offered in its place.
+// one, and the open one is offered in its place. Closed by a press it missed,
+// it stays offered the way a field opened since is.
 func TestTheOfferedFieldFallsBackToTheOpenOne(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	session := &Session{Client: client}
@@ -466,16 +465,146 @@ func TestTheOfferedFieldFallsBackToTheOpenOne(t *testing.T) {
 	handler := newGuestInputMethodHandler(t, client, runtime, textConstraintAny, listener)
 	delete(runtime.runtimeObjects, inputMethodOfferedObject)
 	delete(runtime.runtimeObjects, inputMethodOfferedCardObject)
-	if offered, card := runtime.offeredInputMethod(); offered != handler || card != runtime.topCard() {
-		t.Fatalf("offered field = %v on %v", offered, card)
+	card := runtime.topCard()
+	if offered, offeredCard := runtime.offeredInputMethod(); offered != handler || offeredCard != card {
+		t.Fatalf("offered field = %v on %v", offered, offeredCard)
 	}
-	runtime.closeInputMethod()
-	if offered, _ := runtime.offeredInputMethod(); offered != nil {
-		t.Fatalf("a closed field with no offered record is still offered: %v", offered)
+	runtime.unseenPress()
+	if runtime.runtimeObjects[inputMethodOpenObject] != nil {
+		t.Fatal("the press the field missed left it open")
 	}
-	if _, err := session.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+	if offered, offeredCard := runtime.offeredInputMethod(); offered != handler || offeredCard != card {
+		t.Fatalf("after the press the offered field = %v on %v", offered, offeredCard)
+	}
+	if _, err := session.TextInput(t.Context()); err != nil {
 		t.Fatalf("TextInput() = %v", err)
 	}
+}
+
+// A commit into the offered field types every character, also when that field
+// was closed by a press it did not see or restored from a checkpoint taken
+// before the offered record existed: the first character reopening the field
+// is the commit's own doing, not a change that spends it.
+func TestHostTextFillsAnOfferedFieldThatWasNotOpen(t *testing.T) {
+	for _, restored := range []bool{false, true} {
+		client, runtime := newTestRuntime(t)
+		session := &Session{Client: client}
+		listener, edits := recordingInputMethodListener(t, client, "test/NameListener")
+		field := newNameFieldCard(t, client, runtime, "test/NameCard", nil)
+		field.handler = newGuestInputMethodHandler(t, client, runtime, textConstraintAny, listener)
+		if restored {
+			delete(runtime.runtimeObjects, inputMethodOfferedObject)
+			delete(runtime.runtimeObjects, inputMethodOfferedCardObject)
+		} else {
+			// The title handled a press itself, a cursor move, and kept the
+			// field on its screen.
+			runtime.unseenPress()
+		}
+		edit, err := session.TextInput(t.Context())
+		if err != nil {
+			t.Fatalf("restored %v: %v", restored, err)
+		}
+		if err := edit.Commit(t.Context(), "홍길동"); err != nil {
+			t.Fatalf("restored %v: commit = %v, edits %+v", restored, err, *edits)
+		}
+		want := []inputMethodEdit{{"홍", 1, inputMethodInsert}, {"길", 1, inputMethodInsert}, {"동", 1, inputMethodInsert}}
+		if !reflect.DeepEqual(*edits, want) {
+			t.Fatalf("restored %v: edits = %+v, want %+v", restored, *edits, want)
+		}
+		if runtime.runtimeObjects[inputMethodOpenObject] != field.handler {
+			t.Fatalf("restored %v: the field the commit typed into is not open", restored)
+		}
+	}
+}
+
+// A field the title moved on from without taking its listener away is offered
+// for no more than one commit. The carrier goes where the title hands its keys
+// now and types nothing there — not into another handler of the title's, even
+// one in the digit mode, and not into a text component — and the commit fails.
+// After it the field the title handed the carrier to is offered, or, when that
+// is no handler of the title's, the old one no longer is.
+func TestAnAbandonedTitleFieldGivesWayAtItsFirstCommit(t *testing.T) {
+	t.Run("another handler", func(t *testing.T) {
+		client, runtime := newTestRuntime(t)
+		session := &Session{Client: client}
+		oldListener, oldEdits := recordingInputMethodListener(t, client, "test/OldListener")
+		newListener, newEdits := recordingInputMethodListener(t, client, "test/NewListener")
+		field := newNameFieldCard(t, client, runtime, "test/NameCard", nil)
+		next := newGuestInputMethodHandler(t, client, runtime, textConstraintAny, newListener)
+		setGuestInputMethodMode(t, client, next, inputMethodModeNumeric)
+		abandoned := newGuestInputMethodHandler(t, client, runtime, textConstraintAny, oldListener)
+		field.handler = next
+		if offered, _ := runtime.offeredInputMethod(); offered != abandoned {
+			t.Fatalf("offered field = %v", offered)
+		}
+		edit, err := session.TextInput(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := edit.Commit(t.Context(), "가"); !errors.Is(err, backend.ErrTextInputChanged) {
+			t.Fatalf("a commit into the abandoned field answered %v", err)
+		}
+		if len(*oldEdits) != 0 || len(*newEdits) != 0 {
+			t.Fatalf("the carrier typed: old %+v, new %+v", *oldEdits, *newEdits)
+		}
+		if offered, _ := runtime.offeredInputMethod(); offered != next {
+			t.Fatalf("after the commit the offered field = %v", offered)
+		}
+		edit, err = session.TextInput(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := edit.Commit(t.Context(), "12"); err != nil {
+			t.Fatal(err)
+		}
+		want := []inputMethodEdit{{"1", 1, inputMethodInsert}, {"2", 1, inputMethodInsert}}
+		if !reflect.DeepEqual(*newEdits, want) || len(*oldEdits) != 0 {
+			t.Fatalf("edits: old %+v, new %+v", *oldEdits, *newEdits)
+		}
+	})
+	t.Run("a text component", func(t *testing.T) {
+		client, runtime := newTestRuntime(t)
+		session := &Session{Client: client}
+		listener, edits := recordingInputMethodListener(t, client, "test/NameListener")
+		component := newWidget(runtimeTextFieldComponentClass)
+		if _, err := runtimeTextComponentConstructorWithText(runtime, client.JVM(), []jvm.Value{
+			jvm.ReferenceValue(component), jvm.ReferenceValue(client.JVM().NewString("")), jvm.IntValue(textConstraintAny),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		card := &jvm.Object{ClassName: "test/ComponentCard"}
+		presses := 0
+		if err := client.JVM().RegisterNative(card.ClassName, "keyNotify", "(II)Z", func(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+			presses++
+			return runtimeTextComponentKeyNotify(runtime, vm, []jvm.Value{jvm.ReferenceValue(component), arguments[1], arguments[2]})
+		}); err != nil {
+			t.Fatal(err)
+		}
+		runtime.displayCards = append(runtime.displayCards, card)
+		abandoned := newGuestInputMethodHandler(t, client, runtime, textConstraintAny, listener)
+		runtime.unseenPress()
+		if offered, _ := runtime.offeredInputMethod(); offered != abandoned {
+			t.Fatalf("offered field = %v", offered)
+		}
+		edit, err := session.TextInput(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := edit.Commit(t.Context(), "가"); !errors.Is(err, backend.ErrTextInputChanged) {
+			t.Fatalf("a commit into the abandoned field answered %v", err)
+		}
+		if presses != 2 || componentText(component) != "" || len(*edits) != 0 {
+			t.Fatalf("after %d presses the component holds %q, edits %+v", presses, componentText(component), *edits)
+		}
+		if offered, _ := runtime.offeredInputMethod(); offered != nil {
+			t.Fatalf("the field that refused the carrier is still offered: %v", offered)
+		}
+		// The player's own keys still type into the component.
+		pressCardKey(t, runtime, '2')
+		if componentText(component) != "a" {
+			t.Fatalf("a key the player pressed typed %q", componentText(component))
+		}
+	})
 }
 
 // An edit taken before the field closed is refused after, without a key being

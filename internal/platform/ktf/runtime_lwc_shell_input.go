@@ -159,7 +159,17 @@ func (client *Client) shellTextFields(shell *jvm.Object) []*jvm.Object {
 		roots = append(roots, work)
 	}
 	var fields []*jvm.Object
-	seen := map[*jvm.Object]bool{shell: true}
+	// A Host commit asks this again at every character it delivers, and a
+	// fresh set for a screen of a thousand components was most of what that
+	// cost, so the set is kept between walks and emptied after each, holding
+	// on to nothing.
+	runtime := client.runtime
+	if runtime.shellWalkSeen == nil {
+		runtime.shellWalkSeen = make(map[*jvm.Object]bool)
+	}
+	seen := runtime.shellWalkSeen
+	defer clear(seen)
+	seen[shell] = true
 	budget := maxShellWalkNodes
 	var walk func(nodes []*jvm.Object, depth int)
 	walk = func(nodes []*jvm.Object, depth int) {

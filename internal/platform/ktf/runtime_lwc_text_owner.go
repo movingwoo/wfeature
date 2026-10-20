@@ -71,9 +71,7 @@ func (client *Client) lwcTextOwnership(field *jvm.Object, relaxed bool) ([]lwcTe
 		visibility, shell := node.Fields[componentShellVisibilityRevisionField]
 		chain = append(chain, lwcTextAncestor{node, parent, node.Fields[componentParentRevisionField], node.Fields[componentChildrenRevisionField], visibility})
 		if shell || client.lwcShellClass(node.ClassName) {
-			shown, err := node.Fields[componentShownField].Int32()
-			visible := err == nil && shown != 0
-			return chain, visible && (relaxed || client.runtime.runtimeObjects[runtimeLWCShownShellObject] == node)
+			return chain, componentShown(node) && (relaxed || client.runtime.runtimeObjects[runtimeLWCShownShellObject] == node)
 		}
 		if !attached {
 			return chain, relaxed || node == field

@@ -36,7 +36,7 @@ var inputModes = []string{"EN/L", "EN/S", "KO", "N123"}
 
 // handleWIPICInputMethodCall services the input-method table.
 func (runtime *initializationRuntime) handleWIPICInputMethodCall(thread *armcore.Thread, function uint32) (uint32, error) {
-	runtime.cInput.used = true
+	runtime.cInput.used, runtime.cInput.unreached = true, false
 	switch function {
 	case wipicIMSetCurrentMode:
 		mode, err := runtime.wipicArgument(thread, 0)
@@ -119,6 +119,13 @@ type cInputState struct {
 	// start-up questions included. It is not part of a checkpoint; see
 	// cInputUsed for what stands in for it after one.
 	used bool
+	// unreached records that the Host's last carrier reached no input method:
+	// the card took it as the key it is, so nothing on the screen takes keys
+	// through the input method. The relaxed rule offers nothing until the
+	// title calls the input method again or the player presses a key, which
+	// is what can bring a field up; without it every retry of the commit
+	// would hand the game another key. It is not part of a checkpoint.
+	unreached bool
 }
 
 // cInputUsed reports whether the title has ever used its input method, which

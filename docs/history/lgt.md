@@ -49,6 +49,7 @@ This consolidation adds no execution or acceptance evidence.
 - [LGT key callback hang — 2026-09-23](#lgt-key-callback-hang-2026-09-23)
 - [Newly added archives — 2026-10-19](#lgt-new-archives-2026-10-19)
 - [A name field the key rule refused — 2026-10-20](#lgt-text-input-2026-10-20)
+- [Text input review follow-ups — 2026-10-20](#lgt-text-input-review-2026-10-20)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -7666,7 +7667,86 @@ form's current contents, a title's own field until its listener is removed, and
 an unknown C caller on any card once the title has used the input method. SKT's
 fallbacks are recorded in [its history](skt.md#skt-text-input-2026-10-20). Both
 rest on unit tests (the KTF ones include `TestTextInputKeepsTheFirstRulesAheadOfTheRelaxedOnes`,
-`TestTextInputFallsThroughAStaleFocus` and
-`TestCInputUnreachedCarrierIsReleasedAndLeavesInputOffered`); no KTF or SKT
+`TestTextInputFallsThroughAStaleFocus` and, as the review follow-ups below left
+it, `TestCInputUnreachedCarrierIsReleasedAndWithdrawsTheOffer`); no KTF or SKT
 title was driven to a name screen for this change.
+
+<a id="lgt-text-input-review-2026-10-20"></a>
+
+## Text input review follow-ups — 2026-10-20
+
+A review of the change above, on all three platforms, found twelve faults.
+None of the fixes reaches anything but Host text input: they change which
+field a snapshot names, what a commit's carrier does, and what a failed commit
+leaves behind.
+
+**What a failed carrier leaves.** A commit through a carrier key on a screen
+whose title takes no text still reaches the game as one press and its release.
+Before, the offer stood, so every retry pressed the key again. Now the failure
+is evidence and the offer waits for new evidence:
+
+- KTF and LGT WIPI-C: after a carrier that reached no input method, the
+  unknown-caller offer waits for the title's next input-method call or the
+  player's next press, and on KTF the editor is no longer active, as it was
+  before the relaxed rules (`TestCInputUnreachedCarrierIsReleasedAndWithdrawsTheOffer`,
+  `TestCInputUnknownEditorIsOfferedOnANewCard`,
+  `TestLGTCInputIsOfferedOnceTheTitleUsesTheInputMethod`). A load offers input
+  again, as the next press would.
+- A KTF title's own `InputMethodHandler`: a carrier the title keeps from the
+  offered field ends the offer, since a field still on the screen is handed
+  every key; handing it a key again offers it again. A carrier the title hands
+  to another of its handlers types nothing there and makes that handler the
+  open field, and a carrier that reaches an LWC text component types nothing
+  into it either (`TestAnAbandonedTitleFieldGivesWayAtItsFirstCommit`). Before,
+  an abandoned handler with its listener still set was offered, and failed, at
+  every commit, ahead of every other relaxed route, and a stray `0` was typed
+  into the handler or component the title used instead.
+
+**A commit that stopped after one character.** On KTF, the first character of
+a commit into the offered field reopened that field, and reopening counted as a
+change that spent the commit: of `홍길동`, only `홍` arrived. Reopening the
+field already offered on the same card no longer spends anything, and a
+checkpoint written before the offered record existed now keeps offering its
+open field after a press closes it, as a running session does
+(`TestHostTextFillsAnOfferedFieldThatWasNotOpen`,
+`TestTheOfferedFieldFallsBackToTheOpenOne`).
+
+**Fields offered on evidence that had gone.**
+
+- KTF drawn fields: the relaxed set of fields the last text-reading paint read
+  is tied to the card that painted it and offered only while that card is on
+  top; it is dropped when that card leaves the display
+  (`TestTextInputOffersAFocusedFieldTheCardDraws`,
+  `TestTextInputForgetsTheTextOfARemovedCard`).
+- LGT fields in no shell: a field is one the title draws only when the pushed
+  card read its text during its last paint that read any, so a helper field
+  never drawn, or a dialog's previous field not yet collected, is not offered
+  or counted (`TestTextInputOffersAFieldInNoShellOnlyWhenThePaintReadsIt`).
+  The record is not part of a checkpoint; the next paint fills it.
+- LGT focus: a focused field on the screen that refuses a Host edit, because a
+  composition listener is set, keeps a field beside it from being offered, as
+  on KTF and SKT; a focus left behind a hidden shell still hands the question
+  on (`TestTextInputDoesNotPassAFocusedFieldOverForAnother`).
+- SKT: see [the SKT record](skt.md#skt-text-input-2026-10-20).
+
+**An LGT record from before the change.** A load derived input-method use from
+the recorded calls only. It now also reads the mode table a title that listed
+its modes built, and a selected mode other than the first, as the KTF side
+already did (`TestLGTCInputOfferSurvivesARecordThatHadItClosed`).
+
+**Cost.** A KTF commit checks at every character that a snapshot would still
+name the same editor, and the relaxed shell rule walks up to 1024 components.
+With such a shell up during a 64-character C commit, the commit took 24 ms; a
+visited set kept between walks and a check that no longer repeats the one just
+made bring it to 11 ms. The vendor form's field scan is now one function for
+the strict and the relaxed rule.
+
+**Nothing outside text input moved.** Every local archive, 800 of them, ran 500
+ticks with `run` on a debug build of the change's base and of these fixes, each
+with a throwaway save root. 777 ended on the same screen digest. The other 23
+are all SKT titles, which run on the wall clock: run again, the base alone gave
+each of them more than one digest or gave the digest the fixes gave; the one
+whose base digest held across three runs gave three digests in eight more runs
+of the base, and two of those in eight runs of the fixes. No title was driven
+to a name screen for these fixes.
 

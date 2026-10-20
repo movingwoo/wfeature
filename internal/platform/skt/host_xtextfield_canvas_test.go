@@ -11,12 +11,13 @@ import (
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
-// A focused field on the current Canvas is offered whether or not anything
-// shows it is on screen. Painted onto the screen, the strict route takes it;
-// never painted, or with its paint evidence gone after a refocus or a screen
-// round trip, the fallback does, and the commit lands either way. An old
-// snapshot still fails once the field or the screen changed under it, and
-// with the focus off and nothing painted there is no field at all.
+// A focused field the current Canvas draws is offered however it is drawn.
+// Painted onto the screen, the strict route takes it; drawn by a title that
+// reads its text and draws that itself, or with its screen paint evidence gone
+// after a refocus or a screen round trip, the fallback does, and the commit
+// lands either way. An old snapshot still fails once the field or the screen
+// changed under it, and with the focus off and nothing painted there is no
+// field at all.
 func TestHostXTextFieldFocusedOnTheCurrentCanvas(t *testing.T) {
 	runtime := startUIFixture(t)
 	placeholder, err := runtime.VM.NewObject(midp.CanvasClass, "()V")
@@ -33,7 +34,8 @@ func TestHostXTextFieldFocusedOnTheCurrentCanvas(t *testing.T) {
 			Body: func(_ *jvm.Invocation, args []jvm.Value) (jvm.Value, error) {
 				paints++
 				if !drawField {
-					return jvm.VoidValue(), nil
+					_, err := runtime.VM.InvokeVirtual(field, "getText", "()Ljava/lang/String;")
+					return jvm.VoidValue(), err
 				}
 				return runtime.VM.InvokeVirtual(field, "paint", "(Ljavax/microedition/lcdui/Graphics;)V", args[1])
 			}}},
@@ -66,7 +68,7 @@ func TestHostXTextFieldFocusedOnTheCurrentCanvas(t *testing.T) {
 	showCanvas()
 	unpainted, err := runtime.TextInput(context.Background())
 	if err != nil {
-		t.Fatalf("focused field never painted on a Canvas: %v", err)
+		t.Fatalf("focused field whose text the Canvas draws: %v", err)
 	}
 	before := paints
 	if err := unpainted.Commit(context.Background(), "가"); err != nil {
@@ -122,6 +124,49 @@ func TestHostXTextFieldFocusedOnTheCurrentCanvas(t *testing.T) {
 	setXTextFieldFocusForTest(t, runtime, field, false)
 	if _, err := runtime.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
 		t.Fatalf("an unfocused field nothing painted since the screen changed: %v", err)
+	}
+}
+
+// A field left focused on a Canvas the title has moved on from is no field
+// of the new one: neither built for it nor drawn while it is up, it is not
+// offered there, and an edit opened on the old Canvas is not committed into
+// it. Once the new Canvas draws it, it is.
+func TestHostXTextFieldLeftFocusedOnAnotherCanvasIsNotOffered(t *testing.T) {
+	runtime := startUIFixture(t)
+	invokeFixtureVoid(t, runtime, "UIMIDlet", "showBuffer")
+	nameCanvas := runtime.currentDisplayable
+	field := newXTextField(t, runtime, nameCanvas, "name", 8, 0)
+	setXTextFieldFocusForTest(t, runtime, field, true)
+	edit, err := runtime.TextInput(context.Background())
+	if err != nil || edit.Text != "name" {
+		t.Fatalf("the field on its own Canvas = %+v, %v", edit, err)
+	}
+	if err := runtime.VM.DefineClass(jvm.ClassDefinition{
+		Name: "GameCanvas", SuperName: midp.CanvasClass, Access: jvm.AccessPublic,
+		Methods: []jvm.MethodDefinition{{Name: "paint", Descriptor: "(Ljavax/microedition/lcdui/Graphics;)V", Access: jvm.AccessPublic,
+			Body: func(*jvm.Invocation, []jvm.Value) (jvm.Value, error) { return jvm.VoidValue(), nil }}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	game := &jvm.Object{ClassName: "GameCanvas"}
+	if _, err := runtime.VM.InvokeVirtual(runtime.display, "setCurrent", "(Ljavax/microedition/lcdui/Displayable;)V", jvm.ReferenceValue(game)); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RunPending(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("a field focused on the previous Canvas was offered: %v", err)
+	}
+	if err := edit.Commit(context.Background(), "changed"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("an edit from the previous Canvas: %v", err)
+	}
+	if data, _ := nativeXTextField(field); string(data.text) != "name" {
+		t.Fatalf("the field from the previous Canvas holds %q", data.text)
+	}
+	paintXTextFieldOffscreen(t, runtime, field)
+	if again, err := runtime.TextInput(context.Background()); err != nil || again.Text != "name" {
+		t.Fatalf("the field once the new Canvas draws it = %+v, %v", again, err)
 	}
 }
 
@@ -234,6 +279,32 @@ func TestHostXTextFieldClosedByItsFocusIsNotOffered(t *testing.T) {
 	paintXTextFieldOffscreen(t, runtime, field)
 	if edit, err := runtime.TextInput(context.Background()); err != nil || edit.Text != "name" {
 		t.Fatalf("a field painted after its focus went off = %+v, %v", edit, err)
+	}
+}
+
+// A focus call that changes nothing — a title turning off, after every paint,
+// the focus its fields do not have — neither empties the record of paints nor
+// spends an edit, so the one painted field stays offered and its commit lands.
+func TestHostXTextFieldRepeatedFocusOffKeepsThePaintedField(t *testing.T) {
+	runtime := startUIFixture(t)
+	invokeFixtureVoid(t, runtime, "UIMIDlet", "showBuffer")
+	field := newXTextField(t, runtime, runtime.currentDisplayable, "name", 8, 0)
+	frame := func() {
+		t.Helper()
+		paintXTextFieldOffscreen(t, runtime, field)
+		setXTextFieldFocusForTest(t, runtime, field, false)
+	}
+	frame()
+	edit, err := runtime.TextInput(context.Background())
+	if err != nil || edit.Text != "name" {
+		t.Fatalf("the painted field after a focus-off that changed nothing = %+v, %v", edit, err)
+	}
+	frame()
+	if err := edit.Commit(context.Background(), "이름"); err != nil {
+		t.Fatalf("commit across a frame that set the same focus: %v", err)
+	}
+	if data, _ := nativeXTextField(field); string(data.text) != "이름" {
+		t.Fatalf("the field holds %q", data.text)
 	}
 }
 

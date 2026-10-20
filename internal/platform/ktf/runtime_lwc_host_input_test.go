@@ -451,9 +451,10 @@ func unfocusedLWCField(t *testing.T, session *Session, text string) *jvm.Object 
 }
 
 // A title that told its own field it has focus and reads it on every paint is
-// drawing that field: the Host offers it and the commit lands in it. A paint
-// that reads no text does not take the offer away, and an edit taken before it
-// still lands; a paint that reads another field moves the offer to that one.
+// drawing that field: the Host offers it and the commit lands in it. A paint of
+// the same card that reads no text does not take the offer away, and an edit
+// taken before it still lands; a card over it, or one that replaced it, does;
+// a paint that reads another field moves the offer to that one.
 func TestTextInputOffersAFocusedFieldTheCardDraws(t *testing.T) {
 	session, _ := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "")
 	runtime := session.Client.runtime
@@ -494,14 +495,28 @@ func TestTextInputOffersAFocusedFieldTheCardDraws(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.displayCards = runtime.displayCards[:0]
-	blank := drawnFieldCard(t, session, "test/BlankCard", nil)
-	blank()
+	// The same card painting a frame that reads no text.
+	runtime.beginTextReads()
+	runtime.endTextReads(runtime.topCard(), true)
 	if err := earlier.Commit(context.Background(), "새"); err != nil || runtimeComponentText(field) != "새" {
 		t.Fatalf("a commit after a paint that read no text: text=%q err=%v", runtimeComponentText(field), err)
 	}
 	if _, err := session.TextInput(context.Background()); err != nil {
 		t.Fatalf("a paint that read no text took the offer away: %v", err)
+	}
+	blank := drawnFieldCard(t, session, "test/BlankCard", nil)
+	blank()
+	if _, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("a field the card underneath drew was offered over it: %v", err)
+	}
+	runtime.displayCards = runtime.displayCards[:len(runtime.displayCards)-1]
+	if _, err := session.TextInput(context.Background()); err != nil {
+		t.Fatalf("the field once its card is on top again: %v", err)
+	}
+	runtime.displayCards = runtime.displayCards[:0]
+	drawnFieldCard(t, session, "test/OtherBlankCard", nil)()
+	if _, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("a field the card that was replaced drew was offered: %v", err)
 	}
 
 	next := unfocusedLWCField(t, session, "next")
@@ -513,6 +528,33 @@ func TestTextInputOffersAFocusedFieldTheCardDraws(t *testing.T) {
 	}
 	if input.Text != "next" {
 		t.Fatalf("offer after a paint that read another field: %+v", input)
+	}
+}
+
+// A card taken off the display takes the text its paint read with it: the
+// relaxed rule would never offer that set again, and holding it would keep the
+// card and its fields from the object collector. A card still on the stack
+// keeps its set.
+func TestTextInputForgetsTheTextOfARemovedCard(t *testing.T) {
+	session, _ := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "")
+	runtime := session.Client.runtime
+	field := unfocusedLWCField(t, session, "name")
+	painted := &jvm.Object{ClassName: "test/PaintedCard"}
+	top := &jvm.Object{ClassName: "test/TopCard"}
+	runtime.displayCards = []*jvm.Object{painted, top}
+	runtime.lastPaintedText, runtime.lastPaintedCard = []*jvm.Object{field}, painted
+	if _, err := runtimeDisplayRemoveCard(runtime, session.Client.JVM(), []jvm.Value{jvm.ReferenceValue(nil), jvm.ReferenceValue(top)}); err == nil {
+		t.Fatal("removing the top card notified a card with no showNotify")
+	}
+	if runtime.lastPaintedCard != painted || len(runtime.lastPaintedText) != 1 {
+		t.Fatal("a card still on the display lost its text")
+	}
+	runtime.displayCards = []*jvm.Object{painted, top}
+	if _, err := runtimeDisplayRemoveCard(runtime, session.Client.JVM(), []jvm.Value{jvm.ReferenceValue(nil), jvm.ReferenceValue(painted)}); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.lastPaintedCard != nil || runtime.lastPaintedText != nil {
+		t.Fatalf("a removed card kept %v, %v", runtime.lastPaintedCard, runtime.lastPaintedText)
 	}
 }
 

@@ -261,6 +261,29 @@ func (runtime *initializationRuntime) clearActiveVendorForm(form *jvm.Object) {
 
 func (runtime *initializationRuntime) uniqueVendorTextField(form *jvm.Object) *jvm.Object {
 	var field *jvm.Object
+	several := false
+	runtime.eachVendorTextField(form, func(child *jvm.Object, listened bool) bool {
+		if !listened {
+			return true
+		}
+		if field != nil {
+			field, several = nil, true
+			return false
+		}
+		field = child
+		return true
+	})
+	if several {
+		return nil
+	}
+	return field
+}
+
+// eachVendorTextField hands visit each GTextField a form holds directly, in
+// order, and whether a listener for its events is set, until visit answers
+// false. It is the one reading of which children are vendor fields, for the
+// rule a form is shown under and for the relaxed one alike.
+func (runtime *initializationRuntime) eachVendorTextField(form *jvm.Object, visit func(field *jvm.Object, listened bool) bool) {
 	for _, child := range runtimeComponentChildren(form) {
 		if child == nil {
 			continue
@@ -270,15 +293,10 @@ func (runtime *initializationRuntime) uniqueVendorTextField(form *jvm.Object) *j
 			continue
 		}
 		state, ok := runtimeComponentEventListenerState(child)
-		if !ok || state.listener == nil {
-			continue
+		if !visit(child, ok && state.listener != nil) {
+			return
 		}
-		if field != nil {
-			return nil
-		}
-		field = child
 	}
-	return field
 }
 
 // relaxedVendorTextInput is the vendor rule a Host snapshot falls back on once
@@ -303,19 +321,13 @@ func (runtime *initializationRuntime) relaxedVendorTextInput() (vendorTextInputS
 		return vendorTextInputState{}, false
 	}
 	var fields, listened []*jvm.Object
-	for _, child := range runtimeComponentChildren(form) {
-		if child == nil {
-			continue
-		}
-		vendor, err := runtime.client.vm.IsSubclassOf(child.ClassName, runtimeGTextFieldClass)
-		if err != nil || !vendor {
-			continue
-		}
+	runtime.eachVendorTextField(form, func(child *jvm.Object, isListened bool) bool {
 		fields = append(fields, child)
-		if state, ok := runtimeComponentEventListenerState(child); ok && state.listener != nil {
+		if isListened {
 			listened = append(listened, child)
 		}
-	}
+		return true
+	})
 	var field *jvm.Object
 	switch focus := runtime.runtimeObjects["lwc:focus"]; {
 	case len(listened) == 1:

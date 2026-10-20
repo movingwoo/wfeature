@@ -146,6 +146,17 @@ type javaRuntime struct {
 	// and later restores the same handles.
 	focusedWidget    uint32
 	widgetGeneration uint64
+	// paintTextReads collects the text components the card reads while it
+	// paints. paintedText is that set from the last paint that read any, and
+	// paintedTextCard the card that painted it: a field the title draws
+	// itself is read there, which is the evidence a Host edit offers such a
+	// field on. None of it is part of a checkpoint; the next paint fills it.
+	// See javaTextInputTarget.
+	painting          bool
+	paintTextReads    []uint32
+	paintTextOverflow bool
+	paintedText       []uint32
+	paintedTextCard   uint32
 	// dates is the instant each java/util/Date stands for.
 	dates          map[uint32]int64
 	databases      map[uint32]*javaDatabase

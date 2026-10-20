@@ -3105,3 +3105,16 @@ menu), UNEDITABLE fields, constraint and encoding checks, and a full or invalid
 whose text a title draws without ever calling its `paint`, and, within one
 display revision, a field that replaced an earlier painted one.
 
+**Review follow-ups, the same day.** Two fallbacks were held to more evidence.
+The focused `XTextField` is offered on a Canvas only when it belongs there:
+built for it, or drawn while it is up — painted into any Graphics, or its text
+read for the title to draw — so a field left focused on a Canvas the title has
+moved on from is not offered on the next one, and an edit opened before is not
+committed into it (`TestHostXTextFieldLeftFocusedOnAnotherCanvasIsNotOffered`;
+`TestHostXTextFieldFocusedOnTheCurrentCanvas` now draws the field's text). A
+focus call clears the record of painted fields only when it changes a field's
+focus, and only then spends a pending edit: a title that turns off, after every
+paint, a focus its fields do not have kept the record empty and every edit stale
+(`TestHostXTextFieldRepeatedFocusOffKeepsThePaintedField`). The rest of the
+review is recorded in [the LGT history](lgt.md#lgt-text-input-review-2026-10-20).
+

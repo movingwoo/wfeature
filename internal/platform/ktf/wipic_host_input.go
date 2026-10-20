@@ -20,10 +20,11 @@ const maxCInputLength = 64
 // only evidence there is, and a widget that takes a press without calling the
 // input method — a cursor move, a soft key — looks closed afterwards although
 // it is still on the screen. So once a title of unknown shape has used its
-// input method at all, its editor is offered on whatever card is on top: a
-// carrier its widget does not take fails that one commit and leaves the
-// offer standing. A recognized controller answers for its own editor and is
-// held to that under both rules.
+// input method at all, its editor is offered on whatever card is on top. A
+// carrier no widget takes reaches the game as the key it is, once: it fails
+// that commit, and the offer waits for the input method to be called again or
+// for the player to press a key (see cInputState.unreached). A recognized
+// controller answers for its own editor and is held to that under both rules.
 //
 // A title that runs its own event loop takes keys from its queue in its own
 // time, so whether a carrier was consumed is unknown; a vendor form that owns
@@ -50,7 +51,7 @@ func (client *Client) cInputOffered(relaxed, sync bool) bool {
 		return false
 	}
 	if relaxed && state.owner.address == 0 {
-		return runtime.cInputUsed()
+		return runtime.cInputUsed() && !state.unreached
 	}
 	return active && state.card == runtime.cInputCard()
 }
@@ -120,7 +121,9 @@ func (client *Client) cTextInput(target textInputTarget) *backend.TextInput {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				if !unchanged() {
+				// The check after the previous character answers for this
+				// one too: no guest code runs between them.
+				if offset == 0 && !unchanged() {
 					return backend.ErrTextInputChanged
 				}
 				size := 1
@@ -150,10 +153,13 @@ func (client *Client) cTextInput(target textInputTarget) *backend.TextInput {
 				if !reached {
 					// The carrier never reached the input method, so the card
 					// took it as the key it is. Its release follows, as it
-					// would a person's, so the key is not left down. The
-					// editor stays offered — what the press did is the title's
-					// — but this snapshot is spent with it.
+					// would a person's, so the key is not left down. Nothing
+					// on this screen takes keys through the input method, so
+					// the editor is not active, and the relaxed rule waits for
+					// new evidence before it offers one again; this snapshot is
+					// spent with it.
 					state.pending = nil
+					state.active, state.unreached = false, true
 					state.revision++
 					if err := client.absorbUncaughtCallback("key", runtime.dispatchKeyToCards(KeyReleased, cInputCarrier)); err != nil {
 						return err

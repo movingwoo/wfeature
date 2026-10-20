@@ -668,6 +668,11 @@ func (client *Client) deliverEvents(ctx context.Context) error {
 			client.logger.Debug("LGT clet event delivered",
 				"kind", event.kind, "param1", int32(event.param1), "param2", event.param2)
 		}
+		// A press the player made can bring a field up; see
+		// cTextInputState.unreached.
+		if event.kind == EventKeyPressed {
+			client.cTextInput.unreached = false
+		}
 		if err := client.callClet(ctx, "handleCletEvent", handler,
 			[]uint32{event.kind, event.param1, event.param2}); err != nil {
 			return err

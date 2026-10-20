@@ -218,19 +218,26 @@ func editableFormTextField(item *jvm.Object) (*itemData, bool) {
 
 // hostXTextFieldFallback answers the vendor field a Host edit is for when the
 // strict route could not place one on screen. A focused field is offered on
-// any Canvas, whatever it was painted into: a title that draws it into its own
-// back buffer, or draws its text itself, never paints it onto the screen
-// Graphics, and the field is still the one the player is looking at. With no
-// field focused, the one field painted, into any Graphics, at this display
-// revision is offered; two make the paint ambiguous. A focused field that
-// cannot take text is still the focused one, so a field merely painted beside
-// it is not offered in its place.
+// the Canvas it belongs to, whatever it was drawn into: the Canvas it was
+// built for, or the one that was current at this display revision when the
+// title last painted it into any Graphics or read its text. A title that
+// draws it into its own back buffer, or draws its text itself, never paints it
+// onto the screen Graphics, and the field is still the one the player is
+// looking at; a field left focused on a Canvas the title has since left is
+// not, and is not offered on the new one. With no field
+// focused, the one field painted, into any Graphics, at this display revision
+// is offered; two make the paint ambiguous. A focused field that cannot take
+// text, or cannot be placed on this Canvas, is still the focused one, so a
+// field merely painted beside it is not offered in its place.
 //
 // The caller holds textMu and the vendor lock, and has checked that the
 // current Displayable is a Canvas and that no TextComponent is attached.
 func (runtime *Runtime) hostXTextFieldFallback(vendor *skvmState, current *jvm.Object, displayRevision, menuRevision uint64) *backend.TextInput {
 	kind := hostXTextField
 	field, data := vendor.focusedXTextField()
+	if field != nil && !data.placedOn(current, displayRevision) {
+		return nil
+	}
 	if field == nil {
 		var ok bool
 		kind, field = hostPaintedXTextField, runtime.textFieldPaints.only(current, displayRevision)
@@ -700,10 +707,10 @@ func (runtime *Runtime) commitXTextField(target hostTextTarget, text string) err
 
 // hostXTextFieldStillChosen reports whether the rule that chose a vendor field
 // for a Host edit would choose it again. A focused field the strict route
-// placed must still be shown; one the fallback offered needs only its focus,
-// because the Displayable it was offered on is still current and is a Canvas.
-// The field painted with nothing focused must still be the only one painted.
-// Either fallback also needs the vendor input method to be without a
+// placed must still be shown; one the fallback offered needs its focus and its
+// place on the Displayable it was offered on, which is still current and is a
+// Canvas. The field painted with nothing focused must still be the only one
+// painted. Either fallback also needs the vendor input method to be without a
 // component, as it was when the fallback was asked. The caller holds textMu
 // and the vendor lock.
 func (runtime *Runtime) hostXTextFieldStillChosen(vendor *skvmState, target hostTextTarget, data *xTextFieldData) bool {
@@ -714,7 +721,10 @@ func (runtime *Runtime) hostXTextFieldStillChosen(vendor *skvmState, target host
 	if target.kind == hostPaintedXTextField {
 		return focused == nil && runtime.textFieldPaints.only(target.display, target.displayRevision) == target.field
 	}
-	return focused == target.field && (target.fallback || data.visibleOn(target.display, target.displayRevision))
+	if target.fallback {
+		return focused == target.field && data.placedOn(target.display, target.displayRevision)
+	}
+	return focused == target.field && data.visibleOn(target.display, target.displayRevision)
 }
 
 // textComponentAttached reports whether the vendor input method has a
@@ -728,6 +738,13 @@ func (runtime *Runtime) textComponentAttached() bool {
 
 func (data *xTextFieldData) visibleOn(display *jvm.Object, revision uint64) bool {
 	return data.owner == display || data.paintedDisplay == display && data.paintedDisplayRevision == revision
+}
+
+// placedOn is the fallback's looser evidence that a focused field is on the
+// display: built for it, or drawn — painted into any Graphics, or its text
+// read — while it was current at this revision.
+func (data *xTextFieldData) placedOn(display *jvm.Object, revision uint64) bool {
+	return data.owner == display || data.drawnDisplay == display && data.drawnDisplayRevision == revision
 }
 
 func nativeXTextField(field *jvm.Object) (*xTextFieldData, bool) {
