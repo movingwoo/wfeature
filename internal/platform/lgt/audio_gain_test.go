@@ -100,6 +100,9 @@ func TestJavaAndCAudioGainShareDeviceAndKeepClipLevels(t *testing.T) {
 			t.Fatalf("clip %#x default volume = %d, want 100", clip, got)
 		}
 	}
+	if got := javaCall(javaClipClass+".getVolume()I", javaClip); got != 100 {
+		t.Fatalf("Java clip default getVolume = %d, want 100", got)
+	}
 	setJavaClip := func(level uint32) {
 		t.Helper()
 		if got := javaCall(javaClipClass+".setVolume(I)Z", javaClip, level); got != javaTrue {
@@ -107,6 +110,9 @@ func TestJavaAndCAudioGainShareDeviceAndKeepClipLevels(t *testing.T) {
 		}
 		if got := callSlot(t, client, slotClipGetVolume, javaClip); got != level {
 			t.Fatalf("Java clip volume read through C = %d, want %d", got, level)
+		}
+		if got := javaCall(javaClipClass+".getVolume()I", javaClip); got != level {
+			t.Fatalf("Java clip getVolume = %d, want %d", got, level)
 		}
 	}
 	setCClip := func(level uint32) {

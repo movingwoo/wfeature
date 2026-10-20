@@ -272,3 +272,88 @@ func TestJavaVectorSetElementAtSlotReplacesWithoutResizing(t *testing.T) {
 		t.Fatal("unknown receiver accepted")
 	}
 }
+
+// `copyInto` writes every element, in order, into the front of the array the
+// caller sized with `size`, and leaves the rest of a longer array alone. A
+// null array and one too short are the language's two exceptions.
+func TestJavaVectorCopyIntoSlotFillsTheFrontOfTheArray(t *testing.T) {
+	slot, ok := javaBakedVirtualSlots[javaVectorClass][10]
+	if !ok || slot.Called != "copyInto([Ljava/lang/Object;)V" || slot.Method.Words != 2 {
+		t.Fatal("Vector slot 10 must take the receiver and an array")
+	}
+	client := fixtureClient(t)
+	vector := newFixtureVector(t, client)
+	elements := []uint32{0x1000, 0, 0x3000}
+	for _, element := range elements {
+		if _, err := javaVectorAdd(client, nil, nil, []uint32{vector, element}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	array, err := client.newJavaStringArray([]string{"a", "b", "c", "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _, err := client.javaArrayBlock(array)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, err := client.readWord(block + javaArrayLengthWords*4 + 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for register, value := range []uint32{vector, array} {
+		if err := client.thread.SetRegister(register, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	served, err := client.callJavaPlatformVirtual(context.Background(), client.thread, javaVirtualSlot(javaVectorClass, 10))
+	if err != nil || !served {
+		t.Fatalf("copyInto dispatch: served=%v error=%v", served, err)
+	}
+	for index, want := range append(elements, last) {
+		got, err := client.readWord(block + javaArrayLengthWords*4 + uint32(index)*4)
+		if err != nil || got != want {
+			t.Fatalf("element %d = %#x, %v; want %#x", index, got, err, want)
+		}
+	}
+	short, err := client.newJavaStringArray([]string{"x", "y"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []uint32{short, 0} {
+		_, err := slot.Method.Implementat(client, nil, nil, []uint32{vector, target})
+		var thrown *javaUncaughtThrow
+		want := javaThrowArrayClass
+		if target == 0 {
+			want = javaThrowNullClass
+		}
+		if !errors.As(err, &thrown) || thrown.Class != want {
+			t.Fatalf("array %#x: expected %s, got %v", target, want, err)
+		}
+	}
+	// An int[] is as wide as the references, so only its type refuses them.
+	bytesArray, err := client.newJavaByteArray(make([]byte, 16))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ints, err := client.javaArrayType(1, "I", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	numbers, err := client.allocateJavaArray(ints.Object, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []uint32{bytesArray, numbers} {
+		if _, err := slot.Method.Implementat(client, nil, nil, []uint32{vector, target}); err == nil {
+			t.Fatalf("primitive array %#x took references", target)
+		}
+	}
+	numbersBlock, _, err := client.javaArrayBlock(numbers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first, err := client.readWord(numbersBlock + javaArrayLengthWords*4); err != nil || first != 0 {
+		t.Fatalf("refused int[] written: %#x, %v", first, err)
+	}
+}

@@ -170,6 +170,18 @@
         "lgt.certificate_message"
       ],
       "evidence": "docs/history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility"
+    },
+    {
+      "id": "lgt-certificate-message-002",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "c3abb052c4eda11bba233e1bf21641fe04c5fb276b8fda9af4f581a1d7b1be8c"
+      },
+      "fixes": [
+        "lgt.certificate_message"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-new-archives-2026-10-19-certificate-message"
     }
   ]
 }

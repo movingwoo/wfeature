@@ -530,3 +530,45 @@ func TestJavaGraphicsSetFontIsAccepted(t *testing.T) {
 		t.Errorf("setFont refused: %v", err)
 	}
 }
+
+// A Jlet has one event queue: asking twice answers the same EventQueue object.
+func TestJavaJletEventQueueIsOneObject(t *testing.T) {
+	client := fixtureClient(t)
+	const key = "org/kwis/msp/lcdui/Jlet.getEventQueue()Lorg/kwis/msp/lcdui/EventQueue;"
+	method, registered := javaPlatformMethods[key]
+	if !registered || method.Words != 1 {
+		t.Fatalf("%s is not registered as an instance method", key)
+	}
+	first, err := method.Implementat(client, nil, nil, []uint32{0x1234})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := method.Implementat(client, nil, nil, []uint32{0x1234})
+	if err != nil {
+		t.Fatal(err)
+	}
+	class, known := client.javaClassOfObject(first)
+	if first == 0 || first != second || !known {
+		t.Fatalf("queues %#x and %#x (issued here: %v)", first, second, known)
+	}
+	if class.Name != "org/kwis/msp/lcdui/EventQueue" {
+		t.Fatalf("queue class %q", class.Name)
+	}
+}
+
+// A card answers the default display, the same object getDefaultDisplay does.
+func TestJavaCardDisplayIsTheDefaultDisplay(t *testing.T) {
+	client := fixtureClient(t)
+	method, registered := javaPlatformMethods["org/kwis/msp/lcdui/Card.getDisplay()Lorg/kwis/msp/lcdui/Display;"]
+	if !registered || method.Words != 1 {
+		t.Fatal("Card.getDisplay is not registered as an instance method")
+	}
+	display, err := method.Implementat(client, nil, nil, []uint32{0x1234})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultDisplay, err := javaPlatformMethods["org/kwis/msp/lcdui/Display.getDefaultDisplay()Lorg/kwis/msp/lcdui/Display;"].Implementat(client, nil, nil, nil)
+	if err != nil || display == 0 || display != defaultDisplay {
+		t.Fatalf("card display %#x, default %#x, %v", display, defaultDisplay, err)
+	}
+}

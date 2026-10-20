@@ -102,6 +102,12 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// program, so both are the object the launcher built and both answer it.
 	"org/kwis/msp/lcdui/Jlet.getActiveJlet()Lorg/kwis/msp/lcdui/Jlet;":  {Implementat: javaCurrentJlet},
 	"org/kwis/msp/lcdui/Jlet.getCurrentJlet()Lorg/kwis/msp/lcdui/Jlet;": {Implementat: javaCurrentJlet},
+	// The specification gives each Jlet one EventQueue, and the loop that
+	// drains it is this platform's own: keys reach the pushed card through
+	// deliverJavaKey. A title that asks for the queue in startApp and does
+	// nothing with it yet gets the one object, every time.
+	"org/kwis/msp/lcdui/Jlet.getEventQueue()Lorg/kwis/msp/lcdui/EventQueue;": {
+		Words: 1, Implementat: javaPlatformSingleton("org/kwis/msp/lcdui/EventQueue")},
 	// Showing the annunciator is showing the handset's own status bar, which
 	// this platform does not draw at all — so it takes no room either, and a
 	// title that lays its card out below one gets the whole screen.
@@ -178,6 +184,7 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/media/Clip.<init>(Ljava/lang/String;Ljava/lang/String;)V": {
 		Words: 3, Implementat: javaClipFromFile},
 	"org/kwis/msp/media/Clip.setVolume(I)Z": {Words: 2, Implementat: javaClipSetVolume},
+	"org/kwis/msp/media/Clip.getVolume()I":  {Words: 1, Implementat: javaClipGetVolume},
 
 	// The two a `BaseClip` declares: filling a clip built empty, and emptying
 	// it again. A title that reads its own sound resource and hands the bytes
@@ -342,6 +349,10 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// they are: the default display, and the runtime.
 	"org/kwis/msp/lcdui/Display.getDefaultDisplay()Lorg/kwis/msp/lcdui/Display;": {
 		Implementat: javaPlatformSingleton("org/kwis/msp/lcdui/Display")},
+	// A card's display is that same one: there is one screen, and a title that
+	// asks its card in keyNotify reaches the object getDefaultDisplay answers.
+	"org/kwis/msp/lcdui/Card.getDisplay()Lorg/kwis/msp/lcdui/Display;": {
+		Words: 1, Implementat: javaPlatformSingleton("org/kwis/msp/lcdui/Display")},
 	"java/lang/Runtime.getRuntime()Ljava/lang/Runtime;": {
 		Implementat: javaPlatformSingleton("java/lang/Runtime")},
 
@@ -811,6 +822,12 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		17: {Called: "size()I", Method: javaPlatformMethod{Words: 1, Implementat: javaByteSinkSize}},
 	},
 	javaVectorClass: {
+		// Slot 10 is the first method this class declares, `copyInto`, and its
+		// call site agrees: the caller asks slot 15 (`size`) for a length,
+		// allocates a `String[]` that long, passes the receiver and that array,
+		// drops the answer and keeps the array.
+		10: {Called: "copyInto([Ljava/lang/Object;)V",
+			Method: javaPlatformMethod{Words: 2, Implementat: javaVectorCopyInto}},
 		15: {Called: "size()I", Method: javaPlatformMethod{Words: 1, Implementat: javaVectorSize}},
 		// Slot 19 takes the receiver and one reference and its answer is kept.
 		// **One call site cannot choose between `indexOf`, `contains` and

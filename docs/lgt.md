@@ -108,6 +108,10 @@ Vector slot 26 implements `setElementAt(Object, int)`: it replaces one reference
 without resizing or shifting the list, permits null, and throws
 `ArrayIndexOutOfBoundsException` for an invalid index. See the
 [crash investigation](history/lgt.md#lgt-qa-2026-09-20-vector-replacement-crash).
+Slot 10 implements `copyInto(Object[])`. `Clip.getVolume`, `Jlet.getEventQueue`
+(one queue object; `postEvent` is not implemented) and `Card.getDisplay` (the
+default display) answer the
+[members one title reached first](history/lgt.md#lgt-new-archives-2026-10-19-java-surface).
 
 ### Key callbacks waiting on workers
 
@@ -332,13 +336,15 @@ configured subscriber number remain unchanged. The CLI diagnostic opt-out
 (`-no-auth`) retains the original identity check. See the
 [save-reader evidence](history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison).
 
-One recognized native revision completes its two-stage certificate exchange
+Two recognized native revisions complete their two-stage certificate exchange
 through the same bounded local socket service. Requests must match the session
-identity, model and observed protocol fields. The nonempty local message lets
+identity, model and the revision's observed protocol fields (client field, code
+word and product field). The nonempty local message lets
 the guest set and save its own certificate-present flag. Responses are deferred
 to a service boundary; no external connection or carrier credential is created.
 Unknown exchanges still fail, and the authentication diagnostic opt-out disables
-this behavior. See the [protocol evidence](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility).
+this behavior. See the [protocol evidence](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility)
+and [the second revision](history/lgt.md#lgt-new-archives-2026-10-19-certificate-message).
 
 MC_mdaClipFree returns a C clip's record to the platform arena. A clip keeps at
 most 64 undelivered callback transitions; a full queue drops the oldest. The C

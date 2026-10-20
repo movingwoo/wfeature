@@ -25,7 +25,7 @@ scripts. A resumed session keeps its original runtime. CLI reporting is in
 | `lgt-offline-notification` | Connected Thumb or ARM notification contracts match. Acknowledge the explicit choice locally; the Thumb variant also supports its empty remote-save query. |
 | `lgt-offline-authentication` | Connected packet builder, dial/socket callbacks and response dispatcher match. Answer the exact session-bound authentication request in process. |
 | `lgt-save-subscriber` | A recognized native revision's save reader matches. Accept a saved subscriber identity from another handset; the original length and checksum checks still run and no file changes. |
-| `lgt-certificate-message` | A recognized native revision's two-stage certificate exchange matches. Answer it through the bounded local socket service so the guest sets and saves its own certificate-present flag. |
+| `lgt-certificate-message` | One of two recognized native revisions' two-stage certificate exchange matches. Answer it through the bounded local socket service so the guest sets and saves its own certificate-present flag. |
 | `skt-license` | A complete normalized Java license-check shape matches a supported compiler/library layout. Adapt only its terminal license comparison in a private class-file copy. |
 
 The status constants are in `internal/backend/authentication.go`. Selection is

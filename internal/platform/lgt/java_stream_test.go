@@ -144,6 +144,19 @@ func TestJavaArrayCopyUsesTheArraysOwnElementWidth(t *testing.T) {
 	if _, err := javaArrayCopy(client, nil, nil, []uint32{source, 0, narrow, 0, 1}); err == nil {
 		t.Error("a copy between two element widths is not reported")
 	}
+	// A String[] is as wide as an int[]; only the types tell them apart.
+	names, err := client.newJavaStringArray([]string{"a", "b", "c", "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range [][2]uint32{{source, names}, {names, target}} {
+		if _, err := javaArrayCopy(client, nil, nil, []uint32{pair[0], 0, pair[1], 0, 1}); err == nil {
+			t.Errorf("a copy from %#x into %#x between references and numbers is not reported", pair[0], pair[1])
+		}
+	}
+	if _, err := javaArrayCopy(client, nil, nil, []uint32{names, 0, names, 1, 3}); err != nil {
+		t.Errorf("a copy between references: %v", err)
+	}
 }
 
 // Skipping moves the cursor without reading and answers how far it actually
