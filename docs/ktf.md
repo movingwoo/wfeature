@@ -289,6 +289,11 @@ Particular to this platform:
   file table empties a
   file in the store at the truncating open itself, so its handles are cursors
   on the file as it is and nothing of the truncation is left to carry.
+- A native title that is not running — its next frame more than a minute away,
+  or nothing drawn in a minute of its own time — is refused at a quick save and
+  at a quick load, rather than brought back as it was: an earlier build left the
+  title that read its settings out of an empty file so
+  ([history](history/ktf.md#ktf-native-settings-2026-10-20)).
 - A native package's write waits in the platform until a file is closed or a
   frame ends. A quick save and a quick load store what is waiting first, and
   are refused when the store refuses it. A name the ordinary flush could not

@@ -9293,15 +9293,16 @@ would hand the title that older save instead of the missing file it now sees. A
 guest's own removals stay on its platform's removal list.
 
 A quick save taken while the title was stuck held it with its next frame 152
-hours away, and loading it brought the stuck title back. A title whose next
-frame is more than a minute away is not running, so a quick save of one is
-refused, and so is loading a record of one: the copy of a stuck slot from a
-browser session is refused with "next frame is 152h2m1.612s away, which is not
-running: start the title again". The `run` command's manual clock jumps to a
-scheduled deadline instead of waiting for it, so a slot it took of the stuck
-title on v0.6.0-pre holds a 2 ms interval after a frame 152 hours on, and a
-blank screen; a paced session, which is what a player's slot comes from, never
-reaches that deadline.
+hours away, and loading it brought the stuck title back. The `run` command's
+manual clock jumps to a scheduled deadline instead of waiting for it, and a
+slot it took of the same title on v0.6.0-pre held the frame after that
+deadline: a 2 ms interval, and nothing drawn in 152 hours of the title's time.
+A title whose next frame is more than a minute away, or which has drawn
+nothing in a minute of its own time, is not running, so a quick save of one is
+refused and so is loading a record of one. A copy of the stuck slot from a
+browser session is refused with "its next frame is 152h2m1.612s away", the
+`run` slot with "it has drawn nothing in 152h2m2s of its own time", and a slot
+of the title running on this build loads.
 
 <a id="ktf-native-settings-2026-10-20-what-the-title-draws-with"></a>
 

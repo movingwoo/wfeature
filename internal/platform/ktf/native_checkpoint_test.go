@@ -266,9 +266,18 @@ func TestNativeCheckpointRefusesATitleThatIsNotRunning(t *testing.T) {
 	if _, err := session.CaptureCheckpoint(t.Context()); err != nil {
 		t.Fatalf("a running title was refused: %v", err)
 	}
+	interval := session.platform.frame.interval
 	session.platform.frame.interval = 0x209f770c * time.Millisecond
 	if _, err := session.CaptureCheckpoint(t.Context()); err == nil || !strings.Contains(err.Error(), "next frame") {
 		t.Fatalf("a title whose next frame is hours away was saved: %v", err)
+	}
+	// A clock that jumps to such a deadline runs the next frame, and the title
+	// went on without drawing anything: that is not running either.
+	session.platform.frame.interval = interval
+	session.platform.screen.presents, session.platform.screen.draws = 0, 0
+	session.platform.started = session.platform.clock.Now().Add(-2 * time.Minute)
+	if _, err := session.CaptureCheckpoint(t.Context()); err == nil || !strings.Contains(err.Error(), "drawn nothing") {
+		t.Fatalf("a title that has drawn nothing in two minutes was saved: %v", err)
 	}
 }
 
@@ -356,6 +365,9 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 		{"deadline overflow", func(s *nativeState) { s.Frame.Remaining = math.MinInt64 }},
 		{"a title not running, its next frame hours away", func(s *nativeState) {
 			s.Frame.Interval, s.Frame.Remaining = 0x209f770c*time.Millisecond, 0x209f770c*time.Millisecond
+		}},
+		{"a title not running, nothing drawn in hours", func(s *nativeState) {
+			s.Presents, s.Draws, s.Elapsed = 0, 0, 0x209f770c*time.Millisecond
 		}},
 		{"callback", func(s *nativeState) { s.Frame.Function = 0xdeadbeef }},
 		{"file key of another name", func(s *nativeState) { s.Files[0].Key = []byte("other.dat") }},
