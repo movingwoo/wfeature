@@ -138,20 +138,28 @@ type nativeOpenFile struct {
 	writable bool
 	// truncated says the open itself asked for an empty file. Everything in
 	// data was written through this object, which is what a quick load needs
-	// to know about it: see NativePlatform.reopenFiles. An object whose open
-	// made a file that was not there is not one of these.
+	// to know about it: see NativePlatform.reopenFiles. The open that makes a
+	// file that was not there is one of these, because it is the same mode.
 	truncated bool
 }
 
 // The open modes, which the WIPI specification names and the module's own
 // wrapper corroborates: it retries a refused open of mode 2 or 8 with mode 4,
 // and a read that failed would have nothing to retry with. So 1 is the only
-// mode that cannot write, and anything else may create the file.
+// mode that cannot write.
 //
-// Only 1 and 2 are reached by the local title — the specification is what says
-// what 4 means, and it says the size goes to zero. Serving it as an ordinary
-// write would leave the tail of a longer previous save behind the shorter one
-// that replaced it.
+// **Only 4 makes a file that is not there.** The retry is what says so — a
+// mode that made the file would never be refused for its absence — and a
+// title's own code says it twice more: it opens its settings with mode 2 and
+// takes its defaults when that is refused, and it saves them by opening with
+// mode 2 and, refused, again with mode 4. Answering that first open with an
+// empty file sent the title into its settings with nothing in them: its reads
+// moved no bytes, the frame interval it computes from them was whatever its
+// stack held, and the frame it asked for was days away.
+//
+// The specification is what says what 4 does to a file that is there, and it
+// says the size goes to zero. Serving it as an ordinary write would leave the
+// tail of a longer previous save behind the shorter one that replaced it.
 const (
 	nativeModeRead = 1
 	// nativeModeWriteTruncate is the specification's MC_FILE_OPEN_WRTRUNC:
@@ -272,6 +280,17 @@ func (platform *NativePlatform) packagedFile(name string) ([]byte, bool) {
 	return platform.archive.Files[entry], true
 }
 
+// leftEmptyEarlier reports whether what contents found for a name came out of
+// the store rather than out of this session or the package. Asked of a file
+// with nothing in it, that is a file an earlier session left empty.
+func (platform *NativePlatform) leftEmptyEarlier(name string) bool {
+	if _, ok := platform.written[nativeFileKey(name)]; ok {
+		return false
+	}
+	_, packaged := platform.packagedFile(name)
+	return !packaged
+}
+
 // readName reads a name argument out of guest memory.
 func (platform *NativePlatform) readName(address uint32) (string, error) {
 	if address == 0 {
@@ -310,6 +329,17 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 	if err != nil {
 		return 0, err
 	}
+	if ok && len(data) == 0 && int32(mode) != nativeModeWriteTruncate && platform.leftEmptyEarlier(name) {
+		// Every open but a read-only one used to make a file that was not
+		// there, and the store kept it with nothing in it, so a title that
+		// opened its settings that way found them on its next run and read
+		// nothing out of them. A file with nothing in it that the package
+		// does not carry and this session has not written opens as one that
+		// is not there, for every mode but the one that makes a file. That is
+		// the migration for those saves, and for a file a title left empty on
+		// purpose it is the path the title takes when the file is missing.
+		ok = false
+	}
 	platform.opens = keepFirst(platform.opens, NativeFileOpen{Name: name, Mode: mode, Found: ok})
 	key, truncated := nativeFileKey(name), false
 	if ok && int32(mode) == nativeModeWriteTruncate {
@@ -323,19 +353,16 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 		data, truncated = nil, true
 	}
 	if !ok {
-		if !writable {
-			// A file the package does not carry is a refusal, not a failure.
-			// The module opens names it may not have and answers for itself
-			// what to do about it.
+		if int32(mode) != nativeModeWriteTruncate {
+			// A file that is not there is a refusal, not a failure, for every
+			// mode but the one that makes it. The module opens names it may
+			// not have and answers for itself what to do about it.
 			return 0, nil
 		}
-		// Opening for writing creates the file. A title whose save has never
-		// been written has no other way to make one, and the module treats a
-		// refused create as the end of the run rather than as an empty save.
+		// The module treats a refused create as the end of the run rather
+		// than as an empty save, so this one is never refused.
 		platform.create(key)
-		// Only the mode that empties a file makes an emptied object. An open
-		// that made the file because there was none asked for the file.
-		data, truncated = platform.written[key], int32(mode) == nativeModeWriteTruncate
+		data, truncated = platform.written[key], true
 	}
 	object, err := platform.client.Allocate(4)
 	if err != nil {
@@ -620,7 +647,8 @@ func (platform *NativePlatform) openFileBytes() uint64 {
 // holds is its own, and the title goes on rewriting from there: handing it a
 // longer file would leave the tail of that file behind what the title writes,
 // which is the one thing an emptying open exists to prevent. Every other
-// object, one whose open made the file among them, is given the whole file.
+// object is given the whole file; the open that makes a file is the emptying
+// one, so no other object's open made its file.
 //
 // The names come from a slot, which is untrusted. So every read goes through
 // one backend.RebuildReader: a key is read once however many names and objects

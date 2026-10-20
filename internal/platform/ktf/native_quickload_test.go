@@ -450,7 +450,8 @@ func TestNativeOrdinaryFlushAsksOnceAndTheSessionEndAsksAgain(t *testing.T) {
 	// The end of the session asks once more, for a store that still refuses
 	// and for one that has recovered.
 	t.Run("the session end asks again", func(t *testing.T) {
-		other := startNativeSaveFixture(t, testfixture.KTFNativeSaveArchive, newNativeSaveFixtureStore(t))
+		saved := backend.SaveEntry{Key: testfixture.KTFNativeSaveStoreKey, Data: testfixture.KTFNativeSaveFile(0, 0)}
+		other := startNativeSaveFixture(t, testfixture.KTFNativeSaveArchive, newNativeSaveFixtureStore(t, saved))
 		other.progress(first)
 		other.press(testfixture.KTFNativeSaveKeyHold)
 		other.store.refuse = true
@@ -461,7 +462,7 @@ func TestNativeOrdinaryFlushAsksOnceAndTheSessionEndAsksAgain(t *testing.T) {
 		if other.store.attempts != asked+1 {
 			t.Fatalf("the session end asked %d times for the refused write, want once", other.store.attempts-asked)
 		}
-		other.wantStored("after the session ended", binary.LittleEndian.AppendUint32(nil, first))
+		other.wantStored("after the session ended", testfixture.KTFNativeSaveFile(first, 0))
 	})
 
 	// A later write of the title's is what the store is given next, whole.
@@ -604,9 +605,9 @@ func TestNativeQuickLoadReadsADirectoryWhereAFileWasAsNoFile(t *testing.T) {
 // the file as it is now, so the file the restored title is rewriting is never
 // followed by the tail of a newer one.
 //
-// An object whose open made a file that was not there asked for no such thing,
-// and is given the file as it is, like any other: what the title saved through
-// it after the quick save is still there after the restored title's next write.
+// An object opened on the file as it is asked for no such thing, and is given
+// the file as it is now: what the title saved through it after the quick save
+// is still there after the restored title's next write.
 func TestNativeQuickLoadNeverHandsAnEmptiedObjectANewerTail(t *testing.T) {
 	const first, second, third = 0x11111111, 0x22222222, 0x33333333
 	longer := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
@@ -644,14 +645,16 @@ func TestNativeQuickLoadNeverHandsAnEmptiedObjectANewerTail(t *testing.T) {
 			restored.press(testfixture.KTFNativeSaveKeyFinish)
 			restored.wantStored("after the restored title finished", binary.LittleEndian.AppendUint32(nil, third^testfixture.KTFNativeSaveMask))
 		})
-		t.Run(form.name+", made by its open and part written", func(t *testing.T) {
-			source := startNativeSaveFixture(t, form.build, newNativeSaveFixtureStore(t))
+		t.Run(form.name+", opened as it is and part written", func(t *testing.T) {
+			saved := backend.SaveEntry{Key: testfixture.KTFNativeSaveStoreKey, Data: testfixture.KTFNativeSaveFile(0, 0)}
+			source := startNativeSaveFixture(t, form.build, newNativeSaveFixtureStore(t, saved))
 			store := source.store
-			// No save yet: HOLD's open makes the file and writes part A.
+			// HOLD's open takes the save as it is and writes part A over its
+			// front.
 			source.progress(first)
 			source.press(testfixture.KTFNativeSaveKeyHold)
 			checkpoint := source.quickSave()
-			source.wantStored("after the quick save", binary.LittleEndian.AppendUint32(nil, first))
+			source.wantStored("after the quick save", testfixture.KTFNativeSaveFile(first, 0))
 			source.progress(second)
 			source.press(testfixture.KTFNativeSaveKeyFinish)
 			behind(t, store, longer)
@@ -893,7 +896,7 @@ func TestNativeFileNameIsOneFileWhicheverWayItIsWritten(t *testing.T) {
 	store := memorySaveStore{}
 	platform := newTestNativePlatform(t, nil)
 	platform.AttachSaves(store)
-	file := nativeCall(t, platform.openFile, 0, nativeString(t, platform, "Saves\\Slot.DAT"), 2)
+	file := nativeCall(t, platform.openFile, 0, nativeString(t, platform, "Saves\\Slot.DAT"), nativeModeWriteTruncate)
 	if file == 0 {
 		t.Fatal("the open was refused")
 	}

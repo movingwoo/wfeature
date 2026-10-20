@@ -80,6 +80,7 @@ This consolidation adds no execution or acceptance evidence.
 - [KTF dialogue clipping and deferred text input](#ktf-graphics-input-qa-2026-09-23)
 - [KTF input availability after rejected confirmation](#ktf-input-lifetime-2026-09-23)
 - [KTF slot creation and save overlay reads](#ktf-save-slots-2026-09-23)
+- [An earlier-package title's settings, sky and sparks, 2026-10-20](#ktf-native-settings-2026-10-20)
 
 <a id="implementation-ktf-platform-implementation-status"></a>
 
@@ -9208,3 +9209,96 @@ in the server builds.
 `go vet ./...` pass with the new regression tests, and both server profiles
 build. The active debug server was restarted with the fix, preserving all 24
 save files byte for byte. Physical iPhone replay remains a user confirmation.
+
+<a id="ktf-native-settings-2026-10-20"></a>
+
+## An earlier-package title's settings, sky and sparks, 2026-10-20
+
+<a id="ktf-native-settings-2026-10-20-report-and-cause"></a>
+
+### Report and cause
+
+A report said a title of the earlier native package showed only a black screen,
+and that it had worked in v0.6.0-pre. It had not: v0.6.0-pre and main both
+reach the same digest after 200 ticks from an empty save, and the title never
+ends a frame. Its module information file names application 19563.
+
+The title's start-up sets its frame interval to 50 ms, then opens its settings
+file in mode 2 and, when the open is refused, keeps that default. When the open
+works it reads six words, and one of them, times 150 less 100 (or times 50 in
+the other mode the title keeps), replaces the interval. This platform answered
+mode 2 on a missing name by making the file, so the six reads moved no bytes,
+the words stayed what the stack held, and the interval came out at
+`0x209f770c` ms — 152 hours — on the local run. The empty file went to the save
+store at the next boundary, so every later run read it again.
+
+The module's own code says mode 2 does not make a file. Where the title saves
+its settings it opens them in mode 2 and, refused, again in mode 4 before it
+writes; the 2005 module's wrapper retries a refused 2 or 8 with 4, and creates
+the name before it opens it in mode 2
+([A file is an object](#implementation-a-file-is-an-object-and-the-modules-own-wrapper-names-its-methods)).
+Only mode 4 makes a file now. The 2005 module's start-up gate creates its
+scratch file before it opens it, so it does not depend on the open making one.
+
+<a id="ktf-native-settings-2026-10-20-migration"></a>
+
+### Migration
+
+A save from an earlier build keeps the empty settings file, and the title would
+go on reading nothing out of it. So a file with nothing in it that the package
+does not carry and the session has not written opens as missing in every mode
+but 4. The title takes its defaults, and the next time it saves its settings it
+makes the file through mode 4 and writes them. The rule cannot tell such
+a file from one a title left empty on purpose; for that one it changes which
+path the title takes, to the one it takes when the file is missing. The
+existence and information calls answer as before. A quick save taken while the
+title was stuck brings the stuck interval back, because a checkpoint is
+execution state.
+
+<a id="ktf-native-settings-2026-10-20-what-the-title-draws-with"></a>
+
+### What the title draws with
+
+Running at its interval, the title reached four things this platform did not
+answer, each from its call sites:
+
+- **The clear.** At the top of every frame the title sets display colour item 2
+  to black and fills the whole screen with `0xffffffff`, which named no colour
+  and was drawn as white. A fill that names no colour now takes item 2, white
+  until a title sets it, which is what the earlier titles, which set nothing,
+  already got.
+- **A counted run of text.** The title draws `ne button game` with a count of
+  14: fourteen halfwords and a zero one. The count was read as bytes and drew
+  `ne butt`.
+- **Text measurement**, display `+0x0c`: `(display, font, run, -1)` with `-1`
+  and a null pointer on the stack. One caller centres a line with the answer
+  and draws at six pixels a character when it is zero; the other divides the
+  answer by the run's length for the width of a character to lay its help text
+  out with. The trap's zero made that a division by zero, and the title's
+  runtime reports one through a semihosting write (`svc 0xab`), which ended
+  the frame as `unknown KTF native supervisor call 0xab`. The width is now the
+  sum of the advances of the face the run is drawn in; a width limit and a
+  count of what fits are honoured, though no caller has asked for either.
+- **Interface `0x1002001`**, queried beside the screen and used for everything
+  that is not a bitmap or text: `+0x10` a pen colour `(r, g, b)` with 255 on the
+  stack, `+0x28` a point size of 1 or 2, `+0x30` a clip record (a byte 1, then
+  x, y, width and height as halfwords from offset 4) whose answer one caller
+  reads and draws only on a non-zero one, `+0x50` a point, `+0x54` a line and
+  `+0x5c` a circle of radius 4 round the aim. The stars of the title screen are
+  grey points, the fireworks are points of size 2 and lines, and the aim is the
+  circle. The pen, point size and clip are part of a native checkpoint; a
+  record taken before has none, and its zeroes are the interface's defaults.
+
+<a id="ktf-native-settings-2026-10-20-validation"></a>
+
+### Validation
+
+From an empty save the title reaches its title screen, a tip, its main menu,
+stage selection and the game, where the aim, rockets and score bar draw, in a
+906-tick route with no slot left a trap. A copy of a debug save holding the
+empty settings file runs at a 50 ms interval with the change and at 152 hours
+without it. The open and migration tests fail on the previous open.
+
+The other native archives this file's earlier records describe are no longer in
+the local corpus and were not run again; the 2005 module's file wrapper is the
+evidence for its path, and `TestNativeFileCreatesOnWrite` follows that path.

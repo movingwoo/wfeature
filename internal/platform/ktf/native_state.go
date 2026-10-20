@@ -51,9 +51,13 @@ type nativeState struct {
 	Posted       []nativePostedEvent
 	Resumes      []nativeResume
 	Colours      []nativeColourState
-	Audio        backend.AudioState
-	Clip         backend.AudioHandle
-	Sounding     bool
+	// Shapes is the second drawing interface's pen and clip. A record taken
+	// before that interface was answered has none, and its zeroes are what
+	// the interface starts with: a black pen, a one-pixel point, no clip.
+	Shapes   nativeShapesState
+	Audio    backend.AudioState
+	Clip     backend.AudioHandle
+	Sounding bool
 }
 
 type nativeBlockState struct {
@@ -87,6 +91,12 @@ type nativeFrameState struct {
 	Function, Context   uint32
 }
 type nativeColourState struct{ Item, Colour uint32 }
+type nativeShapesState struct {
+	Pen                 uint32
+	PointSize           int32
+	Clipped             bool
+	X, Y, Width, Height int32
+}
 
 func captureNativePixels(frame *image.RGBA) (nativePixelsState, error) {
 	if frame == nil || frame.Rect.Min != (image.Point{}) || frame.Stride != frame.Rect.Dx()*4 {
@@ -209,6 +219,12 @@ func (session *NativeSession) captureNativeState(now time.Time) (nativeState, er
 	}
 	for _, item := range slices.Sorted(maps.Keys(platform.colours)) {
 		saved.Colours = append(saved.Colours, nativeColourState{item, platform.colours[item]})
+	}
+	shapes := platform.shapes
+	saved.Shapes = nativeShapesState{Pen: shapes.pen, PointSize: shapes.pointSize, Clipped: shapes.clipped}
+	if shapes.clipped {
+		saved.Shapes.X, saved.Shapes.Y = int32(shapes.clip.Min.X), int32(shapes.clip.Min.Y)
+		saved.Shapes.Width, saved.Shapes.Height = int32(shapes.clip.Dx()), int32(shapes.clip.Dy())
 	}
 	saved.Audio, err = platform.audio.CaptureStateAt(platform.pace.SourceInstant(now))
 	if err != nil {
@@ -371,6 +387,15 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 			return invalid()
 		}
 	}
+	// The clip is what the title's halfwords made it, and a point is at most
+	// maxNativePointSize; anything else is not a state this platform reaches.
+	shapes := saved.Shapes
+	if shapes.Pen&0xff != 0 || shapes.PointSize < 0 || shapes.PointSize > maxNativePointSize ||
+		shapes.X < math.MinInt16 || shapes.X > math.MaxInt16 || shapes.Y < math.MinInt16 || shapes.Y > math.MaxInt16 ||
+		shapes.Width < 0 || shapes.Width > math.MaxInt16 || shapes.Height < 0 || shapes.Height > math.MaxInt16 ||
+		!shapes.Clipped && (shapes.X != 0 || shapes.Y != 0 || shapes.Width != 0 || shapes.Height != 0) {
+		return invalid()
+	}
 	// Native playback only starts one-shot clips at nonnegative guest times.
 	// Refuse impossible playback state before adoption can displace the
 	// running session or leave the next tick replaying an excessive number of
@@ -468,6 +493,11 @@ func restoreNativeState(archive *NativeArchive, saved nativeState, options Nativ
 	platform.colours = map[uint32]uint32{}
 	for _, colour := range saved.Colours {
 		platform.colours[colour.Item] = colour.Colour
+	}
+	platform.shapes = nativeShapes{pen: saved.Shapes.Pen, pointSize: saved.Shapes.PointSize, clipped: saved.Shapes.Clipped}
+	if saved.Shapes.Clipped {
+		x, y := int(saved.Shapes.X), int(saved.Shapes.Y)
+		platform.shapes.clip = image.Rect(x, y, x+int(saved.Shapes.Width), y+int(saved.Shapes.Height))
 	}
 	platform.audio, err = backend.NewAudioFromStateWithClock(saved.Audio, nil, platform.source.Now)
 	if err != nil {

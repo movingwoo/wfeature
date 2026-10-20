@@ -48,10 +48,10 @@ import (
 // store, each time it is opened.
 //
 // One object is kept at a time: HOLD and TRUNCATE do nothing while one is
-// kept, and FINISH does nothing without one. Opening for writing creates a file
-// that is not there, so PATCH and HOLD on a missing save leave four bytes; and
-// FINISH after TRUNCATE leaves part B alone at the front of the file, because
-// that is where the cursor of an emptied file stands.
+// kept, and FINISH does nothing without one. Only the open that empties a file
+// makes one that is not there, so PATCH and HOLD on a missing save are refused
+// and do nothing; and FINISH after TRUNCATE leaves part B alone at the front of
+// the file, because that is where the cursor of an emptied file stands.
 //
 // READ answers KTFNativeSaveStatusError when the read moved another number of
 // bytes than the open file's own record promised. Nothing on this platform does
@@ -164,8 +164,9 @@ func ktfNativeSaveArchive(frame bool) ([]byte, error) {
 		fileWrite              = 0x14
 		fileStatus             = 0x18
 
-		// 1 is the only mode that cannot write, 4 empties a file that exists,
-		// and any other writes over what is there.
+		// 1 is the only mode that cannot write, 4 empties a file that exists
+		// and is the only one that makes a file that does not, and any other
+		// writes over what is there.
 		openRead     = 1
 		openWrite    = 2
 		openTruncate = 4

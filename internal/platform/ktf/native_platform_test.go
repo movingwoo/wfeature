@@ -218,14 +218,38 @@ func TestNativeFileInterface(t *testing.T) {
 
 // TestNativeFileCreatesOnWrite is the gate a title's start-up depends on: it
 // makes a scratch file to find out whether the handset has room, and a refused
-// create is what puts "not enough file system memory" on its screen.
+// create is what puts "not enough file system memory" on its screen. The
+// module's own wrapper creates the name before it opens it for writing, and the
+// open that empties a file makes one too.
 func TestNativeFileCreatesOnWrite(t *testing.T) {
-	platform := newTestNativePlatform(t, nil)
-	name := nativeString(t, platform, "scratch.dat")
-	file := nativeCall(t, platform.openFile, 0, name, 2)
-	if file == 0 {
-		t.Fatal("opening a missing name for writing was refused")
+	for _, test := range []struct {
+		name string
+		open func(t *testing.T, platform *NativePlatform, name uint32) uint32
+	}{
+		{"created, then opened as it is", func(t *testing.T, platform *NativePlatform, name uint32) uint32 {
+			nativeCall(t, platform.createFile, 0, name)
+			return nativeCall(t, platform.openFile, 0, name, 2)
+		}},
+		{"opened emptied", func(t *testing.T, platform *NativePlatform, name uint32) uint32 {
+			return nativeCall(t, platform.openFile, 0, name, nativeModeWriteTruncate)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			platform := newTestNativePlatform(t, nil)
+			name := nativeString(t, platform, "scratch.dat")
+			file := test.open(t, platform, name)
+			if file == 0 {
+				t.Fatal("opening a name that was made for writing was refused")
+			}
+			nativeFileWriteReadsBack(t, platform, name, file)
+		})
 	}
+}
+
+// nativeFileWriteReadsBack writes through a file object the open made, and
+// checks that what was written is there to be found and read.
+func nativeFileWriteReadsBack(t *testing.T, platform *NativePlatform, name, file uint32) {
+	t.Helper()
 	payload := nativeString(t, platform, "written")
 	if got := nativeCall(t, platform.writeFile, file, payload, 7); got != 7 {
 		t.Fatalf("wrote %d bytes, want 7", got)
@@ -248,6 +272,88 @@ func TestNativeFileCreatesOnWrite(t *testing.T) {
 	}
 	if got := string(nativeRead(t, platform, buffer, 7)); got != "written" {
 		t.Errorf("read back %q, want %q", got, "written")
+	}
+}
+
+// TestNativeOpenMakesOnlyWhatTheEmptyingModeAsksFor is a title's settings on
+// its first run. It opens them as they are and takes its defaults when that is
+// refused; saving them, it opens them as they are and, refused, again emptied,
+// and writes. An open that made the file at the first step handed it an empty
+// file to read its settings out of instead.
+func TestNativeOpenMakesOnlyWhatTheEmptyingModeAsksFor(t *testing.T) {
+	store := memorySaveStore{}
+	platform := newTestNativePlatform(t, nil)
+	platform.AttachSaves(store)
+	name := nativeString(t, platform, "option.dat")
+	for _, mode := range []uint32{nativeModeRead, 2, 8, 3} {
+		if object := nativeCall(t, platform.openFile, 0, name, mode); object != 0 {
+			t.Errorf("mode %d opened a file that is not there", mode)
+		}
+	}
+	platform.FlushSaves()
+	if _, ok := platform.written["option.dat"]; ok || len(store) != 0 {
+		t.Fatalf("a refused open made a file: written=%v store=%v", platform.written, store)
+	}
+	for _, open := range platform.FileOpens() {
+		if open.Found {
+			t.Errorf("an open of a missing name was recorded as found: %+v", open)
+		}
+	}
+
+	object := nativeCall(t, platform.openFile, 0, name, nativeModeWriteTruncate)
+	if object == 0 {
+		t.Fatal("the open that empties a file did not make it")
+	}
+	settings := nativeString(t, platform, "settings")
+	nativeCall(t, platform.writeFile, object, settings, 8)
+	nativeCall(t, platform.closeFile, object)
+	if got := string(store["fs/option.dat"]); got != "settings" {
+		t.Fatalf("store holds %q, want the settings", got)
+	}
+	// The next run opens them as they are, and finds them.
+	next := newTestNativePlatform(t, nil)
+	next.AttachSaves(store)
+	reopened := nativeCall(t, next.openFile, 0, nativeString(t, next, "option.dat"), 2)
+	if file := next.files[reopened]; reopened == 0 || file == nil || string(file.data) != "settings" {
+		t.Fatal("the next run did not find the settings the title saved")
+	}
+}
+
+// TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing is the migration
+// for the saves an open that made files left behind: each is a file with
+// nothing in it, which the title then read its settings out of on every run.
+// Such a file opens as one that is not there, for every mode but the one that
+// makes a file, unless the package carries it or this session wrote it.
+func TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing(t *testing.T) {
+	store := memorySaveStore{
+		"fs/option.dat":  {},
+		"fs/shipped.dat": {},
+		"fs/kept.dat":    []byte("kept"),
+	}
+	platform := newTestNativePlatform(t, map[string][]byte{"a title/shipped.dat": []byte("from the package")})
+	platform.AttachSaves(store)
+	option := nativeString(t, platform, "option.dat")
+	for _, mode := range []uint32{nativeModeRead, 2, 8} {
+		if object := nativeCall(t, platform.openFile, 0, option, mode); object != 0 {
+			t.Errorf("mode %d opened the empty file an earlier session left", mode)
+		}
+	}
+	// A shipped name and a file with something in it are files like any other.
+	if object := nativeCall(t, platform.openFile, 0, nativeString(t, platform, "shipped.dat"), 2); object == 0 || len(platform.files[object].data) != 0 {
+		t.Error("an emptied file the package carries did not open as it is")
+	}
+	if object := nativeCall(t, platform.openFile, 0, nativeString(t, platform, "kept.dat"), 2); object == 0 || string(platform.files[object].data) != "kept" {
+		t.Error("a saved file did not open as it is")
+	}
+	// The title's own fallback makes it, and from then on this session's own
+	// copy is the file, empty or not.
+	made := nativeCall(t, platform.openFile, 0, option, nativeModeWriteTruncate)
+	if made == 0 {
+		t.Fatal("the open that empties a file was refused")
+	}
+	nativeCall(t, platform.closeFile, made)
+	if object := nativeCall(t, platform.openFile, 0, option, 2); object == 0 {
+		t.Error("a file this session made did not open as it is")
 	}
 }
 
@@ -282,6 +388,29 @@ func TestNativeScreenFill(t *testing.T) {
 	nativeCall(t, platform.present, 0)
 	if _, presents := platform.Frame(); presents != 1 {
 		t.Errorf("presents = %d, want 1", presents)
+	}
+}
+
+// TestNativeClearTakesTheBackgroundItem covers a fill that names no colour of
+// its own: it is the screen's background item, white until a title sets it. A
+// later title sets it to black at the top of every frame and clears.
+func TestNativeClearTakesTheBackgroundItem(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	frame, _ := platform.Frame()
+	white := color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	nativeCall(t, platform.drawRectangle, 0, 0, nativeNoColour, nativeNoColour)
+	if got := frame.RGBAAt(10, 10); got != white {
+		t.Errorf("a clear before any item was set = %+v, want white", got)
+	}
+	nativeCall(t, platform.screenColour, 0, nativeBackgroundColourItem, 0)
+	nativeCall(t, platform.drawRectangle, 0, 0, nativeNoColour, nativeNoColour)
+	if got := frame.RGBAAt(10, 10); got != (color.RGBA{A: 0xff}) {
+		t.Errorf("a clear after the title set the item to black = %+v", got)
+	}
+	// A fill that names its colour takes it, whatever the item holds.
+	nativeCall(t, platform.drawRectangle, 0, 0, nativeNoColour, 0x00ff0000)
+	if got := frame.RGBAAt(10, 10); got != (color.RGBA{G: 0xff, A: 0xff}) {
+		t.Errorf("a fill in green = %+v", got)
 	}
 }
 
@@ -639,9 +768,9 @@ func TestNativeSavesReachTheStoreAtABoundary(t *testing.T) {
 	platform.AttachSaves(store)
 
 	name := nativeString(t, platform, "burst.dat")
-	object := nativeCall(t, platform.openFile, 0, name, 2)
+	object := nativeCall(t, platform.openFile, 0, name, nativeModeWriteTruncate)
 	if object == 0 {
-		t.Fatal("opening for writing did not create the file")
+		t.Fatal("the open that empties a file did not make it")
 	}
 	chunk := nativeString(t, platform, "0123456789abcdef")
 	for round := 0; round < 8; round++ {

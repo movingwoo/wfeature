@@ -25,8 +25,10 @@ import (
 // comes off the two call sites rather than off the name:
 //
 //   - **count is -1 at both**, which is what a run of text with a terminator
-//     rather than a length is. A count that is not -1 has not been seen, and is
-//     taken as a number of bytes.
+//     rather than a length is. A later title passes 14 for "ne button game",
+//     which is fourteen halfwords and then a zero one, so a count is a number
+//     of halfwords, the units the run is made of, and not of bytes. Read as
+//     bytes it drew "ne butt".
 //   - **the text is EUC-KR bytes**, not the specification's wide characters:
 //     one module builds its lines by copying two bytes at a time out of a
 //     string in its own image, and those bytes decode as Korean and read as
@@ -48,6 +50,14 @@ const (
 	// module calls it with a font and two zeroes and uses the answer as the
 	// height of one line.
 	nativeScreenFontMetrics = 0x08
+	// nativeScreenMeasureText answers how wide a run of text is drawn, in
+	// pixels. A later title passes a font, a run, -1 for its count, -1 and a
+	// null pointer, and divides the answer by the run's length for the width
+	// of a character it lays its help text out with: answered zero, that is a
+	// division by zero, and the title's own runtime ends the run over it. Its
+	// other caller centres a line with the answer and falls back to six pixels
+	// a character on zero.
+	nativeScreenMeasureText = 0x0c
 )
 
 // The colour items a module sets before it draws, and which of them the ink is.
@@ -76,6 +86,7 @@ func (platform *NativePlatform) installText() {
 	surface := nativeInterfaceSurface(nativeInterfaceApplication)
 	platform.client.Serve(surface, nativeScreenText, platform.drawText)
 	platform.client.Serve(surface, nativeScreenFontMetrics, platform.fontMetrics)
+	platform.client.Serve(surface, nativeScreenMeasureText, platform.measureText)
 }
 
 // textFace is the face this platform draws a native package's text with. It is
@@ -108,6 +119,52 @@ func (platform *NativePlatform) fontMetrics(thread *armcore.Thread) (uint32, err
 		}
 	}
 	return uint32(face.Height()), nil
+}
+
+// measureText answers the width a run is drawn at, in the face drawText draws
+// it in. The two arguments on the stack are a width to stop at and where to
+// say how many characters fit in it. Both callers pass -1 and null, so a width
+// is a limit only when it is not negative, and the count is written only when
+// there is somewhere to write it.
+func (platform *NativePlatform) measureText(thread *armcore.Thread) (uint32, error) {
+	arguments, err := nativeArguments(thread, 4)
+	if err != nil {
+		return 0, err
+	}
+	address, count := arguments[2], int32(arguments[3])
+	stacked := platform.varargs(thread, 4)
+	stackedLimit, err := stacked(1)
+	if err != nil {
+		return 0, err
+	}
+	stackedFits, err := stacked(1)
+	if err != nil {
+		return 0, err
+	}
+	limit, fits := int(int32(uint32(stackedLimit))), uint32(stackedFits)
+	width, fitted := 0, 0
+	if address != 0 {
+		// A run that cannot be read measures nothing, as drawText draws
+		// nothing for it.
+		if raw, err := platform.readText(address, count); err == nil {
+			face := platform.textFace()
+			for _, character := range decodeEUCKR(raw) {
+				advance := face.Render(character).Advance
+				if limit >= 0 && width+advance > limit {
+					break
+				}
+				width += advance
+				fitted++
+			}
+		}
+	}
+	if fits != 0 {
+		word := []byte{byte(fitted), byte(fitted >> 8), byte(fitted >> 16), byte(fitted >> 24)}
+		if err := platform.client.core.Memory().Write(fits, word); err != nil {
+			return 0, fmt.Errorf("write a KTF native text fit to %#x: %w", fits, err)
+		}
+	}
+	return uint32(width), nil
 }
 
 // drawText draws one run of text on the screen.
@@ -181,8 +238,8 @@ func (platform *NativePlatform) drawText(thread *armcore.Thread) (uint32, error)
 	return 1, nil
 }
 
-// readText reads the run the caller named. A count of -1 is a terminator,
-// which is what both local call sites pass.
+// readText reads the run the caller named. A count of -1 is a terminator, and
+// any other is a number of halfwords.
 //
 // **A terminator here is a zero halfword, not a zero byte**, and reading it as
 // a byte cost three quarters of a sentence. One module builds its lines a
@@ -210,14 +267,14 @@ func (platform *NativePlatform) readText(address uint32, count int32) ([]byte, e
 	if count == 0 {
 		return nil, nil
 	}
-	if count > maxNativeTextLength {
-		return nil, fmt.Errorf("KTF native text of %d bytes at %#x, limit %d", count, address, maxNativeTextLength)
+	if count > maxNativeTextLength/2 {
+		return nil, fmt.Errorf("KTF native text of %d halfwords at %#x, limit %d", count, address, maxNativeTextLength/2)
 	}
-	raw := make([]byte, count)
+	raw := make([]byte, 2*count)
 	if err := platform.client.core.Memory().Read(address, raw); err != nil {
-		return nil, fmt.Errorf("read %d bytes of KTF native text at %#x: %w", count, address, err)
+		return nil, fmt.Errorf("read %d halfwords of KTF native text at %#x: %w", count, address, err)
 	}
-	return raw, nil
+	return nativeHalfwordRun(raw), nil
 }
 
 // readPaddedText carries on past a zero byte that is the pad of a single-byte
@@ -234,6 +291,12 @@ func (platform *NativePlatform) readPaddedText(address uint32, first []byte) ([]
 		// zero: what was read up to it is the run.
 		return first, nil
 	}
+	return nativeHalfwordRun(raw), nil
+}
+
+// nativeHalfwordRun reads a run a halfword at a time up to a zero one, and
+// drops the zero byte that pads a single-byte character.
+func nativeHalfwordRun(raw []byte) []byte {
 	run := make([]byte, 0, len(raw))
 	for offset := 0; offset+1 < len(raw); offset += 2 {
 		high, low := raw[offset], raw[offset+1]
@@ -247,7 +310,7 @@ func (platform *NativePlatform) readPaddedText(address uint32, first []byte) ([]
 			run = append(run, low)
 		}
 	}
-	return run, nil
+	return run
 }
 
 // nativeBlendInk mixes ink into what is under it. The face does not cover a

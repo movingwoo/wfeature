@@ -968,7 +968,10 @@ Java descriptor modules, not the native `.mod`/`.mif` package shape, and no real
 native package was in the local corpus, so native evidence uses authored
 fixtures. The opt-in `TestLocalNativeCheckpointContinuation` uses the Host's
 library discovery boundary and skips explicitly when there is no native
-package.
+package. On 2026-10-20 one native package was in the local corpus again, and it
+passes that probe and `TestLocalKTFNativePackageRuns`; the latter no longer
+reads a draw count as where its route went
+([history](history/ktf.md#ktf-native-settings-2026-10-20)).
 
 **Route evidence, 2026-10-01.** A Chromium page check used the picker,
 save/load controls, key input and disk-restore button for both authored archive

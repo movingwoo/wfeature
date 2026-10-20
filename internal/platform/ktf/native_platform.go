@@ -57,6 +57,9 @@ type NativePlatform struct {
 	installed bool
 	// screen is what the title draws into.
 	screen *nativeScreen
+	// shapes is the second drawing interface's pen and clip; see
+	// native_shapes.go.
+	shapes nativeShapes
 	// screenWidth and screenHeight are the handset the title is told it runs
 	// on. Zero is the platform's own; see SetScreen.
 	screenWidth  int
@@ -121,10 +124,8 @@ type NativePlatform struct {
 	// nativeObjectResume.
 	resumes []nativeResume
 	// colours holds what the title set through nativeScreenColour, by the item
-	// number it named. Nothing draws with them yet; they are kept because the
-	// call that sets them is on the route to a screen this platform can not
-	// yet put text on, and a colour recorded is a colour that call is not
-	// silently losing.
+	// number it named. Text is drawn in item 1, and a fill that names no
+	// colour of its own is drawn in item 2.
 	colours map[uint32]uint32
 }
 
@@ -309,6 +310,7 @@ func (platform *NativePlatform) Install() error {
 	platform.installLibrary()
 	platform.images = map[uint32]*nativeImage{}
 	platform.installScreen()
+	platform.installShapes()
 	platform.installText()
 	platform.installSound()
 	platform.installTimed()

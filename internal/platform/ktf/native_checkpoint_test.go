@@ -126,6 +126,9 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 	p.posted = []nativePostedEvent{{Class: testfixture.KTFNativeCheckpointApplicationID, Event: 0x1234, First: 57, Secon: 91}}
 	p.fileFailure = nativeFileFailed
 	p.colours = map[uint32]uint32{17: 0x11223300}
+	nativeCall(t, p.shapesColour, 0, 0x12, 0x34, 0x56)
+	nativeCall(t, p.shapesPointSize, 0, 3)
+	nativeCall(t, p.shapesClip, 0, put(source, []byte{nativeClipRectangle, 0, 0, 0, 2, 0, 3, 0, 20, 0, 30, 0}), 0)
 	saved, err := source.CaptureCheckpoint(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -177,6 +180,9 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 	}
 	if r.fileFailure != p.fileFailure || r.colours[17] != 0x11223300 {
 		t.Fatal("file or display service state changed")
+	}
+	if r.shapes != p.shapes || !r.shapes.clipped || r.shapes.clip.Dx() != 20 || r.shapes.pointSize != 3 {
+		t.Fatalf("the second drawing interface came back as %+v, want %+v", r.shapes, p.shapes)
 	}
 	// Nothing of the files came with the record. The object is the one the
 	// title held, at its cursor, over a copy of its own of what the store has.
@@ -250,7 +256,7 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 	}
 	defer source.Close()
 	// One open file, so the record has a file entry for the cases to damage.
-	if nativeCall(t, source.platform.openFile, 0, nativeString(t, source.platform, "Slot.dat"), 2) == 0 {
+	if nativeCall(t, source.platform.openFile, 0, nativeString(t, source.platform, "Slot.dat"), nativeModeWriteTruncate) == 0 {
 		t.Fatal("the fixture could not open a file")
 	}
 	saved, err := source.CaptureCheckpoint(t.Context())
@@ -293,6 +299,11 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 		{"file object outside memory", func(s *nativeState) { s.Files[0].Object = 0xdeadbee0 }},
 		{"audio handle", func(s *nativeState) { s.Clip = 42 }},
 		{"speed", func(s *nativeState) { s.Speed = 100 }},
+		{"pen with its spare byte set", func(s *nativeState) { s.Shapes.Pen = 1 }},
+		{"point size below zero", func(s *nativeState) { s.Shapes.PointSize = -1 }},
+		{"point size past the bound", func(s *nativeState) { s.Shapes.PointSize = maxNativePointSize + 1 }},
+		{"clip wider than a halfword", func(s *nativeState) { s.Shapes.Clipped, s.Shapes.Width = true, math.MaxInt16+1 }},
+		{"clip of no clip", func(s *nativeState) { s.Shapes.Clipped, s.Shapes.X = false, 1 }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var record nativeState

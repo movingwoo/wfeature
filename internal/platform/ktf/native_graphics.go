@@ -40,9 +40,20 @@ const (
 
 // nativeNoColour is the value both colour arguments carry when the title means
 // "leave it alone". It is also what a fully saturated colour would be, so a
-// call that passes it for the fill is ambiguous; the one call site that does
-// passes no rectangle either, which reads as a clear.
+// call that passes it for the fill is ambiguous; the call sites that do pass
+// no rectangle either, which reads as a clear.
 const nativeNoColour = 0xffffffff
+
+// A clear fills with the screen's background item, which is what a fill that
+// names no colour of its own takes. A later title is what says so: at the top
+// of every frame it sets item 2 to black and fills the whole screen with
+// nativeNoColour, and then scatters grey stars over the result. Filling with
+// white instead left the stars on a white sky. The earlier titles set no item
+// and clear the same way to white, which is what the item holds until a title
+// sets it.
+const nativeBackgroundColourItem = 2
+
+var nativeDefaultBackground = color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 
 // nativeScreen is the frame the title draws into.
 type nativeScreen struct {
@@ -144,6 +155,12 @@ func (platform *NativePlatform) drawRectangle(thread *armcore.Thread) (uint32, e
 		bounds = image.Rect(x, y, x+width, y+height).Intersect(bounds)
 	}
 	fill := nativeColour(arguments[3])
+	if arguments[3] == nativeNoColour {
+		fill = nativeDefaultBackground
+		if packed, ok := platform.colours[nativeBackgroundColourItem]; ok {
+			fill = nativeColour(packed)
+		}
+	}
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			platform.screen.frame.SetRGBA(x, y, fill)

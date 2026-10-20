@@ -95,15 +95,77 @@ func TestNativeTextReadsBothShapesOfARun(t *testing.T) {
 		})
 	}
 
-	// A caller that gives a count is taken at its word, and one that gives an
-	// impossible one is refused rather than read.
-	address := nativeTextAt(t, platform, []byte("WAIT..\x00"))
+	// A caller that gives a count is taken at its word, in the halfwords the
+	// run is made of, and one that gives an impossible one is refused rather
+	// than read.
+	address := nativeTextAt(t, platform, []byte("W\x00A\x00I\x00T\x00.\x00.\x00\x00\x00"))
 	if raw, err := platform.readText(address, 4); err != nil || string(raw) != "WAIT" {
 		t.Errorf("a counted run read %q (%v), want %q", raw, err, "WAIT")
 	}
-	if _, err := platform.readText(address, maxNativeTextLength+1); err == nil {
+	mixed := nativeTextAt(t, platform, []byte{0xc0, 0xce, 'A', 0x00, 0xc1, 0xf5, 0x00, 0x00})
+	if raw, err := platform.readText(mixed, 2); err != nil || decodeEUCKR(raw) != "인A" {
+		t.Errorf("a counted run of Korean and ASCII read %q (%v), want %q", decodeEUCKR(raw), err, "인A")
+	}
+	if _, err := platform.readText(address, maxNativeTextLength/2+1); err == nil {
 		t.Error("a run longer than the limit was read")
 	}
+}
+
+// TestNativeMeasureTextAnswersTheWidthItIsDrawnAt covers what a title lays its
+// help text out with: it measures a run, divides by its length, and takes the
+// answer as the width of a character. Zero is a division by zero the title's
+// own runtime ends the run over.
+func TestNativeMeasureTextAnswersTheWidthItIsDrawnAt(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	face := platform.textFace()
+	a, b := face.Render('A').Advance, face.Render('B').Advance
+	run := nativeTextAt(t, platform, []byte("A\x00B\x00\x00\x00"))
+	if got := nativeMeasureCall(t, platform, run, -1, -1, 0); got != uint32(a+b) || got == 0 {
+		t.Errorf("width = %d, want %d", got, a+b)
+	}
+	if got := nativeMeasureCall(t, platform, run, 1, -1, 0); got != uint32(a) {
+		t.Errorf("width of a counted run of one = %d, want %d", got, a)
+	}
+	// A width to stop at stops before the character that would pass it, and
+	// says how many fit.
+	fits, err := platform.client.Allocate(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nativeMeasureCall(t, platform, run, -1, int32(a+b-1), fits); got != uint32(a) {
+		t.Errorf("width within %d = %d, want %d", a+b-1, got, a)
+	}
+	if got := binary.LittleEndian.Uint32(nativeRead(t, platform, fits, 4)); got != 1 {
+		t.Errorf("%d characters fit, want 1", got)
+	}
+	if got := nativeMeasureCall(t, platform, 0, -1, -1, 0); got != 0 {
+		t.Errorf("a null run measured %d", got)
+	}
+}
+
+// nativeMeasureCall runs the measuring handler with its last two arguments on
+// the guest stack.
+func nativeMeasureCall(t *testing.T, platform *NativePlatform, address uint32, count, limit int32, fits uint32) uint32 {
+	t.Helper()
+	thread := armcore.NewThread(armcore.NewContext())
+	stack := ThreadStackBase + uint32(ThreadStackSize) - 0x200
+	for index, value := range []uint32{1, 0x8000, address, uint32(count)} {
+		if err := thread.SetRegister(index, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := thread.SetRegister(armcore.RegisterSP, stack); err != nil {
+		t.Fatal(err)
+	}
+	spilled := binary.LittleEndian.AppendUint32(binary.LittleEndian.AppendUint32(nil, uint32(limit)), fits)
+	if err := platform.client.core.Memory().Write(stack, spilled); err != nil {
+		t.Fatal(err)
+	}
+	result, err := platform.measureText(thread)
+	if err != nil {
+		t.Fatalf("measure text: %v", err)
+	}
+	return result
 }
 
 // TestNativeDrawTextPutsInkOnTheScreen covers the drawing itself: the ink is

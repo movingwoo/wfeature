@@ -485,11 +485,14 @@ func TestLocalKTFNativePackageRuns(t *testing.T) {
 			}
 		}
 		t.Logf("%s: after the menu route, %d draws and %d images", name, platform.Draws(), len(platform.images))
+		// The images the route loaded are what say it reached screens of the
+		// game. The draws do not: a title whose title screen is an animation of
+		// thousands of points draws less a frame once it is playing.
 		if len(platform.images) <= images {
 			t.Errorf("%s: the menu route loaded no further images (%d, was %d)", name, len(platform.images), images)
 		}
-		if platform.Draws() <= draws*4 {
-			t.Errorf("%s: the menu route drew %d, barely more than the %d before it", name, platform.Draws(), draws)
+		if platform.Draws() <= draws {
+			t.Errorf("%s: the menu route drew nothing (%d draws, %d before it)", name, platform.Draws(), draws)
 		}
 
 		if sink.messages == 0 {

@@ -145,6 +145,14 @@ later, and a span that faults. Walked, a 32×32 sprite
 cost 33 µs and a 240×320 screen copy 2.5 ms on an M1; by rows, 1.3 µs and
 19 µs.
 
+The earlier native package draws through the display — a fill, a blit, text
+and a present — and through a second interface (`0x1002001`) with a pen
+colour, a point size, a rectangular clip, and points, lines and circle
+outlines in that colour. A fill that names no colour takes the display's
+background item, white until the title sets it. A counted text run counts
+halfwords, and the display measures a run in the face it draws it in
+([history](history/ktf.md#ktf-native-settings-2026-10-20)).
+
 The screen is the Host's choice, 240×320 by default (`-screen WxH` in the
 CLI). The `__adf__` `DisplaySize` field is not used: in the measured local
 set, twelve of the thirteen titles declaring `176*220` draw across the whole
@@ -203,6 +211,13 @@ mkdir); `MC_fsGetFileStat` reads through the removal list like
 `MC_fsIsExist`.
 The earlier native package retains its existing buffered write/flush policy.
 See [save integrity](session.md#save-integrity) for failure recovery and limits.
+Its open makes a missing file only in mode 4, the mode that empties one; every
+other mode is refused, and the titles fall back on their own (defaults, or
+mode 4 and then a write). A file with nothing in it that an earlier session
+left, that the package does not carry, opens as missing in every mode but 4:
+that is the migration for saves from builds whose every writing open made the
+file, which left one title reading its settings out of an empty file
+([history](history/ktf.md#ktf-native-settings-2026-10-20)).
 
 A record database the archive carries, as one `qtcdb` file or as a `qtpdb`
 index beside its data file, is readable through both the WIPI C record table
@@ -254,8 +269,9 @@ Particular to this platform:
   the run the checkpoint was taken in.
 - A `File` opened in the truncating mode, and a native object opened in the
   mode that empties the file, take at most what they had written after a load,
-  from the front of the file as it is. Every other object, including one whose
-  open made the file, takes the whole file. The WIPI C file table empties a
+  from the front of the file as it is. Every other object, including a `File`
+  whose open made the file, takes the whole file; a native open makes a file
+  only in the mode that empties it. The WIPI C file table empties a
   file in the store at the truncating open itself, so its handles are cursors
   on the file as it is and nothing of the truncation is left to carry.
 - A native package's write waits in the platform until a file is closed or a

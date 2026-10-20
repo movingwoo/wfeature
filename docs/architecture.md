@@ -678,7 +678,8 @@ state.
 
 **Native packages** use a separate versioned record under the same envelope. It
 keeps ARM memory, root registers, allocator ownership, built-in interfaces,
-application identity, screen and image pixels, listeners, queued events and
+application identity, screen and image pixels, the display colours, the second
+drawing interface's pen, point size and clip, listeners, queued events and
 resumes, frame and timer deadlines and logical audio. An open file is recorded as
 its name, save key, position, whether it may be written and, when its open
 emptied the file, the number of bytes it then held. The record holds no file
