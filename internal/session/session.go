@@ -170,7 +170,10 @@ type Options struct {
 	// the surface they were given and enforce its size, so a magnified surface
 	// there would reject every frame they produce.
 	Scale int
-	// Width and Height size the screen. Zero selects the handset default.
+	// Width and Height size the screen. Zero lets the platform choose: the
+	// handset the archive says it was packaged for where it says so (a KTF
+	// descriptor's DisplaySize, an SKT archive's resource names), and the
+	// 240x320 default otherwise.
 	Width, Height int
 	// TraceLimit is how many recent boundary events the diagnostics keep in
 	// order. Hosts pass a limit in debug builds and zero in release.
@@ -1095,11 +1098,13 @@ func (s *Session) Screen() (width, height int) {
 	case s.ktf != nil:
 		// The frame is the answer once there is one, because it is built from
 		// the screen the game was actually given rather than from what was
-		// asked for. Before that, the request stands.
+		// asked for. Before that, the platform's own: a start that named no
+		// screen took the one the archive's descriptor declares, which the
+		// Host's default does not know.
 		if _, frameWidth, frameHeight, _ := s.ktf.Frame(); frameWidth > 0 && frameHeight > 0 {
 			return frameWidth, frameHeight
 		}
-		return s.options.width(), s.options.height()
+		return s.ktf.Screen()
 	case s.ktfNative != nil:
 		// The earlier package answers the same way: the title asks for its
 		// size once and draws into what it is given, so the frame is what it

@@ -296,9 +296,11 @@ export class GameSession {
     if (token) message.token = token;
     if (confirmation) message.confirmation = confirmation;
     if (quickLoad) message.quick_load = true;
-    // The screen travels only when it is not the server's own default, so a
-    // page that never opened the setting sends what it always sent.
-    if (screen && (screen.width !== 240 || screen.height !== 320)) {
+    // The screen travels when a player chose one, 240x320 included. Without
+    // it the server asks the archive — a KTF descriptor names the handset its
+    // title was packaged for — so the default size is no longer the same
+    // start as no size at all.
+    if (screen) {
       message.width = screen.width;
       message.height = screen.height;
     }

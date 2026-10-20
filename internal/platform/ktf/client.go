@@ -308,6 +308,18 @@ func (client *Client) screenSize() (int, int) {
 	return width, height
 }
 
+// Screen answers the handset the title is told it runs on. A Host lays out
+// against it before the first frame exists, and when nothing was chosen the
+// answer is the descriptor's or the platform's rather than the Host's default.
+func (client *Client) Screen() (int, int) {
+	if client == nil {
+		return runtimeDisplayPixelWidth, runtimeDisplayPixelHeight
+	}
+	client.run.Lock()
+	defer client.run.Unlock()
+	return client.screenSize()
+}
+
 // Frame returns a copy of the last flushed RGBA screen frame with its size
 // and the number of flushes performed so far. The conversion from the guest's
 // RGB565 screen happens here rather than at each flush, so a Host that asks

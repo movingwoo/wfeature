@@ -56,6 +56,12 @@
               </select>
               <button id="game-start" class="game-start" disabled>{{picker.start}}</button>
             </div>
+            <!-- A title packaged for another phone shows it as a picture cut
+                 off at an edge or a band of empty screen beside it, and
+                 nothing on the game says the screen is a setting. The default
+                 is automatic and right for most titles, so this names the
+                 symptom and the remedy where a game is chosen. -->
+            <p class="prestart-note">{{picker.screen-hint}}</p>
             <!-- A phone has no folder to put a game in: Android does not let a
                  file manager open the directory an app keeps its files in. So
                  the archive comes in through the page. The input is hidden
@@ -190,16 +196,22 @@
             </select>
           </label>
           <label>{{settings.screen}}
-            <!-- The handset screen the game runs on. Almost every title here
-                 was drawn for 240x320 and that is the default; a few were
-                 packaged for a smaller phone and load their artwork by the
-                 size they are given, so running one on the wrong screen means
-                 it asks for pictures its own archive does not contain. It
-                 takes effect on the next start, which is why the note says so
-                 rather than the setting silently doing nothing.
+            <!-- The handset screen the game runs on. The default is automatic:
+                 the start carries no size and the server asks the archive — a
+                 KTF descriptor names the handset its title was packaged for,
+                 and an SKT archive's resource names sometimes do — and
+                 otherwise starts it on 240x320. A title packaged for a smaller
+                 phone keeps its artwork at that size on a larger screen, and
+                 some load their artwork by the size they are given, so running
+                 one on the wrong screen leaves it in a corner or asks for
+                 pictures its own archive does not contain. Once the game is up
+                 the automatic choice shows the size it took. A change takes
+                 effect on the next start, which is why the note says so and
+                 offers to restart rather than the setting silently doing
+                 nothing.
 
-                 The list is handsets that existed rather than sizes that fit:
-                 the two below the default are the phones the older archives
+                 The sizes are handsets that existed rather than sizes that
+                 fit: the two below 240x320 are the phones the older archives
                  were drawn for, and the two above it are the screens the last
                  generation of feature phone carried. A larger one is not
                  a magnifier — that is 확대 — it tells the game it has more
@@ -208,14 +220,19 @@
                  some paint their 240x320 picture into the corner and leave the
                  rest black. -->
             <select id="screen-size" class="game-speed">
+              <option value="auto" selected>{{settings.screen.auto}}</option>
               <option value="128x160">128 × 160</option>
               <option value="176x220">176 × 220</option>
-              <option value="240x320" selected>{{settings.screen.default}}</option>
+              <option value="240x320">240 × 320</option>
               <option value="240x400">240 × 400</option>
               <option value="320x480">320 × 480</option>
             </select>
           </label>
           <p id="screen-note" class="settings-note hidden"></p>
+          <!-- A screen change only reaches a game that starts again, so the
+               note comes with the restart that applies it: stopping and then
+               finding 실행 again is what made the setting look broken. -->
+          <button id="screen-restart" class="panel-button hidden">{{settings.screen.restart-now}}</button>
           <!-- The guest asks the handset to vibrate and the server passes the
                request on; this is where it is decided whether anything
                happens. The row is removed on a browser with no vibrator,

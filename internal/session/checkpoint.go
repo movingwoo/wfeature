@@ -36,10 +36,14 @@ type checkpointSessionState struct {
 	Pointer     checkpointPointerState
 }
 
+// ktfOptions passes the screen through as the Host gave it, zero included: a
+// KTF start that names no screen is started on the one its descriptor
+// declares, so the default is the platform's to answer rather than this
+// package's 240x320. See ktf.PackagedScreen.
 func ktfOptions(options Options) ktf.SessionOptions {
 	return ktf.SessionOptions{DisableAuthentication: options.DisableAuthentication, SaveStore: options.SaveStore,
 		AudioSink: options.AudioSink, FrameSink: backend.FrameSink{Output: options.FrameUpdates, Scale: options.Scale, Epoch: options.FrameEpoch},
-		Speed: options.Speed, TraceLimit: options.TraceLimit, Logger: options.Logger, Width: options.width(), Height: options.height(), Clock: options.Clock}
+		Speed: options.Speed, TraceLimit: options.TraceLimit, Logger: options.Logger, Width: options.Width, Height: options.Height, Clock: options.Clock}
 }
 
 func ktfNativeOptions(options Options) ktf.NativeSessionOptions {

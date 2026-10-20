@@ -785,6 +785,14 @@ func (session *Session) Frame() ([]byte, int, int, uint32) {
 	return session.Client.Frame()
 }
 
+// Screen answers the handset the title was started on; see Client.Screen.
+func (session *Session) Screen() (int, int) {
+	if session == nil {
+		return runtimeDisplayPixelWidth, runtimeDisplayPixelHeight
+	}
+	return session.Client.Screen()
+}
+
 // FrameDigest fingerprints the current screen without copying it; see
 // Client.FrameDigest. A route uses it to tell a settled screen from an
 // animating one.
