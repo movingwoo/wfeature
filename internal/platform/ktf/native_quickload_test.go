@@ -931,7 +931,7 @@ func TestNativeFileNameIsOneFileWhicheverWayItIsWritten(t *testing.T) {
 		t.Fatalf("wrote %d bytes", moved)
 	}
 	nativeCall(t, platform.closeFile, file)
-	if got, found := store["fs/slot.dat"]; !found || string(got) != "written" || len(store) != 1 || platform.StoreFailures() != 0 {
+	if got, found := store["fs/slot.dat"]; !found || string(got) != "written" || len(store) != 2 || store[nativeMadeKey] == nil || platform.StoreFailures() != 0 {
 		t.Fatalf("the store holds %v after %d refusals", store, platform.StoreFailures())
 	}
 	for _, name := range []string{"saves/slot.dat", "SLOT.DAT", "Saves\\Slot.DAT"} {

@@ -240,7 +240,8 @@ func (prepared *PreparedNativeSession) Commit(ctx context.Context, previous *Nat
 	}
 	session, saved := prepared.session, prepared.state
 	platform.adoptReopened(reopened)
-	platform.saves, session.options.SaveStore = live, live
+	platform.AttachSaves(live)
+	session.options.SaveStore = live
 	now := platform.clock.Now()
 	platform.started, session.started = now.Add(-saved.Elapsed), now.Add(-saved.SessionElapsed)
 	platform.timedDue = saved.TimedDue.restore(now)

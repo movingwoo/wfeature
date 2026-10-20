@@ -388,6 +388,16 @@ type nativeSchedule struct {
 	due      time.Time
 }
 
+// maxNativeFrameInterval is the longest a title's next frame may be away in a
+// state a quick save keeps. A title runs by its frames, and one that asked for
+// the next more than a minute away is not running: the one that computed its
+// interval out of an empty settings file an earlier build left asked for 152
+// hours, and showed a black screen for as long as anyone waited. A live
+// session is given what the title asked for; a quick save of that state is
+// refused, and so is the load of a record of one, rather than bringing back a
+// title that does not run.
+const maxNativeFrameInterval = time.Minute
+
 // schedule answers the platform object's scheduling call. The title re-arms it
 // at the end of every frame, so this replaces rather than accumulates.
 func (platform *NativePlatform) schedule(thread *armcore.Thread) (uint32, error) {

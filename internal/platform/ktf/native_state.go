@@ -147,6 +147,9 @@ func (session *NativeSession) checkpointRefusal() error {
 	if held := platform.openFileBytes(); held > nativeStateStorageLimit {
 		return fmt.Errorf("KTF native checkpoint: the open files hold %d bytes, more than the %d a checkpoint restores", held, nativeStateStorageLimit)
 	}
+	if frame := platform.frame; frame != nil && frame.interval > maxNativeFrameInterval {
+		return fmt.Errorf("KTF native checkpoint: the title's next frame is %v away, longer than the %v a running title waits", frame.interval, maxNativeFrameInterval)
+	}
 	return nil
 }
 
@@ -376,7 +379,12 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 		}
 	}
 	if saved.Frame != nil {
-		if saved.Frame.Interval <= 0 || saved.Frame.Interval > time.Duration(math.MaxUint32)*time.Millisecond || saved.Frame.Remaining == math.MinInt64 || math.Abs(float64(saved.Frame.Remaining))/saved.Speed >= float64(math.MaxInt64) {
+		if saved.Frame.Interval > maxNativeFrameInterval && saved.Frame.Interval <= time.Duration(math.MaxUint32)*time.Millisecond {
+			// A title that asked for its next frame this far away was not
+			// running when it was saved; an earlier build left one so.
+			return fmt.Errorf("KTF native checkpoint of a title whose next frame is %v away, which is not running: start the title again", saved.Frame.Interval)
+		}
+		if saved.Frame.Interval <= 0 || saved.Frame.Interval > maxNativeFrameInterval || saved.Frame.Remaining == math.MinInt64 || math.Abs(float64(saved.Frame.Remaining))/saved.Speed >= float64(math.MaxInt64) {
 			return invalid()
 		}
 		if err := function(saved.Frame.Function); err != nil {

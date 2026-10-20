@@ -43,6 +43,12 @@ type nativeSaveFixtureStore struct {
 }
 
 func (store *nativeSaveFixtureStore) StoreSave(name string, data []byte) error {
+	// The list of files the platform has made is the platform's own entry
+	// beside the title's save, and is neither counted nor refused here: what
+	// these tests count and refuse is the save.
+	if name == nativeMadeKey {
+		return store.MemorySaveStore.StoreSave(name, data)
+	}
 	store.attempts++
 	if store.refuse {
 		return errors.New("the fixture store refuses the write")

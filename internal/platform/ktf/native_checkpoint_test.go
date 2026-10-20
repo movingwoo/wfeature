@@ -245,6 +245,33 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 	}
 }
 
+// TestNativeCheckpointRefusesATitleThatIsNotRunning covers the state an earlier
+// build left a title in: its next frame asked for 152 hours away, on an
+// interval computed out of an empty settings file. A quick save of that is a
+// title that does not run, and is refused with that reason rather than kept.
+func TestNativeCheckpointRefusesATitleThatIsNotRunning(t *testing.T) {
+	archive, err := testfixture.KTFNativeCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := backend.NewMemorySaveStore(nil)
+	session, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: NewManualClock(time.Time{}), SaveStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if session.platform.frame == nil {
+		t.Fatal("the fixture scheduled no frame")
+	}
+	if _, err := session.CaptureCheckpoint(t.Context()); err != nil {
+		t.Fatalf("a running title was refused: %v", err)
+	}
+	session.platform.frame.interval = 0x209f770c * time.Millisecond
+	if _, err := session.CaptureCheckpoint(t.Context()); err == nil || !strings.Contains(err.Error(), "next frame") {
+		t.Fatalf("a title whose next frame is hours away was saved: %v", err)
+	}
+}
+
 // TestNativeCheckpointReadsARecordFromBeforeTheSecondDrawingInterface is a
 // quick save taken by a build that did not answer the second drawing
 // interface: its record has no Shapes at all. It loads, and the interface
@@ -327,6 +354,9 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 			s.Screen.Width, s.Screen.Height, s.Screen.Pixels = maxNativeStateScreen+1, 1, make([]byte, (maxNativeStateScreen+1)*4)
 		}},
 		{"deadline overflow", func(s *nativeState) { s.Frame.Remaining = math.MinInt64 }},
+		{"a title not running, its next frame hours away", func(s *nativeState) {
+			s.Frame.Interval, s.Frame.Remaining = 0x209f770c*time.Millisecond, 0x209f770c*time.Millisecond
+		}},
 		{"callback", func(s *nativeState) { s.Frame.Function = 0xdeadbeef }},
 		{"file key of another name", func(s *nativeState) { s.Files[0].Key = []byte("other.dat") }},
 		{"file key in the name's own case", func(s *nativeState) { s.Files[0].Key = []byte("Slot.dat") }},

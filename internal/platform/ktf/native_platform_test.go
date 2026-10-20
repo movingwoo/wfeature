@@ -450,13 +450,15 @@ func TestNativeLeftoverGoesFromTheSaveFolder(t *testing.T) {
 	}
 }
 
-// TestNativeFileCallsAgreeAboutAFileAnEarlierSessionLeftEmpty is a title that
-// makes a file, opens it and writes nothing, and runs again. Every call on the
-// name answers the same way the next time: it is not there, in the answer its
-// generation reads, it has no record, it opens in no mode, and creating it
-// makes it — after which every mode opens it. An answer of "there" beside an
-// open that refused it left a title that could create a file and never open
-// it.
+// TestNativeFileCallsAgreeAboutAFileAnEarlierSessionLeftEmpty is an empty file
+// an earlier build left, which is on no list of this platform's. Every call on
+// the name answers the same way: it is not there, in the answer its generation
+// reads, it has no record, it opens in no mode, and creating it makes it —
+// after which every mode opens it. An answer of "there" beside an open that
+// refused it left a title that could create a file and never open it.
+//
+// A file this platform made and left empty is another thing: it is on the
+// list, and the next session finds it there in every call.
 func TestNativeFileCallsAgreeAboutAFileAnEarlierSessionLeftEmpty(t *testing.T) {
 	for _, generation := range []struct {
 		name    string
@@ -477,20 +479,11 @@ func TestNativeFileCallsAgreeAboutAFileAnEarlierSessionLeftEmpty(t *testing.T) {
 				platform.AttachSaves(store)
 				return platform
 			}
-			first := run()
-			name := nativeString(t, first, "scratch.dat")
-			nativeCall(t, first.createFile, 0, name)
-			object := nativeCall(t, first.openFile, 0, name, 2)
-			if object == 0 {
-				t.Fatal("a name the session created did not open")
-			}
-			nativeCall(t, first.closeFile, object)
-			if data, ok := store["fs/scratch.dat"]; !ok || len(data) != 0 {
-				t.Fatalf("the store holds %q (%t), want the empty file", data, ok)
-			}
+			// What an earlier build left: the empty file, and no list.
+			store["fs/scratch.dat"] = []byte{}
 
 			next := run()
-			name = nativeString(t, next, "scratch.dat")
+			name := nativeString(t, next, "scratch.dat")
 			if got := nativeCall(t, next.fileExists, 0, name); got != generation.missing {
 				t.Errorf("the empty file answered %d to whether it is there, want %d", got, generation.missing)
 			}
@@ -516,6 +509,26 @@ func TestNativeFileCallsAgreeAboutAFileAnEarlierSessionLeftEmpty(t *testing.T) {
 				if object := nativeCall(t, next.openFile, 0, name, mode); object == 0 {
 					t.Errorf("mode %d did not open the file the session created", mode)
 				}
+			}
+			next.FlushSaves()
+
+			// That file is this platform's, made empty: the session after
+			// finds it there in every call, and it stays in the store.
+			after := run()
+			name = nativeString(t, after, "scratch.dat")
+			if got := nativeCall(t, after.fileExists, 0, name); got != generation.there {
+				t.Errorf("the empty file this platform made answered %d to whether it is there, want %d", got, generation.there)
+			}
+			if got := nativeCall(t, after.fileInformation, 0, name, record); got != 0 {
+				t.Errorf("the empty file this platform made has no record (%d)", got)
+			}
+			for _, mode := range []uint32{nativeModeRead, 2} {
+				if object := nativeCall(t, after.openFile, 0, name, mode); object == 0 {
+					t.Errorf("mode %d did not open the empty file this platform made", mode)
+				}
+			}
+			if data, ok := store["fs/scratch.dat"]; !ok || len(data) != 0 {
+				t.Errorf("the store holds %q (%t), want the empty file this platform made", data, ok)
 			}
 		})
 	}
@@ -980,11 +993,23 @@ func TestNativeSavesReachTheStoreAtABoundary(t *testing.T) {
 		t.Errorf("%d store writes during the burst, want none until a boundary", store.stores)
 	}
 	nativeCall(t, platform.closeFile, object)
-	if store.stores != 1 {
-		t.Errorf("%d store writes at the close, want 1", store.stores)
+	// The close stores the file, and before it, the first time, the list of
+	// the files the platform has made with the file's name on it.
+	if store.stores != 2 {
+		t.Errorf("%d store writes at the close, want the file and the list", store.stores)
 	}
 	if got := len(store.saves[nativeSaveKey("burst.dat")]); got != 128 {
 		t.Errorf("stored %d bytes, want the 128 the title wrote", got)
+	}
+	if records, err := backend.DecodeSaveRecords(store.saves[nativeMadeKey]); err != nil || len(records) != 1 || string(records[0]) != "burst.dat" {
+		t.Errorf("the list of made files is %q (%v)", records, err)
+	}
+	// Writing the file again stores the file and nothing else.
+	again := nativeCall(t, platform.openFile, 0, name, 2)
+	nativeCall(t, platform.writeFile, again, chunk, 16)
+	nativeCall(t, platform.closeFile, again)
+	if store.stores != 3 {
+		t.Errorf("%d store writes after the file was written again, want one more", store.stores)
 	}
 }
 

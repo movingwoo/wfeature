@@ -223,14 +223,15 @@ does. Read-write (2) and read (1) open a file that is there and are refused for
 one that is not, and the titles fall back on their own (defaults, or mode 4 and
 then a write); a refused open that could write is logged once for its name, at
 debug level, so a title that took it for a save written shows in the run's log.
-A stored file
-with nothing in it, which the package does not carry and this play did not
-make, is missing to every call on the name — open, existence, information and
-create — so a title sees one answer whichever it asks, and the empty entry is
-removed from the store when a title first asks about it. That is the migration
-for saves from builds whose every writing open made the file, which left one
-title reading its settings out of an empty file. A quick load keeps what the
-play made, so it does not change what a restored title finds
+A build of this platform lists the files it makes for a title in the store
+entry `native/made`, stored before the files at the same boundary. A stored
+file with nothing in it, which the package does not carry and no build of this
+platform made, is missing to every call on the name — open, existence,
+information and create — so a title sees one answer whichever it asks, and the
+empty entry is removed from the store when a title first asks about it. That
+is the migration for saves from earlier builds, whose every writing open made
+the file, which left one title reading its settings out of an empty file; a
+file this platform made empty is on the list and stays a file
 ([history](history/ktf.md#ktf-native-settings-2026-10-20)).
 
 A record database the archive carries, as one `qtcdb` file or as a `qtpdb`

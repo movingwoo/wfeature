@@ -9257,11 +9257,17 @@ settings, and the empty file is gone from the tree.
 
 A save from an earlier build keeps the empty settings file, and the title would
 go on reading nothing out of it. So a stored file with nothing in it, which the
-package does not carry and this play did not make, is missing. The title takes
-its defaults, and the next time it saves its settings it makes the file through
-mode 4 and writes them. The rule cannot tell such a file from one a title left
-empty on purpose; for that one it changes which path the title takes, to the
-one it takes when the file is missing.
+package does not carry and no build of this platform made, is missing. The
+title takes its defaults, and the next time it saves its settings it makes the
+file through mode 4 and writes them.
+
+What a build of this platform made is in the store entry `native/made`, a list
+of the keys it has made for the title, stored before the files at the boundary
+that first stores each one. A file made empty on purpose under this build is
+on it, and is a file in every later session. An earlier build kept no list, so
+an empty file it left — by its open for writing or on purpose, which nothing it
+stored tells apart — is a leftover, and the title goes the way it goes when the
+file is missing.
 
 The rule is in the one lookup every call on a name makes, so open, existence,
 information and create agree about it. A first version applied it to the open
@@ -9270,11 +9276,11 @@ next run that the file was there, its create answered success without making
 one, and every open of it was refused. Now the existence call answers that it
 is missing, in the answer the asking generation reads, and the create makes it.
 
-"This play made it" is the names a session has kept anything under, and a quick
-load hands the displaced session's names to the restored one. Without that, a
-file a title had emptied was a leftover once the load had cleared the session's
-own table, and the same open that worked before the load was refused after it.
-A load into a fresh process starts a new play, as a fresh start does.
+Within a play the names a session has kept anything under are known before the
+list is stored, and a quick load hands the displaced session's names to the
+restored one. Without that, a file a title had emptied was a leftover once the
+load had cleared the session's own table, and the same open that worked before
+the load was refused after it.
 
 The leftover is then removed from the store, the first time a title asks about
 it, so it goes from the save folder and from what an export carries rather than
@@ -9286,8 +9292,16 @@ names holds an older save, the empty entry in front of it stays: removing it
 would hand the title that older save instead of the missing file it now sees. A
 guest's own removals stay on its platform's removal list.
 
-A quick save taken while the title was stuck brings the stuck interval back,
-because a checkpoint is execution state.
+A quick save taken while the title was stuck held it with its next frame 152
+hours away, and loading it brought the stuck title back. A title whose next
+frame is more than a minute away is not running, so a quick save of one is
+refused, and so is loading a record of one: the copy of a stuck slot from a
+browser session is refused with "next frame is 152h2m1.612s away, which is not
+running: start the title again". The `run` command's manual clock jumps to a
+scheduled deadline instead of waiting for it, so a slot it took of the stuck
+title on v0.6.0-pre holds a 2 ms interval after a frame 152 hours on, and a
+blank screen; a paced session, which is what a player's slot comes from, never
+reaches that deadline.
 
 <a id="ktf-native-settings-2026-10-20-what-the-title-draws-with"></a>
 

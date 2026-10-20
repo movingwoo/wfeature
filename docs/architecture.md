@@ -700,8 +700,10 @@ tracing refuse capture. A native package's writes wait in the platform until a
 file is closed or a frame ends, so a capture and a load both store what is
 waiting first; adoption then detaches the old runtime from the store, and the
 restored runtime takes over the names of the files the old one made, so an
-empty file the play made is still a file after the load. Elapsed time and
-deadlines rebase at adoption, excluding detached staging time.
+empty file the play made is still a file after the load. A title whose next
+frame is more than a minute away is not running, and a capture of it is
+refused, as is a record of one at load. Elapsed time and deadlines rebase at
+adoption, excluding detached staging time.
 
 <a id="lgt-checkpoints"></a>
 
