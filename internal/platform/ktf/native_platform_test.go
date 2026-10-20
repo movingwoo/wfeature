@@ -82,6 +82,28 @@ func nativeRead(t *testing.T, platform *NativePlatform, address uint32, length i
 	return data
 }
 
+// nativeRectangleCall runs the display's rectangle call with its mode on the
+// guest stack, where the calling standard puts the fifth argument.
+func nativeRectangleCall(t *testing.T, platform *NativePlatform, rectangle, frame, fill, mode uint32) {
+	t.Helper()
+	thread := armcore.NewThread(armcore.NewContext())
+	stack := ThreadStackBase + uint32(ThreadStackSize) - 0x200
+	for index, value := range []uint32{1, rectangle, frame, fill} {
+		if err := thread.SetRegister(index, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := thread.SetRegister(armcore.RegisterSP, stack); err != nil {
+		t.Fatal(err)
+	}
+	if err := platform.client.core.Memory().Write(stack, binary.LittleEndian.AppendUint32(nil, mode)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := platform.drawRectangle(thread); err != nil {
+		t.Fatalf("draw rectangle: %v", err)
+	}
+}
+
 // TestNativeLibrarySlots covers the C string and memory library at the bottom
 // of the platform table. The module leans on it for everything it builds, so a
 // slot that answers the wrong way shows up as a name it cannot open rather
@@ -322,8 +344,8 @@ func TestNativeOpenMakesOnlyWhatTheEmptyingModeAsksFor(t *testing.T) {
 // TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing is the migration
 // for the saves an open that made files left behind: each is a file with
 // nothing in it, which the title then read its settings out of on every run.
-// Such a file opens as one that is not there, for every mode but the one that
-// makes a file, unless the package carries it or this session wrote it.
+// Such a file is one that is not there, unless the package carries it or this
+// play made it, so only the open that makes a file opens it.
 func TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing(t *testing.T) {
 	store := memorySaveStore{
 		"fs/option.dat":  {},
@@ -357,6 +379,77 @@ func TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing(t *testing.T) {
 	}
 }
 
+// TestNativeFileCallsAgreeAboutAFileAnEarlierSessionLeftEmpty is a title that
+// makes a file, opens it and writes nothing, and runs again. Every call on the
+// name answers the same way the next time: it is not there, in the answer its
+// generation reads, it has no record, it opens in no mode, and creating it
+// makes it — after which every mode opens it. An answer of "there" beside an
+// open that refused it left a title that could create a file and never open
+// it.
+func TestNativeFileCallsAgreeAboutAFileAnEarlierSessionLeftEmpty(t *testing.T) {
+	for _, generation := range []struct {
+		name    string
+		module  []byte
+		missing uint32
+		there   uint32
+	}{
+		{name: "the 2005 module", missing: 0, there: 1},
+		{name: "a module that asks for a version", module: nativeGateModule(), missing: nativeFileFailed, there: 0},
+	} {
+		t.Run(generation.name, func(t *testing.T) {
+			store := memorySaveStore{}
+			run := func() *NativePlatform {
+				platform := newTestNativePlatform(t, nil)
+				if generation.module != nil {
+					platform.archive.Module = generation.module
+				}
+				platform.AttachSaves(store)
+				return platform
+			}
+			first := run()
+			name := nativeString(t, first, "scratch.dat")
+			nativeCall(t, first.createFile, 0, name)
+			object := nativeCall(t, first.openFile, 0, name, 2)
+			if object == 0 {
+				t.Fatal("a name the session created did not open")
+			}
+			nativeCall(t, first.closeFile, object)
+			if data, ok := store["fs/scratch.dat"]; !ok || len(data) != 0 {
+				t.Fatalf("the store holds %q (%t), want the empty file", data, ok)
+			}
+
+			next := run()
+			name = nativeString(t, next, "scratch.dat")
+			if got := nativeCall(t, next.fileExists, 0, name); got != generation.missing {
+				t.Errorf("the empty file answered %d to whether it is there, want %d", got, generation.missing)
+			}
+			record, err := next.client.Allocate(nativeFileRecordSize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := nativeCall(t, next.fileInformation, 0, name, record); got != nativeFileFailed {
+				t.Errorf("the empty file's information answered %d, want the failure", got)
+			}
+			for _, mode := range []uint32{nativeModeRead, 2, 8} {
+				if object := nativeCall(t, next.openFile, 0, name, mode); object != 0 {
+					t.Errorf("mode %d opened the empty file", mode)
+				}
+			}
+			if got := nativeCall(t, next.createFile, 0, name); got != 0 {
+				t.Fatalf("creating the name answered %d", got)
+			}
+			if got := nativeCall(t, next.fileExists, 0, name); got != generation.there {
+				t.Errorf("the created name answered %d to whether it is there, want %d", got, generation.there)
+			}
+			for _, mode := range []uint32{2, nativeModeRead, 8} {
+				if object := nativeCall(t, next.openFile, 0, name, mode); object == 0 {
+					t.Errorf("mode %d did not open the file the session created", mode)
+				}
+			}
+		})
+	}
+}
+
 // TestNativeScreenFill covers the colour format the title's own palette
 // established, and the null rectangle its first call passes.
 func TestNativeScreenFill(t *testing.T) {
@@ -374,7 +467,7 @@ func TestNativeScreenFill(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 0x0000ff00 is the blue of the title's own table.
-	nativeCall(t, platform.drawRectangle, 0, rectangle, nativeNoColour, 0x0000ff00)
+	nativeRectangleCall(t, platform, rectangle, nativeNoColour, 0x0000ff00, nativeRectangleFill)
 	frame, _ := platform.Frame()
 	if got := frame.RGBAAt(2, 3); got.B != 0xff || got.R != 0 || got.G != 0 {
 		t.Errorf("pixel inside the rectangle = %+v, want blue", got)
@@ -393,24 +486,51 @@ func TestNativeScreenFill(t *testing.T) {
 
 // TestNativeClearTakesTheBackgroundItem covers a fill that names no colour of
 // its own: it is the screen's background item, white until a title sets it. A
-// later title sets it to black at the top of every frame and clears.
+// later title sets it to black at the top of every frame and clears. The
+// rectangle is where the fill lands, so a smaller one is the same fill over
+// less of the screen; and a mode that asks for no fill paints nothing, so an
+// outline does not wipe out what is inside it.
 func TestNativeClearTakesTheBackgroundItem(t *testing.T) {
 	platform := newTestNativePlatform(t, nil)
 	frame, _ := platform.Frame()
 	white := color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
-	nativeCall(t, platform.drawRectangle, 0, 0, nativeNoColour, nativeNoColour)
+	black := color.RGBA{A: 0xff}
+	nativeRectangleCall(t, platform, 0, nativeNoColour, nativeNoColour, nativeRectangleFill)
 	if got := frame.RGBAAt(10, 10); got != white {
 		t.Errorf("a clear before any item was set = %+v, want white", got)
 	}
 	nativeCall(t, platform.screenColour, 0, nativeBackgroundColourItem, 0)
-	nativeCall(t, platform.drawRectangle, 0, 0, nativeNoColour, nativeNoColour)
-	if got := frame.RGBAAt(10, 10); got != (color.RGBA{A: 0xff}) {
+	nativeRectangleCall(t, platform, 0, nativeNoColour, nativeNoColour, nativeRectangleFill)
+	if got := frame.RGBAAt(10, 10); got != black {
 		t.Errorf("a clear after the title set the item to black = %+v", got)
 	}
 	// A fill that names its colour takes it, whatever the item holds.
-	nativeCall(t, platform.drawRectangle, 0, 0, nativeNoColour, 0x00ff0000)
+	nativeRectangleCall(t, platform, 0, nativeNoColour, 0x00ff0000, nativeRectangleFill)
 	if got := frame.RGBAAt(10, 10); got != (color.RGBA{G: 0xff, A: 0xff}) {
 		t.Errorf("a fill in green = %+v", got)
+	}
+	box, err := platform.client.Allocate(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := binary.LittleEndian.AppendUint16(binary.LittleEndian.AppendUint16(nil, 8), 8)
+	record = binary.LittleEndian.AppendUint16(binary.LittleEndian.AppendUint16(record, 4), 4)
+	if err := platform.client.core.Memory().Write(box, record); err != nil {
+		t.Fatal(err)
+	}
+	nativeRectangleCall(t, platform, box, nativeNoColour, nativeNoColour, nativeRectangleFill)
+	if got := frame.RGBAAt(10, 10); got != black {
+		t.Errorf("a rectangle filled with no colour of its own = %+v, want the background item", got)
+	}
+	if got := frame.RGBAAt(12, 12); got != (color.RGBA{G: 0xff, A: 0xff}) {
+		t.Errorf("a pixel past that rectangle = %+v, want the green under it", got)
+	}
+	nativeRectangleCall(t, platform, 0, 0x00ff0000, nativeNoColour, 1)
+	if got := frame.RGBAAt(12, 12); got != (color.RGBA{G: 0xff, A: 0xff}) {
+		t.Errorf("a rectangle whose mode asks for no fill painted its inside %+v", got)
+	}
+	if platform.Draws() != 5 {
+		t.Errorf("draws = %d, want one for every rectangle", platform.Draws())
 	}
 }
 
@@ -992,7 +1112,7 @@ func TestNativeFrameDigestTracksTheScreen(t *testing.T) {
 	if err := platform.client.core.Memory().Write(rectangle, record); err != nil {
 		t.Fatal(err)
 	}
-	nativeCall(t, platform.drawRectangle, 0, rectangle, nativeNoColour, 0x0000ff00)
+	nativeRectangleCall(t, platform, rectangle, nativeNoColour, 0x0000ff00, nativeRectangleFill)
 
 	if drawn := platform.FrameDigest(); drawn == blank {
 		t.Error("the screen was drawn into and the digest did not move; a route would wait forever")

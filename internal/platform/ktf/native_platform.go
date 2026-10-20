@@ -81,6 +81,10 @@ type NativePlatform struct {
 	// copy of the same file, and a quick load starts it empty: what the
 	// restored title reads by name is the file as it is now.
 	written map[string][]byte
+	// made names every key this play has kept anything under, here or in a
+	// session this one displaced by a quick load: a file it made is its own,
+	// with or without anything in it. See NativePlatform.contents.
+	made map[string]bool
 	// unsaved names the entries of written the store has not been given yet.
 	// See NativePlatform.keep.
 	unsaved map[string]bool

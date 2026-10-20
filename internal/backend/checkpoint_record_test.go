@@ -56,6 +56,16 @@ func TestCheckpointRecordRoundTripAndStrictSchema(t *testing.T) {
 			}
 		})
 	}
+	// A pointer a record leaves out is the null it would have written, which
+	// is how a record grows a field and still reads the ones written before.
+	older := bytes.Replace(data, []byte(`,"Child":null`), nil, 1)
+	if bytes.Equal(older, data) {
+		t.Fatal("the fixture wrote no null pointer to leave out")
+	}
+	decoded = checkpointRecordFixture{}
+	if err := DecodeCheckpointRecord(older, &decoded); err != nil || !reflect.DeepEqual(decoded, saved) {
+		t.Fatalf("a record without its pointer field decoded as %+v, %v", decoded, err)
+	}
 	for _, bad := range [][]byte{append(bytes.Clone(data), []byte(" {}")...), []byte("\xff"), data[:len(data)-1]} {
 		if err := DecodeCheckpointRecord(bad, &decoded); err == nil {
 			t.Fatal("malformed JSON accepted")

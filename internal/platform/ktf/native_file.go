@@ -143,23 +143,30 @@ type nativeOpenFile struct {
 	truncated bool
 }
 
-// The open modes, which the WIPI specification names and the module's own
-// wrapper corroborates: it retries a refused open of mode 2 or 8 with mode 4,
-// and a read that failed would have nothing to retry with. So 1 is the only
-// mode that cannot write.
+// The open modes. The package is BREW's, and these are its file manager's: 1
+// reads, 2 reads and writes, 4 creates and 8 appends. The module's own wrapper
+// corroborates them: it retries a refused open of mode 2 or 8 with mode 4, and
+// a read that failed would have nothing to retry with. So 1 is the only mode
+// that cannot write.
 //
-// **Only 4 makes a file that is not there.** The retry is what says so — a
-// mode that made the file would never be refused for its absence — and a
-// title's own code says it twice more: it opens its settings with mode 2 and
-// takes its defaults when that is refused, and it saves them by opening with
-// mode 2 and, refused, again with mode 4. Answering that first open with an
-// empty file sent the title into its settings with nothing in them: its reads
-// moved no bytes, the frame interval it computes from them was whatever its
-// stack held, and the frame it asked for was days away.
+// **Only 4 makes a file that is not there**; the others open a file that is.
+// That is the contract both generations are written against, and their code
+// says so three times. The retry is one — a mode that made the file would
+// never be refused for its absence — and the same wrapper creates a name
+// before it opens it in mode 2. A later title opens its settings with mode 2
+// and takes its defaults when that is refused, and saves them by opening with
+// mode 2 and, refused, again with mode 4. A module cannot count on 2 or 8 to
+// make a file when the handset it was written for refuses them, so no module
+// loses a save to the refusal that a handset would not have cost it.
+// Answering that first open with an empty file sent the title into its
+// settings with nothing in them: its reads moved no bytes, the frame interval
+// it computes from them was whatever its stack held, and the frame it asked
+// for was days away.
 //
-// The specification is what says what 4 does to a file that is there, and it
-// says the size goes to zero. Serving it as an ordinary write would leave the
-// tail of a longer previous save behind the shorter one that replaced it.
+// What 4 does to a file that is there is to empty it, which is how the WIPI
+// specification reads the same mode. Serving it as an ordinary write would
+// leave the tail of a longer previous save behind the shorter one that
+// replaced it.
 const (
 	nativeModeRead = 1
 	// nativeModeWriteTruncate is the specification's MC_FILE_OPEN_WRTRUNC:
@@ -220,6 +227,9 @@ func nativeFileKey(name string) string {
 // base name and without regard to case: the module names its files the way
 // they were written into the archive, and the archive's entry names are the
 // title's directory rather than a bare name.
+//
+// It is the one lookup every call on a name makes — open, existence,
+// information and create — so they all agree about whether a file is there.
 func (platform *NativePlatform) contents(name string) ([]byte, bool, error) {
 	if platform.archive == nil {
 		return nil, false, nil
@@ -229,10 +239,28 @@ func (platform *NativePlatform) contents(name string) ([]byte, bool, error) {
 	// wrote in an earlier session, and only then what the package shipped — a
 	// save has to win over the archive's copy of the same name, or a title
 	// would start every session from its shipped settings.
-	if data, ok := platform.written[nativeFileKey(name)]; ok {
+	key := nativeFileKey(name)
+	if data, ok := platform.written[key]; ok {
 		return data, true, nil
 	}
-	return platform.stored(platform.saves, name)
+	data, ok, err := platform.stored(platform.saves, name)
+	if err != nil || !ok || len(data) != 0 || platform.made[key] {
+		return data, ok, err
+	}
+	if _, packaged := platform.packagedFile(name); packaged {
+		return data, true, nil
+	}
+	// A file with nothing in it, which the package does not carry and this
+	// play did not make, is a file that is not there. Builds before this one
+	// made a file at every open that could write, and the store kept it empty,
+	// so a title that opens its settings to find out whether it has any found
+	// an empty file on every later run and read its settings out of nothing.
+	// Taking such a file as missing in every call is the migration for those
+	// saves: the title goes the way it goes on its first run, and the next file
+	// it makes there is one this play made. A file a title left empty on
+	// purpose is taken the same way, which sends that title the way it goes
+	// when the file is missing; nothing in the store tells the two apart.
+	return nil, false, nil
 }
 
 // stored finds a file where it lives outside this session's own table: in a
@@ -280,17 +308,6 @@ func (platform *NativePlatform) packagedFile(name string) ([]byte, bool) {
 	return platform.archive.Files[entry], true
 }
 
-// leftEmptyEarlier reports whether what contents found for a name came out of
-// the store rather than out of this session or the package. Asked of a file
-// with nothing in it, that is a file an earlier session left empty.
-func (platform *NativePlatform) leftEmptyEarlier(name string) bool {
-	if _, ok := platform.written[nativeFileKey(name)]; ok {
-		return false
-	}
-	_, packaged := platform.packagedFile(name)
-	return !packaged
-}
-
 // readName reads a name argument out of guest memory.
 func (platform *NativePlatform) readName(address uint32) (string, error) {
 	if address == 0 {
@@ -328,17 +345,6 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 	data, ok, err := platform.contents(name)
 	if err != nil {
 		return 0, err
-	}
-	if ok && len(data) == 0 && int32(mode) != nativeModeWriteTruncate && platform.leftEmptyEarlier(name) {
-		// Every open but a read-only one used to make a file that was not
-		// there, and the store kept it with nothing in it, so a title that
-		// opened its settings that way found them on its next run and read
-		// nothing out of them. A file with nothing in it that the package
-		// does not carry and this session has not written opens as one that
-		// is not there, for every mode but the one that makes a file. That is
-		// the migration for those saves, and for a file a title left empty on
-		// purpose it is the path the title takes when the file is missing.
-		ok = false
 	}
 	platform.opens = keepFirst(platform.opens, NativeFileOpen{Name: name, Mode: mode, Found: ok})
 	key, truncated := nativeFileKey(name), false
@@ -490,6 +496,10 @@ func (platform *NativePlatform) create(key string) { platform.keep(key, []byte{}
 // title that keeps one open.
 func (platform *NativePlatform) keep(key string, data []byte) {
 	platform.written[key] = data
+	if platform.made == nil {
+		platform.made = map[string]bool{}
+	}
+	platform.made[key] = true
 	// What the store would not take for this name is superseded: these are the
 	// bytes to store now.
 	delete(platform.refused, key)

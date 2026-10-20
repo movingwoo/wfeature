@@ -9245,15 +9245,31 @@ scratch file before it opens it, so it does not depend on the open making one.
 ### Migration
 
 A save from an earlier build keeps the empty settings file, and the title would
-go on reading nothing out of it. So a file with nothing in it that the package
-does not carry and the session has not written opens as missing in every mode
-but 4. The title takes its defaults, and the next time it saves its settings it
-makes the file through mode 4 and writes them. The rule cannot tell such
-a file from one a title left empty on purpose; for that one it changes which
-path the title takes, to the one it takes when the file is missing. The
-existence and information calls answer as before. A quick save taken while the
-title was stuck brings the stuck interval back, because a checkpoint is
-execution state.
+go on reading nothing out of it. So a stored file with nothing in it, which the
+package does not carry and this play did not make, is missing. The title takes
+its defaults, and the next time it saves its settings it makes the file through
+mode 4 and writes them. The rule cannot tell such a file from one a title left
+empty on purpose; for that one it changes which path the title takes, to the
+one it takes when the file is missing.
+
+The rule is in the one lookup every call on a name makes, so open, existence,
+information and create agree about it. A first version applied it to the open
+alone: a title that made a file, opened it and wrote nothing was told on its
+next run that the file was there, its create answered success without making
+one, and every open of it was refused. Now the existence call answers that it
+is missing, in the answer the asking generation reads, and the create makes it.
+
+"This play made it" is the names a session has kept anything under, and a quick
+load hands the displaced session's names to the restored one. Without that, a
+file a title had emptied was a leftover once the load had cleared the session's
+own table, and the same open that worked before the load was refused after it.
+A load into a fresh process starts a new play, as a fresh start does. The
+leftover itself stays in the store until the title writes it again: the save
+store has no call that lists or removes a key, and a migration that needs one is
+a change to every Host's store for an empty file.
+
+A quick save taken while the title was stuck brings the stuck interval back,
+because a checkpoint is execution state.
 
 <a id="ktf-native-settings-2026-10-20-what-the-title-draws-with"></a>
 
@@ -9266,19 +9282,34 @@ answer, each from its call sites:
   to black and fills the whole screen with `0xffffffff`, which named no colour
   and was drawn as white. A fill that names no colour now takes item 2, white
   until a title sets it, which is what the earlier titles, which set nothing,
-  already got.
+  already got. Every rectangle call the route makes passes `0xffffffff` for the
+  frame and 2 for the mode on the stack, and the clear is the one site that
+  passes `0xffffffff` for the fill, with a null rectangle. A fill is drawn when
+  the mode asks for one (2); a mode without that bit, an outline, leaves the
+  inside as it is rather than painting it in the background item. The colour
+  means the same whatever the rectangle, so a smaller rectangle filled with
+  `0xffffffff` is the background over less of the screen.
 - **A counted run of text.** The title draws `ne button game` with a count of
   14: fourteen halfwords and a zero one. The count was read as bytes and drew
-  `ne butt`.
+  `ne butt`. A count is in the units the run is made of, and this title's
+  generation makes its runs of halfwords; the 2005 module's are plain bytes and
+  it passes no count, so a count from it stays a count of bytes.
 - **Text measurement**, display `+0x0c`: `(display, font, run, -1)` with `-1`
   and a null pointer on the stack. One caller centres a line with the answer
-  and draws at six pixels a character when it is zero; the other divides the
-  answer by the run's length for the width of a character to lay its help text
-  out with. The trap's zero made that a division by zero, and the title's
-  runtime reports one through a semihosting write (`svc 0xab`), which ended
-  the frame as `unknown KTF native supervisor call 0xab`. The width is now the
-  sum of the advances of the face the run is drawn in; a width limit and a
-  count of what fits are honoured, though no caller has asked for either.
+  and draws at six pixels a character when it is zero. The other, at
+  `0x10477c`, lays a help page out: it measures the page's wide copy, divides
+  the answer by the page's byte length for the width of a character, and
+  divides the width of a line by that. The trap's zero made the second
+  division a division by zero, and the title's runtime reports one through a
+  semihosting write (`svc 0xab`), which ended the frame as
+  `unknown KTF native supervisor call 0xab`. The width is now the sum of the
+  advances of the face the run is drawn in, over as much of the run as drawing
+  it draws: a run past the 4 KiB bound, one with no terminator and one that
+  reaches the end of guest memory are measured as far as they are read, not
+  answered with zero. A run of characters that all draw at no width — control
+  characters — measures zero, since that is how wide it is drawn. A width limit
+  and a count of what fits are honoured, the count in the run's units, though
+  no caller has asked for either.
 - **Interface `0x1002001`**, queried beside the screen and used for everything
   that is not a bitmap or text: `+0x10` a pen colour `(r, g, b)` with 255 on the
   stack, `+0x28` a point size of 1 or 2, `+0x30` a clip record (a byte 1, then
@@ -9286,8 +9317,11 @@ answer, each from its call sites:
   reads and draws only on a non-zero one, `+0x50` a point, `+0x54` a line and
   `+0x5c` a circle of radius 4 round the aim. The stars of the title screen are
   grey points, the fireworks are points of size 2 and lines, and the aim is the
-  circle. The pen, point size and clip are part of a native checkpoint; a
-  record taken before has none, and its zeroes are the interface's defaults.
+  circle. A line is the WIPI C table's line and a circle its arc all the way
+  round, both walked only inside the clip, and a point is filled a row at a
+  time. The pen, point size and clip are part of a native checkpoint, as a
+  pointer: a record taken before has none and still loads, starting the
+  interface at its defaults.
 
 <a id="ktf-native-settings-2026-10-20-validation"></a>
 
@@ -9298,6 +9332,17 @@ stage selection and the game, where the aim, rockets and score bar draw, in a
 906-tick route with no slot left a trap. A copy of a debug save holding the
 empty settings file runs at a 50 ms interval with the change and at 152 hours
 without it. The open and migration tests fail on the previous open.
+
+A review then found the first version's record unreadable to a quick save of
+v0.6.0-pre, the migration in the open alone, and the rest above. A quick save
+that `run -quicksave` wrote with v0.6.0-pre was refused by the first version as
+damaged (`checkpoint record is missing fields`) and loads with this one. Each new test —
+the calls agreeing, an emptied file across a quick load, the record without the
+interface's state, the units of a count, the runs read as far as they go, the
+mode — fails on the version before it. Along the local test route the frames
+end and draw as often as before and match it byte for byte from the first menu
+on; on the title screen 180 pixels of the fireworks' lines differ, where the
+shared line breaks a tie the other way.
 
 The other native archives this file's earlier records describe are no longer in
 the local corpus and were not run again; the 2005 module's file wrapper is the

@@ -26,6 +26,12 @@ func defaultCheckpointRecordLimits() checkpointRecordLimits {
 // Checkpoint records contain only explicit, exported struct fields, scalars,
 // arrays, slices and optional pointers. Object graphs use IDs. Dynamic maps,
 // interfaces, tags and custom JSON methods are deliberately outside the schema.
+//
+// Every field must be present except a pointer, which a record that leaves it
+// out holds as null. Absent and null decode to the same nil, so this reaches no
+// state a record could not already name; it is what lets a component add a
+// field to its record as a pointer and still read the records written before
+// it, taking nil as "this record predates the field".
 type checkpointRecordWalk struct {
 	limits checkpointRecordLimits
 	bytes  uint64
@@ -303,7 +309,7 @@ func (walk *checkpointRecordWalk) inspect(decoder *json.Decoder, token json.Toke
 				} else {
 					walk.audio.omitted |= added
 				}
-			} else if !present {
+			} else if !present && t.Field(index).Type.Kind() != reflect.Pointer {
 				return fmt.Errorf("checkpoint record is missing fields")
 			}
 		}

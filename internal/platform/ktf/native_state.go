@@ -52,9 +52,10 @@ type nativeState struct {
 	Resumes      []nativeResume
 	Colours      []nativeColourState
 	// Shapes is the second drawing interface's pen and clip. A record taken
-	// before that interface was answered has none, and its zeroes are what
-	// the interface starts with: a black pen, a one-pixel point, no clip.
-	Shapes   nativeShapesState
+	// before that interface was answered has none: the field is a pointer so
+	// that such a record still reads, and nil is what the interface starts
+	// with, a black pen, a one-pixel point and no clip.
+	Shapes   *nativeShapesState
 	Audio    backend.AudioState
 	Clip     backend.AudioHandle
 	Sounding bool
@@ -221,7 +222,7 @@ func (session *NativeSession) captureNativeState(now time.Time) (nativeState, er
 		saved.Colours = append(saved.Colours, nativeColourState{item, platform.colours[item]})
 	}
 	shapes := platform.shapes
-	saved.Shapes = nativeShapesState{Pen: shapes.pen, PointSize: shapes.pointSize, Clipped: shapes.clipped}
+	saved.Shapes = &nativeShapesState{Pen: shapes.pen, PointSize: shapes.pointSize, Clipped: shapes.clipped}
 	if shapes.clipped {
 		saved.Shapes.X, saved.Shapes.Y = int32(shapes.clip.Min.X), int32(shapes.clip.Min.Y)
 		saved.Shapes.Width, saved.Shapes.Height = int32(shapes.clip.Dx()), int32(shapes.clip.Dy())
@@ -389,7 +390,12 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 	}
 	// The clip is what the title's halfwords made it, and a point is at most
 	// maxNativePointSize; anything else is not a state this platform reaches.
-	shapes := saved.Shapes
+	// A record without the interface's state is one taken before it was
+	// answered, and starts it where a session does.
+	shapes := nativeShapesState{}
+	if saved.Shapes != nil {
+		shapes = *saved.Shapes
+	}
 	if shapes.Pen&0xff != 0 || shapes.PointSize < 0 || shapes.PointSize > maxNativePointSize ||
 		shapes.X < math.MinInt16 || shapes.X > math.MaxInt16 || shapes.Y < math.MinInt16 || shapes.Y > math.MaxInt16 ||
 		shapes.Width < 0 || shapes.Width > math.MaxInt16 || shapes.Height < 0 || shapes.Height > math.MaxInt16 ||
@@ -494,10 +500,12 @@ func restoreNativeState(archive *NativeArchive, saved nativeState, options Nativ
 	for _, colour := range saved.Colours {
 		platform.colours[colour.Item] = colour.Colour
 	}
-	platform.shapes = nativeShapes{pen: saved.Shapes.Pen, pointSize: saved.Shapes.PointSize, clipped: saved.Shapes.Clipped}
-	if saved.Shapes.Clipped {
-		x, y := int(saved.Shapes.X), int(saved.Shapes.Y)
-		platform.shapes.clip = image.Rect(x, y, x+int(saved.Shapes.Width), y+int(saved.Shapes.Height))
+	if shapes := saved.Shapes; shapes != nil {
+		platform.shapes = nativeShapes{pen: shapes.Pen, pointSize: shapes.PointSize, clipped: shapes.Clipped}
+		if shapes.Clipped {
+			x, y := int(shapes.X), int(shapes.Y)
+			platform.shapes.clip = image.Rect(x, y, x+int(shapes.Width), y+int(shapes.Height))
+		}
 	}
 	platform.audio, err = backend.NewAudioFromStateWithClock(saved.Audio, nil, platform.source.Now)
 	if err != nil {

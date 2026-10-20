@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"bytes"
 	"encoding/binary"
 	"image/color"
 	"testing"
@@ -95,19 +96,73 @@ func TestNativeTextReadsBothShapesOfARun(t *testing.T) {
 		})
 	}
 
-	// A caller that gives a count is taken at its word, in the halfwords the
-	// run is made of, and one that gives an impossible one is refused rather
-	// than read.
-	address := nativeTextAt(t, platform, []byte("W\x00A\x00I\x00T\x00.\x00.\x00\x00\x00"))
-	if raw, err := platform.readText(address, 4); err != nil || string(raw) != "WAIT" {
-		t.Errorf("a counted run read %q (%v), want %q", raw, err, "WAIT")
+}
+
+// nativeLaterTextPlatform is a test platform whose module is of the later
+// generation, the one whose runs are halfwords.
+func nativeLaterTextPlatform(t *testing.T) *NativePlatform {
+	t.Helper()
+	platform := newTestNativePlatform(t, nil)
+	platform.archive.Module = nativeGateModule()
+	return platform
+}
+
+// TestNativeTextCountsInTheUnitsOfTheRun covers a run with a count. A later
+// title passes 14 for "ne button game", fourteen halfwords; the 2005 module's
+// runs are plain bytes, and a count of them is a count of bytes. Read the
+// other way round, one draws half its line and the other twice its line and
+// whatever follows it.
+func TestNativeTextCountsInTheUnitsOfTheRun(t *testing.T) {
+	later := nativeLaterTextPlatform(t)
+	address := nativeTextAt(t, later, []byte("W\x00A\x00I\x00T\x00.\x00.\x00\x00\x00"))
+	if raw, err := later.readText(address, 4); err != nil || string(raw) != "WAIT" {
+		t.Errorf("a counted run of halfwords read %q (%v), want %q", raw, err, "WAIT")
 	}
-	mixed := nativeTextAt(t, platform, []byte{0xc0, 0xce, 'A', 0x00, 0xc1, 0xf5, 0x00, 0x00})
-	if raw, err := platform.readText(mixed, 2); err != nil || decodeEUCKR(raw) != "인A" {
+	mixed := nativeTextAt(t, later, []byte{0xc0, 0xce, 'A', 0x00, 0xc1, 0xf5, 0x00, 0x00})
+	if raw, err := later.readText(mixed, 2); err != nil || decodeEUCKR(raw) != "인A" {
 		t.Errorf("a counted run of Korean and ASCII read %q (%v), want %q", decodeEUCKR(raw), err, "인A")
 	}
-	if _, err := platform.readText(address, maxNativeTextLength/2+1); err == nil {
-		t.Error("a run longer than the limit was read")
+
+	earlier := newTestNativePlatform(t, nil)
+	plain := nativeTextAt(t, earlier, []byte("WAIT..\x00"))
+	if raw, err := earlier.readText(plain, 4); err != nil || string(raw) != "WAIT" {
+		t.Errorf("a counted run of bytes read %q (%v), want %q", raw, err, "WAIT")
+	}
+	korean := nativeTextAt(t, earlier, []byte{0xc0, 0xce, 'A', 0xc1, 0xf5, 0x00})
+	if raw, err := earlier.readText(korean, 3); err != nil || decodeEUCKR(raw) != "인A" {
+		t.Errorf("a counted run of Korean and ASCII bytes read %q (%v), want %q", decodeEUCKR(raw), err, "인A")
+	}
+}
+
+// TestNativeTextReadsWhatThereIsOfARun covers a run that goes on past what is
+// read of it. One longer than the bound is the part up to the bound, and one
+// that reaches the end of guest memory is what is there up to that end: the
+// screen shows the front of a line either way, and measuring it answers how
+// wide that front is rather than nothing. Only a run of which nothing can be
+// read is an error.
+func TestNativeTextReadsWhatThereIsOfARun(t *testing.T) {
+	later := nativeLaterTextPlatform(t)
+	long := nativeTextAt(t, later, bytes.Repeat([]byte{'A', 0}, maxNativeTextLength))
+	if raw, err := later.readText(long, maxNativeTextLength); err != nil || len(raw) != maxNativeTextLength/2 {
+		t.Errorf("a run past the bound read %d characters (%v), want the %d up to it", len(raw), err, maxNativeTextLength/2)
+	}
+
+	top := ThreadStackBase + uint32(ThreadStackSize)
+	memory := later.client.core.Memory()
+	if err := memory.Read(top, make([]byte, 1)); err == nil {
+		t.Fatal("guest memory goes on past the stack")
+	}
+	end := top - 6
+	if err := memory.Write(end, []byte("A\x00B\x00C\x00")); err != nil {
+		t.Fatal(err)
+	}
+	for _, count := range []int32{-1, 8} {
+		if raw, err := later.readText(end, count); err != nil || string(raw) != "ABC" {
+			t.Errorf("a run of count %d at the end of memory read %q (%v), want %q", count, raw, err, "ABC")
+		}
+	}
+	if _, err := later.readText(top, 4); err == nil {
+		t.Error("a run of which nothing can be read was read")
 	}
 }
 
@@ -140,6 +195,62 @@ func TestNativeMeasureTextAnswersTheWidthItIsDrawnAt(t *testing.T) {
 	}
 	if got := nativeMeasureCall(t, platform, 0, -1, -1, 0); got != 0 {
 		t.Errorf("a null run measured %d", got)
+	}
+}
+
+// TestNativeMeasureTextMeasuresWhatItDraws covers the runs the reading bounds:
+// one past the bound measures the part up to it, and one that reaches the end
+// of guest memory the part before that end, which is what drawing either
+// draws. Answering nothing for them was the division by zero again.
+func TestNativeMeasureTextMeasuresWhatItDraws(t *testing.T) {
+	platform := nativeLaterTextPlatform(t)
+	face := platform.textFace()
+	a, b, c := face.Render('A').Advance, face.Render('B').Advance, face.Render('C').Advance
+	long := nativeTextAt(t, platform, bytes.Repeat([]byte{'A', 0}, maxNativeTextLength))
+	if got, want := nativeMeasureCall(t, platform, long, maxNativeTextLength, -1, 0), uint32(a*maxNativeTextLength/2); got != want {
+		t.Errorf("a run past the bound measured %d, want %d", got, want)
+	}
+	end := ThreadStackBase + uint32(ThreadStackSize) - 6
+	if err := platform.client.core.Memory().Write(end, []byte("A\x00B\x00C\x00")); err != nil {
+		t.Fatal(err)
+	}
+	if got := nativeMeasureCall(t, platform, end, -1, -1, 0); got != uint32(a+b+c) {
+		t.Errorf("a run at the end of memory measured %d, want %d", got, a+b+c)
+	}
+}
+
+// TestNativeMeasureTextCountsWhatFitsInTheRunsUnits covers the count a caller
+// is given of what fits: it is in the run's own units, which a caller steps
+// through its run by. A Korean character is one halfword of a later title's
+// run and two bytes of the 2005 module's.
+func TestNativeMeasureTextCountsWhatFitsInTheRunsUnits(t *testing.T) {
+	for _, generation := range []struct {
+		name     string
+		platform func(t *testing.T) *NativePlatform
+		run      []byte
+		want     uint32
+	}{
+		{name: "halfwords", platform: nativeLaterTextPlatform, run: []byte{0xc0, 0xce, 'A', 0x00, 0xc1, 0xf5, 0x00, 0x00}, want: 2},
+		{name: "plain bytes", platform: func(t *testing.T) *NativePlatform { return newTestNativePlatform(t, nil) },
+			run: []byte{0xc0, 0xce, 'A', 0xc1, 0xf5, 0x00, 0x00, 0x00}, want: 3},
+	} {
+		t.Run(generation.name, func(t *testing.T) {
+			platform := generation.platform(t)
+			face := platform.textFace()
+			// The width of 인 and A, short of the third character.
+			limit := face.Render('인').Advance + face.Render('A').Advance
+			fits, err := platform.client.Allocate(4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := nativeTextAt(t, platform, generation.run)
+			if got := nativeMeasureCall(t, platform, run, -1, int32(limit), fits); got != uint32(limit) {
+				t.Errorf("width within %d = %d", limit, got)
+			}
+			if got := binary.LittleEndian.Uint32(nativeRead(t, platform, fits, 4)); got != generation.want {
+				t.Errorf("%d units fit, want %d", got, generation.want)
+			}
+		})
 	}
 }
 

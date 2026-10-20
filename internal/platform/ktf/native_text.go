@@ -27,8 +27,10 @@ import (
 //   - **count is -1 at both**, which is what a run of text with a terminator
 //     rather than a length is. A later title passes 14 for "ne button game",
 //     which is fourteen halfwords and then a zero one, so a count is a number
-//     of halfwords, the units the run is made of, and not of bytes. Read as
-//     bytes it drew "ne butt".
+//     of the units the run is made of, not of bytes: read as bytes it drew
+//     "ne butt". The later generation's runs are made of halfwords and the
+//     2005 module's of plain bytes (see readText), so the unit is the
+//     generation's; see textUnit.
 //   - **the text is EUC-KR bytes**, not the specification's wide characters:
 //     one module builds its lines by copying two bytes at a time out of a
 //     string in its own image, and those bytes decode as Korean and read as
@@ -77,9 +79,25 @@ const nativeTextColourItem = 1
 // because the ground a clear leaves is light.
 var nativeDefaultTextColour = color.RGBA{A: 0xff}
 
-// maxNativeTextLength bounds a run of text read out of guest memory when the
-// caller gives a count rather than a terminator.
+// maxNativeTextLength bounds how much of a run of text is read out of guest
+// memory, in bytes, after the first zero byte or when the caller gives a count
+// rather than a terminator. A run that goes on past it is the part up to it:
+// what a screen shows of a line is the front of it, and what measuring it
+// answers is the width of what drawing it draws.
 const maxNativeTextLength = 4 << 10
+
+// textUnit is how many bytes one unit of a run takes, which is what a count
+// counts. The later generation's runs are wide characters, a halfword each,
+// and a title of it counts them; the 2005 module hands its text over as plain
+// bytes and passes no count at all, so a count from it is taken in the units
+// its runs are made of, which is what it was before a later title said what a
+// count is.
+func (platform *NativePlatform) textUnit() int {
+	if platform.archive.AsksForInterfaceVersion() {
+		return 2
+	}
+	return 1
+}
 
 // installText registers the display's text calls.
 func (platform *NativePlatform) installText() {
@@ -126,6 +144,20 @@ func (platform *NativePlatform) fontMetrics(thread *armcore.Thread) (uint32, err
 // say how many characters fit in it. Both callers pass -1 and null, so a width
 // is a limit only when it is not negative, and the count is written only when
 // there is somewhere to write it.
+//
+// Measuring is drawing without the ink, so a run measures what drawText
+// draws of it: a run longer than maxNativeTextLength, one with no terminator
+// and one that runs into the end of guest memory are measured as far as they
+// can be read, the way they are drawn, rather than answered with nothing. A
+// zero for real text is what the title divides by. A run whose characters all
+// take no width when drawn — control characters, which no face here inks —
+// measures nothing, because that is how wide it is drawn; the run the title
+// divides by is a page of its own help text.
+//
+// How many fit is counted in the run's own units, the ones a count counts
+// (textUnit): one for each character of a run of halfwords, and the bytes of
+// each character of a run of plain bytes, two for a Korean one. A caller that
+// advances through its run by the answer lands on a character.
 func (platform *NativePlatform) measureText(thread *armcore.Thread) (uint32, error) {
 	arguments, err := nativeArguments(thread, 4)
 	if err != nil {
@@ -144,17 +176,22 @@ func (platform *NativePlatform) measureText(thread *armcore.Thread) (uint32, err
 	limit, fits := int(int32(uint32(stackedLimit))), uint32(stackedFits)
 	width, fitted := 0, 0
 	if address != 0 {
-		// A run that cannot be read measures nothing, as drawText draws
-		// nothing for it.
+		// A run nothing of which can be read measures nothing, as drawText
+		// draws nothing for it.
 		if raw, err := platform.readText(address, count); err == nil {
-			face := platform.textFace()
+			face, halfwords := platform.textFace(), platform.textUnit() == 2
 			for _, character := range decodeEUCKR(raw) {
 				advance := face.Render(character).Advance
 				if limit >= 0 && width+advance > limit {
 					break
 				}
 				width += advance
-				fitted++
+				switch {
+				case halfwords, character < 0x80:
+					fitted++
+				default:
+					fitted += 2
+				}
 			}
 		}
 	}
@@ -239,7 +276,9 @@ func (platform *NativePlatform) drawText(thread *armcore.Thread) (uint32, error)
 }
 
 // readText reads the run the caller named. A count of -1 is a terminator, and
-// any other is a number of halfwords.
+// any other is a number of the run's units (textUnit). What it answers is the
+// run up to maxNativeTextLength, and up to where guest memory ends, rather than
+// a refusal: the error is for a run of which nothing can be read.
 //
 // **A terminator here is a zero halfword, not a zero byte**, and reading it as
 // a byte cost three quarters of a sentence. One module builds its lines a
@@ -260,38 +299,67 @@ func (platform *NativePlatform) readText(address uint32, count int32) ([]byte, e
 	if count < 0 {
 		raw, err := platform.readString(address)
 		if err != nil {
-			return nil, err
+			// No zero byte before the end of guest memory or the bound: the
+			// run is what can be read of it.
+			if raw = platform.readMapped(address, maxNativeTextLength); len(raw) == 0 {
+				return nil, err
+			}
 		}
-		return platform.readPaddedText(address, raw)
+		return platform.readPaddedText(address, raw), nil
 	}
 	if count == 0 {
 		return nil, nil
 	}
-	if count > maxNativeTextLength/2 {
-		return nil, fmt.Errorf("KTF native text of %d halfwords at %#x, limit %d", count, address, maxNativeTextLength/2)
+	unit := platform.textUnit()
+	raw := platform.readMapped(address, int(min(int64(count)*int64(unit), maxNativeTextLength)))
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("KTF native text of %d units at %#x cannot be read", count, address)
 	}
-	raw := make([]byte, 2*count)
-	if err := platform.client.core.Memory().Read(address, raw); err != nil {
-		return nil, fmt.Errorf("read %d halfwords of KTF native text at %#x: %w", count, address, err)
+	if unit == 2 {
+		return nativeHalfwordRun(raw), nil
 	}
-	return nativeHalfwordRun(raw), nil
+	return raw, nil
 }
 
 // readPaddedText carries on past a zero byte that is the pad of a single-byte
 // character. `first` is what stopping at the first zero already gave.
-func (platform *NativePlatform) readPaddedText(address uint32, first []byte) ([]byte, error) {
-	// A zero on a halfword boundary is the terminator, and so is one at the end
-	// of what could be read at all.
+func (platform *NativePlatform) readPaddedText(address uint32, first []byte) []byte {
+	// A zero on a halfword boundary is the terminator.
 	if len(first)%2 == 0 {
-		return first, nil
+		return first
 	}
-	raw := make([]byte, maxNativeTextLength)
-	if err := platform.client.core.Memory().Read(address, raw); err != nil {
-		// The buffer does not reach that far, which says nothing is past the
-		// zero: what was read up to it is the run.
-		return first, nil
+	// Past the pad the run goes on to its zero halfword, or to where guest
+	// memory ends, which ends it the same way.
+	return nativeHalfwordRun(platform.readMapped(address, maxNativeTextLength))
+}
+
+// nativeMemoryPage is the size of the pages guest memory is mapped in, which
+// is where a read can stop being possible.
+const nativeMemoryPage = 0x1000
+
+// readMapped reads up to length bytes at address and stops where guest memory
+// does, so a run that reaches the end of what is mapped is what is there up to
+// that end. Guest memory is mapped a page at a time, so that is how it is read
+// once the whole of it cannot be.
+func (platform *NativePlatform) readMapped(address uint32, length int) []byte {
+	memory := platform.client.core.Memory()
+	data := make([]byte, length)
+	if memory.Read(address, data) == nil {
+		return data
 	}
-	return nativeHalfwordRun(raw), nil
+	read := 0
+	for read < length {
+		at := uint64(address) + uint64(read)
+		if at >= 1<<32 {
+			break
+		}
+		chunk := min(length-read, int(nativeMemoryPage-at%nativeMemoryPage))
+		if memory.Read(uint32(at), data[read:read+chunk]) != nil {
+			break
+		}
+		read += chunk
+	}
+	return data[:read]
 }
 
 // nativeHalfwordRun reads a run a halfword at a time up to a zero one, and

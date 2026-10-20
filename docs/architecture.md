@@ -455,8 +455,10 @@ The version is read before the size is bounded, so an envelope of an earlier
 format is refused as unsupported whatever its size. The checksum detects damage;
 it is not authentication, and every inner record remains untrusted. Before typed
 JSON allocation, a schema-aware pass bounds depth, value count and estimated
-allocation, and rejects missing, duplicate, unknown or wrongly typed fields. Byte
-payloads keep their raw bytes.
+allocation, and rejects missing, duplicate, unknown or wrongly typed fields. A
+pointer field is the one a record may leave out: absent reads as null, which
+is how a record adds a field and still reads the records written before it.
+Byte payloads keep their raw bytes.
 
 A directory store keeps one Host checkpoint slot per exact archive at
 `.wfeature-quicksave/owners/<owner>/<archive SHA-256>.v3.wfq`, beside the guest
@@ -679,8 +681,10 @@ state.
 **Native packages** use a separate versioned record under the same envelope. It
 keeps ARM memory, root registers, allocator ownership, built-in interfaces,
 application identity, screen and image pixels, the display colours, the second
-drawing interface's pen, point size and clip, listeners, queued events and
-resumes, frame and timer deadlines and logical audio. An open file is recorded as
+drawing interface's pen, point size and clip (a pointer, absent from records
+taken before that interface was answered, which start it at its defaults),
+listeners, queued events and resumes, frame and timer deadlines and logical
+audio. An open file is recorded as
 its name, save key, position, whether it may be written and, when its open
 emptied the file, the number of bytes it then held. The record holds no file
 bytes: the table of names the session wrote, the marks on names not yet stored
@@ -694,8 +698,10 @@ decoding. Restoration installs fresh built-in bindings without running the
 package's entry, factory or startup event. Custom Host bindings and active
 tracing refuse capture. A native package's writes wait in the platform until a
 file is closed or a frame ends, so a capture and a load both store what is
-waiting first; adoption then detaches the old runtime from the store. Elapsed
-time and deadlines rebase at adoption, excluding detached staging time.
+waiting first; adoption then detaches the old runtime from the store, and the
+restored runtime takes over the names of the files the old one made, so an
+empty file the play made is still a file after the load. Elapsed time and
+deadlines rebase at adoption, excluding detached staging time.
 
 <a id="lgt-checkpoints"></a>
 

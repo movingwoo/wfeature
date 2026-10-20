@@ -7,6 +7,7 @@ import (
 	"image/color"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/curve"
 )
 
 // One local title queries a second drawing interface beside the screen, and
@@ -52,7 +53,9 @@ const nativeClipRectangle = 1
 
 // maxNativePointSize bounds a point, which is a square that size centred on
 // where it is drawn. A point the size of the largest screen a session runs at
-// already covers it.
+// already covers it. What a point costs is the part of its square inside the
+// screen, filled a row at a time, which is what a rectangle of that size costs
+// the display's own fill.
 const maxNativePointSize = maxNativeStateScreen
 
 // nativeShapes is the interface's state: what it draws with and where.
@@ -77,13 +80,18 @@ func (platform *NativePlatform) installShapes() {
 }
 
 // shapesColour sets the pen. It is kept packed the way the screen's own
-// colours are, so one decoder reads both. Its answer is not read.
+// colours are, so one decoder reads both. Its answer is not read. A title sets
+// it before every shape, so the channels are read straight out of r1 to r3.
 func (platform *NativePlatform) shapesColour(thread *armcore.Thread) (uint32, error) {
-	arguments, err := nativeArguments(thread, 4)
-	if err != nil {
-		return 0, err
+	pen := uint32(0)
+	for register := 1; register <= 3; register++ {
+		channel, err := thread.Register(register)
+		if err != nil {
+			return 0, err
+		}
+		pen |= uint32(uint8(channel)) << (32 - 8*register)
 	}
-	platform.shapes.pen = uint32(uint8(arguments[1]))<<24 | uint32(uint8(arguments[2]))<<16 | uint32(uint8(arguments[3]))<<8
+	platform.shapes.pen = pen
 	return 0, nil
 }
 
@@ -111,8 +119,8 @@ func (platform *NativePlatform) shapesClip(thread *armcore.Thread) (uint32, erro
 		platform.shapes.clipped = false
 		return 1, nil
 	}
-	record := make([]byte, nativeClipRecordSize)
-	if err := platform.client.core.Memory().Read(address, record); err != nil {
+	var record [nativeClipRecordSize]byte
+	if err := platform.client.core.Memory().Read(address, record[:]); err != nil {
 		return 0, fmt.Errorf("read KTF native clip at %#x: %w", address, err)
 	}
 	if record[0] != nativeClipRectangle {
@@ -134,17 +142,19 @@ func nativeHalfwords(record []byte, count int) (int, int, int, int) {
 	return values[0], values[1], values[2], values[3]
 }
 
-// readShape reads count halfwords of the record a drawing call names.
+// readShape reads count halfwords, at most four, of the record a drawing call
+// names. The record is read onto the stack: a title draws thousands of these
+// a frame.
 func (platform *NativePlatform) readShape(thread *armcore.Thread, count int) (int, int, int, int, error) {
 	address, err := thread.Register(1)
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}
-	record := make([]byte, count*2)
-	if err := platform.client.core.Memory().Read(address, record); err != nil {
+	var record [8]byte
+	if err := platform.client.core.Memory().Read(address, record[:count*2]); err != nil {
 		return 0, 0, 0, 0, fmt.Errorf("read KTF native shape at %#x: %w", address, err)
 	}
-	a, b, c, d := nativeHalfwords(record, count)
+	a, b, c, d := nativeHalfwords(record[:], count)
 	return a, b, c, d, nil
 }
 
@@ -176,51 +186,37 @@ func (platform *NativePlatform) shapesPoint(thread *armcore.Thread) (uint32, err
 	}
 	size := int(max(platform.shapes.pointSize, 1))
 	square := image.Rect(x, y, x+size, y+size).Sub(image.Pt((size-1)/2, (size-1)/2))
-	square = square.Intersect(platform.shapesBounds())
-	pen := nativeColour(platform.shapes.pen)
-	for row := square.Min.Y; row < square.Max.Y; row++ {
-		for column := square.Min.X; column < square.Max.X; column++ {
-			platform.screen.frame.SetRGBA(column, row, pen)
-		}
-	}
+	fillNativeRectangle(platform.screen.frame, square.Intersect(platform.shapesBounds()), nativeColour(platform.shapes.pen))
 	platform.screen.draws++
 	return 0, nil
 }
 
-// shapesLine draws a line one pixel wide, both ends included.
+// shapesLine draws a line one pixel wide, both ends included. It is the line
+// the WIPI C table and Java's Graphics draw, walked only across the stretch of
+// it inside the clip: the ends are untrusted halfwords, and a line that spans
+// them is tens of thousands of steps that land nowhere.
 func (platform *NativePlatform) shapesLine(thread *armcore.Thread) (uint32, error) {
 	x, y, toX, toY, err := platform.readShape(thread, 4)
 	if err != nil {
 		return 0, err
 	}
 	bounds, pen := platform.shapesBounds(), nativeColour(platform.shapes.pen)
-	// Bresenham's walk, which visits every pixel the line crosses once and
-	// steps diagonally where it crosses both ways. The ends are halfwords, so
-	// a walk is at most 65,536 steps.
-	deltaX, deltaY := distance(x, toX), -distance(y, toY)
-	stepX, stepY := towards(x, toX), towards(y, toY)
-	balance := deltaX + deltaY
-	for {
-		platform.plot(bounds, x, y, pen)
-		if x == toX && y == toY {
-			break
-		}
-		twice := 2 * balance
-		if twice >= deltaY {
-			balance += deltaY
-			x += stepX
-		}
-		if twice <= deltaX {
-			balance += deltaX
-			y += stepY
-		}
-	}
+	// The plot never fails, so neither does the walk.
+	_ = clippedLine(int32(x), int32(y), int32(toX), int32(toY),
+		int64(bounds.Min.X), int64(bounds.Min.Y), int64(bounds.Max.X), int64(bounds.Max.Y),
+		func(x, y int32) error {
+			platform.plot(bounds, int(x), int(y), pen)
+			return nil
+		})
 	platform.screen.draws++
 	return 0, nil
 }
 
-// shapesCircle draws the outline of a circle. Nothing a title has been seen
-// to call asks for a filled one.
+// shapesCircle draws the outline of a circle: the arc the WIPI C table and
+// Java's Graphics draw, all the way round the square the radius makes about
+// the centre, and only the stretches of it that land inside the clip. A circle
+// of no radius is its centre. Nothing a title has been seen to call asks for a
+// filled one.
 func (platform *NativePlatform) shapesCircle(thread *armcore.Thread) (uint32, error) {
 	centreX, centreY, radius, _, err := platform.readShape(thread, 3)
 	if err != nil {
@@ -230,39 +226,17 @@ func (platform *NativePlatform) shapesCircle(thread *armcore.Thread) (uint32, er
 		return 0, nil
 	}
 	bounds, pen := platform.shapesBounds(), nativeColour(platform.shapes.pen)
-	// The midpoint walk over one eighth of the circle, mirrored into the rest.
-	x, y, balance := radius, 0, 1-radius
-	for x >= y {
-		for _, point := range [8][2]int{{x, y}, {y, x}, {-y, x}, {-x, y}, {-x, -y}, {-y, -x}, {y, -x}, {x, -y}} {
-			platform.plot(bounds, centreX+point[0], centreY+point[1], pen)
-		}
-		y++
-		if balance < 0 {
-			balance += 2*y + 1
-		} else {
-			x--
-			balance += 2*(y-x) + 1
-		}
+	if radius == 0 {
+		platform.plot(bounds, centreX, centreY, pen)
+	} else {
+		within := curve.Bounds{Left: int64(bounds.Min.X), Top: int64(bounds.Min.Y), Right: int64(bounds.Max.X), Bottom: int64(bounds.Max.Y)}
+		// The emit never fails, so neither does the walk.
+		_ = curve.DrawArcWithin(within, int32(centreX-radius), int32(centreY-radius), int32(2*radius), int32(2*radius), 0, 360,
+			func(span curve.Span) error {
+				fillNativeRectangle(platform.screen.frame, image.Rect(int(span.X), int(span.Y), int(span.X+span.Width), int(span.Y)+1), pen)
+				return nil
+			})
 	}
 	platform.screen.draws++
 	return 0, nil
-}
-
-// distance is how far apart two coordinates are, and towards is the step that
-// takes the first to the second.
-func distance(from, to int) int {
-	if to < from {
-		return from - to
-	}
-	return to - from
-}
-
-func towards(from, to int) int {
-	switch {
-	case to < from:
-		return -1
-	case to > from:
-		return 1
-	}
-	return 0
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"image/color"
 	"math"
@@ -241,6 +242,52 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 	}
 	if item, ok := resource.item(6, 1); !ok || len(item) != 3 {
 		t.Fatal("the running session's parsed tables no longer answer")
+	}
+}
+
+// TestNativeCheckpointReadsARecordFromBeforeTheSecondDrawingInterface is a
+// quick save taken by a build that did not answer the second drawing
+// interface: its record has no Shapes at all. It loads, and the interface
+// starts where a session starts it.
+func TestNativeCheckpointReadsARecordFromBeforeTheSecondDrawingInterface(t *testing.T) {
+	archive, err := testfixture.KTFNativeCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := backend.NewMemorySaveStore(nil)
+	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: NewManualClock(time.Time{}), SaveStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	nativeCall(t, source.platform.shapesPointSize, 0, 3)
+	saved, err := source.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(saved.Runtime, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fields["Shapes"]; !ok {
+		t.Fatal("the record this build writes has no Shapes to leave out")
+	}
+	delete(fields, "Shapes")
+	earlier := saved
+	if earlier.Runtime, err = json.Marshal(fields); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := PrepareNativeSessionCheckpoint(archive, earlier, NativeSessionOptions{SaveStore: store})
+	if err != nil {
+		t.Fatalf("a record from before the interface was refused: %v", err)
+	}
+	restored, err := prepared.Commit(t.Context(), source, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	if restored.platform.shapes != (nativeShapes{}) {
+		t.Errorf("the interface came back as %+v, want where a session starts it", restored.platform.shapes)
 	}
 }
 

@@ -148,9 +148,13 @@ cost 33 µs and a 240×320 screen copy 2.5 ms on an M1; by rows, 1.3 µs and
 The earlier native package draws through the display — a fill, a blit, text
 and a present — and through a second interface (`0x1002001`) with a pen
 colour, a point size, a rectangular clip, and points, lines and circle
-outlines in that colour. A fill that names no colour takes the display's
-background item, white until the title sets it. A counted text run counts
-halfwords, and the display measures a run in the face it draws it in
+outlines in that colour. A rectangle is filled when its mode asks for a fill
+(every title passes 2, a fill); a fill that names no colour takes the
+display's background item, white until the title sets it. Lines and circles
+are the WIPI C table's line and arc, walked only inside the clip. A counted
+text run counts the run's own units, halfwords for the later generation and
+bytes for the 2005 module, and the display measures a run as far as it draws
+it, in the face it draws it in, counting what fits in the same units
 ([history](history/ktf.md#ktf-native-settings-2026-10-20)).
 
 The screen is the Host's choice, 240×320 by default (`-screen WxH` in the
@@ -211,12 +215,15 @@ mkdir); `MC_fsGetFileStat` reads through the removal list like
 `MC_fsIsExist`.
 The earlier native package retains its existing buffered write/flush policy.
 See [save integrity](session.md#save-integrity) for failure recovery and limits.
-Its open makes a missing file only in mode 4, the mode that empties one; every
-other mode is refused, and the titles fall back on their own (defaults, or
-mode 4 and then a write). A file with nothing in it that an earlier session
-left, that the package does not carry, opens as missing in every mode but 4:
-that is the migration for saves from builds whose every writing open made the
-file, which left one title reading its settings out of an empty file
+Its open makes a missing file only in mode 4, BREW's create; every other mode
+opens a file that is there and is refused for one that is not, and the titles
+fall back on their own (defaults, or mode 4 and then a write). A stored file
+with nothing in it, which the package does not carry and this play did not
+make, is missing to every call on the name — open, existence, information and
+create — so a title sees one answer whichever it asks. That is the migration
+for saves from builds whose every writing open made the file, which left one
+title reading its settings out of an empty file. A quick load keeps what the
+play made, so it does not change what a restored title finds
 ([history](history/ktf.md#ktf-native-settings-2026-10-20)).
 
 A record database the archive carries, as one `qtcdb` file or as a `qtpdb`

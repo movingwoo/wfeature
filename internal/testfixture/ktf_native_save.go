@@ -231,7 +231,8 @@ func ktfNativeSaveArchive(frame bool) ([]byte, error) {
 	a.emit(lgtStr(0, 3, 0), lgtStr(1, 0, platform), lgtMovImm(0, 1), lgtBXLR)
 
 	// draw(object): count, put the count in the red channel of the whole
-	// screen, present it. It is the frame one form registers.
+	// screen, present it. It is the frame one form registers. The fill's mode
+	// goes on the stack, where a title passes it: 2, a fill.
 	var draw uint32
 	if frame {
 		draw = a.here()
@@ -239,7 +240,9 @@ func ktfNativeSaveArchive(frame bool) ([]byte, error) {
 		a.emit(lgtLdr(3, 4, frames), lgtAddImm(3, 3, 1), lgtStr(3, 4, frames))
 		a.emit(0xe1a03c03) // mov r3, r3, lsl #24
 		a.emit(lgtLdr(0, 4, screen), lgtMovImm(1, 0), lgtMovImm(2, 0))
+		a.emit(lgtMovImm(12, 2), 0xe52dc004) // str ip, [sp, #-4]!
 		method(screenRectangle)
+		a.emit(lgtAddImm(13, 13, 4))
 		a.emit(lgtLdr(0, 4, screen))
 		method(screenPresent)
 		a.emit(lgtMovImm(0, 1), lgtPopPC)

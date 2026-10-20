@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"image/color"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/curve"
 )
 
 // nativeShapeRecord writes the halfwords of one shape record into guest memory
@@ -71,14 +73,31 @@ func TestNativeShapesDrawInThePenInsideTheClip(t *testing.T) {
 		t.Errorf("the line from 20,20 to 25,22 marked %d pixels, want its two ends among 6", marked)
 	}
 
+	// A circle is the arc the WIPI C table and Java's Graphics draw, all the
+	// way round the square its radius makes about the centre, and not filled.
 	nativeCall(t, platform.shapesCircle, 0, nativeShapeRecord(t, platform, 50, 50, 4))
-	for _, at := range [][2]int{{54, 50}, {46, 50}, {50, 54}, {50, 46}} {
-		if !inked(at[0], at[1]) {
-			t.Errorf("the circle missed %v", at)
+	ring := map[[2]int]bool{}
+	if err := curve.DrawArc(46, 46, 8, 8, 0, 360, func(span curve.Span) error {
+		for x := span.X; x < span.X+span.Width; x++ {
+			ring[[2]int{int(x), int(span.Y)}] = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for y := 40; y < 61; y++ {
+		for x := 40; x < 61; x++ {
+			if inked(x, y) != ring[[2]int{x, y}] {
+				t.Errorf("the circle inked %d,%d = %t, the arc %t", x, y, inked(x, y), ring[[2]int{x, y}])
+			}
 		}
 	}
-	if inked(50, 50) {
-		t.Error("the circle was filled")
+	if !inked(54, 50) || !inked(46, 50) || !inked(50, 46) || inked(50, 50) {
+		t.Error("the circle is not a ring of radius 4 round its centre")
+	}
+	nativeCall(t, platform.shapesCircle, 0, nativeShapeRecord(t, platform, 70, 70, 0))
+	if !inked(70, 70) || inked(71, 70) {
+		t.Error("a circle of no radius is not its centre")
 	}
 
 	// The clip answers that it took, and nothing lands outside it.
@@ -109,7 +128,7 @@ func TestNativeShapesDrawInThePenInsideTheClip(t *testing.T) {
 	// Off the screen is nowhere, not a failure.
 	nativeCall(t, platform.shapesCircle, 0, nativeShapeRecord(t, platform, -100, -100, 30))
 	nativeCall(t, platform.shapesLine, 0, nativeShapeRecord(t, platform, -5, -5, 300, 400))
-	if got := platform.Draws(); got != 10 {
+	if got := platform.Draws(); got != 11 {
 		t.Errorf("draws = %d, want one for every shape", got)
 	}
 }

@@ -461,6 +461,8 @@ func TestLocalKTFNativePackageRuns(t *testing.T) {
 		// the input contract, because every screen after the first is one the
 		// title only reaches by being played.
 		images, draws := len(platform.images), platform.Draws()
+		_, presents = platform.Frame()
+		routed := 0
 		for _, step := range []struct {
 			key    uint32
 			frames int
@@ -483,16 +485,22 @@ func TestLocalKTFNativePackageRuns(t *testing.T) {
 					t.Fatalf("%s: frame after key %#x: %v", name, step.key, err)
 				}
 			}
+			routed += step.frames
 		}
 		t.Logf("%s: after the menu route, %d draws and %d images", name, platform.Draws(), len(platform.images))
 		// The images the route loaded are what say it reached screens of the
-		// game. The draws do not: a title whose title screen is an animation of
+		// game, and the frames it went on ending and drawing are what say it
+		// did not stop at the first of them. A ratio of draws to the title
+		// screen's does not: a title whose title screen is an animation of
 		// thousands of points draws less a frame once it is playing.
 		if len(platform.images) <= images {
 			t.Errorf("%s: the menu route loaded no further images (%d, was %d)", name, len(platform.images), images)
 		}
-		if platform.Draws() <= draws {
-			t.Errorf("%s: the menu route drew nothing (%d draws, %d before it)", name, platform.Draws(), draws)
+		if _, ended := platform.Frame(); ended-presents < routed*9/10 {
+			t.Errorf("%s: the menu route ended %d frames of the %d it ran", name, ended-presents, routed)
+		}
+		if drawn := platform.Draws() - draws; drawn < routed {
+			t.Errorf("%s: the menu route drew %d times over %d frames, fewer than one a frame", name, drawn, routed)
 		}
 
 		if sink.messages == 0 {

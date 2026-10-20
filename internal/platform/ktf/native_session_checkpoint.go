@@ -3,6 +3,7 @@ package ktf
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/movingwoo/wfeature/internal/backend"
 )
@@ -176,7 +177,11 @@ func (prepared *PreparedNativeSession) Discard() {
 //  4. If that stored anything the files are read again, so the restored title
 //     opens on what the displaced one wrote.
 //  5. The displaced session is cut off and the restored one adopted. Nothing
-//     in this step can fail.
+//     in this step can fail. The restored session takes over the names of the
+//     files the displaced one had made: they are this play's own, so one left
+//     empty is a file and not a leftover of an earlier build (see
+//     NativePlatform.contents), and a quick load does not change what the
+//     title finds there.
 //
 // Close is not called on the displaced session: its flush forgets a write the
 // store refuses, and the load would go on past a lost save.
@@ -225,6 +230,10 @@ func (prepared *PreparedNativeSession) Commit(ctx context.Context, previous *Nat
 	}
 	// Nothing after this point can fail.
 	if previous != nil {
+		if len(previous.platform.made) != 0 && platform.made == nil {
+			platform.made = make(map[string]bool, len(previous.platform.made))
+		}
+		maps.Copy(platform.made, previous.platform.made)
 		previous.platform.saves = nil
 		previous.platform.audio.SetSink(nil)
 		previous.platform, previous.Client, previous.cheat, previous.cheatConsole = nil, nil, nil, nil

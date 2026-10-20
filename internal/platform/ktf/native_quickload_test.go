@@ -600,6 +600,33 @@ func TestNativeQuickLoadReadsADirectoryWhereAFileWasAsNoFile(t *testing.T) {
 	}
 }
 
+// TestNativeQuickLoadKeepsAnEmptyFileThisPlayMade is a save a title emptied and
+// left empty, a quick save, and a quick load in the same play. The file is the
+// play's own, so the restored title finds it where it left it: the load does
+// not turn it into the empty leftover of an earlier build that every call takes
+// as missing (see NativePlatform.contents), which would send the restored title
+// down a different path from the one it took before the load.
+func TestNativeQuickLoadKeepsAnEmptyFileThisPlayMade(t *testing.T) {
+	const first = 0x11111111
+	for _, form := range nativeSaveFixtureForms {
+		t.Run(form.name, func(t *testing.T) {
+			source := startNativeSaveFixture(t, form.build, newNativeSaveFixtureStore(t))
+			source.press(testfixture.KTFNativeSaveKeyTruncate)
+			if got := source.read(); got.status != testfixture.KTFNativeSaveStatusFound || got.length != 0 {
+				t.Fatalf("the emptied save read as %+v", got)
+			}
+			source.wantStored("after the emptying open", []byte{})
+			restored := source.quickLoad(source.quickSave())
+			if got := restored.read(); got.status != testfixture.KTFNativeSaveStatusFound || got.length != 0 {
+				t.Fatalf("after the quick load the save read as %+v, want the empty file", got)
+			}
+			restored.progress(first)
+			restored.press(testfixture.KTFNativeSaveKeyPatch)
+			restored.wantStored("after the restored title patched it", binary.LittleEndian.AppendUint32(nil, first))
+		})
+	}
+}
+
 // An object whose open asked for an empty file holds only what the title
 // wrote through it. A load gives it back at most that much, from the front of
 // the file as it is now, so the file the restored title is rewriting is never

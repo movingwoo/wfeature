@@ -1,7 +1,6 @@
 package ktf
 
 import (
-	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
@@ -38,10 +37,12 @@ const (
 	nativeScreenPresent = 0x1c
 )
 
-// nativeNoColour is the value both colour arguments carry when the title means
-// "leave it alone". It is also what a fully saturated colour would be, so a
-// call that passes it for the fill is ambiguous; the call sites that do pass
-// no rectangle either, which reads as a clear.
+// nativeNoColour is the value a colour argument carries when the title names
+// no colour of its own. Every rectangle a title has been seen to draw passes
+// it for the frame, beside a mode that draws no frame. For the fill it is the
+// screen's background item: the call sites that pass it there pass no
+// rectangle either, which is a clear, and a clear is what a fill in the
+// background is.
 const nativeNoColour = 0xffffffff
 
 // A clear fills with the screen's background item, which is what a fill that
@@ -50,8 +51,17 @@ const nativeNoColour = 0xffffffff
 // nativeNoColour, and then scatters grey stars over the result. Filling with
 // white instead left the stars on a white sky. The earlier titles set no item
 // and clear the same way to white, which is what the item holds until a title
-// sets it.
+// sets it. The rectangle says where the fill lands and the colour what it is,
+// so a smaller rectangle filled with nativeNoColour is the same fill over less
+// of the screen.
 const nativeBackgroundColourItem = 2
+
+// nativeRectangleFill is the bit of a rectangle's mode that asks for its inside
+// to be filled. Every rectangle a title has been seen to draw passes a mode of
+// 2 and is a fill, the clear among them. A mode without the bit asks for no
+// fill — an outline, which this platform does not draw — and the inside is
+// left as it is rather than painted over.
+const nativeRectangleFill = 2
 
 var nativeDefaultBackground = color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 
@@ -136,23 +146,28 @@ func nativeColour(packed uint32) color.RGBA {
 
 // drawRectangle fills one rectangle. A null rectangle covers the screen: the
 // one call site that passes null passes no size either, and the title makes it
-// before it has drawn anything.
+// before it has drawn anything. The mode is the argument on the stack.
 func (platform *NativePlatform) drawRectangle(thread *armcore.Thread) (uint32, error) {
 	arguments, err := nativeArguments(thread, 4)
 	if err != nil {
 		return 0, err
 	}
+	mode, err := platform.varargs(thread, 4)(1)
+	if err != nil {
+		return 0, err
+	}
 	bounds := platform.screen.frame.Bounds()
 	if arguments[1] != 0 {
-		record := make([]byte, 8)
-		if err := platform.client.core.Memory().Read(arguments[1], record); err != nil {
+		var record [8]byte
+		if err := platform.client.core.Memory().Read(arguments[1], record[:]); err != nil {
 			return 0, fmt.Errorf("read KTF native rectangle at %#x: %w", arguments[1], err)
 		}
-		x := int(int16(binary.LittleEndian.Uint16(record[0:])))
-		y := int(int16(binary.LittleEndian.Uint16(record[2:])))
-		width := int(int16(binary.LittleEndian.Uint16(record[4:])))
-		height := int(int16(binary.LittleEndian.Uint16(record[6:])))
+		x, y, width, height := nativeHalfwords(record[:], 4)
 		bounds = image.Rect(x, y, x+width, y+height).Intersect(bounds)
+	}
+	platform.screen.draws++
+	if uint32(mode)&nativeRectangleFill == 0 {
+		return 1, nil
 	}
 	fill := nativeColour(arguments[3])
 	if arguments[3] == nativeNoColour {
@@ -161,13 +176,27 @@ func (platform *NativePlatform) drawRectangle(thread *armcore.Thread) (uint32, e
 			fill = nativeColour(packed)
 		}
 	}
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			platform.screen.frame.SetRGBA(x, y, fill)
-		}
-	}
-	platform.screen.draws++
+	fillNativeRectangle(platform.screen.frame, bounds, fill)
 	return 1, nil
+}
+
+// fillNativeRectangle fills bounds, which lie inside the frame, with one
+// colour: one row is written a pixel at a time and the rest are copies of it,
+// so a fill costs what moving its bytes costs. It is the fill a rectangle and a
+// point both are, done without the allocation image/draw makes of a colour.
+func fillNativeRectangle(frame *image.RGBA, bounds image.Rectangle, fill color.RGBA) {
+	if bounds.Empty() {
+		return
+	}
+	start := frame.PixOffset(bounds.Min.X, bounds.Min.Y)
+	row := frame.Pix[start : start+bounds.Dx()*4]
+	for offset := 0; offset < len(row); offset += 4 {
+		row[offset], row[offset+1], row[offset+2], row[offset+3] = fill.R, fill.G, fill.B, fill.A
+	}
+	for y := bounds.Min.Y + 1; y < bounds.Max.Y; y++ {
+		offset := frame.PixOffset(bounds.Min.X, y)
+		copy(frame.Pix[offset:offset+len(row)], row)
+	}
 }
 
 // NativeBlit is one blit the title asked for, as its arguments arrived.
