@@ -88,8 +88,8 @@ func (r *sessionRunner) checkpointRefusal(step checkpointStep, game string, err 
 // quickLoadRefusal reads the slot a start from the quick save would restore,
 // before the caller stops the game it is running. It answers the refusals that
 // are already certain: no slot, a slot an earlier build wrote, a damaged one,
-// one taken from a different archive. A start that cannot succeed then leaves
-// the running game alone.
+// one taken from a different archive, and one of a game that was not running.
+// A start that cannot succeed then leaves the running game alone.
 //
 // It only reads. Everything else, an archive that cannot be read among them,
 // is left to the start itself, which words those as it always has; and the
@@ -115,8 +115,11 @@ func (s *Server) quickLoadRefusal(game string) error {
 	if err != nil {
 		return err
 	}
-	_, err = backend.DecodeCheckpoint(data, identity)
-	return err
+	checkpoint, err := backend.DecodeCheckpoint(data, identity)
+	if err != nil {
+		return err
+	}
+	return session.CheckpointRefusal(checkpoint)
 }
 
 // reportEarlierLeftovers says in the log, once per start, what an earlier build

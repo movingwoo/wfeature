@@ -115,7 +115,8 @@ func (platform *NativePlatform) installText() {
 func (platform *NativePlatform) textFace() *glyph.Face { return glyph.Handset() }
 
 // nativeAdvance is how far a character moves the pen across a run, which is
-// what drawing a run steps by and measuring it adds up.
+// what drawing a run steps by and measuring it adds up, given what the face
+// rendered for it.
 //
 // The face inks nothing for a control character and gives it no width, which
 // is right for the descriptor package, whose titles pad fixed buffers with
@@ -125,11 +126,11 @@ func (platform *NativePlatform) textFace() *glyph.Face { return glyph.Handset() 
 // wide as it is long, which a title relies on — one divides the width of its
 // help page by the page's length for the width of a character, and then by
 // that — where a width of nothing is a division by zero.
-func nativeAdvance(face *glyph.Face, character rune) int {
+func nativeAdvance(face *glyph.Face, character rune, rendered glyph.Bitmap) int {
 	if character < 0x20 || character == 0x7f {
-		character = ' '
+		return face.Render(' ').Advance
 	}
-	return face.Render(character).Advance
+	return rendered.Advance
 }
 
 // fontMetrics answers the line height, and the ascent and descent behind it.
@@ -172,10 +173,14 @@ func (platform *NativePlatform) fontMetrics(thread *armcore.Thread) (uint32, err
 // at no width (see nativeAdvance), so a run with anything in it measures more
 // than nothing.
 //
-// How many fit is counted in the run's own units, the ones a count counts
-// (textUnit): one for each character of a run of halfwords, and the bytes of
-// each character of a run of plain bytes, two for a Korean one. A caller that
-// advances through its run by the answer lands on a character.
+// How many fit is written only for the later generation, which is the one seen
+// calling this, with the specification's count of what fits in that place on
+// the stack. Its runs are halfwords, a character each, so the count is of
+// characters and of the run's units at once, and a caller that advances
+// through its run by it lands on a character. For the 2005 module, whose runs
+// are plain bytes and which is not seen calling this, nothing is written,
+// which is what the trap this slot was before wrote; and a place that cannot
+// be written is not worth ending a run over.
 func (platform *NativePlatform) measureText(thread *armcore.Thread) (uint32, error) {
 	arguments, err := nativeArguments(thread, 4)
 	if err != nil {
@@ -197,27 +202,20 @@ func (platform *NativePlatform) measureText(thread *armcore.Thread) (uint32, err
 		// A run nothing of which can be read measures nothing, as drawText
 		// draws nothing for it.
 		if raw, err := platform.readText(address, count); err == nil {
-			face, halfwords := platform.textFace(), platform.textUnit() == 2
+			face := platform.textFace()
 			for _, character := range decodeEUCKR(raw) {
-				advance := nativeAdvance(face, character)
+				advance := nativeAdvance(face, character, face.Render(character))
 				if limit >= 0 && width+advance > limit {
 					break
 				}
 				width += advance
-				switch {
-				case halfwords, character < 0x80:
-					fitted++
-				default:
-					fitted += 2
-				}
+				fitted++
 			}
 		}
 	}
-	if fits != 0 {
+	if fits != 0 && platform.textUnit() == 2 {
 		word := []byte{byte(fitted), byte(fitted >> 8), byte(fitted >> 16), byte(fitted >> 24)}
-		if err := platform.client.core.Memory().Write(fits, word); err != nil {
-			return 0, fmt.Errorf("write a KTF native text fit to %#x: %w", fits, err)
-		}
+		_ = platform.client.core.Memory().Write(fits, word)
 	}
 	return uint32(width), nil
 }
@@ -287,7 +285,7 @@ func (platform *NativePlatform) drawText(thread *armcore.Thread) (uint32, error)
 				}
 			}
 		}
-		cursor += int32(nativeAdvance(face, character))
+		cursor += int32(nativeAdvance(face, character, bitmap))
 	}
 	platform.screen.draws++
 	return 1, nil

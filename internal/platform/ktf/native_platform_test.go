@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"image/color"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -327,6 +329,13 @@ func TestNativeOpenMakesAFileOnlyInTheEmptyingAndAppendingModes(t *testing.T) {
 	if got := strings.Count(log.String(), "open for writing refused"); got != 1 || !strings.Contains(log.String(), "name=option.dat") {
 		t.Errorf("the refused writable opens were logged %d times: %q", got, log.String())
 	}
+	// The names are the title's, so how many are said is bounded.
+	for index := range maxNativeRecordedNotes + 8 {
+		platform.reportRefusedWrite(fmt.Sprintf("name%d.dat", index), 2)
+	}
+	if got := len(platform.refusedWrites); got != maxNativeRecordedNotes {
+		t.Errorf("%d refused names were kept, want at most %d", got, maxNativeRecordedNotes)
+	}
 	platform.FlushSaves()
 	if _, ok := platform.written["option.dat"]; ok || len(store) != 0 {
 		t.Fatalf("a refused open made a file: written=%v store=%v", platform.written, store)
@@ -400,7 +409,8 @@ func TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing(t *testing.T) {
 	if _, ok := store["fs/option.dat"]; ok {
 		t.Error("the empty file an earlier session left is still in the store")
 	}
-	if records, err := backend.DecodeSaveRecords(store[nativeLeftoversKey]); err != nil || len(records) != 1 || string(records[0]) != "fs/option.dat" {
+	if records, err := backend.DecodeSaveRecords(store[nativeLeftoversKey]); err != nil || len(records) != 2 ||
+		string(records[0]) != nativeLeftoversRemoved || string(records[1]) != "fs/option.dat" {
 		t.Errorf("the record of removed leftovers is %q (%v)", records, err)
 	}
 	// A shipped name and a file with something in it are files like any other.
@@ -426,9 +436,9 @@ func TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing(t *testing.T) {
 }
 
 // TestNativeLeftoverGoesFromTheSaveFolder is the migration on a Host's own
-// store: the empty file an earlier build left is gone from the folder once the
-// title has asked for it, whether its name is stored as it is or spelled out by
-// the store's encoding, and a saved file beside it stays.
+// store: the empty file an earlier build left is gone from the folder after the
+// start's migration, whether its name is stored as it is or spelled out by the
+// store's encoding, and a saved file beside it stays.
 func TestNativeLeftoverGoesFromTheSaveFolder(t *testing.T) {
 	root := t.TempDir()
 	store := backend.NewDirectorySaveStore(root)
@@ -465,10 +475,13 @@ func TestNativeLeftoverGoesFromTheSaveFolder(t *testing.T) {
 }
 
 // nativeMigrationStore is a memory store a test can make fail the read of the
-// migration's record, or refuse its write.
+// migration's record, refuse its write, or put off removals; it counts how
+// often it was listed.
 type nativeMigrationStore struct {
 	memorySaveStore
 	unreadable, refuse bool
+	deferRemovals      *int
+	listed             *int
 }
 
 func (store nativeMigrationStore) ReadSave(name string) ([]byte, bool, error) {
@@ -486,11 +499,97 @@ func (store nativeMigrationStore) StoreSave(name string, data []byte) error {
 	return store.memorySaveStore.StoreSave(name, data)
 }
 
+func (store nativeMigrationStore) RemoveEmptySave(name string) (bool, error) {
+	if store.deferRemovals != nil && *store.deferRemovals > 0 {
+		*store.deferRemovals--
+		return false, backend.ErrSaveRemovalDeferred
+	}
+	return store.memorySaveStore.RemoveEmptySave(name)
+}
+
+func (store nativeMigrationStore) SnapshotSaves() ([]backend.SaveEntry, error) {
+	if store.listed != nil {
+		*store.listed++
+	}
+	return store.memorySaveStore.SnapshotSaves()
+}
+
+// nativeLeftoversRecord reads where the migration stands, and the leftovers it
+// recorded.
+func nativeLeftoversRecord(t *testing.T, store memorySaveStore) (string, []string) {
+	t.Helper()
+	records, err := backend.DecodeSaveRecords(store[nativeLeftoversKey])
+	if err != nil || len(records) == 0 {
+		t.Fatalf("the migration's record is %q (%v)", records, err)
+	}
+	keys := []string{}
+	for _, record := range records[1:] {
+		keys = append(keys, string(record))
+	}
+	return string(records[0]), keys
+}
+
+// TestNativeMigrationGoesOnWhereAStartLeftIt covers a migration cut short. A
+// removal the store put off keeps it open, and the next start removes what is
+// left and records it done; a record that says the saves were being listed is
+// listed again; and the record an earlier version wrote once it was done says
+// it is done. Each removal is in the run's log.
+func TestNativeMigrationGoesOnWhereAStartLeftIt(t *testing.T) {
+	put := 1
+	listed := 0
+	store := nativeMigrationStore{memorySaveStore: memorySaveStore{"fs/option.dat": {}}, deferRemovals: &put, listed: &listed}
+	var log bytes.Buffer
+	start := func() {
+		platform := newTestNativePlatform(t, nil)
+		platform.SetLogger(slog.New(slog.NewTextHandler(&log, nil)))
+		platform.AttachSaves(store)
+		platform.migrateLeftovers()
+	}
+	start()
+	if state, keys := nativeLeftoversRecord(t, store.memorySaveStore); state != nativeLeftoversRemoving || !slices.Equal(keys, []string{"fs/option.dat"}) {
+		t.Fatalf("after a put-off removal the record is %s %q", state, keys)
+	}
+	if _, ok := store.memorySaveStore["fs/option.dat"]; !ok {
+		t.Fatal("the put-off leftover is gone")
+	}
+	start()
+	if state, _ := nativeLeftoversRecord(t, store.memorySaveStore); state != nativeLeftoversRemoved {
+		t.Fatalf("after the next start the record is %s", state)
+	}
+	if _, ok := store.memorySaveStore["fs/option.dat"]; ok {
+		t.Error("the next start did not remove the leftover")
+	}
+	if listed != 1 {
+		t.Errorf("the saves were listed %d times, want once", listed)
+	}
+	if !strings.Contains(log.String(), "not removed yet") || !strings.Contains(log.String(), "leftover removed") {
+		t.Errorf("the log says %q", log.String())
+	}
+
+	// A record of a listing that did not finish is listed again.
+	listing := memorySaveStore{"fs/a.dat": {}, nativeLeftoversKey: backend.EncodeSaveRecords([][]byte{[]byte(nativeLeftoversListing)})}
+	platform := newTestNativePlatform(t, nil)
+	platform.AttachSaves(listing)
+	platform.migrateLeftovers()
+	if state, keys := nativeLeftoversRecord(t, listing); state != nativeLeftoversRemoved || !slices.Equal(keys, []string{"fs/a.dat"}) {
+		t.Errorf("a listing that did not finish left %s %q", state, keys)
+	}
+	// An earlier version's record, its keys and no state, is a migration done.
+	earlier := memorySaveStore{"fs/b.dat": {}, nativeLeftoversKey: backend.EncodeSaveRecords([][]byte{[]byte("fs/a.dat")})}
+	platform = newTestNativePlatform(t, nil)
+	platform.AttachSaves(earlier)
+	platform.migrateLeftovers()
+	if _, ok := earlier["fs/b.dat"]; !ok {
+		t.Error("a migration recorded done ran again")
+	}
+}
+
 // TestNativeMigrationChangesNothingItCannotFirstRecord covers the migration's
 // own failures. A record that cannot be read may say the migration was made,
 // so nothing is looked at; a record the store will not take is a removal that
-// could not be undone, so nothing is removed. Either way the next start tries
-// again, and the saves are as they were.
+// could not be undone, so nothing is removed, and the saves are not even read
+// for leftovers. Either way the next start tries again, and the saves are as
+// they were.
 func TestNativeMigrationChangesNothingItCannotFirstRecord(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -500,6 +599,8 @@ func TestNativeMigrationChangesNothingItCannotFirstRecord(t *testing.T) {
 		{name: "a refused record", store: nativeMigrationStore{memorySaveStore: memorySaveStore{"fs/option.dat": {}}, refuse: true}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			listed := 0
+			test.store.listed = &listed
 			platform := newTestNativePlatform(t, nil)
 			platform.AttachSaves(test.store)
 			platform.migrateLeftovers()
@@ -508,6 +609,9 @@ func TestNativeMigrationChangesNothingItCannotFirstRecord(t *testing.T) {
 			}
 			if _, ok := test.store.memorySaveStore[nativeLeftoversKey]; ok {
 				t.Error("a record was written")
+			}
+			if listed != 0 {
+				t.Errorf("the saves were read for leftovers %d times", listed)
 			}
 		})
 	}

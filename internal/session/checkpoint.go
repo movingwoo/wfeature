@@ -245,6 +245,14 @@ func RestoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 	return restoreCheckpoint(ctx, archive, data, options, nil)
 }
 
+// CheckpointRefusal answers a refusal a restore of this checkpoint is certain
+// to meet that the checkpoint alone decides beyond its envelope — for now, a
+// native package title that was not running when it was saved — and nil
+// otherwise. It restores nothing and reads no save.
+func CheckpointRefusal(checkpoint backend.Checkpoint) error {
+	return ktf.NativeCheckpointRefusal(checkpoint)
+}
+
 // LoadCheckpoint atomically adopts a prepared replacement on this session's
 // owning goroutine. The original archive bytes are required even for a running
 // session, so replacing a file in the library cannot bypass identity checks.

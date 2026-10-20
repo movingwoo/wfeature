@@ -254,9 +254,10 @@ func TestNativeMeasureTextMeasuresWhatItDraws(t *testing.T) {
 }
 
 // TestNativeMeasureTextCountsWhatFitsInTheRunsUnits covers the count a caller
-// is given of what fits: it is in the run's own units, which a caller steps
-// through its run by. A Korean character is one halfword of a later title's
-// run and two bytes of the 2005 module's.
+// is given of what fits. The later generation is told it in its run's units, a
+// halfword a character, which a caller steps through its run by; the 2005
+// module, whose runs are plain bytes and which is not seen asking, is told
+// nothing, as the trap this slot was told it.
 func TestNativeMeasureTextCountsWhatFitsInTheRunsUnits(t *testing.T) {
 	for _, generation := range []struct {
 		name     string
@@ -266,7 +267,7 @@ func TestNativeMeasureTextCountsWhatFitsInTheRunsUnits(t *testing.T) {
 	}{
 		{name: "halfwords", platform: nativeLaterTextPlatform, run: []byte{0xc0, 0xce, 'A', 0x00, 0xc1, 0xf5, 0x00, 0x00}, want: 2},
 		{name: "plain bytes", platform: func(t *testing.T) *NativePlatform { return newTestNativePlatform(t, nil) },
-			run: []byte{0xc0, 0xce, 'A', 0xc1, 0xf5, 0x00, 0x00, 0x00}, want: 3},
+			run: []byte{0xc0, 0xce, 'A', 0xc1, 0xf5, 0x00, 0x00, 0x00}, want: 0xdeadbeef},
 	} {
 		t.Run(generation.name, func(t *testing.T) {
 			platform := generation.platform(t)
@@ -277,12 +278,15 @@ func TestNativeMeasureTextCountsWhatFitsInTheRunsUnits(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if err := platform.client.core.Memory().Write(fits, binary.LittleEndian.AppendUint32(nil, 0xdeadbeef)); err != nil {
+				t.Fatal(err)
+			}
 			run := nativeTextAt(t, platform, generation.run)
 			if got := nativeMeasureCall(t, platform, run, -1, int32(limit), fits); got != uint32(limit) {
 				t.Errorf("width within %d = %d", limit, got)
 			}
 			if got := binary.LittleEndian.Uint32(nativeRead(t, platform, fits, 4)); got != generation.want {
-				t.Errorf("%d units fit, want %d", got, generation.want)
+				t.Errorf("the count of what fits reads %#x, want %#x", got, generation.want)
 			}
 		})
 	}

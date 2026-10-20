@@ -203,8 +203,9 @@ checkpoint an earlier build wrote that holds such a sound still restores.
 
 A `start` with `quick_load: true` reads and checks the slot before the game the
 connection is running is stopped, so a start that is certain to be refused (no
-slot, an earlier format, a damaged slot, another archive's) leaves that game
-running. `has_checkpoint` is true for an earlier-format slot as well, so the
+slot, an earlier format, a damaged slot, another archive's, or a native package
+title's slot of a title that was not running, `session.CheckpointRefusal`)
+leaves that game running. `has_checkpoint` is true for an earlier-format slot as well, so the
 load is offered and its refusal can say why.
 
 Slots are outside ordinary `.wfs` exports, and a `.wfs` import is unchanged: it
@@ -510,14 +511,15 @@ recover errors that a legacy Host already hides.
 makes: an entry that holds nothing, which a platform has found no title reads.
 `DirectorySaveStore` looks at every name a read could find the key under — its
 encoded name, and in an encoded folder the names an earlier build gave it, or
-in a folder without the record the key spelled exactly, and on Windows a name
-Win32 stored — and removes them all when each is an empty file, so nothing is
-left to answer for the key. When one of them holds anything, it is an older
-entry the empty one stands in front of, and nothing is removed: taking the
-empty one away would hand a read that older save. A folder that takes no write,
-its earlier names unconverted or a conversion under way, takes no removal until
-it does, and a key a name Win32 stored for an earlier build answers is not
-removed, since every key Win32 spelled the same reads that file. The memory
+in a folder without the record the key spelled exactly — and removes them all
+when each is an empty file, so nothing is left to answer for the key. When one
+of them holds anything, it is an older entry the empty one stands in front of,
+and nothing is removed: taking the empty one away would hand a read that older
+save. A key a name Win32 stored for an earlier build answers is never removed,
+since every key Win32 spelled the same reads that file. A folder that takes no
+write, its earlier names unconverted or a conversion under way, answers
+`ErrSaveRemovalDeferred`, and the removal goes ahead when it is asked again
+once the folder takes writes. The memory
 store removes any empty entry, and a store without the interface keeps it.
 Nothing with a byte in it is removed this way. A guest's own removals stay on
 its platform's removal list. The earlier KTF native package uses it once, for

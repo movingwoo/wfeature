@@ -9266,12 +9266,16 @@ when the file is missing, which for the settings is its defaults. The next time
 it saves its settings it makes the file through mode 4 and writes them.
 
 The keys are recorded first, in the store entry `native/leftovers`, so a later
-build can make any of them again, and the record is what says the migration is
-done: after it, an empty file this build makes is a file like any other, in
-every call and every later session. Nothing is removed that was not recorded
-first. A store that cannot list what it holds, a record that cannot be read —
-it may say the migration was made — and a store that will not take the record
-each leave the saves as they are, and the next start tries again. The removal
+build can make any of them again, and the record says where the migration
+stands: listing (written before the saves are read, so a store that takes no
+write is found out first), removing (the keys, before any goes), and removed.
+A start after one cut short goes on from there: it lists again, or tries the
+removals the store put off again. Once all are gone, an empty file this build
+makes is a file like any other, in every call and every later session. Nothing
+is removed that was not recorded first, and each removal, or one put off, is
+in the run's log. A store that cannot list what it holds, a record that cannot
+be read — it may say the migration was made — and a store that will not take
+the record each leave the saves as they are, and the next start tries again. The removal
 is the one a store makes (`backend.RemoveEmptySave`): only an entry with
 nothing in it, under every name a read could find it at, the encoded one and
 those an earlier build gave it. If one of those names holds an older save, the
@@ -9382,7 +9386,17 @@ the page; a terminated run of the 2005 module read as plain bytes, ending at
 its first zero; a clip record of no shape lifting the clip; a Win32 name left
 alone; the walk over a key's earlier names shared with the read that looks for
 them; the text read into one buffer of the platform's; and the title described
-by what it draws rather than named. Along the local test route the frames
+by what it draws rather than named. A third review, of the branch after that,
+found twelve more, each answered: the migration records where it stands and
+tries a removal the store put off again at the next start, with each removal
+in the log; a start from the quick save refuses a slot of a title that was not
+running before it stops the running game; a title that blits images the
+platform did not build counts as drawing; an append keeps its cursor at the
+end of the file across a quick load; the names a refused open is logged for
+are bounded; the count of what fits is written for the later generation only;
+a glyph is rendered once for a character; the listing record spares a store
+that takes no write a read of all its saves; and the documents and comments
+that still described the earlier design. Along the local test route the frames
 end and draw as often as before and match it byte for byte from the first menu
 on; on the title screen 180 pixels of its lines differ, where the
 shared line breaks a tie the other way.

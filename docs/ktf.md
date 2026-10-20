@@ -221,7 +221,8 @@ The earlier native package retains its existing buffered write/flush policy.
 See [save integrity](session.md#save-integrity) for failure recovery and limits.
 Its open makes a missing file in mode 4, BREW's create, and in mode 8, its
 append, which BREW refuses and which ends here as the modules' retry with 4
-does; an append's cursor starts at the end of the file. Read-write (2) and read
+does; an append's cursor starts at the end of the file, at the open and at a
+quick load. Read-write (2) and read
 (1) open a file that is there and are refused for one that is not, and the
 titles fall back on their own (defaults, or mode 4 and then a write); a refused
 open that could write is logged once for its name, at debug level, so a title
@@ -234,10 +235,11 @@ its start, or at a quick load into a process no start ran in — every file of
 its saves that holds nothing and that the package does not carry is removed:
 those files, and any an earlier build made empty on purpose, which nothing it
 stored tells apart. Their keys are recorded first in the store entry
-`native/leftovers`, which also says the migration is done; nothing is removed
-that was not recorded, a store that cannot list, be read or take the record is
-left as it is until the next start, and after the migration an empty file this
-build makes is a file like any other
+`native/leftovers`, with where the migration stands: nothing is removed that
+was not recorded, a store that cannot list, be read or take the record is left
+as it is until the next start, a removal the store puts off is tried again at
+the next start, each removal is in the run's log, and once all are gone an
+empty file this build makes is a file like any other
 ([history](history/ktf.md#ktf-native-settings-2026-10-20)).
 
 A record database the archive carries, as one `qtcdb` file or as a `qtpdb`
@@ -297,10 +299,12 @@ Particular to this platform:
   on the file as it is and nothing of the truncation is left to carry.
 - A native title that is not running — one that has drawn nothing at all, and
   whose next frame is more than a minute away or which has run for more than a
-  minute — is refused at a quick save and at a quick load, rather than brought
-  back as it was, and the page says to start the game again: an earlier build
-  left the title that read its settings out of an empty file so. A title that
-  has drawn is saved and loaded with any wait for its next frame
+  minute — is refused at a quick save and at a quick load, and at a start from
+  the quick save before the running game is stopped, rather than brought back
+  as it was, and the page says to start the game again: an earlier build left
+  the title that read its settings out of an empty file so. A title that has
+  drawn, or blitted an image the platform did not build, is saved and loaded
+  with any wait for its next frame
   ([history](history/ktf.md#ktf-native-settings-2026-10-20)).
 - A native package's write waits in the platform until a file is closed or a
   frame ends. A quick save and a quick load store what is waiting first, and

@@ -626,11 +626,10 @@ func TestNativeQuickLoadIntoAFreshProcessMigratesTheSaves(t *testing.T) {
 }
 
 // TestNativeQuickLoadKeepsAnEmptyFileThisPlayMade is a save a title emptied and
-// left empty, a quick save, and a quick load in the same play. The file is the
-// play's own, so the restored title finds it where it left it: the load does
-// not turn it into the empty leftover of an earlier build that every call takes
-// as missing (see NativePlatform.contents), which would send the restored title
-// down a different path from the one it took before the load.
+// left empty, a quick save, and a quick load in the same play. The saves were
+// migrated at the start, before the title made the file, so it is a file like
+// any other and the restored title finds it where it left it, rather than
+// going down a different path from the one it took before the load.
 func TestNativeQuickLoadKeepsAnEmptyFileThisPlayMade(t *testing.T) {
 	const first = 0x11111111
 	for _, form := range nativeSaveFixtureForms {

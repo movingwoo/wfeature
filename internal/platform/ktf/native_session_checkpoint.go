@@ -113,6 +113,25 @@ func (prepared *PreparedNativeSession) Speed() float64 {
 	return prepared.session.Speed()
 }
 
+// NativeCheckpointRefusal answers the refusal a load of this checkpoint is
+// certain to meet that its record alone decides, and nil for any other: a
+// record this build does not read, or a title that was not running when it
+// was saved. It restores nothing and reads no save, so a Host can ask it
+// before it stops a running game for a start from the quick save.
+func NativeCheckpointRefusal(checkpoint backend.Checkpoint) error {
+	if checkpoint.Variant != backend.CheckpointKTFNative {
+		return nil
+	}
+	var saved nativeState
+	if err := backend.DecodeCheckpointRecord(checkpoint.Runtime, &saved); err != nil {
+		return err
+	}
+	if saved.Version != nativeStateVersion {
+		return fmt.Errorf("KTF native checkpoint record is version %d and this build reads %d: %w", saved.Version, nativeStateVersion, backend.ErrCheckpointVersion)
+	}
+	return saved.notRunning()
+}
+
 // PrepareNativeSessionCheckpoint rebuilds a native session from a checkpoint
 // without running any of it. It reads no save: options.SaveStore is ignored,
 // and the live store reaches the restored runtime only as an argument of

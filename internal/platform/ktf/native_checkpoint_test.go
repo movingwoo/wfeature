@@ -282,6 +282,12 @@ func TestNativeCheckpointRefusesATitleThatIsNotRunning(t *testing.T) {
 	if _, err := session.CaptureCheckpoint(t.Context()); !errors.Is(err, backend.ErrCheckpointNotRunning) {
 		t.Fatalf("the refusal is not one a Host can tell a person about: %v", err)
 	}
+	// A blit of an image the platform did not build is the title drawing.
+	session.platform.screen.missed = 3
+	if _, err := session.CaptureCheckpoint(t.Context()); err != nil {
+		t.Fatalf("a title that blits images the platform did not build was refused: %v", err)
+	}
+	session.platform.screen.missed = 0
 	// A title that has drawn ran, and a long wait for its next frame — a
 	// pause, a menu waiting on a key — is saved and loads.
 	session.platform.screen.presents, session.platform.screen.draws = 1, 1
@@ -295,6 +301,91 @@ func TestNativeCheckpointRefusesATitleThatIsNotRunning(t *testing.T) {
 		t.Fatalf("a paused title's slot was refused: %v", err)
 	}
 	prepared.Discard()
+}
+
+// TestNativeQuickLoadGivesAnAppendTheEndOfTheFile covers an append open across
+// a quick load. The session it displaces went on appending, so the file is
+// longer than when the quick save was taken; the restored object's next write
+// lands after all of it rather than over what the displaced session wrote.
+func TestNativeQuickLoadGivesAnAppendTheEndOfTheFile(t *testing.T) {
+	archive, err := testfixture.KTFNativeCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := backend.NewMemorySaveStore(nil)
+	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: NewManualClock(time.Time{}), SaveStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := source.platform
+	object := nativeCall(t, p.openFile, 0, nativeString(t, p, "log.dat"), nativeModeAppend)
+	if object == 0 {
+		t.Fatal("the append was refused")
+	}
+	nativeCall(t, p.writeFile, object, nativeString(t, p, "AB"), 2)
+	p.FlushSaves()
+	saved, err := source.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeCall(t, p.writeFile, object, nativeString(t, p, "CD"), 2)
+	p.FlushSaves()
+	prepared, err := PrepareNativeSessionCheckpoint(archive, saved, NativeSessionOptions{SaveStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := prepared.Commit(t.Context(), source, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	r := restored.platform
+	nativeCall(t, r.writeFile, object, nativeString(t, r, "EF"), 2)
+	r.FlushSaves()
+	if data, _ := store.LoadSave("fs/log.dat"); string(data) != "ABCDEF" {
+		t.Fatalf("after the load the appended file is %q, want ABCDEF", data)
+	}
+}
+
+// TestNativeCheckpointRefusalIsToldFromTheRecord covers what a Host asks before
+// it stops a running game for a start from the quick save: a slot of a title
+// that was not running is refused from its record alone, and any other is
+// not.
+func TestNativeCheckpointRefusalIsToldFromTheRecord(t *testing.T) {
+	archive, err := testfixture.KTFNativeCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := backend.NewMemorySaveStore(nil)
+	session, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: NewManualClock(time.Time{}), SaveStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	saved, err := session.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NativeCheckpointRefusal(saved); err != nil {
+		t.Fatalf("a running title's slot was refused: %v", err)
+	}
+	var record nativeState
+	if err := backend.DecodeCheckpointRecord(saved.Runtime, &record); err != nil {
+		t.Fatal(err)
+	}
+	record.Presents, record.Draws, record.Missed, record.Elapsed = 0, 0, 0, 2*time.Hour
+	stuck := saved
+	if stuck.Runtime, err = backend.EncodeCheckpointRecord(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := NativeCheckpointRefusal(stuck); !errors.Is(err, backend.ErrCheckpointNotRunning) {
+		t.Fatalf("a slot of a title that was not running answered %v", err)
+	}
+	other := stuck
+	other.Variant = backend.CheckpointKTFJava
+	if err := NativeCheckpointRefusal(other); err != nil {
+		t.Fatalf("another variant's slot answered %v", err)
+	}
 }
 
 // TestNativeCheckpointReadsARecordFromBeforeTheSecondDrawingInterface is a
@@ -403,6 +494,10 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 		{"file object twice", func(s *nativeState) { s.Files = append(s.Files, s.Files[0]) }},
 		{"file object unaligned", func(s *nativeState) { s.Files[0].Object |= 1 }},
 		{"file object outside memory", func(s *nativeState) { s.Files[0].Object = 0xdeadbee0 }},
+		{"file appending though it was emptied", func(s *nativeState) {
+			appending := true
+			s.Files[0].Appending = &appending
+		}},
 		{"audio handle", func(s *nativeState) { s.Clip = 42 }},
 		{"speed", func(s *nativeState) { s.Speed = 100 }},
 		{"pen with its spare byte set", func(s *nativeState) { s.Shapes.Pen = 1 }},

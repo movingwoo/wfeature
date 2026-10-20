@@ -402,9 +402,11 @@ type nativeSchedule struct {
 const maxNativeFrameInterval = time.Minute
 
 // nativeNotRunning says why a title in this state is not running, or answers
-// the empty string when it is; see maxNativeFrameInterval.
-func nativeNotRunning(next time.Duration, framed bool, presents, draws int, elapsed time.Duration) string {
-	if presents != 0 || draws != 0 {
+// the empty string when it is; see maxNativeFrameInterval. A title has drawn
+// if it ended a frame, drew anything, or blitted an image the platform did
+// not build, which a title that runs does too.
+func nativeNotRunning(next time.Duration, framed bool, presents, draws, missed int, elapsed time.Duration) string {
+	if presents != 0 || draws != 0 || missed != 0 {
 		return ""
 	}
 	if framed && next > maxNativeFrameInterval {

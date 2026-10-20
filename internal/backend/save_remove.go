@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,10 +21,17 @@ type EmptySaveRemover interface {
 	RemoveEmptySave(name string) (bool, error)
 }
 
+// ErrSaveRemovalDeferred is what a removal answers when the store takes no
+// write for now — a folder whose earlier names could not be converted, or whose
+// conversion is under way. Asked again once the folder takes writes, the
+// removal goes ahead.
+var ErrSaveRemovalDeferred = errors.New("backend: the save folder takes no removal until its names are settled")
+
 // RemoveEmptySave removes name's entry when it is there and holds nothing, and
 // reports whether it did. A store that cannot remove one, and an entry that
 // holds anything or is not there, are left as they are, and answer false
-// without an error.
+// without an error; a store that cannot remove it yet answers
+// ErrSaveRemovalDeferred.
 func RemoveEmptySave(store SaveStore, name string) (bool, error) {
 	if remover, ok := store.(EmptySaveRemover); ok {
 		return remover.RemoveEmptySave(name)
@@ -65,7 +73,7 @@ func (store *DirectorySaveStore) RemoveEmptySave(name string) (bool, error) {
 		return false, err
 	}
 	if names.refusesWrites() {
-		return false, nil
+		return false, ErrSaveRemovalDeferred
 	}
 	paths, removable, err := store.saveSpellings(key, names)
 	if err != nil || !removable || len(paths) == 0 {

@@ -128,11 +128,11 @@ func StartNativeSession(ctx context.Context, data []byte, options NativeSessionO
 	platform.SetSpeed(options.Speed)
 	// Before Boot, because Install builds the screen from it.
 	platform.SetScreen(options.Width, options.Height)
+	platform.SetLogger(options.Logger)
 	platform.AttachSaves(options.SaveStore)
 	platform.migrateLeftovers()
 	platform.AttachAudio(options.AudioSink)
 	platform.audio.SetLogger(options.Logger)
-	platform.SetLogger(options.Logger)
 	if err := platform.Boot(ctx); err != nil {
 		return nil, err
 	}

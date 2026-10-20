@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/session"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 	"github.com/movingwoo/wfeature/internal/wsproto"
@@ -600,5 +602,64 @@ func TestCheckpointRefusalTellsAPersonToStartAGameThatIsNotRunning(t *testing.T)
 		if got := r.checkpointRefusal(step.step, "game", err); got != pageSentence(t, step.key) {
 			t.Errorf("%s: the page was told %q, want %s", step.step, got, step.key)
 		}
+	}
+}
+
+// TestQuickLoadRefusalTellsANativeTitleThatWasNotRunning covers a start from
+// the quick save of a slot an earlier build left of a native title that was
+// not running. The refusal is certain from the slot alone, so it is answered
+// before the game this page is running is stopped; a slot of a running title
+// passes.
+func TestQuickLoadRefusalTellsANativeTitleThatWasNotRunning(t *testing.T) {
+	archive, err := testfixture.KTFNativeCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeCheckpointGame(t, root, "ktf", archive)
+	server := checkpointServer(t, root)
+	memory, _ := backend.NewMemorySaveStore(nil)
+	native, err := ktf.StartNativeSession(t.Context(), archive, ktf.NativeSessionOptions{Clock: ktf.NewManualClock(time.Time{}), SaveStore: memory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer native.Close()
+	checkpoint, err := native.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := session.Inspect(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slots := backend.NewDirectorySaveStore(session.SaveDirectory(summary, filepath.Join(root, "saves", "ktf")))
+	store := func(checkpoint backend.Checkpoint) {
+		t.Helper()
+		data, err := backend.EncodeCheckpoint(checkpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := slots.StoreCheckpoint(backend.SaveIdentity(archive), data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store(checkpoint)
+	if err := server.quickLoadRefusal("games/ktf/checkpoint.zip"); err != nil {
+		t.Fatalf("a slot of a running title was refused: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(checkpoint.Runtime, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"Presents": "0", "Draws": "0", "Missed": "0", "Elapsed": fmt.Sprint(int64(2 * time.Hour))} {
+		fields[name] = json.RawMessage(value)
+	}
+	stuck := checkpoint
+	if stuck.Runtime, err = json.Marshal(fields); err != nil {
+		t.Fatal(err)
+	}
+	store(stuck)
+	if err := server.quickLoadRefusal("games/ktf/checkpoint.zip"); !errors.Is(err, backend.ErrCheckpointNotRunning) {
+		t.Fatalf("a slot of a title that was not running answered %v", err)
 	}
 }

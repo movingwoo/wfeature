@@ -143,6 +143,10 @@ type nativeOpenFile struct {
 	// makes a file that was not there is one of these, because it is the same
 	// mode; an append that makes one is not, because it asked for the file.
 	truncated bool
+	// appending says the open was an append, whose cursor starts at the end of
+	// the file — at the open, and at a load, at the end of the file as it is
+	// then, so a write after the load lands after what the file holds.
+	appending bool
 }
 
 // The open modes. The package is BREW's, and these are its file manager's: 1
@@ -222,7 +226,9 @@ func (platform *NativePlatform) SetLogger(logger *slog.Logger) {
 // makes the file. A title that instead took the open for a save written would
 // lose that save, and the run's log is where that shows rather than nowhere.
 func (platform *NativePlatform) reportRefusedWrite(key string, mode uint32) {
-	if platform.logger == nil || platform.refusedWrites[key] {
+	// The names are the title's, so how many are said is bounded as every
+	// other note a run keeps is.
+	if platform.logger == nil || platform.refusedWrites[key] || len(platform.refusedWrites) >= maxNativeRecordedNotes {
 		return
 	}
 	if platform.refusedWrites == nil {
@@ -240,11 +246,23 @@ func (platform *NativePlatform) AttachSaves(store SaveStore) {
 	platform.saves = store
 }
 
-// nativeLeftoversKey is the store entry that records the empty files
-// migrateLeftovers removed, as save records of their keys. It sits outside
-// the "fs/" space the title's own names are kept in, so no name a title opens
-// is it, and that it is there says the migration has been made.
+// nativeLeftoversKey is the store entry that records the migration below: its
+// first save record is where the migration stands, and the rest are the keys
+// of the empty files it found, so a later build can make any of them again. It
+// sits outside the "fs/" space the title's own names are kept in, so no name a
+// title opens is it.
 const nativeLeftoversKey = "native/leftovers"
+
+// Where the migration stands. Listing is written before the saves are read for
+// leftovers, so a store that takes no write is found out before that read;
+// removing names the leftovers before any of them goes; removed says each of
+// them is gone. A record whose first entry is none of these is one an earlier
+// version of this migration wrote once it was done.
+const (
+	nativeLeftoversListing  = "state:listing"
+	nativeLeftoversRemoving = "state:removing"
+	nativeLeftoversRemoved  = "state:removed"
+)
 
 // nativeSaveLister is a store that can list what it holds, which the
 // migration needs to find what earlier builds left. The Hosts' directory store
@@ -264,10 +282,12 @@ type nativeSaveLister interface {
 // made empty on purpose — nothing that build stored tells the two apart — and
 // both are removed: the title goes the way it goes when the file is missing,
 // which for the one that read its settings out of nothing is its defaults.
+// Each removal is in the run's log.
 //
-// Their keys are recorded first, in nativeLeftoversKey, so a later build can
-// make any of them again, and the record is also what says the migration is
-// done: after it, a file this platform makes, empty or not, is a file like any
+// Their keys are recorded first, in nativeLeftoversKey, and the record says
+// where the migration stands, so that a start after one cut short goes on
+// from there: one whose removals did not all go through tries them again, and
+// once they have, a file this platform makes, empty or not, is a file like any
 // other. Nothing is removed that was not recorded first. A store that cannot
 // list what it holds, or be read, or take the record, is left as it is, and
 // the next start tries again.
@@ -276,14 +296,40 @@ func (platform *NativePlatform) migrateLeftovers() {
 	if !ok || platform.archive == nil {
 		return
 	}
-	if _, done, err := backend.ReadSave(platform.saves, nativeLeftoversKey); err != nil || done {
+	data, found, err := backend.ReadSave(platform.saves, nativeLeftoversKey)
+	if err != nil {
+		return
+	}
+	var leftovers []string
+	if found {
+		records, err := backend.DecodeSaveRecords(data)
+		if err != nil {
+			return
+		}
+		state := ""
+		if len(records) != 0 {
+			state = string(records[0])
+		}
+		switch state {
+		case nativeLeftoversRemoving:
+			for _, record := range records[1:] {
+				leftovers = append(leftovers, string(record))
+			}
+			platform.removeLeftovers(leftovers)
+			return
+		case nativeLeftoversListing:
+		default:
+			// Removed, or a record an earlier version wrote when it was done.
+			return
+		}
+	}
+	if !platform.recordLeftovers(nativeLeftoversListing, nil) {
 		return
 	}
 	entries, err := lister.SnapshotSaves()
 	if err != nil {
 		return
 	}
-	var leftovers []string
 	for _, entry := range entries {
 		name, inFiles := strings.CutPrefix(entry.Key, "fs/")
 		if !inFiles || strings.Contains(name, "/") || len(entry.Data) != 0 {
@@ -295,15 +341,53 @@ func (platform *NativePlatform) migrateLeftovers() {
 		leftovers = append(leftovers, entry.Key)
 	}
 	slices.Sort(leftovers)
-	records := make([][]byte, len(leftovers))
-	for index, key := range leftovers {
-		records[index] = []byte(key)
+	if platform.recordLeftovers(nativeLeftoversRemoving, leftovers) {
+		platform.removeLeftovers(leftovers)
+	}
+}
+
+// removeLeftovers removes the recorded leftovers, and records the migration
+// done once every one of them is gone. One that holds something by now is the
+// title's own again, and one the store will never remove — under a name Win32
+// stored for other keys too, or standing in front of an older save — stays;
+// neither keeps the migration open. One the store could not remove for now
+// does, and the next start asks again.
+func (platform *NativePlatform) removeLeftovers(leftovers []string) {
+	pending := false
+	for _, key := range leftovers {
+		removed, err := backend.RemoveEmptySave(platform.saves, key)
+		switch {
+		case err != nil:
+			pending = true
+			platform.logNote("KTF native leftover not removed yet; the next start tries again", "key", key, "error", err)
+		case removed:
+			platform.logNote("KTF native leftover removed: an empty file an earlier build left", "key", key)
+		}
+	}
+	if !pending {
+		platform.recordLeftovers(nativeLeftoversRemoved, leftovers)
+	}
+}
+
+// recordLeftovers stores where the migration stands, with the leftovers it
+// found, and reports whether the store took it.
+func (platform *NativePlatform) recordLeftovers(state string, leftovers []string) bool {
+	records := make([][]byte, 0, len(leftovers)+1)
+	records = append(records, []byte(state))
+	for _, key := range leftovers {
+		records = append(records, []byte(key))
 	}
 	if err := platform.saves.StoreSave(nativeLeftoversKey, backend.EncodeSaveRecords(records)); err != nil {
-		return
+		platform.logNote("KTF native leftovers could not be recorded; the next start tries again", "error", err)
+		return false
 	}
-	for _, key := range leftovers {
-		_, _ = backend.RemoveEmptySave(platform.saves, key)
+	return true
+}
+
+// logNote puts one line in the run's log when there is one.
+func (platform *NativePlatform) logNote(message string, arguments ...any) {
+	if platform.logger != nil {
+		platform.logger.Info(message, arguments...)
 	}
 }
 
@@ -465,8 +549,8 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 	// An append's cursor starts at the end of the file, as BREW's append does,
 	// so what a title writes through it lands after what is there rather than
 	// over the front of it. Every other open starts at the front.
-	position := int64(0)
-	if int32(mode) == nativeModeAppend {
+	appending, position := int32(mode) == nativeModeAppend, int64(0)
+	if appending {
 		position = int64(len(data))
 	}
 	platform.files[object] = &nativeOpenFile{
@@ -476,6 +560,7 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 		position:  position,
 		writable:  writable,
 		truncated: truncated,
+		appending: appending,
 	}
 	return object, nil
 }
@@ -785,11 +870,15 @@ func (platform *NativePlatform) reopenFiles(store SaveStore, records []nativeFil
 	return buffers, nil
 }
 
-// adoptReopened gives each open file the bytes reopenFiles read for it.
+// adoptReopened gives each open file the bytes reopenFiles read for it, and an
+// appending one its cursor at their end.
 func (platform *NativePlatform) adoptReopened(buffers map[uint32][]byte) {
 	for object, data := range buffers {
 		if file := platform.files[object]; file != nil {
 			file.data = data
+			if file.appending {
+				file.position = int64(len(data))
+			}
 		}
 	}
 }

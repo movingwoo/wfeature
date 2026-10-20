@@ -86,6 +86,10 @@ type nativeFileState struct {
 	// NativePlatform.reopenFiles. Length is zero for any other object.
 	Truncated bool
 	Length    int64
+	// Appending says the object was opened to append, so a load gives it its
+	// cursor at the end of the file as it is then. A record taken before
+	// appends were told apart has none, and its objects are not appending.
+	Appending *bool
 }
 type nativeFrameState struct {
 	Interval, Remaining time.Duration
@@ -151,7 +155,7 @@ func (session *NativeSession) checkpointRefusal() error {
 	if framed {
 		next = platform.frame.interval
 	}
-	if why := nativeNotRunning(next, framed, platform.screen.presents, platform.screen.draws, platform.clock.Now().Sub(platform.started)); why != "" {
+	if why := nativeNotRunning(next, framed, platform.screen.presents, platform.screen.draws, platform.screen.missed, platform.clock.Now().Sub(platform.started)); why != "" {
 		return fmt.Errorf("KTF native checkpoint: %w: %s", backend.ErrCheckpointNotRunning, why)
 	}
 	return nil
@@ -219,6 +223,10 @@ func (session *NativeSession) captureNativeState(now time.Time) (nativeState, er
 		if file.truncated {
 			record.Length = int64(len(file.data))
 		}
+		if file.appending {
+			appending := true
+			record.Appending = &appending
+		}
 		saved.Files = append(saved.Files, record)
 	}
 	if platform.frame != nil {
@@ -246,6 +254,19 @@ func (session *NativeSession) captureNativeState(now time.Time) (nativeState, er
 
 // validate checks Host indexes and views before allocating a replacement. Guest
 // pointers are read only through the bounded ARM memory implementation.
+// notRunning answers backend.ErrCheckpointNotRunning, with what the record
+// shows, for a title that was not running when it was saved.
+func (saved nativeState) notRunning() error {
+	next, framed := time.Duration(0), saved.Frame != nil
+	if framed {
+		next = saved.Frame.Interval
+	}
+	if why := nativeNotRunning(next, framed, saved.Presents, saved.Draws, saved.Missed, saved.Elapsed); why != "" {
+		return fmt.Errorf("KTF native checkpoint: %w: %s", backend.ErrCheckpointNotRunning, why)
+	}
+	return nil
+}
+
 func (saved nativeState) validate(memory *armcore.Memory) error {
 	invalid := func() error { return fmt.Errorf("KTF native checkpoint has invalid state references or limits") }
 	if saved.Version != nativeStateVersion || math.IsNaN(saved.Speed) || math.IsInf(saved.Speed, 0) || saved.Speed < backend.SpeedFloor || saved.Speed > backend.SpeedCeiling ||
@@ -347,7 +368,8 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 			return invalid()
 		}
 		if i > 0 && saved.Files[i-1].Object >= file.Object || len(file.Name) >= nativeMaxFileName || string(file.Key) != nativeFileKey(string(file.Name)) ||
-			file.Position < 0 || file.Position > nativeStateStorageLimit || file.Length < 0 || file.Length > nativeStateStorageLimit || !file.Truncated && file.Length != 0 {
+			file.Position < 0 || file.Position > nativeStateStorageLimit || file.Length < 0 || file.Length > nativeStateStorageLimit || !file.Truncated && file.Length != 0 ||
+			file.Appending != nil && *file.Appending && (!file.Writable || file.Truncated) {
 			return invalid()
 		}
 		if err := checkObject(file.Object); err != nil {
@@ -392,12 +414,8 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 	}
 	// A title that was not running when it was saved is not brought back;
 	// an earlier build left one so. See maxNativeFrameInterval.
-	next, framed := time.Duration(0), saved.Frame != nil
-	if framed {
-		next = saved.Frame.Interval
-	}
-	if why := nativeNotRunning(next, framed, saved.Presents, saved.Draws, saved.Elapsed); why != "" {
-		return fmt.Errorf("KTF native checkpoint: %w: %s", backend.ErrCheckpointNotRunning, why)
+	if err := saved.notRunning(); err != nil {
+		return err
 	}
 	for i, colour := range saved.Colours {
 		if i > 0 && saved.Colours[i-1].Item >= colour.Item {
@@ -505,7 +523,8 @@ func restoreNativeState(archive *NativeArchive, saved nativeState, options Nativ
 	// do in a session that has just started.
 	for _, record := range saved.Files {
 		platform.files[record.Object] = &nativeOpenFile{name: string(record.Name), key: string(record.Key),
-			position: record.Position, writable: record.Writable, truncated: record.Truncated}
+			position: record.Position, writable: record.Writable, truncated: record.Truncated,
+			appending: record.Appending != nil && *record.Appending}
 	}
 	platform.fileFailure = saved.FileFailure
 	platform.listeners, platform.posted, platform.resumes = slices.Clone(saved.Listeners), slices.Clone(saved.Posted), slices.Clone(saved.Resumes)
