@@ -169,9 +169,11 @@ Keys use the platform's lifecycle and clock boundaries. Clet events are a press
 and a release: the platform generates no `MV_KEY_REPEAT_EVENT`, and a Host key
 repeat is dropped rather than sent as a second press, because two local titles
 dash on every press (`internal/session`). Native Clets do not expose a general
-pointer-event contract. Host text entry supports focused LWC fields and the
-bounded WIPI-C input-method append path; it does not infer arbitrary
-game-owned fields. Host text must be encodable in KSC5601; other characters
+pointer-event contract. Host text entry supports LWC fields — the focused one,
+or the only one on screen — and the WIPI-C input-method append path, offered on
+every screen once a title has used its input method, except after a commit that
+reached no widget until the next key or input-method call; it does not infer
+arbitrary game-owned fields. Host text must be encodable in KSC5601; other characters
 are refused. See [native text input](native-text-input.md).
 
 ## Storage, audio, and offline services

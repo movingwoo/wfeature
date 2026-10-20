@@ -71,7 +71,18 @@ func TestShownVendorFormOffersItsUniqueListenedTextField(t *testing.T) {
 	}
 }
 
-func TestVendorFormDoesNotGuessAmongFieldsOrUnlistenedChildren(t *testing.T) {
+func addVendorFormChild(t *testing.T, session *Session, form, child *jvm.Object) {
+	t.Helper()
+	if _, err := runtimeComponentAddComponent(session.Client.runtime, session.Client.JVM(), []jvm.Value{
+		jvm.ReferenceValue(form), jvm.ReferenceValue(child),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Of several listened fields, or several fields with no listener, the form
+// does not say which one the player is typing into.
+func TestVendorFormDoesNotGuessAmongItsFields(t *testing.T) {
 	for _, probe := range []struct {
 		name   string
 		mutate func(*testing.T, *Session, *jvm.Object, *jvm.Object)
@@ -81,17 +92,14 @@ func TestVendorFormDoesNotGuessAmongFieldsOrUnlistenedChildren(t *testing.T) {
 			mutate: func(t *testing.T, session *Session, form, _ *jvm.Object) {
 				other := newWidget(runtimeGTextFieldClass)
 				other.Fields[componentEventListenerField] = jvm.ReferenceValue(newWidget("test/OtherListener"))
-				if _, err := runtimeComponentAddComponent(session.Client.runtime, session.Client.JVM(), []jvm.Value{
-					jvm.ReferenceValue(form), jvm.ReferenceValue(other),
-				}); err != nil {
-					t.Fatal(err)
-				}
+				addVendorFormChild(t, session, form, other)
 			},
 		},
 		{
-			name: "listener removed",
-			mutate: func(_ *testing.T, _ *Session, _ *jvm.Object, field *jvm.Object) {
+			name: "two unlistened fields",
+			mutate: func(t *testing.T, session *Session, form, field *jvm.Object) {
 				field.Fields[componentEventListenerField] = jvm.ReferenceValue(nil)
+				addVendorFormChild(t, session, form, newWidget(runtimeGTextFieldClass))
 			},
 		},
 	} {
@@ -100,6 +108,77 @@ func TestVendorFormDoesNotGuessAmongFieldsOrUnlistenedChildren(t *testing.T) {
 			probe.mutate(t, session, form, field)
 			if _, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
 				t.Fatalf("TextInput() error = %v", err)
+			}
+		})
+	}
+}
+
+// The form's fields are read as the form holds them when the Host asks: its
+// only field is offered without a listener, a field added or given its
+// listener after the show is offered, and of several listened fields the one
+// the title focused is. The keypad still follows only the field the form was
+// shown with, so presses keep reaching the card beneath.
+func TestVendorFormOffersTheFieldItHoldsNow(t *testing.T) {
+	for _, probe := range []struct {
+		name   string
+		mutate func(*testing.T, *Session, *jvm.Object, *jvm.Object) *jvm.Object
+	}{
+		{
+			name: "listener removed",
+			mutate: func(_ *testing.T, _ *Session, _, field *jvm.Object) *jvm.Object {
+				field.Fields[componentEventListenerField] = jvm.ReferenceValue(nil)
+				return field
+			},
+		},
+		{
+			name: "added after the show",
+			mutate: func(t *testing.T, session *Session, form, field *jvm.Object) *jvm.Object {
+				if _, err := runtimeComponentRemoveComponent(session.Client.runtime, session.Client.JVM(), []jvm.Value{
+					jvm.ReferenceValue(form), jvm.ReferenceValue(field),
+				}); err != nil {
+					t.Fatal(err)
+				}
+				callVendorFormMethod(t, session.Client.runtime, session.Client.JVM(), form, "hide")
+				callVendorFormMethod(t, session.Client.runtime, session.Client.JVM(), form, "show")
+				addVendorFormChild(t, session, form, field)
+				return field
+			},
+		},
+		{
+			name: "focused of two listened",
+			mutate: func(t *testing.T, session *Session, form, _ *jvm.Object) *jvm.Object {
+				other := newWidget(runtimeGTextFieldClass)
+				other.Fields[componentEventListenerField] = jvm.ReferenceValue(newWidget("test/OtherListener"))
+				addVendorFormChild(t, session, form, other)
+				callShellInput(t, session, runtimeComponentSetFocus, other)
+				return other
+			},
+		},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			session, form, field, _ := shownVendorTextField(t, "old")
+			want := probe.mutate(t, session, form, field)
+			if _, active := session.Client.runtime.activeVendorTextInput(); active {
+				t.Fatal("the probe left the field the form was shown with active")
+			}
+			input, err := session.TextInput(context.Background())
+			if err != nil {
+				t.Fatalf("TextInput() error = %v", err)
+			}
+			if err := input.Commit(context.Background(), "새 이름"); err != nil || runtimeComponentText(want) != "새 이름" {
+				t.Fatalf("commit: text=%q err=%v", runtimeComponentText(want), err)
+			}
+			cardEvents := 0
+			if err := session.Client.JVM().RegisterNative("test/UnderlyingCard", "keyNotify", "(II)Z", func(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+				cardEvents++
+				return jvm.IntValue(0), nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			session.Client.runtime.displayCards = append(session.Client.runtime.displayCards, newWidget("test/UnderlyingCard"))
+			pressCardKey(t, session.Client.runtime, KeyFire)
+			if cardEvents != 2 {
+				t.Fatalf("card beneath the form received %d events, want press and release", cardEvents)
 			}
 		})
 	}

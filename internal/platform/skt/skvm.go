@@ -83,6 +83,15 @@ type xTextFieldData struct {
 	// Direct screen painting proves which display currently presents the field.
 	paintedDisplay         *jvm.Object
 	paintedDisplayRevision uint64
+	// drawnDisplay and drawnDisplayRevision are the Displayable that was
+	// current, and its revision, when the title last drew the field: painted
+	// it into any Graphics, the screen's or a back buffer's, or read its text
+	// to draw that itself. They are what places a focused field the strict
+	// route could not place on the current Canvas; see
+	// hostXTextFieldFallback. They are no part of a checkpoint: after a
+	// restore the title's next paint sets them.
+	drawnDisplay         *jvm.Object
+	drawnDisplayRevision uint64
 	// input is the keypad editor behind the field, made on the first key.
 	input *textinput.State
 	// constraints is what a MIDP TextField would restrict its input to. It is
@@ -1739,6 +1748,11 @@ func (runtime *Runtime) xTextFieldText(vm *jvm.VM, arguments []jvm.Value) (jvm.V
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	// A title that draws the field's text itself reads it here; see
+	// xTextFieldData.drawnDisplay.
+	runtime.displayMu.RLock()
+	data.drawnDisplay, data.drawnDisplayRevision = runtime.currentDisplayable, runtime.displayRevision
+	runtime.displayMu.RUnlock()
 	return jvm.ReferenceValue(vm.NewString(string(data.text))), nil
 }
 
@@ -1826,7 +1840,18 @@ func (runtime *Runtime) setXTextFieldFocus(_ *jvm.VM, arguments []jvm.Value) (jv
 	state := runtime.skvm()
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	data.textRevision++
+	// Only a change of focus is one a pending Host edit has to answer for, and
+	// only a change clears the record of paints. A title closes its editor by
+	// turning the focus off and no longer painting the field, and a paint from
+	// before that would keep offering the closed field to the Host until the
+	// Displayable changed; a field still shown is painted again. A title that
+	// sets the focus its fields already have on every frame, after painting
+	// them, changes nothing, and would otherwise leave no paint on record and
+	// spend every edit.
+	if data.focus != focus {
+		data.textRevision++
+		runtime.textFieldPaints = xTextFieldPaints{}
+	}
 	data.focus = focus
 	data.paintedDisplay = nil
 	if focus {
@@ -1884,6 +1909,10 @@ func (runtime *Runtime) xTextFieldPaint(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	receiver, err := referenceArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
 	runtime.textMu.Lock()
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
@@ -1892,12 +1921,18 @@ func (runtime *Runtime) xTextFieldPaint(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	}
 	text := append([]rune(nil), data.text...)
 	x, y := data.x, data.y
+	runtime.displayMu.RLock()
+	current, revision := runtime.currentDisplayable, runtime.displayRevision
+	runtime.displayMu.RUnlock()
 	if data.focus && context.screen == &runtime.renderMu {
-		runtime.displayMu.RLock()
-		data.paintedDisplay = runtime.currentDisplayable
-		data.paintedDisplayRevision = runtime.displayRevision
-		runtime.displayMu.RUnlock()
+		data.paintedDisplay = current
+		data.paintedDisplayRevision = revision
 	}
+	// Any paint is evidence for a field nobody focused, the screen's or a back
+	// buffer's: see xTextFieldPaints. It also places a focused field on the
+	// Displayable it was painted under.
+	runtime.textFieldPaints.note(receiver, current, revision)
+	data.drawnDisplay, data.drawnDisplayRevision = current, revision
 	runtime.textMu.Unlock()
 	font, err := fontReceiver(context.font)
 	if err != nil || font == nil {

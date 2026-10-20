@@ -438,6 +438,9 @@ func (runtime *initializationRuntime) dispatchKeyToCards(eventType, key int32) e
 	// receives. A press it does not see — fire that confirms, clear on an empty
 	// field — closed it. The Host's own carriers are judged by their senders.
 	if eventType == KeyPressed && len(runtime.cInput.pending) == 0 && runtime.javaInput.pending == nil {
+		// A press the player made can bring a field up; see
+		// cInputState.unreached.
+		runtime.cInput.unreached = false
 		runtime.javaInput.touched, runtime.javaInput.keyTaken = false, false
 		defer func() {
 			if !runtime.javaInput.touched {
@@ -626,7 +629,7 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	}
 	runtime.beginTextReads()
 	_, err = runtime.client.vm.InvokeVirtual(card, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", jvm.ReferenceValue(graphics))
-	runtime.endTextReads(err == nil)
+	runtime.endTextReads(card, err == nil)
 	if err != nil {
 		return true, fmt.Errorf("paint KTF card %s: %w", card.ClassName, err)
 	}

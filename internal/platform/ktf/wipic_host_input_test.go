@@ -3,7 +3,9 @@ package ktf
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -233,7 +235,10 @@ func TestCInputHostRejectsStaleTargets(t *testing.T) {
 	}
 }
 
-func TestCInputHostCancellationAndInactiveEditor(t *testing.T) {
+// A cancelled commit changes nothing. An editor of unknown shape that went
+// quiet is still offered, because the title has used its input method; one
+// that never did is not.
+func TestCInputHostCancellationAndAQuietUnknownEditor(t *testing.T) {
 	s, text, _ := cInputFixture(t)
 	edit, err := s.TextInput(t.Context())
 	if err != nil {
@@ -248,16 +253,216 @@ func TestCInputHostCancellationAndInactiveEditor(t *testing.T) {
 		t.Fatal("cancelled input changed value")
 	}
 	s.Client.runtime.cInput.active = false
-	if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
-		t.Fatal(err)
+	edit, err = s.TextInput(t.Context())
+	if err != nil {
+		t.Fatalf("quiet editor of an unknown caller: %v", err)
+	}
+	if err := edit.Commit(t.Context(), "A"); err != nil || string(*text) != "A" {
+		t.Fatalf("commit into the quiet editor: text=%q err=%v", *text, err)
+	}
+
+	client, runtime := newTestRuntime(t)
+	runtime.displayCards = append(runtime.displayCards, newWidget("test/CInputCard"))
+	if _, err := (&Session{Client: client}).TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("a title that never used its input method: %v", err)
 	}
 }
 
-func TestCInputNewCardDoesNotInheritEditor(t *testing.T) {
-	s, _, _ := cInputFixture(t)
-	s.Client.runtime.displayCards = append(s.Client.runtime.displayCards, newWidget("test/Overlay"))
-	if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+// keyRecordingCard pushes a card that takes no key and records each one.
+func keyRecordingCard(t *testing.T, s *Session, class string) *[][2]int32 {
+	t.Helper()
+	events := &[][2]int32{}
+	if err := s.Client.vm.RegisterNative(class, "keyNotify", "(II)Z", func(_ *jvm.VM, args []jvm.Value) (jvm.Value, error) {
+		kind, _ := args[1].Int32()
+		key, _ := args[2].Int32()
+		*events = append(*events, [2]int32{kind, key})
+		return jvm.IntValue(0), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Client.runtime.displayCards = append(s.Client.runtime.displayCards, newWidget(class))
+	return events
+}
+
+// The editor of a title of unknown shape is offered on a card pushed over the
+// one it was activated on. A carrier that card does not hand to the input
+// method is pressed and released there like any key, the commit fails, and
+// the offer waits for the player's next press.
+func TestCInputUnknownEditorIsOfferedOnANewCard(t *testing.T) {
+	s, text, _ := cInputFixture(t)
+	events := keyRecordingCard(t, s, "test/Overlay")
+	edit, err := s.TextInput(t.Context())
+	if err != nil {
 		t.Fatalf("overlay input: %v", err)
+	}
+	if err := edit.Commit(t.Context(), "A"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("commit through a card that does not take it: %v", err)
+	}
+	if want := [][2]int32{{KeyPressed, cInputCarrier}, {KeyReleased, cInputCarrier}}; !reflect.DeepEqual(*events, want) {
+		t.Fatalf("overlay key events = %v, want %v", *events, want)
+	}
+	if len(*text) != 0 || len(s.Client.runtime.cInput.pending) != 0 {
+		t.Fatalf("an unreached carrier left text %q pending %x", *text, s.Client.runtime.cInput.pending)
+	}
+	if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("offer right after an unreached carrier: %v", err)
+	}
+	if err := edit.Commit(t.Context(), "A"); !errors.Is(err, backend.ErrTextInputChanged) || len(*events) != 2 {
+		t.Fatalf("the spent edit answered %v and sent %v", err, *events)
+	}
+	pressCardKey(t, s.Client.runtime, KeyDown)
+	if _, err := s.TextInput(t.Context()); err != nil {
+		t.Fatalf("offer after the player's press: %v", err)
+	}
+}
+
+// A recognized controller answers for its own editor, and a card pushed over
+// the one that activated it does not inherit it.
+func TestCInputRecognizedEditorIsNotInheritedByANewCard(t *testing.T) {
+	fixture := newDeferredCInputFixture(t)
+	runtime := fixture.session.Client.runtime
+	thread, state, _ := inputOwnerCaller(t, runtime)
+	runtime.rememberCInputOwner(thread)
+	if runtime.cInput.owner.address != state {
+		t.Fatal("authored controller was not recognized")
+	}
+	if _, err := fixture.session.TextInput(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	keyRecordingCard(t, fixture.session, "test/Overlay")
+	if _, err := fixture.session.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("overlay inherited a recognized editor: %v", err)
+	}
+}
+
+// A press the widget takes without calling its input method leaves an editor
+// of unknown shape offered, and a carrier that then reaches the input method
+// still lands. The press spends any edit taken before it.
+func TestCInputUnknownEditorStaysOfferedAfterAPress(t *testing.T) {
+	s, text, _ := cInputFixture(t)
+	before, err := s.TextInput(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SendKey(t.Context(), KeyPressed, KeyRight); err != nil {
+		t.Fatal(err)
+	}
+	if s.Client.runtime.cInput.active {
+		t.Fatal("a press without input-method activity left the editor live")
+	}
+	if err := before.Commit(t.Context(), "A"); !errors.Is(err, backend.ErrTextInputChanged) || len(*text) != 0 {
+		t.Fatalf("an edit taken before the press answered %v with text %q", err, *text)
+	}
+	edit, err := s.TextInput(t.Context())
+	if err != nil {
+		t.Fatalf("editor after a press: %v", err)
+	}
+	if err := edit.Commit(t.Context(), "가"); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := korean.EUCKR.NewEncoder().Bytes([]byte("가"))
+	if !bytes.Equal(*text, want) {
+		t.Fatalf("guest bytes=%x want=%x", *text, want)
+	}
+}
+
+// A widget that ignores the carrier — the editor is gone, the screen changed
+// — sees it as a key: its press, then its release, so the key is not left
+// down. The commit fails, the editor is no longer active, and nothing is
+// offered until there is new evidence of a field, so a retry cannot hand the
+// game the key again: a press of the player's, or a call into the input
+// method, brings the relaxed offer back.
+func TestCInputUnreachedCarrierIsReleasedAndWithdrawsTheOffer(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	s := &Session{Client: client}
+	events := keyRecordingCard(t, s, "test/IgnoringCInputCard")
+	if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 3); err != nil {
+		t.Fatal(err)
+	}
+	commit := func() {
+		t.Helper()
+		edit, err := s.TextInput(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := edit.Commit(t.Context(), "AB"); !errors.Is(err, backend.ErrTextInputChanged) {
+			t.Fatalf("commit into a widget that ignores its carrier: %v", err)
+		}
+	}
+	commit()
+	if want := [][2]int32{{KeyPressed, cInputCarrier}, {KeyReleased, cInputCarrier}}; !reflect.DeepEqual(*events, want) {
+		t.Fatalf("key events = %v, want %v", *events, want)
+	}
+	if len(runtime.cInput.pending) != 0 || runtime.cInput.active {
+		t.Fatalf("after the unreached carrier: pending %x active %v", runtime.cInput.pending, runtime.cInput.active)
+	}
+	if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("offer right after an unreached carrier: %v", err)
+	}
+	pressCardKey(t, runtime, KeyDown)
+	*events = nil
+	commit()
+	if want := [][2]int32{{KeyPressed, cInputCarrier}, {KeyReleased, cInputCarrier}}; !reflect.DeepEqual(*events, want) {
+		t.Fatalf("key events after a press = %v, want %v", *events, want)
+	}
+	if _, err := cInputCall(t, runtime, wipicIMGetCurrentMode); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TextInput(t.Context()); err != nil {
+		t.Fatalf("offer after the title called its input method: %v", err)
+	}
+}
+
+// The relaxed rule's evidence that a title uses its input method is a flag a
+// checkpoint does not keep; a restored session reads it off what it does keep.
+func TestCInputUseIsReadOffWhatACheckpointKeeps(t *testing.T) {
+	for _, probe := range []struct {
+		name  string
+		state func(*initializationRuntime)
+		used  bool
+	}{
+		{"nothing", func(*initializationRuntime) {}, false},
+		{"flag", func(runtime *initializationRuntime) { runtime.cInput.used = true }, true},
+		{"calls", func(runtime *initializationRuntime) { runtime.cInput.calls = 1 }, true},
+		{"activations", func(runtime *initializationRuntime) { runtime.cInput.activations = 1 }, true},
+		{"mode table", func(runtime *initializationRuntime) { runtime.inputModeTableAddress = 0x1000 }, true},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			_, runtime := newTestRuntime(t)
+			probe.state(runtime)
+			if got := runtime.cInputUsed(); got != probe.used {
+				t.Fatalf("cInputUsed() = %v, want %v", got, probe.used)
+			}
+		})
+	}
+
+	_, source := newTestRuntime(t)
+	source.displayCards = []*jvm.Object{newWidget("test/CInputCard")}
+	if _, err := cInputCall(t, source, wipicIMSetCurrentMode, 3); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := source.captureHeapState(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed runtimeHeapState
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	freshClient, fresh := newTestRuntime(t)
+	if _, err := fresh.restoreHeapState(parsed); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.cInput.used || !fresh.cInputUsed() {
+		t.Fatalf("restored use: flag %v, derived %v", fresh.cInput.used, fresh.cInputUsed())
+	}
+	fresh.cInput.active = false
+	if _, err := (&Session{Client: freshClient}).TextInput(t.Context()); err != nil {
+		t.Fatalf("restored quiet editor: %v", err)
 	}
 }
 

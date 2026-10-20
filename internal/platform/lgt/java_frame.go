@@ -123,7 +123,11 @@ func (client *Client) paintJavaCard(ctx context.Context, thread *armcore.Thread)
 	if err != nil {
 		return err
 	}
-	if err := client.callJavaCardMethod(ctx, thread, javaCardPaintMethod, graphics); err != nil {
+	card := client.javaRun.card
+	client.javaRun.beginTextReads()
+	err = client.callJavaCardMethod(ctx, thread, javaCardPaintMethod, graphics)
+	client.javaRun.endTextReads(card, err == nil)
+	if err != nil {
 		return err
 	}
 	// The frame goes the other way here than it does on the Clet path. A Clet

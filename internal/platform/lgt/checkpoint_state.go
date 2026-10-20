@@ -149,6 +149,15 @@ type fileState struct {
 	Length    int
 }
 
+// textInputState is the C input-method bookkeeping. Active says the title has
+// used the input method. Records written before the Host offered input on
+// every screen of such a title held whether input was open at that moment;
+// what else they record shows a title that had used it by then, and a load
+// reads it from there: the automaton's calls, the mode table built for a
+// title that asked for its modes, and a mode other than the first one
+// selected. A title that had only asked for the mode count or the current
+// mode, or selected the first mode, is not seen as using it until its next
+// call.
 type textInputState struct {
 	Active          bool
 	Revision, Calls uint64
@@ -636,7 +645,7 @@ func (client *Client) captureClientState() (clientState, error) {
 	if client.cTextInput.delivering {
 		return clientState{}, ErrCheckpointBusy
 	}
-	saved.TextInput = textInputState{client.cTextInput.active, client.cTextInput.revision, client.cTextInput.calls, bytes.Clone(client.cTextInput.pending)}
+	saved.TextInput = textInputState{client.cTextInput.used, client.cTextInput.revision, client.cTextInput.calls, bytes.Clone(client.cTextInput.pending)}
 	names := slices.Sorted(maps.Keys(client.resourceIDs))
 	for _, name := range names {
 		handle := client.resourceIDs[name]
@@ -1078,10 +1087,9 @@ func restoreClientState(archive *Archive, saved clientState, options Options) (*
 		}
 	}
 	client.inputMode, client.inputModeTableAddress = saved.InputMode, saved.InputModeTable
-	// A checkpoint is taken from a game being played, so keys have reached it;
-	// the mode count only ever compares within one event.
-	client.cTextInput = cTextInputState{active: saved.TextInput.Active, revision: saved.TextInput.Revision,
-		calls: saved.TextInput.Calls, pending: bytes.Clone(saved.TextInput.Pending), keyed: true}
+	used := saved.TextInput.Active || saved.TextInput.Calls != 0 || saved.InputModeTable != 0 || saved.InputMode != 0
+	client.cTextInput = cTextInputState{used: used,
+		revision: saved.TextInput.Revision, calls: saved.TextInput.Calls, pending: bytes.Clone(saved.TextInput.Pending)}
 	client.applicationIDAddress, client.javaApplication = saved.ApplicationID, saved.JavaApplication
 	if len(saved.Resources) != 0 {
 		client.resourceIDs = make(map[string]uint32, len(saved.Resources))

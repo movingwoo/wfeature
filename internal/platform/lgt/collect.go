@@ -631,6 +631,7 @@ func (client *Client) releaseJavaPayloads(dead []uint32, stats *CollectionStats)
 		delete(runtime.databases, object)
 		delete(runtime.widgets, object)
 	}
+	runtime.forgetTextReads(dead)
 	for _, handle := range surfaces {
 		if client.javaSurfaceHeld(handle) {
 			continue

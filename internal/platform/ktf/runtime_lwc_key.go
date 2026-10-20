@@ -46,6 +46,12 @@ func runtimeTextComponentKeyNotify(runtime *initializationRuntime, vm *jvm.VM, a
 	if eventType != KeyPressed {
 		return jvm.IntValue(1), nil
 	}
+	// A Host character's carrier is no key the player pressed, and the
+	// character it carries is for another editor: it types nothing here, and
+	// is taken so that the card does not act on it either.
+	if runtime.hostCarrierInFlight() {
+		return jvm.IntValue(0), nil
+	}
 	editor := textEditorFor(receiver)
 	changed := false
 	switch {

@@ -17,6 +17,20 @@ retry available. Append-only targets label the action **삽입**. Availability
 describes the snapshot taken at opening, not a continuously polled claim about
 the game's focus; the platform validates again at commit.
 
+**Availability errs toward offering.** A field the player can see and cannot
+type into is the failure that matters; a screen that offers input it has no
+field for costs a commit that reports failure. Every platform therefore keeps
+its strict rules first, so the field they pick is still the one that gets the
+text, and asks relaxed rules only when the strict ones name nothing. A relaxed
+rule never chooses between two candidates it cannot tell apart. On the routes
+that deliver text through a carrier key, a commit on a screen without a field
+reaches the game as one press of that key, followed by its release, and then
+fails. That failure is evidence: the route offers nothing more until something
+new says a field may be up, so retrying does not press the key again
+([2026-10-20](history/lgt.md#lgt-text-input-2026-10-20),
+[review follow-ups](history/lgt.md#lgt-text-input-review-2026-10-20)). A carrier
+never types into a field it was not composed for.
+
 ## Boundary
 
 The session requests a platform snapshot of the active field
@@ -47,12 +61,25 @@ An append snapshot is used when a platform can pass completed text to the active
 guest cursor but cannot read or replace the existing value. It starts with an
 empty Host field; the same stale-edit and transport rules apply.
 
-Game-owned input interfaces are supported only where the platform exposes a
-proven active target.
+Game-owned input interfaces are supported only where the platform can name the
+target the text goes to; the rules below say how each platform names one.
 
 ## Supported editors
 
 ### KTF
+
+**Two passes.** Six routes can name an editor, in this order: a title's own
+`InputMethodHandler`, the vendor KFC form, the LWC component with explicit
+focus, a shown shell's text field, a field the title draws, and the C input
+method. They are asked first under the rules below, and the first that names an
+editor its rule accepts wins; a candidate that cannot take the edit, such as a
+focus left on a button or a field behind a hidden shell, hands the question to
+the next route instead of ending it. Only when every route comes up empty are
+they asked again, in the same order, under the relaxed rule each describes. So
+what the first rules pick they still pick, and the relaxed rules only answer
+where the first had nothing. A commit asks again and must find the same editor;
+a route ahead of it that now names another editor makes the edit stale, while a
+route that still names nothing does not.
 
 **LWC fields.** Active LWC `TextField` and `TextBox` instances are supported,
 including guest subclasses. The adapter keeps field constraints and stores the
@@ -63,6 +90,11 @@ complete value through the component string-setting contract.
   hidden ancestors are unavailable. A field that never belonged to a container
   stays supported for a card that draws it directly. Moving focus away and back
   through either the component or the form API invalidates the earlier edit.
+  *Relaxed:* the first shell in the chain needs only to be shown, so a field in
+  a shell that is still shown after a later shell was hidden qualifies, and a
+  chain that ends at a container nothing holds is treated as a field the card
+  draws. Detached children, a parent that no longer lists its child and cycles
+  are still refused.
 - *Without explicit focus*, the most recently shown `ShellComponent` exposes its
   sole direct text child (or sole work component). This covers an observed name
   editor that calls `addComponent` and `show` without `setFocus`. It is a bounded
@@ -70,7 +102,12 @@ complete value through the component string-setting contract.
   `ContainerComponent` contract requires explicit focus for key delivery. Nested
   or ambiguous layouts are not inferred. Hiding or reopening the shell, replacing
   it, or changing its children or work component invalidates a pending edit, and
-  explicit guest focus takes precedence.
+  explicit guest focus takes precedence. *Relaxed:* the newest shell still shown
+  (the platform keeps up to sixteen shown shells, newest first, so hiding a
+  dialog uncovers the shell beneath it) is searched through nested containers,
+  without entering nested shells, and offers its focused field, else its first
+  field told it has focus, else its first field. A field it cannot write — one
+  with a composition listener — offers nothing rather than another field.
 - *With no explicit focus, shell or vendor form*, a field the title draws
   itself is offered: a text component told it has focus through
   `focusNotify(true)` whose text the top card read during its last paint. One
@@ -78,10 +115,16 @@ complete value through the component string-setting contract.
   `setFocus` and never adds it to a container; its card reads `getString` on
   every paint while the name screen is up and on no other screen, so the read,
   not the focus, is the evidence. Exactly one focused field must be read: two, an
-  unfocused one, or a failed paint offer nothing, and a paint that stops reading
-  the field makes a pending edit stale. One screen that does not show the field
-  is still offered: that title's network-failure dialog is painted by the same
-  card, which still reads the field under it.
+  unfocused one, or a failed paint offer nothing. One screen that does not show
+  the field is still offered: that title's network-failure dialog is painted by
+  the same card, which still reads the field under it. *Relaxed:* the set the
+  last paint that read any text published is kept through paints that read none
+  or fail, and of its LWC fields the only focused one, or else the only one, is
+  offered; several unfocused fields still offer nothing, and a paint that reads
+  more than sixteen texts empties the set. The set belongs to the card that
+  painted it and is offered only while that card is on top, so a card pushed
+  over the name screen, or one that replaced it, draws its own screen. A commit
+  through this route does not need the latest paint to have read the field.
 - A field with an explicitly installed `InputMethodListener` is unsupported:
   per-key composition deltas cannot safely describe an arbitrary whole-field
   replacement ([whole-field replacement and IME callbacks](#lifecycle-whole-field-replacement-and-ime-callbacks)).
@@ -91,16 +134,29 @@ exactly one directly attached `GTextField` that has an `EventListener`. The Host
 changes only that field's value; the guest listener receives keypad events and
 owns acceptance and dismissal. Ambiguous or changed form contents are rejected,
 and the synchronous KFC `doModal` path is unsupported
-([lifecycle evidence](#lifecycle-ktf-non-modal-form-visibility)).
+([lifecycle evidence](#lifecycle-ktf-non-modal-form-visibility)). *Relaxed:* the
+form's contents are read when the Host asks rather than when the form was shown,
+so a field added or given a listener afterwards counts; with several listened
+fields the focused one is taken, and a form with no listened field offers its
+only `GTextField`. Keys still go where they went before.
 
 **A title's own `InputMethodHandler`.** A Java title may construct a handler,
 give it its own listener, and hand it the keys its card receives. The Host
 appends up to 64 Java chars per submission, one character per carrier key the
 title forwards, so the title's own length limit and redraw apply to each; the
-field's constraint is applied and controls are rejected. The field is available
-from the listener's registration until a press does not reach the handler,
-except for a field the title rebuilds while handling a key, and it survives a
-quick load. The keypad itself types digits only in the title's digit mode.
+field's constraint is applied and controls are rejected. Under the first rule
+the field is available from the listener's registration until a press does not
+reach the handler, except for a field the title rebuilds while handling a key,
+and it survives a quick load. *Relaxed:* it stays offered through presses that
+miss it, until the title removes the listener or a commit's carrier does not
+reach it: a title whose field is still on its screen hands that field every key,
+so a carrier it keeps from the field shows the field closed, and the offer ends
+until the title hands the field a key again. A press that misses it still spends
+an outstanding edit, and the first character of a commit reopening it does not.
+A carrier the title hands to another of its handlers types nothing there and
+makes that handler the open field; one it hands to a text component types
+nothing either. It is not offered while another card is on top or a vendor form
+owns the keypad. The keypad itself types digits only in the title's digit mode.
 Titles that run their own event loop are unsupported. See
 [whole-field replacement and IME callbacks](#lifecycle-whole-field-replacement-and-ime-callbacks).
 
@@ -119,8 +175,15 @@ returning, and deferred CLR flushes keep the active editor. General guest event
 loops are unsupported. A recognized C controller also keeps availability after
 an ignored empty confirmation; its live state blocks input while a validation
 message covers the editor, permits a fresh edit on return, and blocks input after
-acceptance. Unknown callers keep the conservative input-method-activity
-requirement. See the [initial implementation](history/ktf.md#ktf-c-input-bitmap-investigation),
+acceptance. For an unknown caller the first rule needs input-method activity
+since the last key on the card that showed the editor. *Relaxed:* an unknown
+caller is offered on any card once the title has made any input-method call,
+start-up queries included; after a load, recorded calls, activations or a built
+mode table say so. A recognized controller keeps its live-state rules in both
+passes. A carrier that reaches no input method is followed by its release, the
+commit fails as stale, the editor is no longer active, and the relaxed rule
+offers nothing until the title calls its input method again or the player
+presses a key. See the [initial implementation](history/ktf.md#ktf-c-input-bitmap-investigation),
 the [timer delivery and clipping regression](history/ktf.md#ktf-graphics-input-qa-2026-09-23)
 and the [controller lifetime regression](history/ktf.md#ktf-input-lifetime-2026-09-23).
 
@@ -133,15 +196,30 @@ decides whether the submission continues.
 
 SKT supports a `TextBox`, the selected `Form` `TextField`, a focused vendor
 `XTextField` on the visible Canvas, and the title-owned `TextComponent` attached
-to its input-method handler. SKT tracks revisions for screens, command overlays,
-selected Form children, field values, limits and constraints, and vendor focus;
-restoring an earlier state does not revive a pending Host edit.
+to its input-method handler, in that order. SKT tracks revisions for screens,
+command overlays, selected Form children, field values, limits and constraints,
+and vendor focus; restoring an earlier state does not revive a pending Host edit.
 
-An `XTextField` built with a placeholder constructor Canvas is supported after
-the focused field paints directly onto the current screen. Offscreen painting
-does not qualify, and focus and display changes invalidate that evidence. Host
-commits repaint the visible Canvas. See the
-[SKT name-input regression](history/skt.md#skt-name-input-2026-09-23).
+When none of those names a field, three fallbacks are asked, and none while a
+`TextComponent` is attached, since that component is where the handset's keys
+type. A Form whose selection is not on an editable `TextField` offers its only
+editable `TextField`; a Form's selection starts on its first item and only the
+pad moves it, so a Form that opens on a label above its one field refused the
+page until the player pressed Down. Two editable fields with the selection on
+neither offer nothing. On a Canvas, the focused `XTextField` is offered when it
+belongs to that Canvas: built for it, or drawn while it is up — painted into any
+Graphics, or its text read for the title to draw — so a field left focused on a
+Canvas the title has moved on from is not. With no field focused, the one
+`XTextField` painted into any Graphics since the Displayable came up is offered;
+two painted fields offer nothing, and a focus call that changes a field's focus
+starts that record again, while one that repeats it does not. A fallback's
+commit checks that the same rule still picks the same field.
+
+An `XTextField` built with a placeholder constructor Canvas is placed by the
+strict route after the focused field paints directly onto the current screen,
+and by the fallback when it paints into a back buffer or the title reads its
+text to draw it. Focus and display changes invalidate that evidence. Host
+commits repaint the visible Canvas. See the [SKT name-input regression](history/skt.md#skt-name-input-2026-09-23).
 
 The `TextComponent` route is append-only. `TextComponentHandler` identifies the
 title-owned component and exposes its size, cursor, limit, constraints and
@@ -158,14 +236,25 @@ consumed snapshot cannot be retried.
 
 ### LGT
 
-**LWC fields.** LGT supports a focused LWC `TextField` or `TextBox` whose parent
-chain reaches a shown Shell. Shell visibility and focus changes invalidate
-pending edits, and field and listener revisions also reject guest changes that
-restore an earlier value. Application lifecycle callbacks are dispatched by their
-exact method signature, and shown/focused widget graphs stay reachable by the
-Java collector. As on KTF, a text component whose handler has an installed
-`InputMethodListener` is unsupported. This adds text editing, not a complete LWC
-renderer.
+**LWC fields.** LGT supports an LWC `TextField` or `TextBox` whose parent chain
+reaches a shown Shell, or ends without reaching a shell at all, which is a field
+the title draws itself (as a field that never joined a container is on KTF). The
+focused field comes first; a focused field on the screen that cannot take a Host
+edit keeps any other from being offered in its place. Without a focused one, the
+only field under a shown Shell is taken, and when no shown Shell holds one, the
+only field in no shell whose text the pushed card read during its last paint
+that read text; a field the title built and never drew, or dropped and has not
+had collected, is not one. Two at the same level get nothing. A title can build
+its name dialog without giving the field focus, or tell the field focus has gone
+while the dialog stays up, and the field is still the one the player means.
+Shell visibility and focus changes invalidate pending edits, and field and
+listener revisions also reject guest changes that restore an earlier value; a
+notification that repeats what a component already knows, and an input-mode
+selection, do not, since a title can send them on every frame. Application
+lifecycle callbacks are dispatched by their exact method signature, and
+shown/focused widget graphs stay reachable by the Java collector. As on KTF, a
+text component whose handler has an installed `InputMethodListener` is
+unsupported. This adds text editing, not a complete LWC renderer.
 
 **WIPI-C widgets.** Game-owned widgets that use `MC_imHandleInput` are an append
 route, because WIPI-C exposes neither the field value nor a stable component
@@ -197,13 +286,14 @@ substituted inside the platform and is not composed as a keypad character.
   delivery and atomic capacity rejections keep the retry path. If the Clet route
   no longer reaches the input method, the edit is rejected as stale.
 
-Input is offered while the widget is evidently taking keys. Input-method calls
-before the first key press are start-up configuration and do not count. After
-that, a mode selection or a `MC_imHandleInput` call opens input, and a key press
-the Clet handles without calling the input method closes it, as does a carrier
-that never reaches the input method. A name widget passes its keys to the
-automaton or at least selects its mode again for them; the key that moves focus
-off a field does neither.
+Input is offered from the title's first input-method call on, start-up
+configuration included, on every screen. A commit on a screen whose widget does
+not route the carrier to the automaton fails as a stale edit; the title has
+received one carrier press, and the platform queues the matching release so the
+key does not stay down. Input is then not offered until the title calls its
+input method again or the player presses a key, which is what can bring a field
+up, so a retry does not hand the game another press. See
+[what a title sees after a commit](#what-a-title-sees-after-a-commit).
 
 ### Limits common to every route
 
@@ -299,13 +389,24 @@ the name in white. A third leaves a dark outline colour set from its own
 lettering, and its name stays hard to read; no evidence says what the vendor
 field drew instead.
 
-**LGT C input follows the widget.** LGT WIPI-C input used to become available at
-the first input-method call and stay so. Several titles select a mode while
-starting and on every screen change, so eleven local archives offered input on
-splash, menu and gameplay screens, and a commit there delivered a stray `0` key.
-Availability now follows the rules in [Supported editors](#lgt). One title's
+**LGT C input is offered on every screen.** LGT WIPI-C input was available from
+the first input-method call. Several titles select a mode while starting and on
+every screen change, so eleven local archives offered input on splash, menu and
+gameplay screens, and a commit there delivered a stray `0` key. Availability was
+then made to follow the keys: calls before the first key did not count, and a key
+the Clet handled without the input method closed input. One title's name screen
+showed that this refuses a field that is up. It calls the input method once while
+starting, and after that only from its name screen's key handler; the key that
+opens the screen is handled by the class screen, so on arrival the empty field
+had received no call and the page showed 입력 불가능 until the player pressed some
+other key there. A field the player cannot type into is the failure that matters,
+and an offer on a screen without one costs a commit that reports failure, so
+input is offered again from the first input-method call on, and a failed carrier
+is followed by its release. A load of a record written while input followed the
+keys offers input to a title whose record shows input-method calls, a mode table
+or a selected mode other than the first. One title's
 ranking name widget reads its keys in a timer and holds eight bytes per call; it
-refused every commit before and now takes the whole name.
+takes the whole name ([batches](#lgt)).
 
 **Not a text-input defect, and deliberately not built:** one KTF title draws its
 name field as an LWC component the platform is expected to paint

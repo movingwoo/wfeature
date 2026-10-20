@@ -1699,6 +1699,7 @@ func runtimeDisplayPopCard(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Va
 	}
 	card := runtime.displayCards[len(runtime.displayCards)-1]
 	runtime.displayCards = runtime.displayCards[:len(runtime.displayCards)-1]
+	runtime.forgetRemovedCardText()
 	return jvm.ReferenceValue(card), runtime.notifyCardShown(card, runtime.topCard())
 }
 
@@ -1773,6 +1774,7 @@ func runtimeDisplayRemoveCard(runtime *initializationRuntime, _ *jvm.VM, argumen
 		if current == card {
 			previous := runtime.topCard()
 			runtime.displayCards = append(runtime.displayCards[:index], runtime.displayCards[index+1:]...)
+			runtime.forgetRemovedCardText()
 			return jvm.IntValue(1), runtime.notifyCardShown(previous, runtime.topCard())
 		}
 	}
@@ -1786,6 +1788,7 @@ func runtimeDisplayCountCard(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.
 func runtimeDisplayRemoveAllCards(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 	previous := runtime.topCard()
 	runtime.displayCards = nil
+	runtime.forgetRemovedCardText()
 	return jvm.VoidValue(), runtime.notifyCardShown(previous, nil)
 }
 
@@ -3294,7 +3297,7 @@ func runtimeCardServiceRepaints(runtime *initializationRuntime, vm *jvm.VM, argu
 	}
 	runtime.beginTextReads()
 	_, err = vm.InvokeVirtual(receiver, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", jvm.ReferenceValue(graphics))
-	runtime.endTextReads(err == nil)
+	runtime.endTextReads(receiver, err == nil)
 	if err != nil {
 		return jvm.VoidValue(), fmt.Errorf("service repaint of %s: %w", receiver.ClassName, err)
 	}

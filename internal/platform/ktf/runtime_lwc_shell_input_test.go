@@ -84,14 +84,18 @@ func TestShellTextInputRejectsChangedLifecycle(t *testing.T) {
 	}
 }
 
-func TestShellTextInputDoesNotGuessAnEditor(t *testing.T) {
-	for _, kind := range []string{"multiple", "nested", "vendor", "listener", "non-text"} {
+// A shell's field is offered only when the Host can write into it: not a
+// vendor field, whose form owns it, not a field a composition listener drives,
+// not something that is no text field at all, and not a field its container no
+// longer lists.
+func TestShellTextInputRefusesFieldsItCannotWrite(t *testing.T) {
+	for _, kind := range []string{"stale parent", "vendor", "listener", "non-text"} {
 		t.Run(kind, func(t *testing.T) {
 			session, shell, field := shellTextBox(t)
 			switch kind {
-			case "multiple":
-				callShellInput(t, session, runtimeComponentAddComponent, shell, jvm.ReferenceValue(newWidget(runtimeTextBoxComponentClass)))
-			case "nested":
+			case "stale parent":
+				// The field still names the shell as its parent, which no
+				// longer lists it.
 				container := newWidget(runtimeContainerComponentClass)
 				container.Native = []*jvm.Object{field}
 				shell.Native = []*jvm.Object{container}
@@ -105,9 +109,116 @@ func TestShellTextInputDoesNotGuessAnEditor(t *testing.T) {
 			}
 			callShellInput(t, session, runtimeComponentShown(true), shell)
 			if _, err := session.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
-				t.Fatalf("ambiguous input: %v", err)
+				t.Fatalf("unwritable field offered: %v", err)
 			}
 		})
+	}
+}
+
+// A shell holding several fields, or holding its field inside containers of
+// its own, is typed into at the field the title marked with focusNotify, and
+// without one at its first field. The fields are found where the title put
+// them: the shell's children in order, then its work component.
+func TestShellTextInputChoosesAmongItsFields(t *testing.T) {
+	for _, layout := range []string{"first of two", "focused second", "nested", "work after children"} {
+		t.Run(layout, func(t *testing.T) {
+			session, shell, field := shellTextBox(t)
+			second := unfocusedLWCField(t, session, "second")
+			want := field
+			switch layout {
+			case "first of two":
+				callShellInput(t, session, runtimeComponentAddComponent, shell, jvm.ReferenceValue(second))
+			case "focused second":
+				callShellInput(t, session, runtimeComponentAddComponent, shell, jvm.ReferenceValue(second))
+				callShellInput(t, session, runtimeComponentBooleanField(componentFocusedField), second, jvm.IntValue(1))
+				want = second
+			case "nested":
+				callShellInput(t, session, runtimeComponentRemoveAllComponents, shell)
+				outer, inner := newWidget(runtimeContainerComponentClass), newWidget(runtimeContainerComponentClass)
+				callShellInput(t, session, runtimeComponentAddComponent, shell, jvm.ReferenceValue(newWidget(runtimeButtonComponentClass)))
+				callShellInput(t, session, runtimeComponentAddComponent, inner, jvm.ReferenceValue(field))
+				callShellInput(t, session, runtimeComponentAddComponent, outer, jvm.ReferenceValue(inner))
+				callShellInput(t, session, runtimeComponentAddComponent, shell, jvm.ReferenceValue(outer))
+			case "work after children":
+				callShellInput(t, session, runtimeComponentSetWorkComponent, shell, jvm.ReferenceValue(second))
+			}
+			callShellInput(t, session, runtimeComponentShown(true), shell)
+			edit, err := session.TextInput(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := edit.Commit(t.Context(), "typed"); err != nil || componentText(want) != "typed" {
+				t.Fatalf("commit: field=%q second=%q err=%v", componentText(field), componentText(second), err)
+			}
+		})
+	}
+}
+
+// A shell a title showed over its form and hid again leaves the form on the
+// screen, although the record of the newest shell went with it: the form's
+// field is offered whether or not the title gave it focus, and a commit lands
+// in it. Hiding the form as well leaves nothing.
+func TestShellTextInputFindsAShellStillShownBelowAHiddenOne(t *testing.T) {
+	for _, focus := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no focus", true: "focus"}[focus], func(t *testing.T) {
+			session, form, field := shellTextBox(t)
+			callShellInput(t, session, runtimeComponentShown(true), form)
+			if focus {
+				callShellInput(t, session, runtimeComponentSetFocus, field)
+			}
+			message := newWidget(runtimeShellComponentClass)
+			callShellInput(t, session, runtimeComponentShown(true), message)
+			// Under the message, only a field the title focused is offered:
+			// its form is still shown, but a shell is searched for fields only
+			// when it is the newest one on the screen.
+			switch _, err := session.TextInput(t.Context()); {
+			case focus && err != nil:
+				t.Fatalf("focused form field under a shown message: %v", err)
+			case !focus && !errors.Is(err, backend.ErrNoTextInput):
+				t.Fatalf("form field under a shown message: %v", err)
+			}
+			callShellInput(t, session, runtimeComponentShown(false), message)
+			edit, err := session.TextInput(t.Context())
+			if err != nil {
+				t.Fatalf("form field after the message was hidden: %v", err)
+			}
+			if err := edit.Commit(t.Context(), "after"); err != nil || componentText(field) != "after" {
+				t.Fatalf("commit: text=%q err=%v", componentText(field), err)
+			}
+			callShellInput(t, session, runtimeComponentShown(false), form)
+			if _, err := session.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+				t.Fatalf("hidden form offered its field: %v", err)
+			}
+		})
+	}
+}
+
+// The history of shown shells keeps only shells still shown, newest first, and
+// a shell shown again moves to the front without losing the ones below it.
+func TestShellHistoryKeepsTheShellsStillShown(t *testing.T) {
+	session, first, _ := shellTextBox(t)
+	runtime := session.Client.runtime
+	second, third := newWidget(runtimeShellComponentClass), newWidget(runtimeShellComponentClass)
+	for _, shell := range []*jvm.Object{first, second, third, second} {
+		callShellInput(t, session, runtimeComponentShown(true), shell)
+	}
+	history := func() []*jvm.Object {
+		var shells []*jvm.Object
+		for node := runtime.runtimeObjects[runtimeLWCShellHistoryObject]; node != nil && len(shells) < 8; node, _ = node.Fields[componentShellBelowField].Reference() {
+			shells = append(shells, node)
+		}
+		return shells
+	}
+	if got := history(); len(got) != 3 || got[0] != second || got[1] != third || got[2] != first {
+		t.Fatalf("history after showing second again = %v", got)
+	}
+	callShellInput(t, session, runtimeComponentShown(false), third)
+	callShellInput(t, session, runtimeComponentShown(false), second)
+	if got := history(); len(got) != 1 || got[0] != first || runtime.shownShell() != first {
+		t.Fatalf("history after hiding two = %v", got)
+	}
+	if _, linked := third.Fields[componentShellBelowField]; linked {
+		t.Fatal("a hidden shell kept its link into the history")
 	}
 }
 

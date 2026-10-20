@@ -30,6 +30,9 @@ var inputModes = []string{"EN/L", "EN/S", "KO", "N123"}
 // handleInputMethod services one call in the input-method block.
 func (client *Client) handleInputMethod(thread *armcore.Thread, slot uint32) error {
 	answer := func(value uint32) error { return thread.SetRegister(0, value) }
+	// Any call in the block is a title that edits text through the platform
+	// automaton, which is what the Host's text input is offered on.
+	client.cTextInput.used, client.cTextInput.unreached = true, false
 
 	switch slot {
 	case slotIMGetSupportedModeCount:
@@ -53,10 +56,6 @@ func (client *Client) handleInputMethod(thread *armcore.Thread, slot uint32) err
 			return answer(0)
 		}
 		client.inputMode = mode
-		client.cTextInput.modes++
-		if client.cTextInput.keyed {
-			client.cTextInput.active = true
-		}
 		// A widget can select its mode again while it handles the Host's
 		// carrier; that is part of the delivery, as its other calls are.
 		if !client.cTextInput.delivering {
@@ -110,7 +109,11 @@ const imaFlushKey = 0x9d
 const hostTextInputCarrier = '0'
 
 type cTextInputState struct {
-	active   bool
+	// used is set by the title's first input-method call, start-up
+	// configuration included, and stays set: the Host offers its text input
+	// from then on. See Session.cTextInput for why it does not try to follow
+	// the screen.
+	used     bool
 	revision uint64
 	calls    uint64
 	pending  []byte
@@ -119,13 +122,13 @@ type cTextInputState struct {
 	// completed string, or the same key routed again — belong to that
 	// delivery and are not a key the player pressed.
 	delivering bool
-	// keyed is set once a key press has reached the Clet. Input-method calls
-	// before it are start-up configuration: several local titles select a
-	// mode while starting and show no field for a long time after.
-	keyed bool
-	// modes counts mode selections. A widget can answer a key by selecting
-	// its mode again without passing that key to the automaton.
-	modes uint64
+	// unreached records that the Host's last carrier reached no automaton:
+	// the game took it as the key it is, so nothing on the screen takes keys
+	// through the input method. Input is offered again once the title calls
+	// the input method or the player presses a key, which is what can bring
+	// a field up; without it every retry of the commit would hand the game
+	// another key. It is the Host's own note and no part of a checkpoint.
+	unreached bool
 }
 
 type inputBuffer struct {
@@ -187,9 +190,6 @@ func (client *Client) handleInputKey(thread *armcore.Thread) error {
 	}
 
 	hostCommit := key == hostTextInputCarrier && len(client.cTextInput.pending) != 0
-	if client.cTextInput.keyed || hostCommit {
-		client.cTextInput.active = true
-	}
 	client.cTextInput.calls++
 	if !hostCommit && !client.cTextInput.delivering {
 		client.cTextInput.revision++

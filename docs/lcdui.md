@@ -86,7 +86,8 @@ guess. A Jlet's card receives both soft keys as ordinary WIPI key codes.
   within its elements (an empty one keeps its element focus at 0) and fire
   toggles or selects one, which then calls the form's `ItemStateListener`.
   Fire on any other item runs its first command. A `TextField` item is not
-  typed on the keypad; Host text input edits the selected one
+  typed on the keypad; Host text input edits the selected one, or the Form's
+  only editable one when the selection is on another item
   ([native text input](native-text-input.md#supported-editors)).
 - **TextBox** takes keypad typing, with left/right moving the caret; see
   "Deliberately incomplete". A `NUMERIC`, `PHONENUMBER` or `DECIMAL` box types

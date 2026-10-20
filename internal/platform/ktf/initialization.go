@@ -358,10 +358,17 @@ type initializationRuntime struct {
 	// paintTextReads collects the text components the card being painted
 	// reads, and paintedText is that set from the last paint that returned.
 	// A title that draws its own name field reads it there; see
-	// drawnTextComponent.
+	// drawnTextComponent. lastPaintedText is the set from the last paint that
+	// read any, which the relaxed rule keeps, and lastPaintedCard the card
+	// that painted it; see relaxedDrawnTextComponent.
 	paintTextReads    []*jvm.Object
 	paintTextOverflow bool
 	paintedText       []*jvm.Object
+	lastPaintedText   []*jvm.Object
+	lastPaintedCard   *jvm.Object
+	// shellWalkSeen is the visited set of a walk through a shell's
+	// containers, empty between walks; see shellTextFields.
+	shellWalkSeen map[*jvm.Object]bool
 	// guestFlushedOwnFrame records that the guest put a frame on the screen
 	// from its own code rather than from inside the card paint this platform
 	// drives. See paintTopCard: a title that draws its frame and flushes it

@@ -76,10 +76,12 @@ func TestKTFExplicitFocusRequiresLiveOwnership(t *testing.T) {
 			}
 			child := field
 			if layout == "nested" {
+				// A container that never joined anything is the card's to
+				// draw, as a lone field is.
 				child = newWidget(runtimeContainerComponentClass)
 				callShellInput(t, s, runtimeComponentAddComponent, child, jvm.ReferenceValue(field))
-				if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
-					t.Fatalf("container without a shown shell: %v", err)
+				if _, err := s.TextInput(t.Context()); err != nil {
+					t.Fatalf("field in a container nothing holds: %v", err)
 				}
 			}
 			add := runtimeComponentAddComponent
@@ -128,6 +130,7 @@ func TestKTFExplicitFocusRejectsDetachedAndRestoredChildren(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			replacement := newWidget(runtimeTextFieldComponentClass)
 			switch change {
 			case "index":
 				callShellInput(t, s, runtimeComponentRemoveComponent, shell, jvm.IntValue(0))
@@ -136,11 +139,21 @@ func TestKTFExplicitFocusRejectsDetachedAndRestoredChildren(t *testing.T) {
 			case "all":
 				callShellInput(t, s, runtimeComponentRemoveAllComponents, shell)
 			case "replace":
-				callShellInput(t, s, runtimeComponentSetComponentAt, shell, jvm.IntValue(0), jvm.ReferenceValue(newWidget(runtimeTextFieldComponentClass)))
+				callShellInput(t, s, runtimeComponentSetComponentAt, shell, jvm.IntValue(0), jvm.ReferenceValue(replacement))
 			case "work":
 				callShellInput(t, s, runtimeComponentSetWorkComponent, shell, jvm.ReferenceValue(nil))
 			}
-			if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+			offered, err := s.TextInput(t.Context())
+			if change == "replace" {
+				// The stale focus on the detached field hands the question on,
+				// and the field the shell now holds is the one on the screen.
+				if err != nil {
+					t.Fatalf("replacement field: %v", err)
+				}
+				if err := offered.Commit(t.Context(), "other"); err != nil || componentText(replacement) != "other" || componentText(field) != "old" {
+					t.Fatalf("replacement commit: err=%v replacement=%q detached=%q", err, componentText(replacement), componentText(field))
+				}
+			} else if !errors.Is(err, backend.ErrNoTextInput) {
 				t.Fatalf("detached field offered input: %v", err)
 			}
 			switch change {
@@ -164,6 +177,33 @@ func TestKTFExplicitFocusRejectsDetachedAndRestoredChildren(t *testing.T) {
 		})
 	}
 }
+
+// A field whose containers never joined anything is drawn by its card, as a
+// lone field is. A container taken out of a shell is not: its parent no longer
+// lists it, so it is off the screen with the shell's other contents.
+func TestKTFFocusInAContainerNothingHoldsIsTheCardsToDraw(t *testing.T) {
+	s, field := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "old")
+	outer, inner := newWidget(runtimeContainerComponentClass), newWidget(runtimeContainerComponentClass)
+	callShellInput(t, s, runtimeComponentAddComponent, inner, jvm.ReferenceValue(field))
+	callShellInput(t, s, runtimeComponentAddComponent, outer, jvm.ReferenceValue(inner))
+	edit, err := s.TextInput(t.Context())
+	if err != nil {
+		t.Fatalf("field in containers nothing holds: %v", err)
+	}
+	if err := edit.Commit(t.Context(), "drawn"); err != nil || componentText(field) != "drawn" {
+		t.Fatalf("commit: text=%q err=%v", componentText(field), err)
+	}
+	shell := newWidget(runtimeShellComponentClass)
+	callShellInput(t, s, runtimeComponentAddComponent, shell, jvm.ReferenceValue(outer))
+	if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("field in a shell never shown: %v", err)
+	}
+	callShellInput(t, s, runtimeComponentRemoveComponent, shell, jvm.ReferenceValue(outer))
+	if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("field in a container taken out of its shell: %v", err)
+	}
+}
+
 func TestKTFHiddenExplicitFocus(t *testing.T) {
 	s, shell, field := shellTextBox(t)
 	callShellInput(t, s, runtimeComponentShown(true), shell)
