@@ -2999,6 +2999,17 @@ packages, and two of them keep their pictures in a corner of 240x320. A field
 that does not read as two whole numbers in 32..1024 either side of `*` answers
 nothing and leaves 240x320.
 
+Both fields have to be missing for that reading. All 277 local descriptors that
+declare a `DisplaySize` carry a `ResizeType` beside it, and none of the four
+without one does, so a descriptor with a `ResizeType` and no `DisplaySize` is
+the current format with the field left out — a repacked or hand-made archive —
+and starts on 240x320. So does one whose fields ran past the 256 the parser
+keeps (`Descriptor.Truncated`), where the field may have been dropped rather
+than never written; the most any local descriptor has is 40. A Host request
+counts only with two positive sides: half a size used to reach the client as it
+was, run the title on 240x320 and then fail every quick save as an invalid
+screen.
+
 **Nothing that ran stopped running.** The 105 archives whose start changed were
 run 900 ticks at `-play -speed 8` on the declared screen and on 240x320: 101
 end clean both ways, two log the same title-side error both ways, two fail to

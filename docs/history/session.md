@@ -315,12 +315,32 @@ A KTF start without a size now runs on the handset the descriptor declares
 ([`history/ktf.md`](ktf.md#implementation-the-handset-a-title-was-packaged-for-is-in-its-descriptor)),
 so leaving 240x320 out of a start no longer meant 240x320. The menu's default
 became `자동`, which is the start without a size, and every size travels. A
-stored 240x320 from the earlier page reads as `자동`, because that was the option
-labelled 기본; the two titles above still start where their archives say unless
-a player picks a size for them. The picker names the symptom under the start
-button, and a change made while a game runs comes with a restart beside the
-note, because a note with nothing to press is what made the setting look
-broken.
+size the earlier page stored stays chosen, 240x320 included: that page wrote
+its key only when a player changed the menu, so a stored 240x320 is a player who
+tried another size and went back, and reading it as `자동` would move a title
+that declares a smaller phone off the screen they settled on. A stored value
+the menu does not offer reads as `자동` in the menu and in the start alike, so
+the two never disagree. The two titles above still start where their archives
+say unless a player picks a size for them. The picker names the symptom under
+the start button, and a change made while a game runs comes with a restart
+beside the note, because a note with nothing to press is what made the setting
+look broken.
+
+**The server says what `자동` takes, and the page compares screens.** Every
+started message carries `auto_width` and `auto_height`, the screen a start
+without a size takes for that game (`session.Summary.ScreenWidth`), on a fresh
+start, a quick load and a return alike. The first version of the page learned
+it from a start it had made without a size and remembered what the menu said at
+that start, and both went wrong the moment `sessionStarted` ran again: a return
+after a change in the menu took the new choice for the running game's, so the
+note and the restart disappeared while the game stayed on the old screen, and a
+game started on a size and returned to after picking `자동` taught `자동` that
+size. The note now appears when the screen the menu's choice would start on
+differs from the one the game is on, so picking the size `자동` already took
+offers no restart that changes nothing. The restart starts the game again
+without waiting on the game list: a list that failed to load, or a last-game
+record that could not be saved, used to leave the game stopped and not
+restarted.
 
 **The other platforms have nothing to read, so they keep their rules.** The
 same reports asked whether LGT and SKT could start on their packaged handset

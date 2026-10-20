@@ -1,6 +1,8 @@
 package ktf
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +27,7 @@ func TestPackagedScreenReadsTheDescriptor(t *testing.T) {
 		{"a taller handset", map[string]string{"DISPLAYSIZE": "240*400"}, 240, 400, true},
 		{"an earlier descriptor", map[string]string{"AID": "fixture"}, 176, 220, true},
 		{"no properties at all", nil, 176, 220, true},
+		{"the current format without the field", map[string]string{"RESIZETYPE": "1"}, 0, 0, false},
 		{"an empty field", map[string]string{"DISPLAYSIZE": ""}, 0, 0, false},
 		{"another separator", map[string]string{"DISPLAYSIZE": "176x220"}, 0, 0, false},
 		{"one side", map[string]string{"DISPLAYSIZE": "176*"}, 0, 0, false},
@@ -44,20 +47,116 @@ func TestPackagedScreenReadsTheDescriptor(t *testing.T) {
 	}
 }
 
+// A descriptor whose fields ran past what the parser keeps may have had its
+// DisplaySize dropped, so the missing field is not read as the earlier format:
+// that would shrink a current package to 176x220 because of where its field
+// happened to sit. Parsing keeps the fields it always kept.
+func TestADescriptorCutShortSaysNothingAboutItsHandset(t *testing.T) {
+	var text strings.Builder
+	text.WriteString("AID:fixture\nPID:P0001\nMClass:fixture.Main\n")
+	for index := 0; index < maxDescriptorFields; index++ {
+		fmt.Fprintf(&text, "Field%d:value\n", index)
+	}
+	text.WriteString("DisplaySize:240*320\n")
+	descriptor, err := ParseDescriptor([]byte(text.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !descriptor.Truncated || len(descriptor.Properties) != maxDescriptorFields {
+		t.Fatalf("parsed %d fields, truncated=%v; want %d and true", len(descriptor.Properties), descriptor.Truncated, maxDescriptorFields)
+	}
+	if _, kept := descriptor.Properties["DISPLAYSIZE"]; kept {
+		t.Fatal("the field past the limit was kept")
+	}
+	if width, height, ok := PackagedScreen(descriptor); ok {
+		t.Fatalf("a descriptor cut short answered %dx%d", width, height)
+	}
+	if width, height := AutomaticScreen(descriptor); width != runtimeDisplayPixelWidth || height != runtimeDisplayPixelHeight {
+		t.Fatalf("a descriptor cut short starts on %dx%d, want the platform's own", width, height)
+	}
+
+	whole, err := ParseDescriptor([]byte("AID:fixture\nPID:P0001\nMClass:fixture.Main\nAID2:x\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if whole.Truncated {
+		t.Fatal("a short descriptor reads as cut short")
+	}
+}
+
+// The screen a start naming none takes is what a Host shows for its automatic
+// choice, so it is the declaration where there is one and the platform's own
+// where there is not — never a zero a page would have to guess around.
+func TestAutomaticScreenIsTheDeclarationOrThePlatforms(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		properties    map[string]string
+		width, height int
+	}{
+		{"declared", map[string]string{"DISPLAYSIZE": "176*220", "RESIZETYPE": "0"}, 176, 220},
+		{"an earlier descriptor", map[string]string{"AID": "fixture"}, 176, 220},
+		{"unreadable", map[string]string{"DISPLAYSIZE": "wide"}, runtimeDisplayPixelWidth, runtimeDisplayPixelHeight},
+		{"left out", map[string]string{"RESIZETYPE": "1"}, runtimeDisplayPixelWidth, runtimeDisplayPixelHeight},
+	} {
+		if width, height := AutomaticScreen(Descriptor{Properties: test.properties}); width != test.width || height != test.height {
+			t.Errorf("%s: AutomaticScreen = %dx%d, want %dx%d", test.name, width, height, test.width, test.height)
+		}
+	}
+}
+
 // A Host that names a screen keeps it: the page's setting and -screen are how a
 // player overrides a declaration, so the descriptor only decides what "no
 // answer" means.
 func TestSessionScreenIsTheHostsWhenItNamesOne(t *testing.T) {
 	declared := Descriptor{Properties: map[string]string{"DISPLAYSIZE": "176*220"}}
-	if width, height := sessionScreen(declared, SessionOptions{Width: 240, Height: 320}); width != 240 || height != 320 {
-		t.Fatalf("a named screen became %dx%d", width, height)
+	if width, height, fromDescriptor := sessionScreen(declared, SessionOptions{Width: 240, Height: 320}); width != 240 || height != 320 || fromDescriptor {
+		t.Fatalf("a named screen became %dx%d (descriptor %v)", width, height, fromDescriptor)
 	}
-	if width, height := sessionScreen(declared, SessionOptions{}); width != 176 || height != 220 {
-		t.Fatalf("no screen named became %dx%d, want the declared 176x220", width, height)
+	if width, height, fromDescriptor := sessionScreen(declared, SessionOptions{}); width != 176 || height != 220 || !fromDescriptor {
+		t.Fatalf("no screen named became %dx%d (descriptor %v), want the declared 176x220", width, height, fromDescriptor)
 	}
 	unreadable := Descriptor{Properties: map[string]string{"DISPLAYSIZE": "wide"}}
-	if width, height := sessionScreen(unreadable, SessionOptions{}); width != 0 || height != 0 {
-		t.Fatalf("an unreadable declaration became %dx%d, want the platform's own", width, height)
+	if width, height, fromDescriptor := sessionScreen(unreadable, SessionOptions{}); width != 0 || height != 0 || fromDescriptor {
+		t.Fatalf("an unreadable declaration became %dx%d (descriptor %v), want the platform's own", width, height, fromDescriptor)
+	}
+}
+
+// Half a handset, or a negative one, names nothing: passing it through ran the
+// title on the platform's own screen while the client kept the unusable pair,
+// and every quick save then refused it. The descriptor decides instead, and the
+// session that results can be saved.
+func TestAScreenThatIsNotTwoSidesNamesNothing(t *testing.T) {
+	declared := Descriptor{Properties: map[string]string{"DISPLAYSIZE": "176*220"}}
+	for _, named := range []struct{ width, height int }{{176, 0}, {0, 220}, {-1, -1}, {240, -320}} {
+		width, height, fromDescriptor := sessionScreen(declared, SessionOptions{Width: named.width, Height: named.height})
+		if width != 176 || height != 220 || !fromDescriptor {
+			t.Errorf("%dx%d became %dx%d (descriptor %v), want the declared 176x220", named.width, named.height, width, height, fromDescriptor)
+		}
+		client := &Client{}
+		client.SetScreen(named.width, named.height)
+		if client.screenWidth != 0 || client.screenHeight != 0 {
+			t.Errorf("SetScreen(%d, %d) kept %dx%d, want nothing named", named.width, named.height, client.screenWidth, client.screenHeight)
+		}
+	}
+
+	archive, err := testfixture.KTFCheckpointArchiveDeclaring("DisplaySize:176*220\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := backend.NewMemorySaveStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := StartSession(t.Context(), archive, SessionOptions{SaveStore: store, Width: 176})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if width, height := session.Screen(); width != 176 || height != 220 {
+		t.Fatalf("started on %dx%d, want the declared 176x220", width, height)
+	}
+	if _, err := session.CaptureCheckpoint(t.Context()); err != nil {
+		t.Fatalf("a session started with half a screen cannot be saved: %v", err)
 	}
 }
 

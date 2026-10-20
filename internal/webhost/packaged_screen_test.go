@@ -11,6 +11,9 @@ import (
 // the descriptor declares, and the page lays its canvas out from this answer
 // before the first picture arrives. A page that names a screen — the default
 // size included, which the page now sends when a player picks it — keeps it.
+// Either way the message says what a start without a size takes, which is
+// what the page's automatic choice means: a page that started on a named
+// screen still has to know whether picking 자동 would change anything.
 func TestKTFStartWithoutAScreenTakesTheDeclaredHandset(t *testing.T) {
 	archive, err := testfixture.KTFCheckpointArchiveDeclaring("DisplaySize:176*220\n")
 	if err != nil {
@@ -35,6 +38,10 @@ func TestKTFStartWithoutAScreenTakesTheDeclaredHandset(t *testing.T) {
 			t.Cleanup(r.stopGame)
 			if r.started.Width != test.wantW || r.started.Height != test.wantH {
 				t.Fatalf("started message says %dx%d, want %dx%d", r.started.Width, r.started.Height, test.wantW, test.wantH)
+			}
+			if r.started.AutoWidth != 176 || r.started.AutoHeight != 220 {
+				t.Fatalf("started message says a start without a size takes %dx%d, want the declared 176x220",
+					r.started.AutoWidth, r.started.AutoHeight)
 			}
 		})
 	}
@@ -72,5 +79,9 @@ func TestAQuickLoadAtStartKeepsTheScreenTheSlotWasTakenOn(t *testing.T) {
 	if !r.started.Restored || r.started.Width != 176 || r.started.Height != 220 {
 		t.Fatalf("loaded slot reports restored=%v on %dx%d, want the 176x220 it was taken on",
 			r.started.Restored, r.started.Width, r.started.Height)
+	}
+	if r.started.AutoWidth != 176 || r.started.AutoHeight != 220 {
+		t.Fatalf("loaded slot says a start without a size takes %dx%d, want the declared 176x220",
+			r.started.AutoWidth, r.started.AutoHeight)
 	}
 }

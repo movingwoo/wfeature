@@ -60,12 +60,15 @@ type clientMessage struct {
 	Value float64 `json:"value,omitempty"`
 
 	// Width and Height are the handset screen a "start" asks for. They are
-	// optional and the server's default stands when they are absent, which is
-	// what every game but a handful wants. A title packaged for a smaller
-	// phone reads its screen and then loads artwork by that size, so the one
-	// that ships no 240-wide set cannot be run on a 240-wide screen at all —
-	// see docs/skvm.md. Every platform honours it; the started message reports
-	// the screen the game actually got, which is what the page reads back.
+	// optional, and when they are absent the archive decides: a KTF title
+	// starts on the handset its descriptor declares and an SKT title on the
+	// one its resource names say, and anything that says nothing on 240x320
+	// — see session.Options. A title packaged for a smaller phone reads its
+	// screen and then loads artwork by that size, so the one that ships no
+	// 240-wide set cannot be run on a 240-wide screen at all — see
+	// docs/skvm.md. Every platform honours a size that is sent; the started
+	// message reports the screen the game actually got, which is what the
+	// page reads back, and the one a start without a size would take.
 	Width  int `json:"width,omitempty"`
 	Height int `json:"height,omitempty"`
 
@@ -266,6 +269,14 @@ type startedMessage struct {
 	// page can lay out before the first frame arrives.
 	Width  int `json:"width"`
 	Height int `json:"height"`
+	// AutoWidth and AutoHeight are the screen a start that sends no size
+	// takes for this game, which is what the page's automatic choice means.
+	// The page cannot read the archive, and it is told on every start, load
+	// and return rather than learning it from a start that happened to send
+	// nothing: what decides whether a change in its menu needs a restart is
+	// this against the screen the game is on, never what the menu said.
+	AutoWidth  int `json:"auto_width"`
+	AutoHeight int `json:"auto_height"`
 	// Token names this game if its page has to come back to it. The page keeps
 	// it for as long as the game runs and sends it with "resume" after a
 	// dropped connection; see resume.go for what it is worth and for how long.

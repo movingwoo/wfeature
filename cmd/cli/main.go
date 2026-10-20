@@ -689,9 +689,8 @@ func parseScreenSize(text string) (int, int, error) {
 	}
 	parsedWidth, widthErr := strconv.Atoi(width)
 	parsedHeight, heightErr := strconv.Atoi(height)
-	if widthErr != nil || heightErr != nil ||
-		parsedWidth < 32 || parsedHeight < 32 || parsedWidth > 1024 || parsedHeight > 1024 {
-		return 0, 0, fmt.Errorf("invalid -screen %q, want two sizes between 32 and 1024", text)
+	if widthErr != nil || heightErr != nil || !backend.ValidScreen(parsedWidth, parsedHeight) {
+		return 0, 0, fmt.Errorf("invalid -screen %q, want two sizes between %d and %d", text, backend.MinScreenSide, backend.MaxScreenSide)
 	}
 	return parsedWidth, parsedHeight, nil
 }

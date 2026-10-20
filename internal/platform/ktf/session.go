@@ -93,9 +93,10 @@ type SessionOptions struct {
 	// playback calls and still gets the answers it expects.
 	AudioSink backend.AudioSink
 	FrameSink backend.FrameSink
-	// Width and Height name the handset the game is told it runs on. Zero for
-	// either selects the platform's own 240x320, which is what all but a
-	// title packaged for a smaller phone wants. It is what the guest is told
+	// Width and Height name the handset the game is told it runs on. Anything
+	// but two positive sides names none, and the title starts on the handset
+	// its descriptor declares, or on the platform's own 240x320 where the
+	// descriptor cannot say; see PackagedScreen. It is what the guest is told
 	// rather than how large the Host draws the result; see Client.SetScreen.
 	Width, Height int
 	// Debug is handed the ARM core once it exists and before any guest code
@@ -261,6 +262,13 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 		"main_class", archive.Descriptor.MainClass,
 		"client", archive.JAR.Client.Name,
 		"max_steps", client.core.MaxSteps())
+	// Said here rather than where the client is built, because a restore
+	// builds one the same way and then puts back the screen its record was
+	// taken on: a line naming the descriptor's screen there would describe a
+	// screen the restored title is not running on.
+	if width, height, declared := sessionScreen(archive.Descriptor, options); declared {
+		client.log("KTF screen taken from the descriptor", "width", width, "height", height)
+	}
 	if startupHook != nil {
 		// Startup guest runs park every slice so a Host event loop stays
 		// responsive during the long DRM/initialization phase; the hook and
@@ -785,7 +793,7 @@ func (session *Session) Frame() ([]byte, int, int, uint32) {
 	return session.Client.Frame()
 }
 
-// Screen answers the handset the title was started on; see Client.Screen.
+// Screen answers the screen the title is running on; see Client.Screen.
 func (session *Session) Screen() (int, int) {
 	if session == nil {
 		return runtimeDisplayPixelWidth, runtimeDisplayPixelHeight

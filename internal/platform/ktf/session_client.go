@@ -36,7 +36,8 @@ func newSessionClient(archive *Archive, options SessionOptions) (*Client, error)
 		client.clock = wallClock{}
 	}
 	client.SetSpeed(options.Speed)
-	client.SetScreen(sessionScreen(archive.Descriptor, options))
+	screenWidth, screenHeight, _ := sessionScreen(archive.Descriptor, options)
+	client.SetScreen(screenWidth, screenHeight)
 	client.SetDiagnostics(options.TraceLimit, options.Logger)
 	client.audio = backend.NewAudioWithClock(options.AudioSink, client.now)
 	client.audio.SetLogger(options.Logger)

@@ -68,7 +68,9 @@ the page can match it to its request:
 
 The `started` description carries `platform`, `game`, `aid`, `pid`, `name`,
 `save_owner`, `main_class`, `authentication`, the screen the game actually got
-(`width`, `height`), the browser `token`, `can_watch`, `can_touch`,
+(`width`, `height`), the screen a start without a size takes for that game
+(`auto_width`, `auto_height`, which the page's `자동` means), the browser
+`token`, `can_watch`, `can_touch`,
 `can_checkpoint`, `has_checkpoint`, `restored` and `speed`. Native text editing
 uses edit identifiers and stale-target checks. Detailed payloads and their
 compatibility history are in [the transport record](history/session.md).

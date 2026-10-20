@@ -4,7 +4,7 @@ import { initAudioSettings } from "./audio-settings.js";
 import { createRapidFire, RAPID_FIRE } from "./rapid-fire.js";
 import { createKeyHolds } from "./key-holds.js";
 import { createGameSpeed } from "./game-speed.js";
-import { AUTO_SCREEN, createScreenChoice } from "./screen-choice.js";
+import { AUTO_SCREEN, createScreenChoice, sizeOf } from "./screen-choice.js";
 import { initKeypadEditor, fitKeypadLabel } from "./keypad-editor.js";
 import { SETTINGS } from "./keypad-layout.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
@@ -219,27 +219,16 @@ const FRAME_SCALE_KEY = "wfeature:frameScale";
 // The screen is remembered per game rather than once for the page: it is a
 // property of the title — which artwork its archive carries — and not a taste.
 // See screen-choice.js for what "auto" sends and what an earlier page's value
-// means now.
+// means now: choice is what the menu says for a game, screen what a start for
+// it carries.
 const screenChoice = createScreenChoice();
 
-// storedScreenChoice answers what the screen menu says for a game, and
-// storedScreen what a start for it carries: null when the server is to ask the
-// archive.
-const storedScreenChoice = path => screenChoice.choice(path);
-
-const storedScreen = path => screenChoice.screen(path);
-
-const rememberScreen = (path, value) => screenChoice.remember(path, value);
-
-// The size the automatic choice took for each game this page has started, so
+// The screen the automatic choice takes for each game this page has run, so
 // the menu can say it: "자동" alone tells a player nothing about why the game
-// looks the way it does. Learned from the server's answer, because the page
-// cannot read the archive.
+// looks the way it does. The server says it in every started message — a
+// start on a chosen size, a quick load and a return included — because the
+// page cannot read the archive.
 const automaticScreens = new Map();
-
-// What the running game was started with, which is what decides whether a
-// change in the menu needs a restart to mean anything.
-let runningScreenChoice = "";
 
 // A restart the screen menu asked for: the game is stopped, the picker comes
 // back, and this names the game to start again on the screen just chosen.
@@ -904,7 +893,7 @@ const recordSessionStats = stats => {
 // saves are read and written on the same side as the emulator.
 const startServerGame = async (path, scale) => {
   pageAudio?.activate();
-  await sessionLink.start(path, scale, storedScreen(path));
+  await sessionLink.start(path, scale, screenChoice.screen(path));
 };
 
 // A session is running from here on: reveal the panels that only mean
@@ -924,13 +913,12 @@ const sessionStarted = info => {
   canWatchWrites = info.can_watch === true;
   canTouch = info.can_touch === true;
   guestScreen = { width: Number(info.width) || 0, height: Number(info.height) || 0 };
-  // A quick load puts back the screen its slot was taken on, which says
-  // nothing about what the automatic choice takes, so only a fresh start
-  // teaches the menu. The size is written without spaces because the menu is
-  // as narrow as the other settings and the label has to fit in it.
-  runningScreenChoice = storedScreenChoice(currentGamePath);
-  if (runningScreenChoice === AUTO_SCREEN && !info.restored && guestScreen.width > 0 && guestScreen.height > 0) {
-    automaticScreens.set(currentGamePath, `${guestScreen.width}×${guestScreen.height}`);
+  // The server's answer rather than anything the menu said: this runs again on
+  // a return and after a quick load, by which time the menu may say something
+  // the running game was not started with.
+  const automatic = { width: Number(info.auto_width) || 0, height: Number(info.auto_height) || 0 };
+  if (currentGamePath && automatic.width > 0 && automatic.height > 0) {
+    automaticScreens.set(currentGamePath, automatic);
   }
   refreshScreenSetting();
   recordEvent(`${currentPlatform} session started: ${info.main_class || info.name || ""}`);
@@ -939,11 +927,44 @@ const sessionStarted = info => {
   initCheat();
 };
 
+// startChosenGame is what 실행 does: start a game on the server and, if that
+// fails, put the picker back so another try is one press away. The screen
+// menu's restart comes through here too, so its start has the same wait and
+// the same errors as one a player makes.
+const startChosenGame = async path => {
+  const select = document.getElementById("game-select");
+  const startButton = document.getElementById("game-start");
+  if (!path) return;
+
+  select.disabled = true;
+  startButton.disabled = true;
+  startButton.textContent = phrase("picker.starting");
+
+  try {
+    rememberGame(path);
+    // A restart whose list did not come back has no option to read the name
+    // from, and the name the running game had is still the right one.
+    const option = [...select.options].find(candidate => candidate.value === path);
+    if (option) currentGameLabel = option.textContent ?? "";
+    recordEvent(`starting ${path} on the server`);
+    setStatus(phrase("start.status"));
+    await startServerGame(path, Number(localStore.getItem(FRAME_SCALE_KEY) ?? "1"));
+  } catch (error) {
+    reportEndingOrError(error);
+    select.disabled = false;
+    startButton.disabled = sessionLink?.state() !== "ready";
+    startButton.textContent = phrase("picker.start");
+  }
+};
+
 const initGameSelect = async () => {
   const select = document.getElementById("game-select");
   const startButton = document.getElementById("game-start");
-  // A restart the screen menu asked for is this rebuild's to carry out or to
-  // drop: however the list comes back, it is not left for a later one.
+  // A restart the screen menu asked for is this rebuild's to carry out: it is
+  // not left for a later one, and it does not wait on the list either — the
+  // server knows the game by its path, so a list that failed to load or a
+  // last-game record that could not be saved is no reason to stop a game and
+  // then not start it.
   const restarting = restartAfterStop;
   restartAfterStop = "";
 
@@ -977,6 +998,16 @@ const initGameSelect = async () => {
     });
   }
 
+  await listGames(select, startButton, restarting);
+  // The picker is back on that game where the list has it, so the start is
+  // the one a player would make by pressing 실행 now.
+  if (restarting) void startChosenGame(restarting);
+};
+
+// listGames fills the picker from the server's list and selects the game a
+// restart is about, or else the last one played. A list that cannot be read
+// is reported here and leaves the picker saying so.
+const listGames = async (select, startButton, restarting) => {
   try {
     // Always asked for, never trusted from a cache: an unchanged list costs a
     // revalidation and an added game shows at once.
@@ -1004,7 +1035,7 @@ const initGameSelect = async () => {
       return;
     }
 
-    const previous = lastGame();
+    const previous = restarting || lastGame();
     if (previous && [...select.options].some(option => option.value === previous)) {
       select.value = previous;
     }
@@ -1020,32 +1051,8 @@ const initGameSelect = async () => {
     checkpointControls?.refresh();
     if (!startButton.dataset.started) {
       startButton.dataset.started = "yes";
-      startButton.addEventListener("click", async () => {
-        const path = select.value;
-        if (!path) return;
-
-        select.disabled = true;
-        startButton.disabled = true;
-        startButton.textContent = phrase("picker.starting");
-
-        try {
-          rememberGame(path);
-          currentGameLabel = select.options[select.selectedIndex]?.textContent ?? "";
-          recordEvent(`starting ${path} on the server`);
-          setStatus(phrase("start.status"));
-          await startServerGame(path, Number(localStore.getItem(FRAME_SCALE_KEY) ?? "1"));
-        } catch (error) {
-          reportEndingOrError(error);
-          select.disabled = false;
-          startButton.disabled = sessionLink?.state() !== "ready";
-          startButton.textContent = phrase("picker.start");
-        }
-      });
+      startButton.addEventListener("click", () => startChosenGame(select.value));
     }
-    // The screen menu's restart stopped a game to start it again. The picker
-    // is back on that game, so the start is the one a player would make by
-    // pressing 실행 now: the same path, the same wait, the same errors.
-    if (restarting && select.value === restarting && !startButton.disabled) startButton.click();
   } catch (error) {
     reportError(error);
     select.replaceChildren(new Option(phrase("picker.unavailable"), ""));
@@ -1298,15 +1305,25 @@ const initSettings = () => {
     const automatic = [...screen.options].find(option => option.value === AUTO_SCREEN);
     const showStored = () => {
       const path = chosenGame();
-      const choice = storedScreenChoice(path);
-      screen.value = [...screen.options].some(option => option.value === choice) ? choice : AUTO_SCREEN;
+      const choice = screenChoice.choice(path);
+      screen.value = choice;
+      // The size is written without spaces because the menu is as narrow as
+      // the other settings and the label has to fit in it.
       const took = automaticScreens.get(path);
       if (automatic) {
-        automatic.textContent = took ? phrase("settings.screen.auto-size", { size: took }) : phrase("settings.screen.auto");
+        automatic.textContent = took
+          ? phrase("settings.screen.auto-size", { size: `${took.width}×${took.height}` })
+          : phrase("settings.screen.auto");
       }
       // The note and the restart are about the running game: a choice made
-      // for a game that is not running is simply what it starts on.
-      const pending = gameRunning && path === currentGamePath && choice !== runningScreenChoice;
+      // for a game that is not running is simply what it starts on. What they
+      // compare is screens, the one the choice would start on against the one
+      // the game is on, so picking the size 자동 already took — or 자동 for a
+      // game started on its size — offers no restart that changes nothing.
+      // A screen the page cannot know yet offers none either.
+      const wanted = choice === AUTO_SCREEN ? took : sizeOf(choice);
+      const pending = Boolean(wanted) && gameRunning && path === currentGamePath &&
+        (wanted.width !== guestScreen.width || wanted.height !== guestScreen.height);
       if (screenNote) {
         screenNote.textContent = pending ? phrase("settings.screen.restart") : "";
         screenNote.classList.toggle("hidden", !pending);
@@ -1321,7 +1338,7 @@ const initSettings = () => {
     screen.addEventListener("change", () => {
       const path = chosenGame();
       if (!path) return;
-      rememberScreen(path, screen.value);
+      screenChoice.remember(path, screen.value);
       showStored();
     });
     // The same question the panel's restart asks, because it is the same

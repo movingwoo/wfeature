@@ -148,11 +148,13 @@ cost 33 µs and a 240×320 screen copy 2.5 ms on an M1; by rows, 1.3 µs and
 The screen is the Host's choice, 240×320 by default (`-screen WxH` in the
 CLI) where the archive gives no answer. A start that names no screen runs on
 the handset the `__adf__` declares in `DisplaySize` (`176*220`, `240*320` or
-`240*400` locally; `ktf.PackagedScreen`). A descriptor without the field is an
-earlier revision of the format and starts on 176×220; a field that is not two
-whole numbers in 32..1024 either side of `*` answers nothing. A Host that
-names a screen keeps it (the page's `📱 화면` too), and a quick save restores
-the screen it was taken on. A 176×220 package started on 240×320 keeps its
+`240*400` locally; `ktf.PackagedScreen`). A descriptor without the field or
+`ResizeType` is an earlier revision of the format and starts on 176×220; one
+with a `ResizeType` and no `DisplaySize`, one whose fields ran past the 256 the
+parser keeps, and a field that is not two whole numbers in 32..1024 either side
+of `*` answer nothing. A Host that names both sides keeps them (the page's
+`📱 화면` too; anything else names nothing), and a quick save restores the
+screen it was taken on. A 176×220 package started on 240×320 keeps its
 pictures in a corner while its background and text spread over the rest,
 which no reading of the frame can tell from a title that uses the room
 ([history](history/ktf.md#implementation-the-handset-a-title-was-packaged-for-is-in-its-descriptor)).

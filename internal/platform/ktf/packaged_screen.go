@@ -1,13 +1,9 @@
 package ktf
 
-import "strings"
+import (
+	"strings"
 
-// The range a Host may name a screen in, mirrored here so that a declaration
-// is read by the same bounds a request is: internal/webhost refuses a start
-// outside it and the CLI's -screen does the same.
-const (
-	packagedScreenMinSide = 32
-	packagedScreenMaxSide = 1024
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // The handset a descriptor without DisplaySize was packaged for; see
@@ -37,13 +33,22 @@ const (
 // **A descriptor without the field is an earlier revision of the format**,
 // one that carries no ResizeType either, and every local archive written in it
 // is a 176x220 package; two of them keep their pictures in a corner of a
-// 240x320 screen.
+// 240x320 screen. Both fields have to be missing for that reading: every local
+// descriptor that declares a DisplaySize carries a ResizeType beside it, so
+// one with a ResizeType and no DisplaySize is the current format with the
+// field left out — a repacked or hand-made archive — and says nothing about
+// its handset. So does a descriptor whose fields ran past what ParseDescriptor
+// keeps, because there the field may have been dropped rather than never
+// written.
 // A field that is present and cannot be read — anything but two whole numbers
 // either side of `*`, or a side outside what a Host may ask for — answers
 // nothing, and the platform's own 240x320 stands.
 func PackagedScreen(descriptor Descriptor) (width, height int, ok bool) {
 	declared, present := descriptor.Properties["DISPLAYSIZE"]
 	if !present {
+		if _, current := descriptor.Properties["RESIZETYPE"]; current || descriptor.Truncated {
+			return 0, 0, false
+		}
 		return earlierDescriptorWidth, earlierDescriptorHeight, true
 	}
 	widthText, heightText, found := strings.Cut(declared, "*")
@@ -58,9 +63,23 @@ func PackagedScreen(descriptor Descriptor) (width, height int, ok bool) {
 	return width, height, true
 }
 
+// AutomaticScreen is the handset a session for this descriptor starts on when
+// its Host names none: the one PackagedScreen reads, and otherwise the
+// platform's own 240x320. A Host shows it beside a setting whose automatic
+// choice sends no size, because only this side can read the archive.
+func AutomaticScreen(descriptor Descriptor) (width, height int) {
+	width, height, ok := PackagedScreen(descriptor)
+	if !ok {
+		return runtimeDisplayPixelWidth, runtimeDisplayPixelHeight
+	}
+	return width, height
+}
+
 // packagedScreenSide reads one side of a DisplaySize. Only digits are taken,
 // so a sign, a space or a unit is a field this platform cannot read rather than
 // a number it guessed at, and the length is bounded before the value is built.
+// The range is the one a Host's request is held to, so a declaration a Host
+// could not have asked for is not adopted either.
 func packagedScreenSide(text string) (int, bool) {
 	if text == "" || len(text) > 4 {
 		return 0, false
@@ -73,25 +92,30 @@ func packagedScreenSide(text string) (int, bool) {
 		}
 		value = value*10 + int(digit-'0')
 	}
-	if value < packagedScreenMinSide || value > packagedScreenMaxSide {
+	if !backend.ValidScreenSide(value) {
 		return 0, false
 	}
 	return value, true
 }
 
-// sessionScreen is the handset a session starts on: the Host's when it names
-// one, and otherwise the one the descriptor declares. Zero for both sides is
-// what SetScreen reads as the platform's own.
-func sessionScreen(descriptor Descriptor, options SessionOptions) (int, int) {
-	if options.Width != 0 || options.Height != 0 {
-		return options.Width, options.Height
+// sessionScreen is the handset a session starts on, and whether the
+// descriptor chose it: the Host's when it names one, and otherwise the one the
+// descriptor declares. Zero for both sides is what SetScreen reads as the
+// platform's own.
+//
+// **A Host names a screen only with two positive sides.** Anything else — one
+// side, a negative value — is a request that names no handset, and passing it
+// through ran the title on the platform's own while the client kept the
+// unusable pair, which every quick save then refused as an invalid screen.
+// webhost and the CLI never send one, so this is the descriptor deciding
+// rather than a guess at half a handset.
+func sessionScreen(descriptor Descriptor, options SessionOptions) (width, height int, declared bool) {
+	if options.Width > 0 && options.Height > 0 {
+		return options.Width, options.Height, false
 	}
 	width, height, ok := PackagedScreen(descriptor)
 	if !ok {
-		return 0, 0
+		return 0, 0, false
 	}
-	if options.Logger != nil {
-		options.Logger.Debug("KTF screen taken from the descriptor", "width", width, "height", height)
-	}
-	return width, height
+	return width, height, true
 }
