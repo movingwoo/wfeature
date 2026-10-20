@@ -389,14 +389,15 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 		}
 	}
 	// The clip is what the title's halfwords made it, and a point is at most
-	// maxNativePointSize; anything else is not a state this platform reaches.
+	// as large as the screen's longer side; anything else is not a state this
+	// platform reaches.
 	// A record without the interface's state is one taken before it was
 	// answered, and starts it where a session does.
 	shapes := nativeShapesState{}
 	if saved.Shapes != nil {
 		shapes = *saved.Shapes
 	}
-	if shapes.Pen&0xff != 0 || shapes.PointSize < 0 || shapes.PointSize > maxNativePointSize ||
+	if shapes.Pen&0xff != 0 || shapes.PointSize < 0 || shapes.PointSize > nativePointSizeOn(saved.Screen.Width, saved.Screen.Height) ||
 		shapes.X < math.MinInt16 || shapes.X > math.MaxInt16 || shapes.Y < math.MinInt16 || shapes.Y > math.MaxInt16 ||
 		shapes.Width < 0 || shapes.Width > math.MaxInt16 || shapes.Height < 0 || shapes.Height > math.MaxInt16 ||
 		!shapes.Clipped && (shapes.X != 0 || shapes.Y != 0 || shapes.Width != 0 || shapes.Height != 0) {

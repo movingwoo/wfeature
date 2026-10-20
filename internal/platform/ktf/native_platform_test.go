@@ -297,17 +297,19 @@ func nativeFileWriteReadsBack(t *testing.T, platform *NativePlatform, name, file
 	}
 }
 
-// TestNativeOpenMakesOnlyWhatTheEmptyingModeAsksFor is a title's settings on
-// its first run. It opens them as they are and takes its defaults when that is
-// refused; saving them, it opens them as they are and, refused, again emptied,
-// and writes. An open that made the file at the first step handed it an empty
-// file to read its settings out of instead.
-func TestNativeOpenMakesOnlyWhatTheEmptyingModeAsksFor(t *testing.T) {
+// TestNativeOpenMakesAFileOnlyInTheEmptyingAndAppendingModes is a title's
+// settings on its first run. It opens them as they are and takes its defaults
+// when that is refused; saving them, it opens them as they are and, refused,
+// again emptied, and writes. An open that made the file at the first step
+// handed it an empty file to read its settings out of instead. An append makes
+// the file it opens, as the emptying open does, and its object is given the
+// file whole after a quick load rather than as an emptied one.
+func TestNativeOpenMakesAFileOnlyInTheEmptyingAndAppendingModes(t *testing.T) {
 	store := memorySaveStore{}
 	platform := newTestNativePlatform(t, nil)
 	platform.AttachSaves(store)
 	name := nativeString(t, platform, "option.dat")
-	for _, mode := range []uint32{nativeModeRead, 2, 8, 3} {
+	for _, mode := range []uint32{nativeModeRead, 2, 3} {
 		if object := nativeCall(t, platform.openFile, 0, name, mode); object != 0 {
 			t.Errorf("mode %d opened a file that is not there", mode)
 		}
@@ -339,13 +341,24 @@ func TestNativeOpenMakesOnlyWhatTheEmptyingModeAsksFor(t *testing.T) {
 	if file := next.files[reopened]; reopened == 0 || file == nil || string(file.data) != "settings" {
 		t.Fatal("the next run did not find the settings the title saved")
 	}
+
+	appended := nativeCall(t, next.openFile, 0, nativeString(t, next, "log.dat"), nativeModeAppend)
+	if file := next.files[appended]; appended == 0 || file == nil || file.truncated || !file.writable {
+		t.Fatalf("an append did not make the file it opened as a whole, writable one: %+v", file)
+	}
+	entry := nativeString(t, next, "entry")
+	nativeCall(t, next.writeFile, appended, entry, 5)
+	nativeCall(t, next.closeFile, appended)
+	if got := string(store["fs/log.dat"]); got != "entry" {
+		t.Fatalf("store holds %q for the appended file, want what was written", got)
+	}
 }
 
 // TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing is the migration
 // for the saves an open that made files left behind: each is a file with
 // nothing in it, which the title then read its settings out of on every run.
 // Such a file is one that is not there, unless the package carries it or this
-// play made it, so only the open that makes a file opens it.
+// play made it, so only an open that makes a file opens it.
 func TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing(t *testing.T) {
 	store := memorySaveStore{
 		"fs/option.dat":  {},
@@ -355,10 +368,15 @@ func TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing(t *testing.T) {
 	platform := newTestNativePlatform(t, map[string][]byte{"a title/shipped.dat": []byte("from the package")})
 	platform.AttachSaves(store)
 	option := nativeString(t, platform, "option.dat")
-	for _, mode := range []uint32{nativeModeRead, 2, 8} {
+	for _, mode := range []uint32{nativeModeRead, 2} {
 		if object := nativeCall(t, platform.openFile, 0, option, mode); object != 0 {
 			t.Errorf("mode %d opened the empty file an earlier session left", mode)
 		}
+	}
+	// The store says what the title was told: the leftover is gone from it.
+	// The emptied file the package carries, and the saved one, are not.
+	if _, ok := store["fs/option.dat"]; ok {
+		t.Error("the empty file an earlier session left is still in the store")
 	}
 	// A shipped name and a file with something in it are files like any other.
 	if object := nativeCall(t, platform.openFile, 0, nativeString(t, platform, "shipped.dat"), 2); object == 0 || len(platform.files[object].data) != 0 {
@@ -366,6 +384,9 @@ func TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing(t *testing.T) {
 	}
 	if object := nativeCall(t, platform.openFile, 0, nativeString(t, platform, "kept.dat"), 2); object == 0 || string(platform.files[object].data) != "kept" {
 		t.Error("a saved file did not open as it is")
+	}
+	if _, ok := store["fs/shipped.dat"]; !ok {
+		t.Error("the emptied copy of a file the package carries was removed")
 	}
 	// The title's own fallback makes it, and from then on this session's own
 	// copy is the file, empty or not.
@@ -430,7 +451,7 @@ func TestNativeFileCallsAgreeAboutAFileAnEarlierSessionLeftEmpty(t *testing.T) {
 			if got := nativeCall(t, next.fileInformation, 0, name, record); got != nativeFileFailed {
 				t.Errorf("the empty file's information answered %d, want the failure", got)
 			}
-			for _, mode := range []uint32{nativeModeRead, 2, 8} {
+			for _, mode := range []uint32{nativeModeRead, 2} {
 				if object := nativeCall(t, next.openFile, 0, name, mode); object != 0 {
 					t.Errorf("mode %d opened the empty file", mode)
 				}
@@ -723,6 +744,15 @@ func TestNativeSavesOutliveTheSession(t *testing.T) {
 
 // memorySaveStore is a SaveStore with no filesystem behind it.
 type memorySaveStore map[string][]byte
+
+// RemoveEmptySave takes an empty entry away, as the Hosts' stores do.
+func (store memorySaveStore) RemoveEmptySave(name string) (bool, error) {
+	if data, ok := store[name]; !ok || len(data) != 0 {
+		return false, nil
+	}
+	delete(store, name)
+	return true, nil
+}
 
 func (store memorySaveStore) LoadSave(name string) ([]byte, bool) {
 	data, ok := store[name]

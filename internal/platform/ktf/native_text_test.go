@@ -217,6 +217,27 @@ func TestNativeMeasureTextMeasuresWhatItDraws(t *testing.T) {
 	if got := nativeMeasureCall(t, platform, end, -1, -1, 0); got != uint32(a+b+c) {
 		t.Errorf("a run at the end of memory measured %d, want %d", got, a+b+c)
 	}
+	// A control character inks nothing and takes a space's width, so a run of
+	// them is as wide as it is long rather than nothing to divide by, and the
+	// run is drawn as wide as it is measured.
+	space := face.Render(' ').Advance
+	controls := nativeTextAt(t, platform, []byte{'\n', 0, '\r', 0, '\t', 0, 0, 0})
+	if got := nativeMeasureCall(t, platform, controls, -1, -1, 0); got != uint32(3*space) || got == 0 {
+		t.Errorf("a run of three control characters measured %d, want %d", got, 3*space)
+	}
+	mixed := nativeTextAt(t, platform, []byte{'A', 0, '\n', 0, 'B', 0, 0, 0})
+	if got := nativeMeasureCall(t, platform, mixed, -1, -1, 0); got != uint32(a+space+b) {
+		t.Errorf("A, a line break and B measured %d, want %d", got, a+space+b)
+	}
+	frame, _ := platform.Frame()
+	nativeTextCall(t, platform, 0x8000, controls, -1, 10, 10)
+	for y := 0; y < 40; y++ {
+		for x := 0; x < 60; x++ {
+			if frame.RGBAAt(x, y) != (color.RGBA{}) {
+				t.Fatalf("a run of control characters inked %d,%d", x, y)
+			}
+		}
+	}
 }
 
 // TestNativeMeasureTextCountsWhatFitsInTheRunsUnits covers the count a caller

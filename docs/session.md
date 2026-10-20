@@ -506,6 +506,16 @@ store answers; otherwise a title that asks whether its save folder exists would
 fail every run after the first. Legacy `LoadSave` remains compatible but cannot
 recover errors that a legacy Host already hides.
 
+`EmptySaveRemover` (`backend.RemoveEmptySave`) is the one removal a store
+makes: an entry that holds nothing, which a platform has found no title reads.
+`DirectorySaveStore` removes it only under a key with one name on disk — one the
+encoding leaves as it is, in a folder whose names are settled — so no earlier
+spelling of the key is left to answer in its place; the memory store removes any
+empty entry, and a store without the interface keeps it. Nothing with a byte in
+it is removed this way. A guest's own removals stay on its platform's removal
+list. The earlier KTF native package uses it for the empty files earlier builds
+left ([KTF](ktf.md)).
+
 Record decoding rejects truncation and trailing bytes. A record list keeps a
 record of no bytes (length zero) apart from a deleted one (the tombstone length):
 decoding returns the first as an empty record and the second as nil, so a restart

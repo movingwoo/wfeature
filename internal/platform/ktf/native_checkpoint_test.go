@@ -349,6 +349,9 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 		{"pen with its spare byte set", func(s *nativeState) { s.Shapes.Pen = 1 }},
 		{"point size below zero", func(s *nativeState) { s.Shapes.PointSize = -1 }},
 		{"point size past the bound", func(s *nativeState) { s.Shapes.PointSize = maxNativePointSize + 1 }},
+		{"point size past the screen", func(s *nativeState) {
+			s.Shapes.PointSize = int32(max(s.Screen.Width, s.Screen.Height)) + 1
+		}},
 		{"clip wider than a halfword", func(s *nativeState) { s.Shapes.Clipped, s.Shapes.Width = true, math.MaxInt16+1 }},
 		{"clip of no clip", func(s *nativeState) { s.Shapes.Clipped, s.Shapes.X = false, 1 }},
 	} {

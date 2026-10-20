@@ -9237,8 +9237,13 @@ its settings it opens them in mode 2 and, refused, again in mode 4 before it
 writes; the 2005 module's wrapper retries a refused 2 or 8 with 4, and creates
 the name before it opens it in mode 2
 ([A file is an object](#implementation-a-file-is-an-object-and-the-modules-own-wrapper-names-its-methods)).
-Only mode 4 makes a file now. The 2005 module's start-up gate creates its
-scratch file before it opens it, so it does not depend on the open making one.
+Only mode 4 makes a file now, and mode 8. The 2005 module's start-up gate
+creates its scratch file before it opens it, so it does not depend on the open
+making one. Mode 8 is BREW's append, which refuses a missing file as read-write
+does, and the first version refused it too. The review asked what that costs a
+module not in the corpus that appends without retrying; the decision was to
+make the file there, which is where the 2005 module's retry with 4 ends anyway,
+and to keep refusing read-write, which a title reads its settings through.
 
 <a id="ktf-native-settings-2026-10-20-migration"></a>
 
@@ -9263,10 +9268,15 @@ is missing, in the answer the asking generation reads, and the create makes it.
 load hands the displaced session's names to the restored one. Without that, a
 file a title had emptied was a leftover once the load had cleared the session's
 own table, and the same open that worked before the load was refused after it.
-A load into a fresh process starts a new play, as a fresh start does. The
-leftover itself stays in the store until the title writes it again: the save
-store has no call that lists or removes a key, and a migration that needs one is
-a change to every Host's store for an empty file.
+A load into a fresh process starts a new play, as a fresh start does.
+
+The leftover is then removed from the store, the first time a title asks about
+it, so it goes from the save folder and from what an export carries rather than
+staying there unread. That is the one removal a store makes
+(`backend.RemoveEmptySave`): only an entry with nothing in it, and on disk only
+under a key with one name — one the encoding leaves as it is, in a folder whose
+names are settled — so that no earlier spelling of the key is left to answer in
+its place. A guest's own removals stay on its platform's removal list.
 
 A quick save taken while the title was stuck brings the stuck interval back,
 because a checkpoint is execution state.
@@ -9306,10 +9316,12 @@ answer, each from its call sites:
   advances of the face the run is drawn in, over as much of the run as drawing
   it draws: a run past the 4 KiB bound, one with no terminator and one that
   reaches the end of guest memory are measured as far as they are read, not
-  answered with zero. A run of characters that all draw at no width — control
-  characters — measures zero, since that is how wide it is drawn. A width limit
-  and a count of what fits are honoured, the count in the run's units, though
-  no caller has asked for either.
+  answered with zero. A control character inside a run inks nothing and takes a
+  space's width, drawn and measured alike: the face gives it no width, which
+  suits the descriptor package's padded buffers, but a native run ends at its
+  terminator, and a run of control characters measured as nothing would be the
+  same division by zero. A width limit and a count of what fits are honoured,
+  the count in the run's units, though no caller has asked for either.
 - **Interface `0x1002001`**, queried beside the screen and used for everything
   that is not a bitmap or text: `+0x10` a pen colour `(r, g, b)` with 255 on the
   stack, `+0x28` a point size of 1 or 2, `+0x30` a clip record (a byte 1, then
@@ -9318,8 +9330,8 @@ answer, each from its call sites:
   `+0x5c` a circle of radius 4 round the aim. The stars of the title screen are
   grey points, the fireworks are points of size 2 and lines, and the aim is the
   circle. A line is the WIPI C table's line and a circle its arc all the way
-  round, both walked only inside the clip, and a point is filled a row at a
-  time. The pen, point size and clip are part of a native checkpoint, as a
+  round, both walked only inside the clip, and a point, at most as large as the
+  screen's longer side, is filled a row at a time. The pen, point size and clip are part of a native checkpoint, as a
   pointer: a record taken before has none and still loads, starting the
   interface at its defaults.
 
@@ -9339,7 +9351,8 @@ that `run -quicksave` wrote with v0.6.0-pre was refused by the first version as
 damaged (`checkpoint record is missing fields`) and loads with this one. Each new test —
 the calls agreeing, an emptied file across a quick load, the record without the
 interface's state, the units of a count, the runs read as far as they go, the
-mode — fails on the version before it. Along the local test route the frames
+mode, the leftover's removal, a run of control characters, a point past the
+screen — fails on the version before it. Along the local test route the frames
 end and draw as often as before and match it byte for byte from the first menu
 on; on the title screen 180 pixels of the fireworks' lines differ, where the
 shared line breaks a tie the other way.

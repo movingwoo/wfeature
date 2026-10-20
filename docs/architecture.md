@@ -1095,10 +1095,20 @@ When a surface stores within rule 2 differs by platform:
 | LGT C table, Java `File` and streams | at the close or flush, and at the end of the game |
 | SKT `XFile`, WIPI `File`, `com.xce.io` streams | at the close or flush, and at the end of the game |
 
-Two platform contracts stand beside the rule. A KTF C create-mode open of a
+Three platform contracts stand beside the rule. A KTF C create-mode open of a
 database the archive itself ships does not empty it. The earlier KTF native
 package's platform names its files by lower-cased base name, so names that
-differ only by case are one file there by the platform's own contract.
+differ only by case are one file there by the platform's own contract. And that
+package is BREW's: its read-write mode (2) opens a file that is there and is
+refused for one that is not, in place of rule 4, and only its create mode (4)
+and its append mode (8) make a missing file. Both generations of its modules
+are written against that — one creates a name before it opens it read-write
+and retries a refused 2 or 8 with 4, the other takes its defaults when a
+read-write open of its settings is refused — and a title of it that was handed
+an empty file there read nothing out of it. BREW refuses a missing file in
+append as well; this platform makes it, which ends as the retry with 4 does
+and keeps the first save of a module that appends without retrying
+([history](history/ktf.md#ktf-native-settings-2026-10-20)).
 
 <a id="services-audio-time"></a>
 

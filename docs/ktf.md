@@ -151,10 +151,12 @@ colour, a point size, a rectangular clip, and points, lines and circle
 outlines in that colour. A rectangle is filled when its mode asks for a fill
 (every title passes 2, a fill); a fill that names no colour takes the
 display's background item, white until the title sets it. Lines and circles
-are the WIPI C table's line and arc, walked only inside the clip. A counted
-text run counts the run's own units, halfwords for the later generation and
-bytes for the 2005 module, and the display measures a run as far as it draws
-it, in the face it draws it in, counting what fits in the same units
+are the WIPI C table's line and arc, walked only inside the clip, and a point
+is at most as large as the screen's longer side. A counted text run counts the
+run's own units, halfwords for the later generation and bytes for the 2005
+module; a control character in a run inks nothing and takes a space's width.
+The display measures a run as far as it draws it, in the face it draws it in,
+counting what fits in the same units
 ([history](history/ktf.md#ktf-native-settings-2026-10-20)).
 
 The screen is the Host's choice, 240×320 by default (`-screen WxH` in the
@@ -215,12 +217,15 @@ mkdir); `MC_fsGetFileStat` reads through the removal list like
 `MC_fsIsExist`.
 The earlier native package retains its existing buffered write/flush policy.
 See [save integrity](session.md#save-integrity) for failure recovery and limits.
-Its open makes a missing file only in mode 4, BREW's create; every other mode
-opens a file that is there and is refused for one that is not, and the titles
-fall back on their own (defaults, or mode 4 and then a write). A stored file
+Its open makes a missing file in mode 4, BREW's create, and in mode 8, its
+append, which BREW refuses and which ends here as the modules' retry with 4
+does. Read-write (2) and read (1) open a file that is there and are refused for
+one that is not, and the titles fall back on their own (defaults, or mode 4 and
+then a write). A stored file
 with nothing in it, which the package does not carry and this play did not
 make, is missing to every call on the name — open, existence, information and
-create — so a title sees one answer whichever it asks. That is the migration
+create — so a title sees one answer whichever it asks, and the empty entry is
+removed from the store when a title first asks about it. That is the migration
 for saves from builds whose every writing open made the file, which left one
 title reading its settings out of an empty file. A quick load keeps what the
 play made, so it does not change what a restored title finds
@@ -277,8 +282,8 @@ Particular to this platform:
 - A `File` opened in the truncating mode, and a native object opened in the
   mode that empties the file, take at most what they had written after a load,
   from the front of the file as it is. Every other object, including a `File`
-  whose open made the file, takes the whole file; a native open makes a file
-  only in the mode that empties it. The WIPI C file table empties a
+  or a native append whose open made the file, takes the whole file. The WIPI C
+  file table empties a
   file in the store at the truncating open itself, so its handles are cursors
   on the file as it is and nothing of the truncation is left to carry.
 - A native package's write waits in the platform until a file is closed or a

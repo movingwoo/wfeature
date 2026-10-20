@@ -52,11 +52,18 @@ const (
 const nativeClipRectangle = 1
 
 // maxNativePointSize bounds a point, which is a square that size centred on
-// where it is drawn. A point the size of the largest screen a session runs at
-// already covers it. What a point costs is the part of its square inside the
-// screen, filled a row at a time, which is what a rectangle of that size costs
-// the display's own fill.
+// where it is drawn, on any screen a session runs at. On a screen it is bounded
+// by that screen's longer side (nativePointSizeOn): a point that size already
+// covers what the screen can show of it, and the part of the square inside the
+// screen, filled a row at a time, is all a point costs — what a rectangle of
+// that size costs the display's own fill.
 const maxNativePointSize = maxNativeStateScreen
+
+// nativePointSizeOn is the largest point a screen of the given size is drawn
+// with.
+func nativePointSizeOn(width, height int) int32 {
+	return int32(min(max(width, height), maxNativePointSize))
+}
 
 // nativeShapes is the interface's state: what it draws with and where.
 type nativeShapes struct {
@@ -101,7 +108,8 @@ func (platform *NativePlatform) shapesPointSize(thread *armcore.Thread) (uint32,
 	if err != nil {
 		return 0, err
 	}
-	platform.shapes.pointSize = min(max(int32(size), 1), maxNativePointSize)
+	screen := platform.screen.frame.Bounds()
+	platform.shapes.pointSize = min(max(int32(size), 1), nativePointSizeOn(screen.Dx(), screen.Dy()))
 	return 0, nil
 }
 

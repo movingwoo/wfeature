@@ -57,6 +57,13 @@ func TestNativeShapesDrawInThePenInsideTheClip(t *testing.T) {
 	if inked(9, 9) || inked(12, 12) {
 		t.Error("a point of size 2 is larger than two pixels a side")
 	}
+	// A point is never larger than the screen's longer side: that size covers
+	// what the screen shows of anything larger.
+	nativeCall(t, platform.shapesPointSize, 0, 1<<20)
+	if longer := int32(max(frame.Bounds().Dx(), frame.Bounds().Dy())); platform.shapes.pointSize != longer {
+		t.Errorf("a point size past the screen became %d, want the longer side %d", platform.shapes.pointSize, longer)
+	}
+	nativeCall(t, platform.shapesPointSize, 0, 1)
 
 	// A line visits every pixel it crosses once, both ends included, and steps
 	// diagonally where it crosses both ways.

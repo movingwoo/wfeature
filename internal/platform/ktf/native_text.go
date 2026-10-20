@@ -113,6 +113,24 @@ func (platform *NativePlatform) installText() {
 // there is one face rather than one per size.
 func (platform *NativePlatform) textFace() *glyph.Face { return glyph.Handset() }
 
+// nativeAdvance is how far a character moves the pen across a run, which is
+// what drawing a run steps by and measuring it adds up.
+//
+// The face inks nothing for a control character and gives it no width, which
+// is right for the descriptor package, whose titles pad fixed buffers with
+// them. A native run is ended by its terminator instead, so a control
+// character inside one is a character of the line, and here it takes the
+// width of a space: still no ink, but a place. That keeps a run of them as
+// wide as it is long, which a title relies on — one divides the width of its
+// help page by the page's length for the width of a character, and then by
+// that — where a width of nothing is a division by zero.
+func nativeAdvance(face *glyph.Face, character rune) int {
+	if character < 0x20 || character == 0x7f {
+		character = ' '
+	}
+	return face.Render(character).Advance
+}
+
 // fontMetrics answers the line height, and the ascent and descent behind it.
 func (platform *NativePlatform) fontMetrics(thread *armcore.Thread) (uint32, error) {
 	arguments, err := nativeArguments(thread, 4)
@@ -149,10 +167,9 @@ func (platform *NativePlatform) fontMetrics(thread *armcore.Thread) (uint32, err
 // draws of it: a run longer than maxNativeTextLength, one with no terminator
 // and one that runs into the end of guest memory are measured as far as they
 // can be read, the way they are drawn, rather than answered with nothing. A
-// zero for real text is what the title divides by. A run whose characters all
-// take no width when drawn — control characters, which no face here inks —
-// measures nothing, because that is how wide it is drawn; the run the title
-// divides by is a page of its own help text.
+// zero is what the title divides by, and no character a run can hold is drawn
+// at no width (see nativeAdvance), so a run with anything in it measures more
+// than nothing.
 //
 // How many fit is counted in the run's own units, the ones a count counts
 // (textUnit): one for each character of a run of halfwords, and the bytes of
@@ -181,7 +198,7 @@ func (platform *NativePlatform) measureText(thread *armcore.Thread) (uint32, err
 		if raw, err := platform.readText(address, count); err == nil {
 			face, halfwords := platform.textFace(), platform.textUnit() == 2
 			for _, character := range decodeEUCKR(raw) {
-				advance := face.Render(character).Advance
+				advance := nativeAdvance(face, character)
 				if limit >= 0 && width+advance > limit {
 					break
 				}
@@ -269,7 +286,7 @@ func (platform *NativePlatform) drawText(thread *armcore.Thread) (uint32, error)
 				}
 			}
 		}
-		cursor += int32(bitmap.Advance)
+		cursor += int32(nativeAdvance(face, character))
 	}
 	platform.screen.draws++
 	return 1, nil
