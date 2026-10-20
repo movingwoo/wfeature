@@ -9273,10 +9273,12 @@ A load into a fresh process starts a new play, as a fresh start does.
 The leftover is then removed from the store, the first time a title asks about
 it, so it goes from the save folder and from what an export carries rather than
 staying there unread. That is the one removal a store makes
-(`backend.RemoveEmptySave`): only an entry with nothing in it, and on disk only
-under a key with one name — one the encoding leaves as it is, in a folder whose
-names are settled — so that no earlier spelling of the key is left to answer in
-its place. A guest's own removals stay on its platform's removal list.
+(`backend.RemoveEmptySave`): only an entry with nothing in it, under every name
+a read could find it at — the encoded one, and the names an earlier build or
+Win32 gave it — so that nothing is left to answer for the key. If one of those
+names holds an older save, the empty entry in front of it stays: removing it
+would hand the title that older save instead of the missing file it now sees. A
+guest's own removals stay on its platform's removal list.
 
 A quick save taken while the title was stuck brings the stuck interval back,
 because a checkpoint is execution state.

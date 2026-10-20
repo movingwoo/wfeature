@@ -4,12 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestRemoveEmptySaveTakesOnlyAnEntryThatHoldsNothing covers the one removal a
-// store makes: an empty entry under a key with one name on disk goes, and
-// everything else stays — an entry with a byte in it, a key the encoding
-// changes, a key that is a directory of others, and a key that is not there.
+// store makes: an empty entry goes, under its plain name or the one the
+// encoding gives it, and everything else stays — an entry with a byte in it, a
+// key that is a directory of others, and a key that is not there.
 func TestRemoveEmptySaveTakesOnlyAnEntryThatHoldsNothing(t *testing.T) {
 	root := t.TempDir()
 	directory := NewDirectorySaveStore(root)
@@ -50,18 +51,82 @@ func TestRemoveEmptySaveTakesOnlyAnEntryThatHoldsNothing(t *testing.T) {
 			if _, present, _ := store.ReadSave("fs/folder/inside"); !present {
 				t.Error("an entry below a directory key did not survive")
 			}
+			if removed, err := RemoveEmptySave(store, "fs/Upper.dat"); !removed || err != nil {
+				t.Errorf("the empty entry under a key the encoding changes was not removed: %t, %v", removed, err)
+			}
+			if _, present, _ := store.ReadSave("fs/Upper.dat"); present {
+				t.Error("the removed entry under an encoded name still reads")
+			}
 			if name == "directory store" {
-				// A key the encoding changes has more than one name an earlier
-				// build may have left it under, and stays.
-				if removed, err := RemoveEmptySave(store, "fs/Upper.dat"); removed || err != nil {
-					t.Errorf("a key the encoding changes was removed: %t, %v", removed, err)
+				for _, file := range []string{"option.dat", encodeSaveName("Upper.dat")} {
+					if _, err := os.Stat(filepath.Join(root, "fs", file)); !os.IsNotExist(err) {
+						t.Errorf("the removed entry's file %s is still on disk: %v", file, err)
+					}
 				}
-				if _, present, _ := store.ReadSave("fs/Upper.dat"); !present {
-					t.Error("the empty entry under an encoded name did not survive")
+			}
+		})
+	}
+}
+
+// TestRemoveEmptySaveTakesEveryNameOfTheKeyOrNone covers a key an earlier
+// build also left under its plain name in an encoded folder. A read takes the
+// later of the two. When both are empty, both go and the key reads as no
+// entry; when the older one holds a save, the empty one in front of it stays,
+// because taking it away would hand a read that older save.
+func TestRemoveEmptySaveTakesEveryNameOfTheKeyOrNone(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		earlier []byte
+		removed bool
+	}{
+		{name: "both empty", earlier: []byte{}, removed: true},
+		{name: "an older save behind the empty one", earlier: []byte("older"), removed: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			store := NewDirectorySaveStore(root)
+			if err := store.StoreSave("fs/Upper.dat", nil); err != nil {
+				t.Fatal(err)
+			}
+			encoded := filepath.Join(root, "fs", encodeSaveName("Upper.dat"))
+			plain := filepath.Join(root, "fs", "Upper.dat")
+			if encoded == plain {
+				t.Fatal("the key's encoded name is its plain one")
+			}
+			if err := os.WriteFile(plain, test.earlier, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			older := time.Now().Add(-time.Hour)
+			if err := os.Chtimes(plain, older, older); err != nil {
+				t.Fatal(err)
+			}
+			if data, present, err := store.ReadSave("fs/Upper.dat"); err != nil || !present || len(data) != 0 {
+				t.Fatalf("before the removal the key read %q (%t, %v), want the later, empty entry", data, present, err)
+			}
+			removed, err := store.RemoveEmptySave("fs/Upper.dat")
+			if err != nil || removed != test.removed {
+				t.Fatalf("removed = %t (%v), want %t", removed, err, test.removed)
+			}
+			data, present, err := store.ReadSave("fs/Upper.dat")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.removed {
+				if present {
+					t.Errorf("the key still reads %q after both of its empty names went", data)
 				}
-				if _, err := os.Stat(filepath.Join(root, "fs", "option.dat")); !os.IsNotExist(err) {
-					t.Errorf("the removed entry's file is still on disk: %v", err)
+				for _, path := range []string{encoded, plain} {
+					if _, err := os.Lstat(path); !os.IsNotExist(err) {
+						t.Errorf("%s is still on disk: %v", path, err)
+					}
 				}
+				return
+			}
+			if !present || len(data) != 0 {
+				t.Errorf("the key reads %q (%t), want the empty entry still in front of the older save", data, present)
+			}
+			if kept, err := os.ReadFile(plain); err != nil || string(kept) != "older" {
+				t.Errorf("the older save is %q (%v)", kept, err)
 			}
 		})
 	}

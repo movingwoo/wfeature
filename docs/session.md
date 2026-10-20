@@ -508,13 +508,18 @@ recover errors that a legacy Host already hides.
 
 `EmptySaveRemover` (`backend.RemoveEmptySave`) is the one removal a store
 makes: an entry that holds nothing, which a platform has found no title reads.
-`DirectorySaveStore` removes it only under a key with one name on disk — one the
-encoding leaves as it is, in a folder whose names are settled — so no earlier
-spelling of the key is left to answer in its place; the memory store removes any
-empty entry, and a store without the interface keeps it. Nothing with a byte in
-it is removed this way. A guest's own removals stay on its platform's removal
-list. The earlier KTF native package uses it for the empty files earlier builds
-left ([KTF](ktf.md)).
+`DirectorySaveStore` looks at every name a read could find the key under — its
+encoded name, and in an encoded folder the names an earlier build gave it, or
+in a folder without the record the key spelled exactly, and on Windows a name
+Win32 stored — and removes them all when each is an empty file, so nothing is
+left to answer for the key. When one of them holds anything, it is an older
+entry the empty one stands in front of, and nothing is removed: taking the
+empty one away would hand a read that older save. A folder that takes no write,
+its earlier names unconverted or a conversion under way, takes no removal until
+it does. The memory store removes any empty entry, and a store without the
+interface keeps it. Nothing with a byte in it is removed this way. A guest's own
+removals stay on its platform's removal list. The earlier KTF native package
+uses it for the empty files earlier builds left ([KTF](ktf.md)).
 
 Record decoding rejects truncation and trailing bytes. A record list keeps a
 record of no bytes (length zero) apart from a deleted one (the tombstone length):

@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/binary"
 	"image/color"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // newTestNativePlatform builds a client over a synthetic package. The module is
@@ -397,6 +400,44 @@ func TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing(t *testing.T) {
 	nativeCall(t, platform.closeFile, made)
 	if object := nativeCall(t, platform.openFile, 0, option, 2); object == 0 {
 		t.Error("a file this session made did not open as it is")
+	}
+}
+
+// TestNativeLeftoverGoesFromTheSaveFolder is the migration on a Host's own
+// store: the empty file an earlier build left is gone from the folder once the
+// title has asked for it, whether its name is stored as it is or spelled out by
+// the store's encoding, and a saved file beside it stays.
+func TestNativeLeftoverGoesFromTheSaveFolder(t *testing.T) {
+	root := t.TempDir()
+	store := backend.NewDirectorySaveStore(root)
+	for key, data := range map[string][]byte{"fs/option.dat": {}, "fs/slot:1.dat": {}, "fs/kept.dat": []byte("kept")} {
+		if err := store.StoreSave(key, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	platform := newTestNativePlatform(t, nil)
+	platform.AttachSaves(store)
+	for _, name := range []string{"option.dat", "slot:1.dat", "kept.dat"} {
+		nativeCall(t, platform.openFile, 0, nativeString(t, platform, name), 2)
+	}
+	for _, key := range []string{"fs/option.dat", "fs/slot:1.dat"} {
+		if _, present, err := store.ReadSave(key); present || err != nil {
+			t.Errorf("%s is still in the save folder (%v)", key, err)
+		}
+	}
+	if data, present, _ := store.ReadSave("fs/kept.dat"); !present || string(data) != "kept" {
+		t.Error("the saved file beside the leftovers did not stay")
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "fs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "kept.dat" {
+		names := []string{}
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Errorf("the save folder holds %q, want only kept.dat", names)
 	}
 }
 
