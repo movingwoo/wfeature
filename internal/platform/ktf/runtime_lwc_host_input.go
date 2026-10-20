@@ -22,12 +22,8 @@ const (
 )
 
 // TextInput snapshots the active Java or C editor for a Host that composes text with
-// its native keyboard or IME. LWC fields use explicit guest focus or a shown
-// shell's sole direct text child when the guest has not assigned focus. The
-// verified vendor path instead uses the sole listened GTextField in the shown
-// non-modal GForm. With none of those, a field the title draws itself is used
-// (see drawnTextComponent). Guest execution and this snapshot share the
-// client run lock.
+// its native keyboard or IME; resolveTextInputLocked decides which editor that
+// is. Guest execution and this snapshot share the client run lock.
 func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, error) {
 	if session == nil || session.Client == nil {
 		return nil, backend.ErrNoTextInput
@@ -41,62 +37,223 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 	if client.runtime == nil || client.workersStopped {
 		return nil, backend.ErrNoTextInput
 	}
-	// A title's own field takes the keys the title is handing it right now,
-	// which is stronger evidence of the field on screen than any focus record.
-	if edit, err := client.inputMethodTextInputLocked(); err == nil {
-		return edit, nil
-	}
-	focus := client.runtime.runtimeObjects["lwc:focus"]
-	component := focus
-	shellState := client.shellTextInput()
-	if component == nil && shellState.shell != nil {
-		component = shellState.field
-	}
-	vendorState, vendorActive := client.runtime.activeVendorTextInput()
-	if vendorActive {
-		component = vendorState.field
-	}
-	drawn := (*jvm.Object)(nil)
-	if component == nil {
-		drawn = client.runtime.drawnTextComponent()
-		component = drawn
-	}
-	multiline, vendor, ok := client.lwcTextInputKind(component)
-	if vendor && !vendorActive {
+	target, ok := client.resolveTextInputLocked(textInputResolution{sync: true})
+	if !ok {
 		return nil, backend.ErrNoTextInput
 	}
-	if !ok {
-		if component != nil {
-			return nil, backend.ErrNoTextInput
+	switch target.position.route() {
+	case routeTitleField:
+		return client.titleFieldTextInput(target), nil
+	case routeCInput:
+		return client.cTextInput(target), nil
+	}
+	return client.componentTextInput(target), nil
+}
+
+// Where a Host composition goes.
+//
+// Six routes can name an editor, in this order of preference: a field the
+// title runs through its own InputMethodHandler, which takes the keys the title
+// is handing it right now and is stronger evidence of a field on screen than
+// any focus record; the sole listened GTextField of the shown vendor form; the
+// LWC component the guest gave explicit focus; a shown shell's text field; a
+// field the title draws itself (see drawnTextComponent); and the C input
+// method.
+//
+// Every route is asked twice. The first pass holds each route to the rule it
+// has always had, so whatever those rules pick they still pick, ahead of
+// anything else. The second pass asks the routes again, in the same order,
+// under relaxed rules, and only when the first found nothing. In either pass a
+// route whose candidate cannot take the edit — a stale focus on a button, a
+// field behind a hidden shell — hands the question to the next route. The
+// first rules used to end the question there instead, so handing on only adds
+// answers where they had none. A field the player cannot type into is the
+// failure that matters; a screen offered input it has no field for costs only
+// a commit that fails.
+//
+// A commit asks again and must be answered with the same editor. A route ahead
+// of the one that answered now naming another editor is a change — text never
+// lands in one editor while a stricter route names another — but a route that
+// still names nothing is not, so the stale state of another route cannot spend
+// an edit it had no part in.
+type textInputRoute int
+
+const (
+	routeTitleField textInputRoute = iota
+	routeVendorForm
+	routeFocus
+	routeShell
+	routeDrawn
+	routeCInput
+	textInputRoutes
+)
+
+// textInputPosition is one route in one pass: the first pass's routes in
+// order, then the second pass's.
+type textInputPosition int
+
+const textInputPositions = 2 * textInputPosition(textInputRoutes)
+
+func (position textInputPosition) route() textInputRoute {
+	return textInputRoute(int(position) % int(textInputRoutes))
+}
+
+func (position textInputPosition) relaxed() bool {
+	return int(position) >= int(textInputRoutes)
+}
+
+// textInputTarget is the editor one position names.
+type textInputTarget struct {
+	position textInputPosition
+	// component is the LWC or vendor field a component route names, and
+	// vendor the state of the form a vendor field was found in.
+	component *jvm.Object
+	vendor    vendorTextInputState
+	// handler and card are a title's own field and the card it is on.
+	handler, card *jvm.Object
+}
+
+// identifies reports whether two answers name the same editor, whichever
+// position named each: a field is the same field through every route that
+// can find it.
+func (target textInputTarget) identifies(other textInputTarget) bool {
+	route, otherRoute := target.position.route(), other.position.route()
+	switch {
+	case route == routeTitleField || otherRoute == routeTitleField:
+		return route == otherRoute && target.handler == other.handler && target.card == other.card
+	case route == routeCInput || otherRoute == routeCInput:
+		return route == otherRoute
+	}
+	return target.component == other.component
+}
+
+// textInputResolution is how one question is asked.
+type textInputResolution struct {
+	// sync lets a snapshot bring a recognized C controller's recorded state
+	// up to date, as it always has. A commit only reads.
+	sync bool
+	// drawn is the field a commit was offered through the drawn-field route,
+	// and drawnFrom the position that offered it. From that position on the
+	// route answers with it, whatever the paints since read: the evidence a
+	// field is drawn is a read, and a later paint that did not read it is no
+	// evidence that it has gone. The commit holds the field to its identity
+	// and its values instead; a route ahead of drawnFrom still decides.
+	drawn     *jvm.Object
+	drawnFrom textInputPosition
+}
+
+// resolveTextInputLocked answers the first editor any position names. The
+// caller holds client.run.
+func (client *Client) resolveTextInputLocked(resolution textInputResolution) (textInputTarget, bool) {
+	for position := textInputPosition(0); position < textInputPositions; position++ {
+		if target, ok := client.textInputAt(position, resolution); ok {
+			return target, true
 		}
-		return client.cTextInputLocked()
+	}
+	return textInputTarget{}, false
+}
+
+// textInputAt answers the editor one position names, when it can take a Host
+// edit.
+func (client *Client) textInputAt(position textInputPosition, resolution textInputResolution) (textInputTarget, bool) {
+	runtime := client.runtime
+	relaxed := position.relaxed()
+	target := textInputTarget{position: position}
+	switch position.route() {
+	case routeTitleField:
+		if relaxed {
+			target.handler, target.card = runtime.offeredInputMethod()
+		} else {
+			target.handler, target.card = runtime.runtimeObjects[inputMethodOpenObject], runtime.runtimeObjects[inputMethodCardObject]
+		}
+		return target, client.titleFieldOffered(target.handler, target.card, relaxed)
+	case routeVendorForm:
+		var state vendorTextInputState
+		var ok bool
+		if relaxed {
+			state, ok = runtime.relaxedVendorTextInput()
+		} else {
+			state, ok = runtime.activeVendorTextInput()
+		}
+		if !ok || !client.textInputComponentUsable(state.field, true, relaxed) {
+			return target, false
+		}
+		target.component, target.vendor = state.field, state
+		return target, true
+	case routeFocus:
+		target.component = runtime.runtimeObjects["lwc:focus"]
+	case routeShell:
+		if relaxed {
+			target.component = client.relaxedShellTextComponent()
+		} else {
+			target.component = client.shellTextComponent()
+		}
+	case routeDrawn:
+		switch {
+		case resolution.drawn != nil && position >= resolution.drawnFrom:
+			target.component = resolution.drawn
+		case relaxed:
+			target.component = client.relaxedDrawnTextComponent()
+		default:
+			target.component = runtime.drawnTextComponent()
+		}
+	case routeCInput:
+		return target, client.cInputOffered(relaxed, resolution.sync)
+	}
+	return target, target.component != nil && client.textInputComponentUsable(target.component, false, relaxed)
+}
+
+// textInputComponentUsable is what every component route asks of the field it
+// names: the kind of field that route edits, a constraint this Host can
+// validate, no composition listener, and for an LWC field a place on the
+// screen under the pass's ownership rule. A vendor field's place is its
+// form's, which the vendor route has already checked.
+func (client *Client) textInputComponentUsable(component *jvm.Object, vendorRoute, relaxed bool) bool {
+	_, vendor, ok := client.lwcTextInputKind(component)
+	if !ok || vendor != vendorRoute {
+		return false
 	}
 	constraintValue, hasConstraint := component.Fields[componentConstraintField]
-	constraint, ok := lwcTextConstraint(constraintValue, hasConstraint)
-	if !ok {
-		return nil, backend.ErrNoTextInput
+	if _, ok := lwcTextConstraint(constraintValue, hasConstraint); !ok {
+		return false
 	}
-	listenerState, ok := lwcTextInputListenerState(component)
-	if !ok || listenerState.listener != nil {
-		// InputMethodListener consumes per-key composition deltas. The Host
-		// supplies a completed field value, which cannot be represented by
-		// that interface without a cursor or replacement range.
-		return nil, backend.ErrNoTextInput
+	// InputMethodListener consumes per-key composition deltas. The Host
+	// supplies a completed field value, which cannot be represented by that
+	// interface without a cursor or replacement range.
+	if listenerState, ok := lwcTextInputListenerState(component); !ok || listenerState.listener != nil {
+		return false
 	}
+	if !vendor {
+		if _, visible := client.lwcTextOwnership(component, relaxed); !visible {
+			return false
+		}
+	}
+	return true
+}
+
+// componentTextInput offers an LWC or vendor field. The field's value is the
+// one this platform holds, so the Host replaces it whole.
+func (client *Client) componentTextInput(target textInputTarget) *backend.TextInput {
+	runtime := client.runtime
+	component := target.component
+	multiline, vendor, _ := client.lwcTextInputKind(component)
+	constraintValue, hasConstraint := component.Fields[componentConstraintField]
+	constraint, _ := lwcTextConstraint(constraintValue, hasConstraint)
+	listenerState, _ := lwcTextInputListenerState(component)
 	textValue, hasText := component.Fields[componentTextField]
 	focusRevision := component.Fields[componentFocusRevisionField]
 	var ownership []lwcTextAncestor
 	if !vendor {
-		var visible bool
-		ownership, visible = client.lwcTextOwnership(component)
-		if !visible {
-			return nil, backend.ErrNoTextInput
-		}
+		ownership, _ = client.lwcTextOwnership(component, true)
 	}
 	maxValue, hasMax := component.Fields[componentMaxLengthField]
 	text := componentText(component)
 	maxLength := int(componentMaxLength(component))
 	inputMode, password := lwcTextInputHints(constraint)
+	var resolution textInputResolution
+	if target.position.route() == routeDrawn {
+		resolution.drawn, resolution.drawnFrom = component, target.position
+	}
 
 	return &backend.TextInput{
 		Text:      text,
@@ -110,22 +267,21 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 			}
 			client.run.Lock()
 			defer client.run.Unlock()
-			if client.runtime == nil || client.workersStopped {
+			if client.runtime != runtime || client.workersStopped {
 				return backend.ErrTextInputChanged
 			}
-			currentListenerState, listenerStateOK := lwcTextInputListenerState(component)
+			current, ok := client.resolveTextInputLocked(resolution)
+			if !ok || !current.identifies(target) || vendor && !sameVendorTextInputState(current.vendor, target.vendor) {
+				return backend.ErrTextInputChanged
+			}
 			if !vendor {
-				currentOwnership, visible := client.lwcTextOwnership(component)
+				currentOwnership, visible := client.lwcTextOwnership(component, true)
 				if !visible || !slices.Equal(ownership, currentOwnership) {
 					return backend.ErrTextInputChanged
 				}
 			}
-			currentVendorState, currentVendorActive := client.runtime.activeVendorTextInput()
-			if client.runtime.runtimeObjects["lwc:focus"] != focus || component.Fields[componentFocusRevisionField] != focusRevision ||
-				client.shellTextInput() != shellState ||
-				(drawn != nil && client.runtime.drawnTextComponent() != drawn) ||
-				vendorActive != currentVendorActive ||
-				(vendorActive && !sameVendorTextInputState(currentVendorState, vendorState)) ||
+			currentListenerState, listenerStateOK := lwcTextInputListenerState(component)
+			if component.Fields[componentFocusRevisionField] != focusRevision ||
 				!listenerStateOK || !sameLWCTextInputListenerState(currentListenerState, listenerState) ||
 				!sameTextInputField(component, componentTextField, textValue, hasText) ||
 				!sameTextInputField(component, componentConstraintField, constraintValue, hasConstraint) ||
@@ -140,7 +296,7 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 			}
 			component.Fields[componentTextField] = jvm.ReferenceValue(client.vm.NewString(replacement))
 			setComponentCursor(component, len([]rune(replacement)))
-			if err := client.runtime.publishTextComponent(component); err != nil {
+			if err := runtime.publishTextComponent(component); err != nil {
 				return err
 			}
 			// Keep the two keypad adapters in step if either is used after a
@@ -155,11 +311,11 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 			// a key would have: a card whose worker owns its cadence kept the
 			// old text on screen until the next press. Request it the way a
 			// component repaints after its contents change.
-			client.runtime.repaintPending = true
-			client.runtime.postRepaintEvent()
+			runtime.repaintPending = true
+			runtime.postRepaintEvent()
 			return nil
 		},
-	}, nil
+	}
 }
 
 // A field a title draws itself.
@@ -178,6 +334,12 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 // drawn. So the Host offers a field the top card read during its last paint
 // and that was told it has focus, when that is exactly one field. Two focused
 // fields drawn together are ambiguous and offer nothing.
+//
+// The relaxed rule, consulted after every route under its first rule found
+// nothing, needs no focus from a field that is the only one read, and keeps
+// what the last paint that read any text published: a frame that reads none,
+// or a paint that fails, says nothing about a field the frame before it drew.
+// Several fields read and none of them focused still offer nothing.
 
 // maxPaintTextReads bounds how many distinct text components one paint is
 // tracked for. A paint that reads more is not a name screen anyone could
@@ -190,11 +352,19 @@ func (runtime *initializationRuntime) beginTextReads() {
 }
 
 // endTextReads publishes what the paint read once it returned. A paint that
-// failed published nothing a Host could rely on.
+// failed published nothing a Host could rely on. The relaxed rule's set
+// changes only on a paint that read text, and is emptied by one that read
+// more than a name screen does.
 func (runtime *initializationRuntime) endTextReads(painted bool) {
 	runtime.paintedText = nil
 	if painted && !runtime.paintTextOverflow {
 		runtime.paintedText = runtime.paintTextReads
+	}
+	switch {
+	case painted && runtime.paintTextOverflow:
+		runtime.lastPaintedText = nil
+	case len(runtime.paintedText) > 0:
+		runtime.lastPaintedText = runtime.paintedText
 	}
 	runtime.paintTextReads, runtime.paintTextOverflow = nil, false
 }
@@ -227,9 +397,34 @@ func (runtime *initializationRuntime) drawnTextComponent() *jvm.Object {
 	return found
 }
 
+// relaxedDrawnTextComponent answers the field the relaxed rule offers: of the
+// fields in the last set a paint published, the only focused one, or else the
+// only one. Components that are not LWC fields — a button's label, a vendor
+// field — are not fields a Host edit can go to here, and do not count.
+func (client *Client) relaxedDrawnTextComponent() *jvm.Object {
+	var fields, focused []*jvm.Object
+	for _, component := range client.runtime.lastPaintedText {
+		if _, vendor, ok := client.lwcTextInputKind(component); !ok || vendor {
+			continue
+		}
+		fields = append(fields, component)
+		if value, err := component.Fields[componentFocusedField].Int32(); err == nil && value != 0 {
+			focused = append(focused, component)
+		}
+	}
+	switch {
+	case len(focused) == 1:
+		return focused[0]
+	case len(fields) == 1:
+		return fields[0]
+	}
+	return nil
+}
+
 // lwcTextInputKind follows a guest subclass to the runtime LWC field or box it
 // extends. A vendor field is marked separately because it is editable only
-// through the bounded shown-form lifecycle validated by activeVendorTextInput.
+// through its shown form, which the vendor route validates
+// (activeVendorTextInput, then relaxedVendorTextInput).
 func (client *Client) lwcTextInputKind(component *jvm.Object) (multiline, vendor, ok bool) {
 	if client == nil || client.vm == nil || component == nil {
 		return false, false, false

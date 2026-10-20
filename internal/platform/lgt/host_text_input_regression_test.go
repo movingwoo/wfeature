@@ -1,6 +1,7 @@
 package lgt
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -143,10 +144,13 @@ func TestLGTDeliveryToleratesAFlushInsideTheCarrier(t *testing.T) {
 	}
 }
 
-// Several local titles select an input mode while starting and again on every
-// screen change, and the C route offered input from then on: on splash and
-// menu screens a commit sent the game a stray carrier key and failed.
-func TestLGTCInputFollowsTheKeysTheWidgetTakes(t *testing.T) {
+// A title's name widget can call the input method only from its key handler:
+// one local title calls it once while starting and then not until a key
+// arrives on its name screen, so the key that opened the screen bypassed the
+// automaton and following the keys left the empty field unavailable. Input is
+// offered from the first input-method call on, and a commit where no widget
+// takes keys reports failure and leaves the offer in place.
+func TestLGTCInputIsOfferedOnceTheTitleUsesTheInputMethod(t *testing.T) {
 	session, err := StartSession(t.Context(), fixtureArchive(t), SessionOptions{Width: 16, Height: 8, MaxSteps: 1 << 20})
 	if err != nil {
 		t.Fatal(err)
@@ -159,54 +163,96 @@ func TestLGTCInputFollowsTheKeysTheWidgetTakes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A mode selected before any key is start-up configuration.
-	callSlot(t, c, slotIMSetCurrentMode, 2)
+	// A title that never uses the input method has nothing to deliver to.
 	if _, err := session.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
-		t.Fatalf("start-up mode selection offered input: %v", err)
+		t.Fatalf("input offered before any input-method call: %v", err)
 	}
-	// A key the widget passes to the automaton opens it.
-	press('#')
+	// A mode selected while starting, before any key, is enough.
+	callSlot(t, c, slotIMSetCurrentMode, 2)
 	edit, err := session.TextInput(t.Context())
 	if err != nil {
-		t.Fatalf("widget taking keys: %v", err)
+		t.Fatalf("start-up mode selection: %v", err)
 	}
-	// A key it does not pass on closes it, and the old edit with it.
+	// A key the title handles without the automaton leaves it offered.
 	if err := c.writeWord(fixtureRouteKeys, 1); err != nil {
 		t.Fatal(err)
 	}
 	press('#')
-	if _, err := session.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
-		t.Fatalf("key that bypassed the automaton left input available: %v", err)
+	if _, err := session.TextInput(t.Context()); err != nil {
+		t.Fatalf("key that bypassed the automaton withdrew input: %v", err)
 	}
-	if err := edit.Commit(t.Context(), "ab"); !errors.Is(err, backend.ErrTextInputChanged) {
-		t.Fatalf("edit outlived the key: %v", err)
-	}
-	// A mode selected after keys have arrived opens it again, and a carrier
-	// that never reaches the automaton closes it rather than leave it offered.
-	callSlot(t, c, slotIMSetCurrentMode, 2)
-	edit, err = session.TextInput(t.Context())
-	if err != nil {
-		t.Fatalf("mode selection after keys: %v", err)
-	}
+	// A commit there reaches no widget: it fails, the game sees a whole tap
+	// of the carrier key rather than a press that stays down, and input is
+	// still offered for the screen the player moves to next.
 	if err := edit.Commit(t.Context(), "ab"); !errors.Is(err, backend.ErrTextInputChanged) {
 		t.Fatalf("unrouted carrier: %v", err)
 	}
-	if _, err := session.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
-		t.Fatalf("input stayed available after an unrouted carrier: %v", err)
+	if len(c.events) != 1 || c.events[0] != (pendingEvent{EventKeyReleased, hostTextInputCarrier, 0}) {
+		t.Fatalf("queued after an unrouted carrier: %+v", c.events)
 	}
-	// Passing keys on again restores it.
+	if err := c.deliverEvents(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if err := c.writeWord(fixtureRouteKeys, 0); err != nil {
 		t.Fatal(err)
 	}
-	press('#')
 	edit, err = session.TextInput(t.Context())
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("input withdrawn after an unrouted carrier: %v", err)
 	}
 	if err := edit.Commit(t.Context(), "ab"); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := c.readCString(fixtureInputCompleted); err != nil || got != "ab" {
 		t.Fatalf("delivered %q %v", got, err)
+	}
+	if len(c.events) != 0 {
+		t.Fatalf("a delivered carrier queued %+v", c.events)
+	}
+}
+
+// A record written while input followed the keys says whether input was open
+// when it was taken, and a key the title handled without the automaton had
+// closed it. A title that had called the automaton by then has used the input
+// method, and a load offers input to it as the running session does.
+func TestLGTCInputOfferSurvivesARecordThatHadItClosed(t *testing.T) {
+	archive := fixtureArchive(t)
+	ctx := t.Context()
+	store, err := backend.NewMemorySaveStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := StartSession(ctx, archive, SessionOptions{SaveStore: store, Width: 16, Height: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = source.Close(context.Background()) })
+	source.client.SendEvent(EventKeyPressed, '#', 0)
+	if err := source.client.deliverEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := source.CaptureCheckpoint(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved sessionCheckpointState
+	if err := backend.DecodeCheckpointRecord(checkpoint.Runtime, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if !saved.Client.TextInput.Active || saved.Client.TextInput.Calls != 1 {
+		t.Fatalf("recorded %+v, want a title that has called the automaton once", saved.Client.TextInput)
+	}
+	saved.Client.TextInput.Active = false
+	if checkpoint.Runtime, err = backend.EncodeCheckpointRecord(saved); err != nil {
+		t.Fatal(err)
+	}
+	other := boundarySaves(t, store)
+	restored, err := prepareFixtureCheckpoint(t, archive, checkpoint, other).Commit(ctx, nil, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close(context.Background())
+	if _, err := restored.TextInput(ctx); err != nil {
+		t.Fatalf("input after loading the older record: %v", err)
 	}
 }

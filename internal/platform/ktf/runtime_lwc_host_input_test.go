@@ -451,8 +451,9 @@ func unfocusedLWCField(t *testing.T, session *Session, text string) *jvm.Object 
 }
 
 // A title that told its own field it has focus and reads it on every paint is
-// drawing that field: the Host offers it, the commit lands in it, and a paint
-// that stops reading it takes the offer away.
+// drawing that field: the Host offers it and the commit lands in it. A paint
+// that reads no text does not take the offer away, and an edit taken before it
+// still lands; a paint that reads another field moves the offer to that one.
 func TestTextInputOffersAFocusedFieldTheCardDraws(t *testing.T) {
 	session, _ := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "")
 	runtime := session.Client.runtime
@@ -489,24 +490,35 @@ func TestTextInputOffersAFocusedFieldTheCardDraws(t *testing.T) {
 		t.Fatalf("field text = %q after a commit", got)
 	}
 
-	stale, err := session.TextInput(context.Background())
+	earlier, err := session.TextInput(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	runtime.displayCards = runtime.displayCards[:0]
-	other := drawnFieldCard(t, session, "test/OtherCard", nil)
-	other()
-	if err := stale.Commit(context.Background(), "새"); !errors.Is(err, backend.ErrTextInputChanged) {
-		t.Fatalf("a commit after the card stopped drawing the field: %v", err)
+	blank := drawnFieldCard(t, session, "test/BlankCard", nil)
+	blank()
+	if err := earlier.Commit(context.Background(), "새"); err != nil || runtimeComponentText(field) != "새" {
+		t.Fatalf("a commit after a paint that read no text: text=%q err=%v", runtimeComponentText(field), err)
 	}
-	if _, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
-		t.Fatalf("a screen that does not draw the field offered it: %v", err)
+	if _, err := session.TextInput(context.Background()); err != nil {
+		t.Fatalf("a paint that read no text took the offer away: %v", err)
+	}
+
+	next := unfocusedLWCField(t, session, "next")
+	runtime.displayCards = runtime.displayCards[:0]
+	drawnFieldCard(t, session, "test/NextCard", nil, next)()
+	input, err = session.TextInput(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Text != "next" {
+		t.Fatalf("offer after a paint that read another field: %+v", input)
 	}
 }
 
-// Only one focused field drawn by the card is evidence of which one the player
-// is typing into. An unfocused field, two focused ones, and a paint that failed
-// are not.
+// One field drawn by the card is evidence of which one the player is typing
+// into, and so is the one focused field among several. Two focused fields, two
+// unfocused ones, and a paint that failed are not.
 func TestTextInputDoesNotGuessBetweenDrawnFields(t *testing.T) {
 	setFocused := func(session *Session, field *jvm.Object, focused int32) {
 		t.Helper()
@@ -521,8 +533,9 @@ func TestTextInputDoesNotGuessBetweenDrawnFields(t *testing.T) {
 		offered bool
 	}{
 		{"one focused", []int32{1}, false, true},
-		{"one told it lost focus", []int32{0}, false, false},
+		{"one told it lost focus", []int32{0}, false, true},
 		{"two focused", []int32{1, 1}, false, false},
+		{"two unfocused", []int32{0, 0}, false, false},
 		{"one focused of two", []int32{0, 1}, false, true},
 		{"failed paint", []int32{1}, true, false},
 	} {
@@ -542,5 +555,160 @@ func TestTextInputDoesNotGuessBetweenDrawnFields(t *testing.T) {
 				t.Fatalf("offered=%v, error %v", test.offered, err)
 			}
 		})
+	}
+}
+
+// A focus the title set on something that is not a field the Host can type
+// into, and never moved, hands the question on: a shell's field, a field the
+// card draws and the C editor stay reachable behind it. The stale focus moving
+// to another such component does not spend an edit taken behind it; a focus on
+// a field that can take the edit does, because that field is the editor now.
+func TestTextInputFallsThroughAStaleFocus(t *testing.T) {
+	t.Run("shell", func(t *testing.T) {
+		session, shell, field := shellTextBox(t)
+		callShellInput(t, session, runtimeComponentSetFocus, newWidget(runtimeButtonComponentClass))
+		callShellInput(t, session, runtimeComponentShown(true), shell)
+		edit, err := session.TextInput(t.Context())
+		if err != nil {
+			t.Fatalf("shell field behind a stale focus: %v", err)
+		}
+		callShellInput(t, session, runtimeComponentSetFocus, newWidget(runtimeButtonComponentClass))
+		if err := edit.Commit(t.Context(), "typed"); err != nil || componentText(field) != "typed" {
+			t.Fatalf("commit after the stale focus moved: text=%q err=%v", componentText(field), err)
+		}
+		edit, err = session.TextInput(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		focused := unfocusedLWCField(t, session, "focused")
+		callShellInput(t, session, runtimeComponentSetFocus, focused)
+		if err := edit.Commit(t.Context(), "late"); !errors.Is(err, backend.ErrTextInputChanged) || componentText(field) != "typed" {
+			t.Fatalf("commit after focus reached a field: text=%q err=%v", componentText(field), err)
+		}
+		if input, err := session.TextInput(t.Context()); err != nil || input.Text != "focused" {
+			t.Fatalf("focused field after the stale focus: %+v %v", input, err)
+		}
+	})
+	t.Run("drawn", func(t *testing.T) {
+		session, _ := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "")
+		callShellInput(t, session, runtimeComponentSetFocus, newWidget(runtimeButtonComponentClass))
+		field := unfocusedLWCField(t, session, "name")
+		callShellInput(t, session, runtimeComponentBooleanField(componentFocusedField), field, jvm.IntValue(1))
+		drawnFieldCard(t, session, "test/NameCard", nil, field)()
+		edit, err := session.TextInput(t.Context())
+		if err != nil {
+			t.Fatalf("drawn field behind a stale focus: %v", err)
+		}
+		if err := edit.Commit(t.Context(), "이름"); err != nil || componentText(field) != "이름" {
+			t.Fatalf("commit: text=%q err=%v", componentText(field), err)
+		}
+	})
+	t.Run("C", func(t *testing.T) {
+		session, text, _ := cInputFixture(t)
+		callShellInput(t, session, runtimeComponentSetFocus, newWidget(runtimeButtonComponentClass))
+		edit, err := session.TextInput(t.Context())
+		if err != nil {
+			t.Fatalf("C editor behind a stale focus: %v", err)
+		}
+		if !edit.Append {
+			t.Fatalf("edit = %+v, want the C editor", edit)
+		}
+		callShellInput(t, session, runtimeComponentSetFocus, newWidget(runtimeButtonComponentClass))
+		if err := edit.Commit(t.Context(), "A"); err != nil || string(*text) != "A" {
+			t.Fatalf("commit after the stale focus moved: text=%q err=%v", *text, err)
+		}
+	})
+}
+
+// The rules a Host edit was held to before the relaxed ones existed still
+// choose first: an editor they name is offered ahead of anything only the
+// relaxed rules find, and an edit taken from the relaxed rules is spent once
+// the first rules name an editor again.
+func TestTextInputKeepsTheFirstRulesAheadOfTheRelaxedOnes(t *testing.T) {
+	t.Run("C editor and an unfocused drawn field", func(t *testing.T) {
+		session, text, _ := cInputFixture(t)
+		runtime := session.Client.runtime
+		field := unfocusedLWCField(t, session, "drawn")
+		if err := session.Client.JVM().RegisterNative("test/CInputCard", "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", func(vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+			_, err := runtimeTextComponentGetString(runtime, vm, []jvm.Value{jvm.ReferenceValue(field)})
+			return jvm.VoidValue(), err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		runtime.repaintPending = true
+		if _, err := runtime.paintTopCard(); err != nil {
+			t.Fatal(err)
+		}
+		if edit, err := session.TextInput(t.Context()); err != nil || !edit.Append {
+			t.Fatalf("the live C editor lost to a relaxed drawn field: %+v %v", edit, err)
+		}
+		// A press the widget does not take closes the editor under the first
+		// rules; the relaxed rules then find the drawn field first.
+		if err := session.SendKey(t.Context(), KeyPressed, KeyRight); err != nil {
+			t.Fatal(err)
+		}
+		edit, err := session.TextInput(t.Context())
+		if err != nil || edit.Append || edit.Text != "drawn" {
+			t.Fatalf("drawn field after the editor closed: %+v %v", edit, err)
+		}
+		if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 3); err != nil {
+			t.Fatal(err)
+		}
+		if err := edit.Commit(t.Context(), "late"); !errors.Is(err, backend.ErrTextInputChanged) || componentText(field) != "drawn" {
+			t.Fatalf("relaxed edit after the editor reopened: text=%q err=%v", componentText(field), err)
+		}
+		if edit, err := session.TextInput(t.Context()); err != nil || !edit.Append {
+			t.Fatalf("reopened C editor: %+v %v", edit, err)
+		} else if err := edit.Commit(t.Context(), "7"); err != nil || string(*text) != "7" {
+			t.Fatalf("C commit: text=%q err=%v", *text, err)
+		}
+	})
+	t.Run("focus and an unlistened vendor field", func(t *testing.T) {
+		session, _, vendorField, _ := shownVendorTextField(t, "vendor")
+		vendorField.Fields[componentEventListenerField] = jvm.ReferenceValue(nil)
+		focused := unfocusedLWCField(t, session, "focused")
+		callShellInput(t, session, runtimeComponentSetFocus, focused)
+		if edit, err := session.TextInput(t.Context()); err != nil || edit.Text != "focused" {
+			t.Fatalf("the focused field lost to a relaxed vendor field: %+v %v", edit, err)
+		}
+		callShellInput(t, session, runtimeComponentSetFocus, newWidget(runtimeButtonComponentClass))
+		if edit, err := session.TextInput(t.Context()); err != nil || edit.Text != "vendor" {
+			t.Fatalf("vendor field behind a stale focus: %+v %v", edit, err)
+		}
+	})
+}
+
+// A paint that fails says nothing about the field the paint before it drew, so
+// the offer stands through it. A paint that reads more text than a name screen
+// does is a different screen, and takes the offer away.
+func TestTextInputKeepsADrawnFieldThroughAFailedPaint(t *testing.T) {
+	session, _ := focusedLWCField(t, runtimeTextFieldComponentClass, 0, "")
+	runtime := session.Client.runtime
+	runtime.runtimeObjects["lwc:focus"] = nil
+	field := unfocusedLWCField(t, session, "name")
+	fail := false
+	paint := drawnFieldCard(t, session, "test/NameCard", &fail, field)
+	paint()
+	if _, err := session.TextInput(context.Background()); err != nil {
+		t.Fatalf("drawn field: %v", err)
+	}
+	fail = true
+	paint()
+	edit, err := session.TextInput(context.Background())
+	if err != nil {
+		t.Fatalf("drawn field after a failed paint: %v", err)
+	}
+	if err := edit.Commit(context.Background(), "이름"); err != nil || runtimeComponentText(field) != "이름" {
+		t.Fatalf("commit: text=%q err=%v", runtimeComponentText(field), err)
+	}
+
+	labels := []*jvm.Object{field}
+	for len(labels) <= maxPaintTextReads {
+		labels = append(labels, unfocusedLWCField(t, session, "label"))
+	}
+	runtime.displayCards = runtime.displayCards[:0]
+	drawnFieldCard(t, session, "test/ListCard", nil, labels...)()
+	if _, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("a screen reading %d texts offered a field: %v", len(labels), err)
 	}
 }

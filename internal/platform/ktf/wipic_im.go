@@ -36,6 +36,7 @@ var inputModes = []string{"EN/L", "EN/S", "KO", "N123"}
 
 // handleWIPICInputMethodCall services the input-method table.
 func (runtime *initializationRuntime) handleWIPICInputMethodCall(thread *armcore.Thread, function uint32) (uint32, error) {
+	runtime.cInput.used = true
 	switch function {
 	case wipicIMSetCurrentMode:
 		mode, err := runtime.wipicArgument(thread, 0)
@@ -114,6 +115,22 @@ type cInputState struct {
 	// character, or the same key routed again — belong to that delivery and
 	// are not a key the player pressed.
 	delivering bool
+	// used records that the title has called into this table at all, its
+	// start-up questions included. It is not part of a checkpoint; see
+	// cInputUsed for what stands in for it after one.
+	used bool
+}
+
+// cInputUsed reports whether the title has ever used its input method, which
+// is what the relaxed C rule offers an editor on; see cInputOffered. A
+// checkpoint does not record the flag, so a restored session reads the same
+// fact off what it does record: the calls and activations counted, and the
+// mode table a title asking for its modes at start-up has built. A title that
+// asked only for the mode count or the current mode before the checkpoint is
+// not seen as using it until its next call.
+func (runtime *initializationRuntime) cInputUsed() bool {
+	state := &runtime.cInput
+	return state.used || state.calls != 0 || state.activations != 0 || runtime.inputModeTableAddress != 0
 }
 
 func (runtime *initializationRuntime) rememberCInputTimer() {

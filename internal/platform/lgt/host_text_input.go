@@ -41,9 +41,9 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 func (session *Session) javaTextInput() (*backend.TextInput, error) {
 	client := session.client
 	runtime := client.javaRun
-	target := runtime.focusedWidget
+	target := client.javaTextInputTarget()
 	state := runtime.widgets[target]
-	if target == 0 || !client.javaTextInputAvailable(target, state) {
+	if target == 0 {
 		return nil, backend.ErrNoTextInput
 	}
 	constraint := state.mode
@@ -68,10 +68,9 @@ func (session *Session) javaTextInput() (*backend.TextInput, error) {
 			if err := commitCtx.Err(); err != nil {
 				return err
 			}
-			if client.javaRun != runtime || runtime.focusedWidget != target ||
+			if client.javaRun != runtime || client.javaTextInputTarget() != target ||
 				runtime.widgetGeneration != generation || runtime.widgets[target] != state ||
-				state.revision != revision || state.inputHandler != handler ||
-				!client.javaTextInputAvailable(target, state) {
+				state.revision != revision || state.inputHandler != handler {
 				return backend.ErrTextInputChanged
 			}
 			if err := validateJavaTextInput(replacement, constraint, maxLength, multiline); err != nil {
@@ -99,10 +98,19 @@ const maxCTextInputLength = 64
 // exposes neither the widget's value nor its cursor, so the Host truthfully
 // offers an append operation: one complete, OS-composed string is returned in
 // the widget's normal completion buffer at its current cursor.
+//
+// It is offered whenever the title has used the input method, on every
+// screen. Nothing a Host can see says a widget is up: one local title calls
+// the input method once while starting and then only from its name screen's
+// key handler, so the key that opens that screen is handled without it and
+// the empty field gets no call at all until the player presses another key.
+// Following the keys made that field unavailable, and a field the player
+// cannot type into is the failure that matters; an offer on a screen without
+// one costs a commit that reports failure and a carrier key the game sees.
 func (session *Session) cTextInput() *backend.TextInput {
 	client := session.client
 	state := &client.cTextInput
-	if !state.active || client.clet.HandleEvent == 0 {
+	if !state.used || client.clet.HandleEvent == 0 {
 		return nil
 	}
 	revision, mode, handler := state.revision, client.inputMode, client.clet.HandleEvent
@@ -118,7 +126,7 @@ func (session *Session) cTextInput() *backend.TextInput {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if !state.active || state.revision != revision || client.inputMode != mode ||
+			if !state.used || state.revision != revision || client.inputMode != mode ||
 				client.clet.HandleEvent != handler || len(state.pending) != 0 {
 				return backend.ErrTextInputChanged
 			}
@@ -174,9 +182,10 @@ func (session *Session) cTextInput() *backend.TextInput {
 			}
 			if state.calls == calls {
 				// The carrier went to the game as a key and never reached the
-				// automaton: no field is taking keys, whatever the last mode
-				// selection suggested.
-				state.active = false
+				// automaton: no field is taking keys on this screen. The game
+				// had the press, so it gets the release a handset would send
+				// after it rather than a key that stays down.
+				client.SendEvent(EventKeyReleased, hostTextInputCarrier, 0)
 				return backend.ErrTextInputChanged
 			}
 			// The widget reached MC_imHandleInput but its completion buffer
@@ -239,13 +248,91 @@ func validateCTextInput(text string) ([]byte, error) {
 	return encoded, nil
 }
 
+// javaTextInputTarget is the text component a Host edit goes to. The focused
+// one comes first, whenever it can take the text. Without one, the field the
+// screen holds is still the field the player means: a title can build its name
+// dialog without ever giving the field focus, or tell it focus has gone while
+// the dialog stays up, and a field that cannot be typed into is the failure
+// that matters. So the only text component under a shown shell is taken, or,
+// when no shell shows one, the only one that was never placed in a shell at
+// all, which the title can only be drawing itself. Two candidates at the same
+// level are two fields the Host cannot choose between, and get nothing.
+func (client *Client) javaTextInputTarget() uint32 {
+	runtime := client.javaRun
+	if focused := runtime.focusedWidget; focused != 0 && client.javaTextInputAvailable(focused, runtime.widgets[focused]) {
+		return focused
+	}
+	// Level 0 is under a shown shell and level 1 drawn by the title: one
+	// candidate of each, and how many each level had.
+	var candidate [2]uint32
+	var found [2]int
+	for object, state := range runtime.widgets {
+		if !client.javaTextInputAvailable(object, state) {
+			continue
+		}
+		level := 1
+		if client.javaTextPlacement(object) == javaTextUnderShownShell {
+			level = 0
+		}
+		candidate[level] = object
+		found[level]++
+	}
+	switch {
+	case found[0] == 1:
+		return candidate[0]
+	case found[0] == 0 && found[1] == 1:
+		return candidate[1]
+	}
+	return 0
+}
+
+// javaTextPlacement says where a text component sits for a Host edit. LGT
+// draws no LWC component, so a shell's visibility is only what the title told
+// it; a component whose parent chain ends without reaching a shell is one the
+// title draws itself, the way a field that never joined a container is on
+// KTF. A chain through a hidden shell, an unknown object or a cycle places the
+// component nowhere.
+type javaTextPlace uint8
+
+const (
+	javaTextUnplaced javaTextPlace = iota
+	javaTextUnderShownShell
+	javaTextDrawnByTitle
+)
+
+func (client *Client) javaTextPlacement(object uint32) javaTextPlace {
+	runtime := client.javaRuntimeState()
+	seen := map[uint32]bool{}
+	for depth := 0; object != 0 && depth < maxWidgetDepth; depth++ {
+		if seen[object] {
+			return javaTextUnplaced
+		}
+		seen[object] = true
+		state := runtime.widgets[object]
+		if state == nil {
+			return javaTextUnplaced
+		}
+		if state.kind == javaWidgetShell {
+			if state.shown {
+				return javaTextUnderShownShell
+			}
+			return javaTextUnplaced
+		}
+		if state.parent == 0 {
+			return javaTextDrawnByTitle
+		}
+		object = state.parent
+	}
+	return javaTextUnplaced
+}
+
 // A listener changes the callback contract of a commit. The current LGT
 // corpus installs none, and this runtime cannot yet enter notifyTextChanged
 // safely from a Host commit, so such a field is refused instead of updated
 // without the callback the guest requested.
 func (client *Client) javaTextInputAvailable(target uint32, state *javaWidget) bool {
 	if state == nil || state.kind != javaWidgetTextField && state.kind != javaWidgetTextBox ||
-		!client.javaWidgetShown(target) {
+		client.javaTextPlacement(target) == javaTextUnplaced {
 		return false
 	}
 	if state.inputHandler == 0 {

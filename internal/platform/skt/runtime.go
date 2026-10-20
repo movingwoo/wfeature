@@ -138,6 +138,12 @@ type Runtime struct {
 	// Guest threads can call text setters outside a Host dispatch, so
 	// dispatchMu alone cannot protect the snapshot-to-commit boundary.
 	textMu sync.Mutex
+	// textFieldPaints is which vendor XTextField the title painted on the
+	// current Displayable, guarded by textMu. It sits on the runtime because
+	// a paint reading the SKVM state would otherwise be what created it, and
+	// it is no part of a checkpoint: after a restore it starts empty and the
+	// title's next paint fills it. See xTextFieldPaints.
+	textFieldPaints xTextFieldPaints
 	// screenPaintQueued keeps at most one runtime-drawn screen repaint on the
 	// event queue at a time, the same way paintQueued does for a Canvas.
 	screenPaintQueued bool

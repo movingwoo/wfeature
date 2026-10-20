@@ -554,7 +554,12 @@ func javaComponentShowNotify(
 ) (uint32, error) {
 	state := client.javaWidgetState(arguments[0])
 	shown := arguments[1] != 0
-	if state.kind == javaWidgetShell && state.shown != shown {
+	if state.shown == shown {
+		// A title can repeat the notification on every frame. Only a change
+		// is one a pending Host edit has to answer for.
+		return 0, nil
+	}
+	if state.kind == javaWidgetShell {
 		state.visibilityRevision++
 	}
 	state.shown = shown
@@ -603,6 +608,7 @@ func javaComponentFocusNotify(
 	runtime := client.javaRuntimeState()
 	object, focused := arguments[0], arguments[1] != 0
 	state := client.javaWidgetState(object)
+	before, wasFocused := runtime.focusedWidget, state.focused
 	state.focused = focused
 	if focused {
 		if previous := runtime.focusedWidget; previous != 0 && previous != object {
@@ -612,7 +618,10 @@ func javaComponentFocusNotify(
 	} else if runtime.focusedWidget == object {
 		runtime.focusedWidget = 0
 	}
-	runtime.widgetGeneration++
+	// Repeating what a component already knows is no change of focus.
+	if runtime.focusedWidget != before || state.focused != wasFocused {
+		runtime.widgetGeneration++
+	}
 	return 0, nil
 }
 
@@ -648,12 +657,14 @@ func javaInputMethodConstructor(
 
 // javaInputMethodSetMode accepts every mode. There is no on-device input method
 // to switch: text arrives through the Host keypad, so no mode is less available
-// than another.
+// than another. The mode is the automaton's, not the field's constraint, which
+// a Host edit is validated against, so selecting one leaves a pending edit
+// standing; a title that selects its mode on every frame made every commit
+// stale.
 func javaInputMethodSetMode(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	client.javaWidgetState(arguments[0]).mode = int32(arguments[1])
-	client.javaRuntimeState().widgetGeneration++
 	return 1, nil
 }
 

@@ -1829,6 +1829,11 @@ func (runtime *Runtime) setXTextFieldFocus(_ *jvm.VM, arguments []jvm.Value) (jv
 	data.textRevision++
 	data.focus = focus
 	data.paintedDisplay = nil
+	// A focus call clears the record of unfocused paints too. A title closes
+	// its editor by turning the focus off and no longer painting the field, and
+	// a paint from before that would keep offering the closed field to the
+	// Host until the Displayable changed; a field still shown is painted again.
+	runtime.textFieldPaints = xTextFieldPaints{}
 	if focus {
 		if previous := state.focusedTextField; previous != nil && previous != receiver {
 			if previousData, ok := previous.Native.(*xTextFieldData); ok && previousData != nil {
@@ -1884,6 +1889,10 @@ func (runtime *Runtime) xTextFieldPaint(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	receiver, err := referenceArgument(arguments, 0)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
 	runtime.textMu.Lock()
 	data, err := xTextFieldArgument(arguments)
 	if err != nil {
@@ -1892,12 +1901,16 @@ func (runtime *Runtime) xTextFieldPaint(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	}
 	text := append([]rune(nil), data.text...)
 	x, y := data.x, data.y
+	runtime.displayMu.RLock()
+	current, revision := runtime.currentDisplayable, runtime.displayRevision
+	runtime.displayMu.RUnlock()
 	if data.focus && context.screen == &runtime.renderMu {
-		runtime.displayMu.RLock()
-		data.paintedDisplay = runtime.currentDisplayable
-		data.paintedDisplayRevision = runtime.displayRevision
-		runtime.displayMu.RUnlock()
+		data.paintedDisplay = current
+		data.paintedDisplayRevision = revision
 	}
+	// Any paint is evidence for a field nobody focused, the screen's or a back
+	// buffer's: see xTextFieldPaints.
+	runtime.textFieldPaints.note(receiver, current, revision)
 	runtime.textMu.Unlock()
 	font, err := fontReceiver(context.font)
 	if err != nil || font == nil {

@@ -149,6 +149,11 @@ type fileState struct {
 	Length    int
 }
 
+// textInputState is the C input-method bookkeeping. Active says the title has
+// used the input method. Records written before the Host offered input on
+// every screen of such a title held whether input was open at that moment; a
+// title that had called the automaton by then has used it, which a load reads
+// from Calls.
 type textInputState struct {
 	Active          bool
 	Revision, Calls uint64
@@ -636,7 +641,7 @@ func (client *Client) captureClientState() (clientState, error) {
 	if client.cTextInput.delivering {
 		return clientState{}, ErrCheckpointBusy
 	}
-	saved.TextInput = textInputState{client.cTextInput.active, client.cTextInput.revision, client.cTextInput.calls, bytes.Clone(client.cTextInput.pending)}
+	saved.TextInput = textInputState{client.cTextInput.used, client.cTextInput.revision, client.cTextInput.calls, bytes.Clone(client.cTextInput.pending)}
 	names := slices.Sorted(maps.Keys(client.resourceIDs))
 	for _, name := range names {
 		handle := client.resourceIDs[name]
@@ -1078,10 +1083,8 @@ func restoreClientState(archive *Archive, saved clientState, options Options) (*
 		}
 	}
 	client.inputMode, client.inputModeTableAddress = saved.InputMode, saved.InputModeTable
-	// A checkpoint is taken from a game being played, so keys have reached it;
-	// the mode count only ever compares within one event.
-	client.cTextInput = cTextInputState{active: saved.TextInput.Active, revision: saved.TextInput.Revision,
-		calls: saved.TextInput.Calls, pending: bytes.Clone(saved.TextInput.Pending), keyed: true}
+	client.cTextInput = cTextInputState{used: saved.TextInput.Active || saved.TextInput.Calls != 0,
+		revision: saved.TextInput.Revision, calls: saved.TextInput.Calls, pending: bytes.Clone(saved.TextInput.Pending)}
 	client.applicationIDAddress, client.javaApplication = saved.ApplicationID, saved.JavaApplication
 	if len(saved.Resources) != 0 {
 		client.resourceIDs = make(map[string]uint32, len(saved.Resources))

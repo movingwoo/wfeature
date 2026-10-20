@@ -139,17 +139,25 @@ func TestTextInputRejectsInvalidConstraintsWithoutTruncating(t *testing.T) {
 	}
 }
 
-func TestTextInputRequiresFocusAndAShownShellAndRejectsAListener(t *testing.T) {
+// The field the player sees takes the text whether or not the title gave it
+// focus: a focused field comes first, and without one the only field under a
+// shown shell is taken. A hidden shell, and a field whose handler has a
+// listener, are still refused.
+func TestTextInputTakesTheShownFieldAndRejectsAListener(t *testing.T) {
 	session, shell, field := focusedJavaTextFixture(t, javaWidgetTextField, javaTextConstraintAny, "old")
 	runtime := session.client.javaRun
 	runtime.focusedWidget = 0
-	if _, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
-		t.Fatalf("unfocused field error = %v", err)
+	edit, err := session.TextInput(context.Background())
+	if err != nil || edit.Text != "old" {
+		t.Fatalf("unfocused field under a shown shell: %+v %v", edit, err)
 	}
-	runtime.focusedWidget = field
 	session.client.javaWidgetState(shell).shown = false
 	if _, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
 		t.Fatalf("hidden shell error = %v", err)
+	}
+	runtime.focusedWidget = field
+	if _, err := session.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("focused field in a hidden shell error = %v", err)
 	}
 	session.client.javaWidgetState(shell).shown = true
 	handler, err := newTestObject(t, session.client, javaInputMethodHandlerClass)
@@ -163,7 +171,7 @@ func TestTextInputRequiresFocusAndAShownShellAndRejectsAListener(t *testing.T) {
 	}
 
 	cleanSession, _, cleanField := focusedJavaTextFixture(t, javaWidgetTextField, javaTextConstraintAny, "old")
-	edit, err := cleanSession.TextInput(context.Background())
+	edit, err = cleanSession.TextInput(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,6 +258,105 @@ func TestTextInputCommitRejectsRestoredLifecycleAndGuestEdits(t *testing.T) {
 	}
 }
 
+func newJavaTextField(t *testing.T, client *Client, text string) uint32 {
+	t.Helper()
+	field, err := newTestObject(t, client, "org/kwis/msp/lwc/TextFieldComponent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaTextComponentConstructor(javaWidgetTextField)(client, t.Context(), client.thread,
+		[]uint32{field, newTestString(t, client, text), uint32(javaTextConstraintAny)}); err != nil {
+		t.Fatal(err)
+	}
+	return field
+}
+
+// Without focus the Host takes a field only when the screen leaves one
+// choice: the only field under a shown shell, or, when no shell shows one,
+// the only field that never joined a shell, which the title draws itself.
+func TestTextInputChoosesAnUnfocusedFieldOnlyWhenItIsTheOnlyOne(t *testing.T) {
+	session, shell, field := focusedJavaTextFixture(t, javaWidgetTextField, javaTextConstraintAny, "first")
+	client := session.client
+	client.javaRun.focusedWidget = 0
+	target := func() string {
+		t.Helper()
+		edit, err := session.TextInput(context.Background())
+		if errors.Is(err, backend.ErrNoTextInput) {
+			return ""
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return edit.Text
+	}
+	loose := newJavaTextField(t, client, "loose")
+	if got := target(); got != "first" {
+		t.Fatalf("a field in no shell outranked the shown one: %q", got)
+	}
+	second := newJavaTextField(t, client, "second")
+	if _, err := javaComponentAddChild(client, t.Context(), client.thread, []uint32{shell, second}); err != nil {
+		t.Fatal(err)
+	}
+	if got := target(); got != "" {
+		t.Fatalf("two shown fields without focus offered %q", got)
+	}
+	if _, err := javaComponentSetFocus(client, t.Context(), client.thread, []uint32{second}); err != nil {
+		t.Fatal(err)
+	}
+	if got := target(); got != "second" {
+		t.Fatalf("focus did not decide between shown fields: %q", got)
+	}
+	// A focused field the title draws itself is taken like a shown one.
+	if _, err := javaComponentSetFocus(client, t.Context(), client.thread, []uint32{loose}); err != nil {
+		t.Fatal(err)
+	}
+	if got := target(); got != "loose" {
+		t.Fatalf("focused field in no shell: %q", got)
+	}
+	client.javaRun.focusedWidget = 0
+	if _, err := javaComponentShow(false)(client, t.Context(), client.thread, []uint32{shell}); err != nil {
+		t.Fatal(err)
+	}
+	if got := target(); got != "loose" {
+		t.Fatalf("the only field in no shell, with the shell hidden: %q", got)
+	}
+	newJavaTextField(t, client, "other")
+	if got := target(); got != "" {
+		t.Fatalf("two fields in no shell offered %q", got)
+	}
+	_ = field
+}
+
+// A title can repeat its notifications and select its input mode on every
+// frame. None of that changes the field, and a commit made meanwhile lands.
+func TestTextInputCommitSurvivesRepeatedNotificationsAndModeSelection(t *testing.T) {
+	session, shell, field := focusedJavaTextFixture(t, javaWidgetTextField, javaTextConstraintAny, "old")
+	client := session.client
+	edit, err := session.TextInput(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range []uint32{shell, field} {
+		if _, err := javaComponentShowNotify(client, t.Context(), client.thread, []uint32{object, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := javaComponentFocusNotify(client, t.Context(), client.thread, []uint32{field, 1}); err != nil {
+		t.Fatal(err)
+	}
+	if handler := client.javaWidgetState(field).inputHandler; handler != 0 {
+		if _, err := javaInputMethodSetMode(client, t.Context(), client.thread, []uint32{handler, 2}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := edit.Commit(context.Background(), "new"); err != nil {
+		t.Fatalf("commit after repeated notifications: %v", err)
+	}
+	if got := client.javaWidgetState(field).text; got != "new" {
+		t.Fatalf("field holds %q", got)
+	}
+}
+
 func cTextInputFixture(t *testing.T, mode uint32) *Session {
 	t.Helper()
 	session, err := StartSession(t.Context(), fixtureArchive(t), SessionOptions{
@@ -261,8 +368,8 @@ func cTextInputFixture(t *testing.T, mode uint32) *Session {
 	if applied := callSlot(t, session.client, slotIMSetCurrentMode, mode); applied != 1 {
 		t.Fatalf("setting input mode %d answered %d", mode, applied)
 	}
-	// The widget is open once a key the player pressed reached it: the
-	// fixture passes every key to the automaton, as a name widget does.
+	// A key the player pressed has reached the widget, which passes every
+	// key to the automaton, as a name widget does.
 	session.client.SendEvent(EventKeyPressed, '#', 0)
 	if err := session.client.deliverEvents(t.Context()); err != nil {
 		t.Fatal(err)

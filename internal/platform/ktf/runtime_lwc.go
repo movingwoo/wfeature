@@ -594,8 +594,9 @@ const (
 	componentCommandGrabbed = "commandGrab:Z"
 )
 
-// runtimeComponentShown tracks the latest shell for Host text entry. Rendering
-// and acceptance remain guest-owned; showing a shell does not invent focus.
+// runtimeComponentShown tracks the latest shell for Host text entry, and the
+// shells still shown beneath it; see recordShellHistory. Rendering and
+// acceptance remain guest-owned; showing a shell does not invent focus.
 func runtimeComponentShown(shown bool) runtimeJavaImplementation {
 	return func(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		receiver, err := runtimeComponentReceiver("ShellComponent show", arguments, 1)
@@ -613,6 +614,7 @@ func runtimeComponentShown(shown bool) runtimeJavaImplementation {
 		} else if runtime.runtimeObjects[runtimeLWCShownShellObject] == receiver {
 			delete(runtime.runtimeObjects, runtimeLWCShownShellObject)
 		}
+		runtime.recordShellHistory(receiver, shown)
 		return jvm.VoidValue(), nil
 	}
 }

@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
@@ -10,8 +11,9 @@ import (
 // callable methods and component data, but do not draw a complete widget UI.
 // A settings name editor uses GForm.show rather than a synchronous modal call.
 // The bounded non-modal path exposes its sole listened GTextField to Host text
-// input and leaves acceptance and dismissal to the guest. doModal still returns
-// immediately without presenting a dialog. See docs/native-text-input.md#lifecycle-widget-input-lifecycle-follow-up.
+// input and leaves acceptance and dismissal to the guest; when that finds no
+// field, the form's contents as they stand decide (relaxedVendorTextInput).
+// doModal still returns immediately without presenting a dialog. See docs/native-text-input.md#lifecycle-widget-input-lifecycle-follow-up.
 const (
 	runtimeGFormClass          = "com/ktf/kfc/GForm"
 	runtimeGMenubarFormClass   = "com/ktf/kfc/GMenubarForm"
@@ -222,7 +224,10 @@ func runtimeGFormConstructor(_ *initializationRuntime, _ *jvm.VM, arguments []jv
 
 // runtimeGFormShow exposes only the vendor lifecycle observed in a non-modal
 // settings editor: one shown form directly contains one listened GTextField.
-// A form with no such field, or more than one, has no Host-editable target.
+// That field also owns the keypad while the form is shown; see
+// dispatchKeyToVendorForm. A form with no such field, or more than one, owns
+// no keys, and its Host-editable target, if any, is the one the form's
+// contents give when the Host asks; see relaxedVendorTextInput.
 func runtimeGFormShow(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	receiver, err := runtimeComponentReceiver("GForm.show", arguments, 1)
 	if err != nil {
@@ -274,6 +279,67 @@ func (runtime *initializationRuntime) uniqueVendorTextField(form *jvm.Object) *j
 		field = child
 	}
 	return field
+}
+
+// relaxedVendorTextInput is the vendor rule a Host snapshot falls back on once
+// every route under its first rules found nothing. The field is read off the
+// shown form as it stands, not as it stood when it was shown: a title that
+// adds its field, or gives it a listener, after the show is still showing it.
+// One listened field is the one; of several, the one the title gave focus is,
+// and without that the form is ambiguous. A form whose fields have no listener
+// is typed into at its only field, and with more than one it is ambiguous.
+//
+// The keypad does not follow this: dispatchKeyToVendorForm still hands keys
+// only to the field the form was shown with. Moving them to a field found here
+// would take presses the card beneath the form is waiting for, in a lifecycle
+// nothing here has observed. A Host commit writes the value and sends no key,
+// so it has no such cost.
+func (runtime *initializationRuntime) relaxedVendorTextInput() (vendorTextInputState, bool) {
+	if runtime == nil {
+		return vendorTextInputState{}, false
+	}
+	form := runtime.runtimeObjects[runtimeKFCShownFormObject]
+	if !componentShown(form) {
+		return vendorTextInputState{}, false
+	}
+	var fields, listened []*jvm.Object
+	for _, child := range runtimeComponentChildren(form) {
+		if child == nil {
+			continue
+		}
+		vendor, err := runtime.client.vm.IsSubclassOf(child.ClassName, runtimeGTextFieldClass)
+		if err != nil || !vendor {
+			continue
+		}
+		fields = append(fields, child)
+		if state, ok := runtimeComponentEventListenerState(child); ok && state.listener != nil {
+			listened = append(listened, child)
+		}
+	}
+	var field *jvm.Object
+	switch focus := runtime.runtimeObjects["lwc:focus"]; {
+	case len(listened) == 1:
+		field = listened[0]
+	case len(listened) > 1 && focus != nil && slices.Contains(listened, focus):
+		field = focus
+	case len(listened) == 0 && len(fields) == 1:
+		field = fields[0]
+	}
+	if field == nil {
+		return vendorTextInputState{}, false
+	}
+	event, ok := runtimeComponentEventListenerState(field)
+	if !ok {
+		return vendorTextInputState{}, false
+	}
+	return vendorTextInputState{
+		form:               form,
+		field:              field,
+		visibilityRevision: form.Fields[componentKFCVisibilityRevisionField],
+		childrenRevision:   form.Fields[componentChildrenRevisionField],
+		textRevision:       field.Fields[componentKFCTextRevisionField],
+		event:              event,
+	}, true
 }
 
 // dispatchKeyToVendorForm gives a shown non-modal vendor form ownership of the

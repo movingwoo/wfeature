@@ -11,31 +11,62 @@ import (
 
 const maxCInputLength = 64
 
-// cTextInputLocked offers completed text to the currently active C widget.
-// The caller holds client.run. C timer delivery is completed before returning;
-// general guest event loops remain excluded because consumption is unknown.
-// Keypad language modes are not field constraints: completed OS text is
-// validated for encoding, while the guest retains its own content policy.
-func (client *Client) cTextInputLocked() (*backend.TextInput, error) {
+// cInputOffered decides whether the C input method can take a Host
+// composition. Under the first rules that is its live editor: activated on the
+// card on top, kept alive by the input-method activity of every press, or
+// answered by a recognized controller's own state.
+//
+// The relaxed rule exists because for an unknown caller that activity is the
+// only evidence there is, and a widget that takes a press without calling the
+// input method — a cursor move, a soft key — looks closed afterwards although
+// it is still on the screen. So once a title of unknown shape has used its
+// input method at all, its editor is offered on whatever card is on top: a
+// carrier its widget does not take fails that one commit and leaves the
+// offer standing. A recognized controller answers for its own editor and is
+// held to that under both rules.
+//
+// A title that runs its own event loop takes keys from its queue in its own
+// time, so whether a carrier was consumed is unknown; a vendor form that owns
+// the keypad takes every press, so a carrier would reach the form rather than
+// the card (see dispatchKeyToVendorForm). sync brings a recognized
+// controller's recorded state up to date, which a snapshot has always done and
+// a commit does not.
+func (client *Client) cInputOffered(relaxed, sync bool) bool {
 	runtime := client.runtime
 	state := &runtime.cInput
+	active := state.active
 	if state.owner.address != 0 {
-		active := state.owner.current(runtime)
-		if state.active != active {
-			state.active = active
+		live := state.owner.current(runtime)
+		if sync && state.active != live {
+			state.active = live
 			state.revision++
 		}
+		active = live
 	}
-	if !state.active || runtime.guestEventLoop || len(runtime.displayCards) == 0 || state.card != runtime.cInputCard() {
-		return nil, backend.ErrNoTextInput
+	if runtime.guestEventLoop || len(runtime.displayCards) == 0 {
+		return false
 	}
+	if _, form := runtime.activeVendorTextInput(); form {
+		return false
+	}
+	if relaxed && state.owner.address == 0 {
+		return runtime.cInputUsed()
+	}
+	return active && state.card == runtime.cInputCard()
+}
+
+// cTextInput offers completed text to the C widget. The caller holds
+// client.run. C timer delivery is completed before returning; general guest
+// event loops remain excluded because consumption is unknown. Keypad language
+// modes are not field constraints: completed OS text is validated for
+// encoding, while the guest retains its own content policy.
+func (client *Client) cTextInput(target textInputTarget) *backend.TextInput {
+	runtime := client.runtime
+	state := &runtime.cInput
 	revision, mode := state.revision, state.mode
 	owner := state.owner
 	cards := len(runtime.displayCards)
 	card := runtime.displayCards[cards-1]
-	shell := client.shellTextInput()
-	vendor, vendorActive := runtime.activeVendorTextInput()
-	focus := runtime.runtimeObjects["lwc:focus"]
 	return &backend.TextInput{Append: true, MaxLength: maxCInputLength, InputMode: "text",
 		Commit: func(ctx context.Context, text string) error {
 			if err := ctx.Err(); err != nil {
@@ -43,16 +74,17 @@ func (client *Client) cTextInputLocked() (*backend.TextInput, error) {
 			}
 			client.run.Lock()
 			defer client.run.Unlock()
+			// The input method is still the editor a snapshot would choose,
+			// for the same controller, on the same card, and no key or
+			// input-method call since has spent the snapshot.
 			unchanged := func() bool {
-				if client.runtime != runtime || client.workersStopped {
+				if client.runtime != runtime || client.workersStopped || state.owner != owner ||
+					state.revision != revision || state.mode != mode ||
+					len(runtime.displayCards) != cards || runtime.displayCards[cards-1] != card {
 					return false
 				}
-				currentVendor, currentVendorActive := runtime.activeVendorTextInput()
-				return runtime.runtimeObjects["lwc:focus"] == focus && client.shellTextInput() == shell &&
-					state.owner == owner && (owner.address == 0 || owner.current(runtime)) &&
-					currentVendorActive == vendorActive && (!vendorActive || sameVendorTextInputState(vendor, currentVendor)) &&
-					!runtime.guestEventLoop && state.active && state.revision == revision && state.mode == mode &&
-					len(runtime.displayCards) == cards && runtime.displayCards[cards-1] == card
+				current, ok := client.resolveTextInputLocked(textInputResolution{})
+				return ok && current.identifies(target)
 			}
 			if !unchanged() || len(state.pending) != 0 || state.discardCarrier {
 				return backend.ErrTextInputChanged
@@ -109,16 +141,30 @@ func (client *Client) cTextInputLocked() (*backend.TextInput, error) {
 					_, err = client.serviceTimersLocked(ctx, maxPendingTimers)
 				}
 				consumed := len(state.pending) == 0
+				reached := state.calls != calls
 				inserted = inserted || consumed
-				state.discardCarrier = !consumed && state.calls == calls && state.timerCallback != 0
+				state.discardCarrier = !consumed && !reached && state.timerCallback != 0
 				if err != nil {
 					return err
+				}
+				if !reached {
+					// The carrier never reached the input method, so the card
+					// took it as the key it is. Its release follows, as it
+					// would a person's, so the key is not left down. The
+					// editor stays offered — what the press did is the title's
+					// — but this snapshot is spent with it.
+					state.pending = nil
+					state.revision++
+					if err := client.absorbUncaughtCallback("key", runtime.dispatchKeyToCards(KeyReleased, cInputCarrier)); err != nil {
+						return err
+					}
+					return backend.ErrTextInputChanged
 				}
 				if !unchanged() {
 					return backend.ErrTextInputChanged
 				}
 				if !consumed {
-					if state.calls == calls || state.revision != revision {
+					if state.revision != revision {
 						state.active = false
 						return backend.ErrTextInputChanged
 					}
@@ -128,7 +174,7 @@ func (client *Client) cTextInputLocked() (*backend.TextInput, error) {
 			}
 			return nil
 		},
-	}, nil
+	}
 }
 
 // Wait before injecting a key, so cancellation or a removed timer cannot leave

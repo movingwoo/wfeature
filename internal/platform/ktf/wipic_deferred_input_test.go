@@ -139,6 +139,10 @@ func TestCInputTimerClearKeepsEditorAvailable(t *testing.T) {
 	if string(*fixture.text) != string(want) {
 		t.Fatalf("replacement text=%x, want %x", *fixture.text, want)
 	}
+	// Fire reaches the widget without any input-method call, which closes the
+	// live editor of a caller of unknown shape. Nothing tells the Host its
+	// screen went with it, so it stays offered; an edit taken before the
+	// press is spent by it.
 	if err := s.SendKey(context.Background(), KeyPressed, KeyFire); err != nil {
 		t.Fatal(err)
 	}
@@ -146,8 +150,14 @@ func TestCInputTimerClearKeepsEditorAvailable(t *testing.T) {
 	if _, err := s.Client.ServiceTimers(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
-		t.Fatalf("dismissed editor: %v", err)
+	if s.Client.runtime.cInput.active {
+		t.Fatal("fire without input-method activity left the editor live")
+	}
+	if err := edit.Commit(context.Background(), "x"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("edit taken before fire: %v", err)
+	}
+	if _, err := s.TextInput(context.Background()); err != nil {
+		t.Fatalf("editor of an unknown caller after fire: %v", err)
 	}
 }
 

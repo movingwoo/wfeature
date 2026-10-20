@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/api/skvm"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
@@ -228,9 +229,109 @@ func TestHostTextInputCommitsFocusedFormFieldAndNotifies(t *testing.T) {
 	if err := stale.Commit(context.Background(), "다른 이름"); !errors.Is(err, backend.ErrTextInputChanged) {
 		t.Fatalf("Commit() after focus change error = %v", err)
 	}
+
+	// With the selection on the ChoiceGroup the Form's only TextField is still
+	// the one, and its listener hears the edit as it does from the selection.
+	moved, err := runtime.TextInput(context.Background())
+	if err != nil || moved.Text != "새 이름" {
+		t.Fatalf("TextInput() with the selection off the field = %+v, %v", moved, err)
+	}
+	if err := moved.Commit(context.Background(), "세 번째"); err != nil {
+		t.Fatalf("Commit() with the selection off the field error = %v", err)
+	}
+	if changes := invokeFixtureInt(t, runtime, "UIMIDlet", "itemChanges"); changes != 2 {
+		t.Fatalf("itemChanges() = %d, want a callback for each Host edit", changes)
+	}
 }
 
-func TestHostTextInputCommitsOnlyTheFocusedVisibleXTextField(t *testing.T) {
+// A Form opens with its selection on its first item, and a label above its
+// one TextField keeps the selection off the field until the player presses
+// Down. With exactly one editable TextField that field is the one: the edit is
+// offered and lands in it. An edit opened that way is not committed after the
+// selection moves, even onto the same field, and the field the selection is
+// then on is offered as before.
+func TestHostTextInputOffersTheFormsOnlyTextField(t *testing.T) {
+	runtime := startUIFixture(t)
+	field := newTextFieldForTest(t, runtime, "이름", "홍길동", 10, 0)
+	form := showFormForTest(t, runtime, newStringItemForTest(t, runtime, "안내", "이름을 입력하세요"), field)
+	if selection := runtime.screenState(form, screenForm).selection; selection != 0 {
+		t.Fatalf("Form selection = %d, want the label it opens on", selection)
+	}
+	edit, err := runtime.TextInput(context.Background())
+	if err != nil || edit.Text != "홍길동" || edit.MaxLength != 10 || edit.Multiline {
+		t.Fatalf("TextInput() = %+v, %v", edit, err)
+	}
+	if err := edit.Commit(context.Background(), "새 이름"); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	if text := textFieldStringForTest(t, runtime, field); text != "새 이름" {
+		t.Fatalf("TextField text = %q", text)
+	}
+
+	stale, err := runtime.TextInput(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pressKey(t, runtime, KeyCodeDown)
+	if err := stale.Commit(context.Background(), "다른 이름"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("Commit() after the selection moved error = %v", err)
+	}
+	if selected, err := runtime.TextInput(context.Background()); err != nil || selected.Text != "새 이름" {
+		t.Fatalf("selected TextField = %+v, %v", selected, err)
+	}
+}
+
+// Two editable TextFields with the selection on neither leave no way to tell
+// which the player means, so neither is offered until the player selects one.
+// An UNEDITABLE field is not one a Host edit could take, so it does not count,
+// and the selection resting on one does not keep the Form's other field from
+// being offered. The commit asks the same question again: a second field made
+// editable since the edit opened leaves two, and nothing is written.
+func TestHostTextInputLeavesTwoFormTextFieldsToTheSelection(t *testing.T) {
+	runtime := startUIFixture(t)
+	first := newTextFieldForTest(t, runtime, "이름", "first", 10, 0)
+	second := newTextFieldForTest(t, runtime, "별명", "second", 10, 0)
+	showFormForTest(t, runtime, newStringItemForTest(t, runtime, "안내", "두 칸"), first, second)
+	if _, err := runtime.TextInput(context.Background()); !errors.Is(err, backend.ErrNoTextInput) {
+		t.Fatalf("two TextFields off the selection offered one: %v", err)
+	}
+	setConstraints := func(field *jvm.Object, constraints int32) {
+		t.Helper()
+		if _, err := runtime.VM.InvokeVirtual(field, "setConstraints", "(I)V", jvm.IntValue(constraints)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setConstraints(second, textFieldUneditable)
+	edit, err := runtime.TextInput(context.Background())
+	if err != nil || edit.Text != "first" {
+		t.Fatalf("the one editable TextField = %+v, %v", edit, err)
+	}
+	setConstraints(second, 0)
+	if err := edit.Commit(context.Background(), "stale"); !errors.Is(err, backend.ErrTextInputChanged) {
+		t.Fatalf("Commit() with a second editable field error = %v", err)
+	}
+	if text := textFieldStringForTest(t, runtime, first); text != "first" {
+		t.Fatalf("an ambiguous commit changed the first field to %q", text)
+	}
+
+	pressKey(t, runtime, KeyCodeDown)
+	if selected, err := runtime.TextInput(context.Background()); err != nil || selected.Text != "first" {
+		t.Fatalf("the selected TextField = %+v, %v", selected, err)
+	}
+	setConstraints(first, textFieldUneditable)
+	other, err := runtime.TextInput(context.Background())
+	if err != nil || other.Text != "second" {
+		t.Fatalf("TextInput() with the selection on an UNEDITABLE field = %+v, %v", other, err)
+	}
+	if err := other.Commit(context.Background(), "별명 입력"); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	if text := textFieldStringForTest(t, runtime, second); text != "별명 입력" {
+		t.Fatalf("second TextField text = %q", text)
+	}
+}
+
+func TestHostTextInputCommitsOnlyTheFocusedXTextField(t *testing.T) {
 	runtime := startUIFixture(t)
 	invokeFixtureVoid(t, runtime, "UIMIDlet", "showBuffer")
 	owner := runtime.currentDisplayable
@@ -262,6 +363,9 @@ func TestHostTextInputCommitsOnlyTheFocusedVisibleXTextField(t *testing.T) {
 	}
 	if data, _ := nativeXTextField(field); string(data.text) != "한글" {
 		t.Fatalf("stale commit changed old XTextField to %q", data.text)
+	}
+	if fresh, err := runtime.TextInput(context.Background()); err != nil || fresh.Text != "next" {
+		t.Fatalf("TextInput() after vendor focus change = %+v, %v", fresh, err)
 	}
 }
 
@@ -302,6 +406,66 @@ func TestHostTextInputConstraintMetadataAndSyntax(t *testing.T) {
 	if !validHostText("가", 1, 0, false) || validHostText("😀", 1, 0, false) || !validHostText("😀", 2, 0, false) {
 		t.Fatal("maxSize did not count Java UTF-16 char units")
 	}
+}
+
+// showFormForTest makes a Form of the given items current. Its selection is
+// on the first item, where every Form starts.
+func showFormForTest(t *testing.T, runtime *Runtime, items ...*jvm.Object) *jvm.Object {
+	t.Helper()
+	form, err := runtime.VM.NewObject(midp.FormClass, "(Ljava/lang/String;)V", jvm.ReferenceValue(runtime.VM.NewString("입력")))
+	if err != nil {
+		t.Fatalf("new Form error = %v", err)
+	}
+	for _, item := range items {
+		if _, err := runtime.VM.InvokeVirtual(form, "append", "(Ljavax/microedition/lcdui/Item;)I", jvm.ReferenceValue(item)); err != nil {
+			t.Fatalf("Form.append() error = %v", err)
+		}
+	}
+	if _, err := runtime.VM.InvokeVirtual(runtime.display, "setCurrent", "(Ljavax/microedition/lcdui/Displayable;)V", jvm.ReferenceValue(form)); err != nil {
+		t.Fatalf("setCurrent(Form) error = %v", err)
+	}
+	if err := runtime.RunPending(); err != nil {
+		t.Fatalf("RunPending() error = %v", err)
+	}
+	return form
+}
+
+func newStringItemForTest(t *testing.T, runtime *Runtime, label, text string) *jvm.Object {
+	t.Helper()
+	item, err := runtime.VM.NewObject(midp.StringItemClass, "(Ljava/lang/String;Ljava/lang/String;)V",
+		jvm.ReferenceValue(runtime.VM.NewString(label)), jvm.ReferenceValue(runtime.VM.NewString(text)))
+	if err != nil {
+		t.Fatalf("new StringItem error = %v", err)
+	}
+	return item
+}
+
+func newTextFieldForTest(t *testing.T, runtime *Runtime, label, text string, maxSize, constraints int32) *jvm.Object {
+	t.Helper()
+	field, err := runtime.VM.NewObject(midp.TextFieldClass, "(Ljava/lang/String;Ljava/lang/String;II)V",
+		jvm.ReferenceValue(runtime.VM.NewString(label)), jvm.ReferenceValue(runtime.VM.NewString(text)),
+		jvm.IntValue(maxSize), jvm.IntValue(constraints))
+	if err != nil {
+		t.Fatalf("new TextField error = %v", err)
+	}
+	return field
+}
+
+func textFieldStringForTest(t *testing.T, runtime *Runtime, field *jvm.Object) string {
+	t.Helper()
+	value, err := runtime.VM.InvokeVirtual(field, "getString", "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatalf("TextField.getString() error = %v", err)
+	}
+	object, err := value.Reference()
+	if err != nil || object == nil {
+		t.Fatalf("TextField.getString() = %v, %v", object, err)
+	}
+	text, ok := object.Native.(string)
+	if !ok {
+		t.Fatal("TextField.getString() did not return a String")
+	}
+	return text
 }
 
 func newXTextField(t *testing.T, runtime *Runtime, owner *jvm.Object, text string, maxSize, constraints int32) *jvm.Object {

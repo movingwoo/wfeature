@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"unicode/utf16"
 
+	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
@@ -18,10 +19,17 @@ const (
 	hostFormTextField
 	hostXTextField
 	hostTextComponent
+	// hostPaintedXTextField is a vendor field nobody focused, offered because
+	// it is the one field the title painted on the current Displayable.
+	hostPaintedXTextField
 )
 
 type hostTextTarget struct {
-	kind            hostTextTargetKind
+	kind hostTextTargetKind
+	// fallback marks a target no strict route chose: it was found only after
+	// every one of them came up empty, and its commit checks that the rule
+	// that found it still finds it. See textInputSnapshot.
+	fallback        bool
 	display         *jvm.Object
 	field           *jvm.Object
 	original        string
@@ -51,20 +59,43 @@ func (runtime *Runtime) TextInput(ctx context.Context) (*backend.TextInput, erro
 	return runtime.textInputSnapshot()
 }
 
+// textInputSnapshot finds the field a Host edit is for.
+//
+// The strict routes come first, in this order, and each names a field only
+// when the platform's own state puts the player in it: a TextBox, the selected
+// TextField of a Form, the focused XTextField when the screen is known to show
+// it, and the TextComponent the vendor input method is attached to. **The
+// fallbacks are asked only when every strict route came up empty**, so what
+// the strict routes pick they still pick, in the same order. A field the
+// player can see and cannot type into is the failure that matters; offering
+// text input on a screen that shows no field is the lesser one. The fallbacks
+// are a Form's only editable TextField, the focused XTextField on a Canvas
+// whatever it was painted into, and, with no field focused, the one XTextField
+// painted at this display revision.
+//
+// No fallback is asked while a TextComponent is attached, even one that
+// cannot take text: that component is where the handset's keys type, so text
+// written into any other field would land where the player is not typing.
 func (runtime *Runtime) textInputSnapshot() (*backend.TextInput, error) {
 	if runtime.State() != StateActive {
 		return nil, backend.ErrNoTextInput
 	}
-	runtime.textMu.Lock()
 	runtime.displayMu.RLock()
 	current := runtime.currentDisplayable
 	displayRevision := runtime.displayRevision
 	runtime.displayMu.RUnlock()
 	if current == nil {
-		runtime.textMu.Unlock()
 		return nil, backend.ErrNoTextInput
 	}
+	// A vendor field is drawn by the title, so only a Canvas can be showing one
+	// the strict route could not place. This is asked before any lock is taken
+	// because a class hierarchy can need the loader; the Displayable cannot
+	// change meanwhile, because it changes only on the event loop and the
+	// caller holds dispatchMu.
+	canvas, err := runtime.VM.IsSubclassOf(current.ClassName, midp.CanvasClass)
+	canvas = canvas && err == nil
 
+	runtime.textMu.Lock()
 	state := runtime.lcdui()
 	state.mu.Lock()
 	display := state.displayables[current]
@@ -77,6 +108,7 @@ func (runtime *Runtime) textInputSnapshot() (*backend.TextInput, error) {
 		runtime.textMu.Unlock()
 		return nil, backend.ErrNoTextInput
 	}
+	var fallback *backend.TextInput
 	if display != nil && display.screen != nil {
 		screen := display.screen
 		switch screen.kind {
@@ -93,20 +125,22 @@ func (runtime *Runtime) textInputSnapshot() (*backend.TextInput, error) {
 				return result, nil
 			}
 		case screenForm:
-			if screen.selection >= 0 && screen.selection < len(screen.items) {
-				field := screen.items[screen.selection]
-				if data, ok := field.Native.(*itemData); ok && data != nil && data.kind == itemText &&
-					data.constraint&textFieldUneditable == 0 {
-					target := hostTextTarget{
-						kind: hostFormTextField, display: current, field: field, original: string(data.text),
-						displayRevision: displayRevision, menuRevision: menuRevision, revision: data.textRevision, screenRevision: screen.textRevision,
-						maxSize: data.maxSize, constraint: data.constraint,
-					}
-					result := hostTextInput(runtime, target, data.maxSize, data.constraint, false)
+			if field, data, selected := formTextFieldForHost(screen); field != nil {
+				target := hostTextTarget{
+					kind: hostFormTextField, fallback: !selected, display: current, field: field, original: string(data.text),
+					displayRevision: displayRevision, menuRevision: menuRevision, revision: data.textRevision, screenRevision: screen.textRevision,
+					maxSize: data.maxSize, constraint: data.constraint,
+				}
+				result := hostTextInput(runtime, target, data.maxSize, data.constraint, false)
+				if selected {
 					state.mu.Unlock()
 					runtime.textMu.Unlock()
 					return result, nil
 				}
+				// The Form's only field waits for the routes below to come up
+				// empty. textMu is held throughout, and every Form and
+				// TextField change takes it, so what it was built from stays.
+				fallback = result
 			}
 		}
 	}
@@ -114,8 +148,7 @@ func (runtime *Runtime) textInputSnapshot() (*backend.TextInput, error) {
 
 	vendor := runtime.skvm()
 	vendor.mu.Lock()
-	field := vendor.focusedTextField
-	if data, ok := nativeXTextField(field); ok && data.focus && data.visibleOn(current, displayRevision) &&
+	if field, data := vendor.focusedXTextField(); field != nil && data.visibleOn(current, displayRevision) &&
 		data.constraints&textFieldUneditable == 0 {
 		target := hostTextTarget{
 			kind: hostXTextField, display: current, field: field, original: string(data.text),
@@ -129,12 +162,138 @@ func (runtime *Runtime) textInputSnapshot() (*backend.TextInput, error) {
 	}
 	component := vendor.textInput.component
 	revision := vendor.textInput.revision
+	if component == nil && fallback == nil && canvas {
+		fallback = runtime.hostXTextFieldFallback(vendor, current, displayRevision, menuRevision)
+	}
 	vendor.mu.Unlock()
 	runtime.textMu.Unlock()
-	if component == nil {
+	if component != nil {
+		return runtime.hostTextComponentInput(current, component, revision, displayRevision, menuRevision)
+	}
+	if fallback == nil {
 		return nil, backend.ErrNoTextInput
 	}
-	return runtime.hostTextComponentInput(current, component, revision, displayRevision, menuRevision)
+	return fallback, nil
+}
+
+// formTextFieldForHost answers which TextField of a Form a Host edit is for,
+// and whether it is the selected item. The selected item comes first when it
+// is an editable TextField: that is the field the player is on. When it is
+// not, a Form with exactly one editable TextField has that one. A Form's
+// selection starts on its first item and appending items does not move it,
+// only the pad does, so a Form that opens on a label above its one field would
+// otherwise refuse the page until the player pressed Down. Two or more
+// editable fields with the selection on neither leave no way to tell which the
+// player means, and the answer is none. The caller holds textMu.
+func formTextFieldForHost(form *screenData) (*jvm.Object, *itemData, bool) {
+	if form.selection >= 0 && form.selection < len(form.items) {
+		if data, ok := editableFormTextField(form.items[form.selection]); ok {
+			return form.items[form.selection], data, true
+		}
+	}
+	var only *jvm.Object
+	var onlyData *itemData
+	for _, item := range form.items {
+		data, ok := editableFormTextField(item)
+		if !ok || item == only {
+			continue
+		}
+		if only != nil {
+			return nil, nil, false
+		}
+		only, onlyData = item, data
+	}
+	return only, onlyData, false
+}
+
+// editableFormTextField reports a Form item a Host edit may write: a
+// TextField that is not UNEDITABLE.
+func editableFormTextField(item *jvm.Object) (*itemData, bool) {
+	if item == nil {
+		return nil, false
+	}
+	data, ok := item.Native.(*itemData)
+	return data, ok && data != nil && data.kind == itemText && data.constraint&textFieldUneditable == 0
+}
+
+// hostXTextFieldFallback answers the vendor field a Host edit is for when the
+// strict route could not place one on screen. A focused field is offered on
+// any Canvas, whatever it was painted into: a title that draws it into its own
+// back buffer, or draws its text itself, never paints it onto the screen
+// Graphics, and the field is still the one the player is looking at. With no
+// field focused, the one field painted, into any Graphics, at this display
+// revision is offered; two make the paint ambiguous. A focused field that
+// cannot take text is still the focused one, so a field merely painted beside
+// it is not offered in its place.
+//
+// The caller holds textMu and the vendor lock, and has checked that the
+// current Displayable is a Canvas and that no TextComponent is attached.
+func (runtime *Runtime) hostXTextFieldFallback(vendor *skvmState, current *jvm.Object, displayRevision, menuRevision uint64) *backend.TextInput {
+	kind := hostXTextField
+	field, data := vendor.focusedXTextField()
+	if field == nil {
+		var ok bool
+		kind, field = hostPaintedXTextField, runtime.textFieldPaints.only(current, displayRevision)
+		if data, ok = nativeXTextField(field); !ok {
+			return nil
+		}
+	}
+	if data.constraints&textFieldUneditable != 0 {
+		return nil
+	}
+	target := hostTextTarget{
+		kind: kind, fallback: true, display: current, field: field, original: string(data.text),
+		displayRevision: displayRevision, menuRevision: menuRevision, revision: data.textRevision,
+		maxSize: data.maxSize, constraint: data.constraints,
+	}
+	return hostTextInput(runtime, target, data.maxSize, data.constraints, false)
+}
+
+// focusedXTextField answers the vendor field whose focus is on, or nil. The
+// caller holds textMu and the vendor lock.
+func (vendor *skvmState) focusedXTextField() (*jvm.Object, *xTextFieldData) {
+	data, ok := nativeXTextField(vendor.focusedTextField)
+	if !ok || !data.focus {
+		return nil, nil
+	}
+	return vendor.focusedTextField, data
+}
+
+// xTextFieldPaints is the evidence for a vendor field nobody focused: which
+// XTextField the title painted while the current Displayable was up. Any
+// Graphics counts, the screen's or one a title draws its back buffer through,
+// because either way the title drew the field to show it. It holds one field,
+// and whether a second was painted too, rather than a list: the Host offers a
+// field only when it is the one, and an archive that paints any number of
+// fields cannot grow it. The record belongs to one display revision and
+// starts over with the first paint after the Displayable changes; a focus
+// call empties it, as it clears a focused field's screen evidence. Until then
+// a second field keeps it ambiguous, even after the first is no longer drawn,
+// because a paint does not say what it replaced. Guarded by textMu.
+type xTextFieldPaints struct {
+	display  *jvm.Object
+	revision uint64
+	field    *jvm.Object
+	several  bool
+}
+
+// note records one paint of field while display was current at revision.
+func (paints *xTextFieldPaints) note(field, display *jvm.Object, revision uint64) {
+	switch {
+	case paints.field == nil || paints.display != display || paints.revision != revision:
+		*paints = xTextFieldPaints{display: display, revision: revision, field: field}
+	case paints.field != field:
+		paints.several = true
+	}
+}
+
+// only answers the one field painted while display was current at revision,
+// or nil when none or several were.
+func (paints *xTextFieldPaints) only(display *jvm.Object, revision uint64) *jvm.Object {
+	if paints.several || paints.display != display || paints.revision != revision {
+		return nil
+	}
+	return paints.field
 }
 
 func hostTextInput(runtime *Runtime, target hostTextTarget, maxSize, constraint int32, multiline bool) *backend.TextInput {
@@ -194,7 +353,7 @@ func (runtime *Runtime) commitTextInput(ctx context.Context, target hostTextTarg
 		err = runtime.commitTextBox(target, text)
 	case hostFormTextField:
 		err = runtime.commitFormTextField(target, text)
-	case hostXTextField:
+	case hostXTextField, hostPaintedXTextField:
 		err = runtime.commitXTextField(target, text)
 	case hostTextComponent:
 		err = runtime.commitTextComponent(ctx, target, text)
@@ -204,7 +363,7 @@ func (runtime *Runtime) commitTextInput(ctx context.Context, target hostTextTarg
 	if err != nil {
 		return err
 	}
-	if target.kind == hostXTextField || target.kind == hostTextComponent {
+	if target.kind == hostXTextField || target.kind == hostPaintedXTextField || target.kind == hostTextComponent {
 		if err := runtime.redrawTitleField(); err != nil {
 			return err
 		}
@@ -454,6 +613,10 @@ func (runtime *Runtime) commitTextBox(target hostTextTarget, text string) error 
 
 func (runtime *Runtime) commitFormTextField(target hostTextTarget, text string) error {
 	runtime.textMu.Lock()
+	if target.fallback && runtime.textComponentAttached() {
+		runtime.textMu.Unlock()
+		return backend.ErrTextInputChanged
+	}
 	state := runtime.lcdui()
 	state.mu.Lock()
 	display := state.displayables[target.display]
@@ -463,7 +626,12 @@ func (runtime *Runtime) commitFormTextField(target hostTextTarget, text string) 
 		return backend.ErrTextInputChanged
 	}
 	form := display.screen
-	if form.textRevision != target.screenRevision || form.selection < 0 || form.selection >= len(form.items) || form.items[form.selection] != target.field {
+	// The field has to be the one the same rule picks now: the selected item,
+	// or with the selection elsewhere the Form's only editable field. Another
+	// field made editable since then leaves the fallback with two.
+	chosen, _, selected := formTextFieldForHost(form)
+	byFallback := !selected
+	if form.textRevision != target.screenRevision || chosen != target.field || byFallback != target.fallback {
 		state.mu.Unlock()
 		runtime.textMu.Unlock()
 		return backend.ErrTextInputChanged
@@ -505,7 +673,7 @@ func (runtime *Runtime) commitXTextField(target hostTextTarget, text string) err
 	state := runtime.skvm()
 	state.mu.Lock()
 	data, ok := nativeXTextField(target.field)
-	if !ok || data.textRevision != target.revision || state.focusedTextField != target.field || !data.focus || !data.visibleOn(target.display, target.displayRevision) ||
+	if !ok || data.textRevision != target.revision || !runtime.hostXTextFieldStillChosen(state, target, data) ||
 		string(data.text) != target.original || data.maxSize != target.maxSize || data.constraints != target.constraint ||
 		data.constraints&textFieldUneditable != 0 {
 		state.mu.Unlock()
@@ -528,6 +696,34 @@ func (runtime *Runtime) commitXTextField(target hostTextTarget, text string) err
 		return err
 	}
 	return runtime.repaintNewCurrentCanvas(target.display)
+}
+
+// hostXTextFieldStillChosen reports whether the rule that chose a vendor field
+// for a Host edit would choose it again. A focused field the strict route
+// placed must still be shown; one the fallback offered needs only its focus,
+// because the Displayable it was offered on is still current and is a Canvas.
+// The field painted with nothing focused must still be the only one painted.
+// Either fallback also needs the vendor input method to be without a
+// component, as it was when the fallback was asked. The caller holds textMu
+// and the vendor lock.
+func (runtime *Runtime) hostXTextFieldStillChosen(vendor *skvmState, target hostTextTarget, data *xTextFieldData) bool {
+	if target.fallback && vendor.textInput.component != nil {
+		return false
+	}
+	focused, _ := vendor.focusedXTextField()
+	if target.kind == hostPaintedXTextField {
+		return focused == nil && runtime.textFieldPaints.only(target.display, target.displayRevision) == target.field
+	}
+	return focused == target.field && (target.fallback || data.visibleOn(target.display, target.displayRevision))
+}
+
+// textComponentAttached reports whether the vendor input method has a
+// component to type into. The caller holds textMu.
+func (runtime *Runtime) textComponentAttached() bool {
+	vendor := runtime.skvm()
+	vendor.mu.Lock()
+	defer vendor.mu.Unlock()
+	return vendor.textInput.component != nil
 }
 
 func (data *xTextFieldData) visibleOn(display *jvm.Object, revision uint64) bool {

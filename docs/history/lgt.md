@@ -48,6 +48,7 @@ This consolidation adds no execution or acceptance evidence.
 - [LGT startup, rendering, and media QA — 2026-09-21](#lgt-qa-2026-09-21)
 - [LGT key callback hang — 2026-09-23](#lgt-key-callback-hang-2026-09-23)
 - [Newly added archives — 2026-10-19](#lgt-new-archives-2026-10-19)
+- [A name field the key rule refused — 2026-10-20](#lgt-text-input-2026-10-20)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -7593,3 +7594,79 @@ selection screen after `게임시작`. `TestCertificateMessageRevisionRequests` 
 both revisions' recorded requests and socket contracts as fixed bytes, both
 revisions run the fragment and changed-byte checks, and an unregistered module
 is refused. Remote saves, ranking and purchases remain unavailable.
+
+<a id="lgt-text-input-2026-10-20"></a>
+
+## A name field the key rule refused — 2026-10-20
+
+A Clet title from the 2026-10-19 additions ran, but its character-name screen
+(new game, slot, class, then the name) showed 입력 불가능 when the text input
+dialog was opened there. The player had pressed only the confirm key on the way.
+
+**What the title does with the input method.** A run with `-trace-live " im"`
+and the same presses, then a probe through `Session.TextInput`:
+
+- While starting, before any key: `MC_imGetSupportedModeCount`,
+  `MC_imGetSupportedModes`, `MC_imSetCurrentMode(2)` and ten
+  `MC_imHandleInput(0x9d)` flushes, all with the completion buffer the name
+  screen later uses.
+- Notices, title, menu, slot and class selection: no input-method call.
+- The name screen: every key press, `0`, `2`, `5` and `*` included, reaches
+  `MC_imHandleInput` from one call site in a wrapper that hands the automaton
+  the key. On arrival, with no key pressed there, nothing calls it. The key
+  that opens the screen is the class screen's confirm.
+- Every frame of the name screen copies the completion buffer into the string
+  it draws (`strcpy`, `strcat`, `strlen`); no other screen reads the buffer.
+
+The availability rule then in force ignored calls before the first key and
+closed input on any key the Clet handled without the input method. Input was
+therefore closed on arrival and opened only by a key pressed on the name screen
+itself. The carrier route was never the problem: after any key there, a commit
+of a two-character name appeared in the field, and the title accepted it and
+went on into its opening.
+
+**The decision.** Reading the completion buffer back would have been evidence
+of the widget at work, and the probe showed it opening input on arrival. It was
+not kept: it would have needed the buffer address in quick-save records, and a
+widget that copies its buffer with its own loop would still be refused. The
+user's call was the simpler one: a field the player cannot type into is the
+failure that matters, an offer on a screen without a field costs only a commit
+that reports failure, and so availability should err toward offering, on every
+platform. LGT C input is offered again from the first input-method call on,
+start-up configuration included. A carrier that reaches no automaton is followed
+by its release, so the stray key is a whole tap rather than a key held down, and
+the offer stays. A load of a record written while input followed the keys
+offers input to a title whose record shows input-method calls
+(`TestLGTCInputOfferSurvivesARecordThatHadItClosed`).
+
+Result on the same route, from an empty debug save: the snapshot on arrival is
+offered, a two-character name lands in the field, and the confirm key goes on
+to the opening. Four `*` presses on the name screen, each followed by a
+one-character commit, append all four characters: the wrapper's mode changes
+do not keep the carrier from the automaton in this title. Its disassembly shows
+modes in which the wrapper drops `0` or sends keys through its own table
+instead; those were not reached.
+
+**LGT Java fields at the same time.** The Java route required a focused field.
+It now takes the focused field when it can, and otherwise the only text
+component under a shown shell, or, with none there, the only one that never
+joined a shell. Repeated show and focus notifications and input-mode selections
+no longer make a pending edit stale; real visibility, focus, parent and value
+changes still do (`TestTextInputChoosesAnUnfocusedFieldOnlyWhenItIsTheOnlyOne`,
+`TestTextInputCommitSurvivesRepeatedNotificationsAndModeSelection`). A static
+scan finds text component class names in ten local LGT titles (twelve
+archives); no route to a Java name field was run.
+
+**KTF and SKT at the same time.** KTF asks its six routes twice: first under
+the rules they had, with a candidate that cannot take the edit handing the
+question on instead of ending it, then, only when that finds nothing, under
+relaxed rules — any shown shell in a focused field's chain, the newest shell
+still shown, a drawn field without focus that is the only one read, the vendor
+form's current contents, a title's own field until its listener is removed, and
+an unknown C caller on any card once the title has used the input method. SKT's
+fallbacks are recorded in [its history](skt.md#skt-text-input-2026-10-20). Both
+rest on unit tests (the KTF ones include `TestTextInputKeepsTheFirstRulesAheadOfTheRelaxedOnes`,
+`TestTextInputFallsThroughAStaleFocus` and
+`TestCInputUnreachedCarrierIsReleasedAndLeavesInputOffered`); no KTF or SKT
+title was driven to a name screen for this change.
+

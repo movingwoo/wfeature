@@ -35,6 +35,7 @@ This consolidation adds no execution or acceptance evidence.
 - [SKT name input with a placeholder Canvas](#skt-name-input-2026-09-23)
 - [SKT input and tile rendering (2026-09-29)](#skt-qa-2026-09-29)
 - [SKT retained-session resume (2026-09-30)](#skt-resume-2026-09-30)
+- [Text input offered when no strict route names a field (2026-10-20)](#skt-text-input-2026-10-20)
 
 <a id="implementation-skvm-and-the-skt-platform"></a>
 
@@ -3054,3 +3055,53 @@ after the server process itself exits.
 
 Local evidence is under ignored `var/diagnostics/skt-resume-20260930` and saves
 are isolated under `var/savedata/skt-resume-20260930`.
+
+<a id="skt-text-input-2026-10-20"></a>
+
+## Text input offered when no strict route names a field (2026-10-20)
+
+A user decision taken while fixing an LGT name screen
+([LGT history](lgt.md#lgt-text-input-2026-10-20)) applies to every platform: a
+field the player can see and cannot type into is the failure that matters, and
+an offer on a screen without one is the lesser one. The SKT strict routes keep
+their order and their picks; three fallbacks are asked only when all of them
+come up empty, and none while a `TextComponent` is attached:
+
+- **A Form's only editable `TextField`.** Selection starts on the first item,
+  appending items does not move it, and only Up and Down do, so a Form of a
+  `StringItem` above a `TextField` refused the page until the player pressed
+  Down. Two editable fields with the selection on neither still offer nothing.
+  The commit reruns the same rule and is stale once a second field becomes
+  editable or the pad moves the selection.
+- **The focused `XTextField` on a Canvas, whatever it was painted into.** The
+  strict route needs the constructor Canvas to be current or a focused paint
+  onto the screen Graphics at this display revision, so a title drawing the
+  field into its own back buffer, or drawing its text itself, never qualified.
+- **With no field focused, the one `XTextField` painted into any Graphics at
+  this display revision.** The record holds one field and whether a second was
+  painted, starts again when the Displayable changes, and is emptied by any
+  focus call: a title closes its editor by turning the focus off and no longer
+  painting it, and the earlier name-input work recorded the dialog reporting
+  unavailable once a field is closed that way, which stays true. The record is
+  not part of a checkpoint; after a load the title's next paint fills it.
+
+Tests: `TestHostTextInputOffersTheFormsOnlyTextField`,
+`TestHostTextInputLeavesTwoFormTextFieldsToTheSelection`,
+`TestHostXTextFieldFocusedOnTheCurrentCanvas` (was
+`TestHostXTextFieldPaintedOnCurrentCanvas`),
+`TestHostXTextFieldPaintedOffscreenIsOffered` (was
+`TestHostXTextFieldRejectsOffscreenPaint`),
+`TestHostTextInputCommitsOnlyTheFocusedXTextField`,
+`TestHostXTextFieldWithoutFocusOffersTheOnePaintedField`,
+`TestHostXTextFieldClosedByItsFocusIsNotOffered`,
+`TestHostXTextFieldTwoPaintedFieldsAreAmbiguous` and
+`TestHostTextInputFallbacksKeepTheStrictOrder`. No local archive was driven to
+a name screen for this change.
+
+Gates left as they were: the command menu overlay (the field does not have the
+keys while the menu is up, and a vendor commit's redraw key would reach the
+menu), UNEDITABLE fields, constraint and encoding checks, and a full or invalid
+`TextComponent`. Still refused for want of evidence: an unfocused `XTextField`
+whose text a title draws without ever calling its `paint`, and, within one
+display revision, a field that replaced an earlier painted one.
+

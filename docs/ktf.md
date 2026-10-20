@@ -111,7 +111,10 @@ Host keyboard/IME entry supports a title's own `InputMethodHandler` field
 active LWC fields, the sole direct text child of a shown Shell when explicit
 focus is absent, the observed non-modal KFC form containing one listened text
 field, the one focused text component the top card read during its last paint,
-and the WIPI-C input-method editor. Every route refuses text outside KSC5601.
+and the WIPI-C input-method editor; when none of them names a field, the same
+routes are asked again under relaxed rules, so a field on screen is offered
+even when the title gives no exact evidence for it. Every route refuses text
+outside KSC5601.
 The guest owns acceptance and persistence. `doModal` (LWC `DialogComponent`,
 KFC `GForm`) returns at once without presenting anything: a dialog answers OK,
 or timeout when it has no buttons, and the call is counted in diagnostics, so

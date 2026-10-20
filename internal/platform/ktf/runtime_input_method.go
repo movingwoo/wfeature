@@ -60,6 +60,15 @@ const (
 	// that a checkpoint taken while the field is open restores it open.
 	inputMethodOpenObject = "input-method:open"
 	inputMethodCardObject = "input-method:card"
+	// The offered field is the open one as the second pass of a Host snapshot
+	// sees it: opened the same way, and closed only when the title takes its
+	// listener away. A press the field misses closes the open one, which is
+	// how the first title's confirmation looks — but a field still on the
+	// screen after such a press is then one nobody can type into, while
+	// offering a field that did close costs only a commit that fails. See
+	// unseenPress.
+	inputMethodOfferedObject     = "input-method:offered"
+	inputMethodOfferedCardObject = "input-method:offered-card"
 
 	// inputMethodCarrier is the key a Host character travels on. The titles
 	// forward every key of the pad to their open field, and a digit is the key
@@ -219,6 +228,8 @@ func notifyInputMethodListenerAfter(vm *jvm.VM, listener *jvm.Object, units []ui
 // field opens, hands that handler every key of the pad while it is open, and
 // sets its mode from a soft key. It marks the press being delivered as one the
 // field saw; see dispatchKeyToCards. took says the handler was handed a key.
+// The field it records is both the open one and the offered one; see
+// inputMethodOfferedObject.
 //
 // A field that opens while another field is taking a key is that field reset.
 // The first title does it when a fifth character overflows its four: it builds
@@ -240,22 +251,27 @@ func (runtime *initializationRuntime) touchInputMethod(handler *jvm.Object, took
 	}
 	card := runtime.topCard()
 	open := runtime.runtimeObjects[inputMethodOpenObject]
-	if open == handler && runtime.runtimeObjects[inputMethodCardObject] == card {
+	if open == handler && runtime.runtimeObjects[inputMethodCardObject] == card &&
+		runtime.runtimeObjects[inputMethodOfferedObject] == handler && runtime.runtimeObjects[inputMethodOfferedCardObject] == card {
 		return
 	}
 	if open != handler && !took && runtime.javaInput.keyTaken {
 		handler.Fields[inputMethodResetField] = jvm.IntValue(1)
 	}
 	runtime.runtimeObjects[inputMethodOpenObject] = handler
+	runtime.runtimeObjects[inputMethodOfferedObject] = handler
 	if card != nil {
 		runtime.runtimeObjects[inputMethodCardObject] = card
+		runtime.runtimeObjects[inputMethodOfferedCardObject] = card
 	} else {
 		delete(runtime.runtimeObjects, inputMethodCardObject)
+		delete(runtime.runtimeObjects, inputMethodOfferedCardObject)
 	}
 	runtime.javaInput.revision++
 }
 
-// closeInputMethod forgets the open field.
+// closeInputMethod forgets the open field. The offered one stays; see
+// inputMethodOfferedObject.
 func (runtime *initializationRuntime) closeInputMethod() {
 	if runtime.runtimeObjects[inputMethodOpenObject] == nil {
 		return
@@ -265,12 +281,40 @@ func (runtime *initializationRuntime) closeInputMethod() {
 	runtime.javaInput.revision++
 }
 
+// withdrawInputMethod forgets the offered field, once the title has taken the
+// listener of that handler away.
+func (runtime *initializationRuntime) withdrawInputMethod(handler *jvm.Object) {
+	if offered, _ := runtime.offeredInputMethod(); offered == nil || offered != handler {
+		return
+	}
+	delete(runtime.runtimeObjects, inputMethodOfferedObject)
+	delete(runtime.runtimeObjects, inputMethodOfferedCardObject)
+	runtime.javaInput.revision++
+}
+
+// offeredInputMethod answers the offered field and its card. A checkpoint
+// taken before there was an offered field restores only the open one, which
+// is the same field.
+func (runtime *initializationRuntime) offeredInputMethod() (handler, card *jvm.Object) {
+	if handler := runtime.runtimeObjects[inputMethodOfferedObject]; handler != nil {
+		return handler, runtime.runtimeObjects[inputMethodOfferedCardObject]
+	}
+	return runtime.runtimeObjects[inputMethodOpenObject], runtime.runtimeObjects[inputMethodCardObject]
+}
+
 // unseenPress closes the open field after a press it did not see. That is the
 // sign the title closed it: the first title closes its field on fire, and on
 // clear when the field is empty, and neither key reaches the handler. A reset
 // field that has not taken a key yet is the exception; see touchInputMethod.
+//
+// The offered field stays, but a composition taken before the press is spent
+// either way: whatever the press did to the screen happened after it.
 func (runtime *initializationRuntime) unseenPress() {
 	open := runtime.runtimeObjects[inputMethodOpenObject]
+	if offered, _ := runtime.offeredInputMethod(); offered == nil && open == nil {
+		return
+	}
+	runtime.javaInput.revision++
 	if open == nil {
 		return
 	}
@@ -282,7 +326,7 @@ func (runtime *initializationRuntime) unseenPress() {
 
 // runtimeInputMethodSetListener keeps the listener the handler's edits go to.
 // Registering one on a handler the title built is the field opening; removing
-// it is the field closing.
+// it is the field closing, for the offered field as well as the open one.
 func runtimeInputMethodSetListener(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	result, err := runtimeComponentSetField("InputMethodHandler.setInputMethodListener", inputMethodListenerField)(runtime, vm, arguments)
 	if err != nil {
@@ -291,29 +335,45 @@ func runtimeInputMethodSetListener(runtime *initializationRuntime, vm *jvm.VM, a
 	receiver, _ := arguments[0].Reference()
 	if listener, _ := arguments[1].Reference(); listener != nil {
 		runtime.touchInputMethod(receiver, false)
-	} else if runtime.runtimeObjects[inputMethodOpenObject] == receiver {
-		runtime.closeInputMethod()
+	} else if receiver != nil {
+		if runtime.runtimeObjects[inputMethodOpenObject] == receiver {
+			runtime.closeInputMethod()
+		}
+		runtime.withdrawInputMethod(receiver)
 	}
 	return result, nil
 }
 
-// inputMethodTextInputLocked offers the open field of a title's own handler to
-// a Host that composes text. The field cannot be read, so the Host appends.
-// The caller holds client.run.
-func (client *Client) inputMethodTextInputLocked() (*backend.TextInput, error) {
+// titleFieldOffered decides whether a title's own field can take a Host
+// composition: the open field under the first rules, the offered one under
+// the relaxed ones, either way on the card it was opened on while that card
+// is on top. A title that runs its own event loop takes keys from its queue
+// in its own time, so whether a carrier was consumed is unknown; the C input
+// method leaves such a title out for the same reason.
+func (client *Client) titleFieldOffered(handler, card *jvm.Object, relaxed bool) bool {
 	runtime := client.runtime
-	handler := runtime.runtimeObjects[inputMethodOpenObject]
-	card := runtime.runtimeObjects[inputMethodCardObject]
-	// A title that runs its own event loop takes keys from its queue in its
-	// own time, so whether a carrier was consumed is unknown; the C input
-	// method leaves such a title out for the same reason.
 	if handler == nil || card == nil || runtime.guestEventLoop || runtime.topCard() != card {
-		return nil, backend.ErrNoTextInput
+		return false
 	}
+	// A vendor form that owns the keypad takes every press, so a carrier
+	// would reach the form rather than the field. The open field has always
+	// been offered regardless; the offered one is not.
+	if relaxed {
+		if _, form := runtime.activeVendorTextInput(); form {
+			return false
+		}
+	}
+	listener, err := handler.Fields[inputMethodListenerField].Reference()
+	return err == nil && listener != nil
+}
+
+// titleFieldTextInput offers a title's own field to a Host that composes
+// text. The field cannot be read, so the Host appends. The caller holds
+// client.run.
+func (client *Client) titleFieldTextInput(target textInputTarget) *backend.TextInput {
+	runtime := client.runtime
+	handler := target.handler
 	listenerValue := handler.Fields[inputMethodListenerField]
-	if listener, err := listenerValue.Reference(); err != nil || listener == nil {
-		return nil, backend.ErrNoTextInput
-	}
 	constraint, err := handler.Fields[inputMethodConstraintField].Int32()
 	if err != nil {
 		constraint = textConstraintAny
@@ -327,10 +387,15 @@ func (client *Client) inputMethodTextInputLocked() (*backend.TextInput, error) {
 			}
 			client.run.Lock()
 			defer client.run.Unlock()
+			// The field is still the one a snapshot would choose, on its card,
+			// and nothing a press did has spent the composition.
 			unchanged := func() bool {
-				return client.runtime == runtime && !client.workersStopped && !runtime.guestEventLoop &&
-					runtime.runtimeObjects[inputMethodOpenObject] == handler && runtime.topCard() == card &&
-					runtime.javaInput.revision == revision && handler.Fields[inputMethodListenerField] == listenerValue
+				if client.runtime != runtime || client.workersStopped ||
+					runtime.javaInput.revision != revision || handler.Fields[inputMethodListenerField] != listenerValue {
+					return false
+				}
+				current, ok := client.resolveTextInputLocked(textInputResolution{})
+				return ok && current.identifies(target)
 			}
 			if !unchanged() {
 				return backend.ErrTextInputChanged
@@ -375,7 +440,9 @@ func (client *Client) inputMethodTextInputLocked() (*backend.TextInput, error) {
 				}
 				if !consumed {
 					// The title did not hand the carrier to this field, which is
-					// a press the field did not see.
+					// a press the field did not see: it closes the open field and
+					// spends this composition, and leaves the offered field for
+					// the next snapshot.
 					runtime.unseenPress()
 					return backend.ErrTextInputChanged
 				}
@@ -383,7 +450,7 @@ func (client *Client) inputMethodTextInputLocked() (*backend.TextInput, error) {
 			}
 			return nil
 		},
-	}, nil
+	}
 }
 
 // validateInputMethodText applies the field's constraint the way a Java text
