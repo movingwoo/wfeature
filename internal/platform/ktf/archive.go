@@ -42,6 +42,11 @@ type Descriptor struct {
 	// the three above. Jlet.getAppProperty answers from it, which is what the
 	// original runtime reads its manifest values from.
 	Properties map[string]string
+	// Truncated says the descriptor named more fields than this platform
+	// keeps, so a field missing from Properties may still have been written
+	// in it. Only a reading that infers something from an absence asks; see
+	// PackagedScreen.
+	Truncated bool
 }
 
 type ClientImage struct {
@@ -197,6 +202,7 @@ func ParseDescriptor(data []byte) (Descriptor, error) {
 		return Descriptor{}, fmt.Errorf("KTF descriptor exceeds %d bytes", maxADFSize)
 	}
 	values := make(map[string]string)
+	truncated := false
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 1024), maxADFSize)
 	for scanner.Scan() {
@@ -206,7 +212,13 @@ func ParseDescriptor(data []byte) (Descriptor, error) {
 			continue
 		}
 		key := strings.ToUpper(strings.TrimSpace(string(keyBytes)))
-		if key == "" || len(values) >= maxDescriptorFields {
+		if key == "" {
+			continue
+		}
+		if len(values) >= maxDescriptorFields {
+			if _, known := values[key]; !known {
+				truncated = true
+			}
 			continue
 		}
 		identifying := key == "AID" || key == "PID" || key == "MCLASS"
@@ -234,6 +246,7 @@ func ParseDescriptor(data []byte) (Descriptor, error) {
 		PID:        values["PID"],
 		MainClass:  strings.ReplaceAll(values["MCLASS"], ".", "/"),
 		Properties: values,
+		Truncated:  truncated,
 	}
 	if err := validateSimpleName("AID", descriptor.AID); err != nil {
 		return Descriptor{}, err

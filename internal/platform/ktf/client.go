@@ -271,9 +271,10 @@ func (client *Client) guestPrint(line string) {
 	client.logger.Info("KTF guest printk", "text", strings.TrimRight(line, "\r\n"))
 }
 
-// SetScreen names the handset the game is told it runs on. Zero for either
-// side selects the platform's own 240x320, which is what every local title
-// but one packaged for a smaller phone wants.
+// SetScreen names the handset the game is told it runs on. Anything but two
+// positive sides selects the platform's own 240x320, and is kept as zero for
+// both, so a quick save never records half a handset; a session picks the
+// pair from its Host or its descriptor before this, see sessionScreen.
 //
 // **It is an emulation input rather than a view setting.** Nothing here
 // scales a picture: how large the frame is drawn belongs to the Host, and
@@ -294,6 +295,9 @@ func (client *Client) SetScreen(width, height int) {
 	if client == nil {
 		return
 	}
+	if width <= 0 || height <= 0 {
+		width, height = 0, 0
+	}
 	client.screenWidth = width
 	client.screenHeight = height
 }
@@ -306,6 +310,26 @@ func (client *Client) screenSize() (int, int) {
 		width, height = client.screenWidth, client.screenHeight
 	}
 	return width, height
+}
+
+// Screen answers the screen the title is running on, which a Host lays out
+// against. Once there is a frame it is the frame's size, because the frame is
+// built from the screen the title was actually given; before that it is the
+// handset the title is told it runs on, which for a start that chose nothing
+// is the descriptor's or the platform's rather than the Host's default.
+//
+// It answers the size alone, under one lock, so a Host that asks at every
+// start and every load pays for neither a conversion nor a copy of the frame.
+func (client *Client) Screen() (int, int) {
+	if client == nil {
+		return runtimeDisplayPixelWidth, runtimeDisplayPixelHeight
+	}
+	client.run.Lock()
+	defer client.run.Unlock()
+	if client.frameWidth > 0 && client.frameHeight > 0 {
+		return client.frameWidth, client.frameHeight
+	}
+	return client.screenSize()
 }
 
 // Frame returns a copy of the last flushed RGBA screen frame with its size

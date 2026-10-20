@@ -713,18 +713,6 @@ func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
 	}
 }
 
-// The screen sizes a page may ask for. The floor is smaller than any handset
-// these games shipped on and the ceiling is larger, because what this bounds is
-// an allocation from a message rather than a taste in phones.
-const (
-	minScreen = 32
-	maxScreen = 1024
-)
-
-func validScreen(width, height int) bool {
-	return width >= minScreen && width <= maxScreen && height >= minScreen && height <= maxScreen
-}
-
 func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	if message.Token != "" && !validResumeToken(message.Token) {
 		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "invalid browser token"})
@@ -786,7 +774,7 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 
 	// Two sessions on one save directory overwrite each other silently, so
 	// the directory is claimed before anything is started; see saveclaim.go.
-	if (message.Width != 0 || message.Height != 0) && !validScreen(message.Width, message.Height) {
+	if (message.Width != 0 || message.Height != 0) && !backend.ValidScreen(message.Width, message.Height) {
 		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "invalid screen size"})
 		return
 	}
@@ -818,15 +806,17 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	if message.Value >= 1 && message.Value <= 4 {
 		scale = int(message.Value)
 	}
-	// A screen the page did not ask for is the default one, and a size outside
+	// A screen the page did not ask for is the platform's to choose — the
+	// handset the archive says it was packaged for where it says so, and the
+	// 240x320 default otherwise; see session.Options — and a size outside
 	// what a handset ever had is refused rather than clamped: it would come
 	// from a page this server does not serve, and a game started on a screen
 	// nothing was drawn for is worse than a game that did not start.
 	screenWidth, screenHeight := 0, 0
 	if message.Width != 0 || message.Height != 0 {
-		if !validScreen(message.Width, message.Height) {
+		if !backend.ValidScreen(message.Width, message.Height) {
 			r.send(serverMessage{Kind: serverError, ID: message.ID,
-				Message: fmt.Sprintf("screen %dx%d is outside %d..%d", message.Width, message.Height, minScreen, maxScreen)})
+				Message: fmt.Sprintf("screen %dx%d is outside %d..%d", message.Width, message.Height, backend.MinScreenSide, backend.MaxScreenSide)})
 			return
 		}
 		screenWidth, screenHeight = message.Width, message.Height
@@ -911,6 +901,8 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		MainClass:      summary.MainClass,
 		Width:          startedWidth,
 		Height:         startedHeight,
+		AutoWidth:      summary.ScreenWidth,
+		AutoHeight:     summary.ScreenHeight,
 		Token:          r.token,
 		CanWatch:       started.Cheat() != nil && started.Cheat().CanWatch(),
 		CanTouch:       started.HasPointer(),

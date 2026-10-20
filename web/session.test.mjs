@@ -419,10 +419,11 @@ test("a token the server no longer holds resolves rather than throwing", async (
   assert.ok(!answer.started);
 });
 
-// The screen a game runs on travels with the start, and only when it is not
-// the one the server would have chosen: a page that never opened the setting
-// has to send exactly what it always sent.
-test("a start carries a screen only when it is not the default", async () => {
+// The screen a game runs on travels with the start whenever a player chose
+// one. The default size is a choice like any other now: without a screen the
+// server asks the archive, which on KTF may name a smaller handset, so leaving
+// 240x320 out would start the game on something else.
+test("a start carries a screen whenever one was chosen, the default size included", async () => {
   const { session, socket } = await openFakeSession();
   // Each start is answered, because an unanswered ask holds a five-minute
   // timer open and the test would wait for it.
@@ -436,8 +437,8 @@ test("a start carries a screen only when it is not the default", async () => {
 
   const asDefault = await started("skt/game.zip", 1, { width: 240, height: 320 });
   assert.equal(asDefault.kind, "start");
-  assert.equal(asDefault.width, undefined);
-  assert.equal(asDefault.height, undefined);
+  assert.equal(asDefault.width, 240);
+  assert.equal(asDefault.height, 320);
 
   const asChosen = await started("skt/small.zip", 2, { width: 176, height: 220 });
   assert.equal(asChosen.game, "skt/small.zip");
@@ -445,7 +446,8 @@ test("a start carries a screen only when it is not the default", async () => {
   assert.equal(asChosen.width, 176);
   assert.equal(asChosen.height, 220);
 
-  // A start with no screen at all is the same message as before this existed.
+  // The automatic choice sends no screen, which is the message a page sent
+  // before the setting existed.
   const asPlain = await started("ktf/game.zip");
   assert.equal(asPlain.width, undefined);
   assert.equal(asPlain.height, undefined);

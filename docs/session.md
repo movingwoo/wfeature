@@ -39,7 +39,7 @@ the page can match it to its request:
 
 | Page message | Fields | Purpose |
 | --- | --- | --- |
-| `start` | `game`, `token`, `quick_load`, `value` (initial scale 1–4), `width`, `height` (32–1024), `confirmation` | Start an archive from its `games.json` path. A screen size the page does not send is the platform default. |
+| `start` | `game`, `token`, `quick_load`, `value` (initial scale 1–4), `width`, `height` (32–1024), `confirmation` | Start an archive from its `games.json` path. Without a screen size the archive decides: a KTF descriptor's `DisplaySize`, an SKT archive's resource names, and otherwise 240×320. The page leaves it out only for `자동`; a chosen size is always sent. |
 | `resume` | `token`, `takeover` | Find the browser token's retained game; `takeover: true` transfers control from another connected page. |
 | `park` / `stop` | — | Retain the game without control, or end it. |
 | `key` | `action` (`press`, `release`), `code` | One key event with the MIDP-style code the keypad sends. A `repeat` from an older page is dropped; the session makes the handset's repeat itself. |
@@ -68,7 +68,9 @@ the page can match it to its request:
 
 The `started` description carries `platform`, `game`, `aid`, `pid`, `name`,
 `save_owner`, `main_class`, `authentication`, the screen the game actually got
-(`width`, `height`), the browser `token`, `can_watch`, `can_touch`,
+(`width`, `height`), the screen a start without a size takes for that game
+(`auto_width`, `auto_height`, which the page's `자동` means), the browser
+`token`, `can_watch`, `can_touch`,
 `can_checkpoint`, `has_checkpoint`, `restored` and `speed`. Native text editing
 uses edit identifiers and stale-target checks. Detailed payloads and their
 compatibility history are in [the transport record](history/session.md).

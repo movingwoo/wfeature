@@ -152,7 +152,7 @@ and `runskt` keep the profiling, routes and platform diagnostics.
 | `-frame path` | Write the final screen to a PNG. |
 | `-play` | Pace the game using wall time. Without it KTF uses a manual clock and advances to scheduled deadlines, and LGT, whose guest clock only a tick moves, runs its ticks back to back: the run is the one a paced Host would have had, without the waiting. SKT is paced either way. |
 | `-speed N` | Guest speed, 0.1 through 16; default 1. This flag does not imply `-play` for this command. |
-| `-screen WxH` | Handset dimensions for a newly started session. Restoration uses saved runtime settings. |
+| `-screen WxH` | Handset dimensions for a newly started session. Without it the archive decides as it does for `runktf` and `runskt`, and LGT starts on 240x320. Restoration uses saved runtime settings. |
 
 A non-serve run prints JSON with `platform`, `ticks`, `exited`, `restored`,
 `quick_saved` and `digest` (a screen digest). A guest that exits during start
@@ -234,7 +234,7 @@ wfeature runktf <game.zip> [-ticks N] [-frame out.png] [-framedir dir] [-save di
 | `-gdb host:port` | serve a GDB stub over the ARM core. The run does not wait for a client; attach with `target remote host:port`. A client's first question (`?`) stops the game at its next instruction, so the registers it reads are where the game stopped. When no guest code is running (between ticks, a run waiting on its driver, a long host call), `?` and Ctrl-C are answered after 250 ms from the registers of the last stop, and the game stops at its next instruction without a second reply. Detaching or dropping the connection, at any point, removes that client's breakpoints and any stop it asked for and lets the game run on, and the stub accepts the next client; Ctrl-C stops a running target; a game whose run has ended answers `W00`, or `X09` after `k`, which has no reply; a request packet over 64 KiB ends the connection. The stub sends no target description: the register file is the classic ARM layout (r0–r15, eight 12-byte FPA registers, `fps`, `cpsr`; 168 bytes), which gdb knows and lldb takes from a target definition file (`plugin.process.gdb-remote.target-definition-file`) |
 | `-diag report.json` | write the runtime-boundary diagnostics ([below](#reading-a-diagnostics-report)) |
 | `-audio out` | write what the guest played: `out.mid` for its MIDI events, `out.wav` for its samples |
-| `-screen WxH` | the handset the game is told it runs on, 240x320 by default |
+| `-screen WxH` | the handset the game is told it runs on. Without it, the one the `__adf__` declares in `DisplaySize`, 176x220 for a descriptor without that field and `ResizeType` (an earlier revision), and 240x320 for one this platform cannot read, one with only `ResizeType`, or the earlier package |
 | `-scale N` | run the hqx filter over captured frames: 2, 3 or 4 |
 | `-profile report.txt` | sample the ARM core and rank the result by symbol |
 | `-profile-folded stacks.txt` | the same profile as flamegraph-folded lines |
@@ -277,14 +277,14 @@ has the contract and what the local library does at 240x400 and 320x480, the
 larger sizes the browser offers. `runlgt` takes the same flag so those sizes
 can be measured from a command line.
 
-**The size is a flag rather than read from the archive, by measurement.** A KTF
-archive declares `DisplaySize` in its `__adf__`. Thirteen local titles declare
-`176*220` and twelve of them draw across the whole 240x320 screen, so adopting
-the declaration would shrink twelve working titles to fix one band that is a
-game's own artwork — see
-[`history/ktf.md`](history/ktf.md#a-band-beside-a-title-screen-was-the-titles-own).
-Every local archive was packaged for the 240x320 handset this carrier
-standardised on; the flag remains for an archive packaged for another handset.
+**Without the flag the archive decides.** A KTF archive declares the handset
+it was packaged for in its `__adf__` (`DisplaySize:176*220`), and a 176x220
+package started on 240x320 keeps its pictures in a corner while its background
+and text spread over the rest, so `runktf` starts it on the declared handset —
+see [`history/ktf.md`](history/ktf.md#implementation-the-handset-a-title-was-packaged-for-is-in-its-descriptor).
+`runskt` does the same from an archive's resource names, and `runlgt` has
+nothing to read and starts on 240x320. The flag overrides all three, which is
+how to see a title on a screen it was not packaged for.
 
 **Raise `-hold` before concluding a title has stopped.** A title that samples
 the keypad once a frame never sees a press and release delivered in the same

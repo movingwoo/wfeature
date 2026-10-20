@@ -2957,7 +2957,69 @@ the size is something a Host is told, so a title truly packaged for a smaller
 phone is a flag away and the twelve that were not are untouched. Across the 34
 local archives: at the default screen 29 first frames are byte-identical to the
 previous build and the 6 that differ are the family with the measured noise
-floor; at 176x220, 33 run clean and lay themselves out correctly.
+floor; at 176x220, 33 run clean and lay themselves out correctly. This was
+reversed on 2026-10-20; see
+[the next section](#implementation-the-handset-a-title-was-packaged-for-is-in-its-descriptor).
+
+<a id="implementation-the-handset-a-title-was-packaged-for-is-in-its-descriptor"></a>
+
+#### The handset a title was packaged for is in its descriptor
+
+Two player reports of titles that "do not fit the screen" were each fixed by
+choosing 176x220 by hand, and since 2026-10-20 `DisplaySize` decides the screen
+of a start that names none (`ktf.PackagedScreen`, applied in the session
+client's construction, so `runktf` and a server session agree).
+
+**The measure behind "twelve of thirteen draw across the whole screen" could
+not see the failure.** It looked for a uniform fill outside the declared
+rectangle, so it counted a title that lays its background and text out across
+the screen it is told, while its 176x220 pictures stay in a corner, as one that
+uses the screen. Both reported titles are that kind. One keeps its title art at
+the bottom left and centres its prompt on the 240-wide screen. The other tiles
+a star field over all of 240x320, anchors its version and age mark to the
+screen's corners and its prompt to the bottom, and keeps its art at the top
+left. No reading of a frame tells either from a title that uses the room, and
+the screen cannot change without a restart, so the answer has to come from the
+archive before the start.
+
+**The library supports the declaration.** Of 281 distinct KTF archives, 176
+declare `240*320`, 100 `176*220`, one `240*400`, and four omit the field.
+Collectors' file names mark 206 of them as small- or large-screen packages, and
+205 agree with `DisplaySize`; the one that does not declares `240*400` and runs
+on it. Nine small-handset titles were run at both sizes: at 240x320 five
+misplace their pictures (three as above, two leaving the rest of the screen
+empty), three lay themselves out for what they are told, and one stayed on its
+splash; at 176x220 every one of them lays out as on its handset. `ResizeType`
+does not separate the two kinds: two of the four titles declaring
+`ResizeType:1` misplace their art as well.
+
+**A descriptor without the field starts on 176x220.** It is an earlier revision
+of the format, without `ResizeType` either; all four local ones are 176x220
+packages, and two of them keep their pictures in a corner of 240x320. A field
+that does not read as two whole numbers in 32..1024 either side of `*` answers
+nothing and leaves 240x320.
+
+Both fields have to be missing for that reading. All 277 local descriptors that
+declare a `DisplaySize` carry a `ResizeType` beside it, and none of the four
+without one does, so a descriptor with a `ResizeType` and no `DisplaySize` is
+the current format with the field left out — a repacked or hand-made archive —
+and starts on 240x320. So does one whose fields ran past the 256 the parser
+keeps (`Descriptor.Truncated`), where the field may have been dropped rather
+than never written; the most any local descriptor has is 40. A Host request
+counts only with two positive sides: half a size used to reach the client as it
+was, run the title on 240x320 and then fail every quick save as an invalid
+screen.
+
+**Nothing that ran stopped running.** The 105 archives whose start changed were
+run 900 ticks at `-play -speed 8` on the declared screen and on 240x320: 101
+end clean both ways, two log the same title-side error both ways, two fail to
+start both ways, and no final frame is empty in either.
+
+What a declaration costs is the room: a 176x220 package that does lay itself
+out for a larger screen now starts as it looked on its own phone rather than on
+240x320. Every size is still in the page's `📱 화면`, and a start that names one
+is honoured. A quick save keeps the screen it was taken on, so a slot saved at
+the platform's own 240x320 before this change restores onto 240x320.
 
 <a id="implementation-an-ab-sweep-of-the-local-set-is-half-noise"></a>
 

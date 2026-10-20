@@ -18,6 +18,13 @@ const KTFCheckpointStartupCounter = ktfImageBase + 0x900
 // through the ordinary loader. Its only behavior is a startup counter; worker,
 // graphics and service continuation have separate, more detailed fixtures.
 func KTFCheckpointArchive() ([]byte, error) {
+	return KTFCheckpointArchiveDeclaring("")
+}
+
+// KTFCheckpointArchiveDeclaring is KTFCheckpointArchive with more descriptor
+// fields after the three it always carries, one "Key:value" per line — such
+// as "DisplaySize:176*220\n", which decides the screen a session starts on.
+func KTFCheckpointArchiveDeclaring(fields string) ([]byte, error) {
 	data := make([]byte, 0x1000)
 	words := func(offset int, values ...uint32) {
 		for index, value := range values {
@@ -63,7 +70,7 @@ func KTFCheckpointArchive() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return fixtureZIP([]fixtureEntry{{"__adf__", []byte("AID:fixture\nPID:P0001\nMClass:fixture.Checkpoint\n")}, {"fixture.jar", jar}})
+	return fixtureZIP([]fixtureEntry{{"__adf__", []byte("AID:fixture\nPID:P0001\nMClass:fixture.Checkpoint\n" + fields)}, {"fixture.jar", jar}})
 }
 
 type fixtureEntry struct {

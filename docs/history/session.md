@@ -310,6 +310,63 @@ The page omits the field when the stored size is the default, so choosing
 offers neither of them that size; one of the two cannot run on any size the menu
 does offer, which is why the archive answers before the settings panel.
 
+**Since 2026-10-20 the page sends a chosen size, the default size included.**
+A KTF start without a size now runs on the handset the descriptor declares
+([`history/ktf.md`](ktf.md#implementation-the-handset-a-title-was-packaged-for-is-in-its-descriptor)),
+so leaving 240x320 out of a start no longer meant 240x320. The menu's default
+became `자동`, which is the start without a size, and every size travels. A
+size the earlier page stored stays chosen, 240x320 included: that page wrote
+its key only when a player changed the menu, so a stored 240x320 is a player who
+tried another size and went back, and reading it as `자동` would move a title
+that declares a smaller phone off the screen they settled on. A stored value
+the menu does not offer reads as `자동` in the menu and in the start alike, so
+the two never disagree. The two titles above still start where their archives
+say unless a player picks a size for them. The picker names the symptom under
+the start button, and a change made while a game runs comes with a restart
+beside the note, because a note with nothing to press is what made the setting
+look broken.
+
+**The server says what `자동` takes, and the page compares screens.** Every
+started message carries `auto_width` and `auto_height`, the screen a start
+without a size takes for that game (`session.Summary.ScreenWidth`), on a fresh
+start, a quick load and a return alike. The first version of the page learned
+it from a start it had made without a size and remembered what the menu said at
+that start, and both went wrong the moment `sessionStarted` ran again: a return
+after a change in the menu took the new choice for the running game's, so the
+note and the restart disappeared while the game stayed on the old screen, and a
+game started on a size and returned to after picking `자동` taught `자동` that
+size. The note now appears when the screen the menu's choice would start on
+differs from the one the game is on, so picking the size `자동` already took
+offers no restart that changes nothing. The restart starts the game again
+without waiting on the game list: a list that failed to load, or a last-game
+record that could not be saved, used to leave the game stopped and not
+restarted.
+
+**The other platforms have nothing to read, so they keep their rules.** The
+same reports asked whether LGT and SKT could start on their packaged handset
+too, and the archives cannot say:
+
+- An LGT `app_info` has no size; 18 of 125 carry a `Resolution` key, all empty.
+  The code is a native module, so there are no bytecode constants to read.
+- An SKT descriptor has no size, and the resource-name rule above answers for 3
+  of 91 archives. Probed at 240x320, three more are small packages it does not
+  see — one fits only 128x160, two fit 176x220 — and about six centre a small
+  picture in a black frame. The right size differs between them, so no single
+  fallback serves them.
+- Inferring the width from the archive's own images (every PNG, including those
+  inside the titles' packs) was checked against the KTF declarations: of 277,
+  91 agree, 37 disagree and 149 give no answer.
+- The download address an LGT `app_info` keeps names the handset it was fetched
+  for (`device_id`, 108 of 125, six models), and an SKT descriptor's carries a
+  platform code; either would need a table of handsets from outside the
+  archives.
+- Reading a running game fails on the very titles reported: they draw across
+  the whole screen. All seven LGT titles probed were still on a notice at 600
+  ticks, short of any screen worth judging.
+
+LGT therefore starts on 240x320 and SKT keeps its resource-name rule; the
+hint and the restart are how a player reaches another size there.
+
 Rules that keep the setting honest:
 
 - **The size the server refuses is the size no handset had.** Anything outside

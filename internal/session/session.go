@@ -66,6 +66,14 @@ type Summary struct {
 	// when it is not SaveOwner; see MigrateSaveOwner. It is the Host's to act
 	// on and is not sent to a page.
 	EarlierSaveOwner string `json:"-"`
+	// ScreenWidth and ScreenHeight are the handset a start that names no
+	// screen runs this archive on: the one the archive says it was packaged
+	// for where it says so — a KTF descriptor's DisplaySize, an SKT archive's
+	// resource names — and the 240x320 default otherwise. A Host shows it
+	// beside a setting whose automatic choice sends no size, because only
+	// this side can read the archive.
+	ScreenWidth  int `json:"-"`
+	ScreenHeight int `json:"-"`
 }
 
 // Inspect reads an archive far enough to name the game and the directory its
@@ -85,7 +93,7 @@ func Inspect(archive []byte) (Summary, error) {
 		}
 		return Summary{}, err
 	}
-	summary := Summary{Platform: string(platform)}
+	summary := Summary{Platform: string(platform), ScreenWidth: DefaultWidth, ScreenHeight: DefaultHeight}
 	switch platform {
 	case detect.KTF:
 		// The vendor ships two generations of package, and only one of them
@@ -113,6 +121,7 @@ func Inspect(archive []byte) (Summary, error) {
 		summary.SaveOwner = ktf.SaveOwner(opened.Descriptor)
 		summary.EarlierSaveOwner = ktf.EarlierSaveOwner(opened.Descriptor)
 		summary.MainClass = opened.Descriptor.MainClass
+		summary.ScreenWidth, summary.ScreenHeight = ktf.AutomaticScreen(opened.Descriptor)
 	case detect.LGT:
 		opened, err := lgt.Open(archive)
 		if err != nil {
@@ -128,6 +137,7 @@ func Inspect(archive []byte) (Summary, error) {
 		if err != nil {
 			return summary, err
 		}
+		summary.ScreenWidth, summary.ScreenHeight = sktScreen(opened, Options{})
 		if opened.Script != nil {
 			summary.Name = opened.Script.Name
 			summary.SaveOwner = opened.ScriptSaveOwner
@@ -170,7 +180,12 @@ type Options struct {
 	// the surface they were given and enforce its size, so a magnified surface
 	// there would reject every frame they produce.
 	Scale int
-	// Width and Height size the screen. Zero selects the handset default.
+	// Width and Height size the screen. Zero lets the platform choose: the
+	// handset the archive says it was packaged for where it says so (a KTF
+	// descriptor's DisplaySize, an SKT archive's resource names), and the
+	// 240x320 default otherwise; Summary says which. A Host names both sides
+	// or neither: on KTF a pair that is not two positive sides names nothing
+	// and the descriptor decides.
 	Width, Height int
 	// TraceLimit is how many recent boundary events the diagnostics keep in
 	// order. Hosts pass a limit in debug builds and zero in release.
@@ -349,23 +364,8 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 		}
 		// The archive is opened before the screen is built, because on this
 		// vendor the archive is the only thing that says which handset it was
-		// packaged for. A Host that asked for a size keeps it; one that did
-		// not is given the archive's own answer. See skt.PackagedScreen.
-		screenWidth, screenHeight := options.width(), options.height()
-		if opened.Script != nil {
-			if options.Width == 0 {
-				screenWidth = opened.Script.Width
-			}
-			if options.Height == 0 {
-				screenHeight = opened.Script.Height
-			}
-		}
-		if options.Width == 0 && options.Height == 0 {
-			if packagedWidth, packagedHeight, packaged := skt.PackagedScreen(opened); packaged {
-				screenWidth, screenHeight = packagedWidth, packagedHeight
-			}
-		}
-		surface, err := newCaptureFramebuffer(screenWidth, screenHeight)
+		// packaged for.
+		surface, err := newCaptureFramebuffer(sktScreen(opened, options))
 		if err != nil {
 			return nil, err
 		}
@@ -407,6 +407,28 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 	}
 	session.startedAt = time.Now()
 	return session, nil
+}
+
+// sktScreen is the handset an SKT start runs on. A Host that asked for a size
+// keeps it; one that did not is given the archive's own answer. Inspect asks
+// it with no size to say what a start naming none would take, so the two
+// cannot disagree. See skt.PackagedScreen.
+func sktScreen(opened *skt.Archive, options Options) (width, height int) {
+	width, height = options.width(), options.height()
+	if opened.Script != nil {
+		if options.Width == 0 {
+			width = opened.Script.Width
+		}
+		if options.Height == 0 {
+			height = opened.Script.Height
+		}
+	}
+	if options.Width == 0 && options.Height == 0 {
+		if packagedWidth, packagedHeight, packaged := skt.PackagedScreen(opened); packaged {
+			width, height = packagedWidth, packagedHeight
+		}
+	}
+	return width, height
 }
 
 // SkipToNextDeadline moves a KTF manual clock to pending work. A wall clock or
@@ -1088,18 +1110,20 @@ func (s *Session) frameUpdate() (frame backend.FrameUpdate, ok bool) {
 // answer with a size of its own: what the guest took is the only answer a Host
 // can lay out against.
 //
-// It answers the requested size before the first frame exists, because a Host
-// that has just started a game asks then.
+// Before the first frame exists it answers the screen the platform built,
+// because a Host that has just started a game asks then: the requested size
+// where the platform has nothing else to say, and on KTF the handset the
+// descriptor declares when the start named none.
 func (s *Session) Screen() (width, height int) {
 	switch {
 	case s.ktf != nil:
 		// The frame is the answer once there is one, because it is built from
 		// the screen the game was actually given rather than from what was
-		// asked for. Before that, the request stands.
-		if _, frameWidth, frameHeight, _ := s.ktf.Frame(); frameWidth > 0 && frameHeight > 0 {
-			return frameWidth, frameHeight
-		}
-		return s.options.width(), s.options.height()
+		// asked for. Before that, the platform's own: a start that named no
+		// screen took the one the archive's descriptor declares, which the
+		// Host's default does not know. The platform answers both without
+		// copying the frame.
+		return s.ktf.Screen()
 	case s.ktfNative != nil:
 		// The earlier package answers the same way: the title asks for its
 		// size once and draws into what it is given, so the frame is what it

@@ -115,6 +115,19 @@ body {
   max-width: 100%;
 }
 
+/* The hint under the picker belongs to the row above it, so it gives back most
+   of the column's gap, and it is quieter than the controls it is about. It
+   wraps between words: a Korean line broken inside one reads as two. */
+.prestart-note {
+  margin: -18px 0 0;
+  max-width: 24em;
+  color: #aaa;
+  font-size: 0.85em;
+  line-height: 1.45;
+  text-align: center;
+  word-break: keep-all;
+}
+
 /* Editing occupies the game screen while the grid stays visible below it.
    The panel scrolls inside short viewports. */
 .keypad-arrange {

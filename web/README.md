@@ -54,11 +54,27 @@ picker.
   game list and the upload and delete buttons). The buttons sit on the picker
   because an import replaces a save and the game is not running there.
 - **Screen** — the game's own screen size, chosen per game under `📱 화면`:
-  128×160, 176×220, 240×320 (the default), 240×400 or 320×480. A change takes
-  effect on the next start, and the note under the setting says so. The picture
-  is fitted into the 3:4 hole (`object-fit: contain`), so a 3:5 or 2:3 screen
-  leaves bezel on one axis; a touch on the canvas is mapped back to the game's
-  own pixels (`touch.js`), and a touch on the bezel is ignored.
+  `자동` (the default), 128×160, 176×220, 240×320, 240×400 or 320×480.
+  `자동` sends no size and the server asks the archive: a KTF descriptor's
+  `DisplaySize` names the handset the title was packaged for, an SKT archive's
+  resource names sometimes do, and anything else starts on 240×320. Once a
+  game has run on the page the option reads `자동 176×220`: every started
+  message says what a start without a size takes (`auto_width`,
+  `auto_height`), a start on a chosen size and a quick load included. A size
+  is always sent, 240×320 included, and a stored value the menu does not
+  offer reads as `자동` both in the menu and in the start
+  (`screen-choice.js`). A change takes effect on the next start: while a game
+  runs and the choice would put it on another screen than the one it is on,
+  the note under the setting says so and `지금 재시작` beside it stops the
+  game and starts it again on the new screen, after the same question the
+  panel's restart asks. The start does not wait on the game list, so a list
+  that fails to load does not leave the game stopped. The picker says
+  `화면이 잘리거나 여백이 생길 경우 화면 크기를 변경해주세요` under the start
+  button, because a title on the wrong screen shows only a cut-off picture or
+  an empty band. The picture is fitted into the 3:4 hole
+  (`object-fit: contain`), so a 3:5 or 2:3 screen leaves bezel on one axis; a
+  touch on the canvas is mapped back to the game's own pixels (`touch.js`), and
+  a touch on the bezel is ignored.
 - **Keypad** — `설정`, `메뉴`, `통화`, `우상단` and `취소` (CLR) above a direction pad
   and the twelve phone keys; the buttons are labelled in Korean, as the key
   settings list them. Which of the four keypads is drawn is a setting: Type1
@@ -303,7 +319,8 @@ picker.
   | Key | What |
   |---|---|
   | `wfeature:lastGame` | the last game played |
-  | `wfeature:screen:<game>`, `wfeature:speed:<game>` | the per-game screen size and speed (the old shared `wfeature:speed` is no longer read) |
+  | `wfeature:screen-choice:<game>`, `wfeature:speed:<game>` | the per-game screen (`auto` or a size) and speed (the old shared `wfeature:speed` is no longer read) |
+  | `wfeature:screen:<game>` | the screen an earlier page kept, read for a game with no `screen-choice` entry; that page wrote it only when a player changed the menu, so every size it holds, 240x320 included, stays a choice |
   | `wfeature:frameScale` | `🔍 화질` |
   | `wfeature:volume:midi`, `wfeature:volume:pcm` | the two volumes |
   | `wfeature:vibrate` | `📳 진동` |
@@ -554,7 +571,7 @@ offline, where it comes up and then fails on an import. `service-worker.test.mjs
 therefore compares the list against what `index.html` names and what the module
 graph from `app.js` reaches; two modules had already drifted out of it. A
 change to the list wants the cache name bumped with it. The shell cache is
-`wfeature-pwa-v61` (the constant in `service-worker.js`). The `wfeature-pwa-`
+`wfeature-pwa-v63` (the constant in `service-worker.js`). The `wfeature-pwa-`
 prefix, introduced in version 35, keeps already-installed workers from deleting
 it through their broad `wfeature-shell-*` cleanup. Activation removes legacy
 shell caches and strictly older `wfeature-pwa-vN` versions, preserving future

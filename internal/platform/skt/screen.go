@@ -15,8 +15,8 @@ import (
 // a screen size: the descriptor names the MIDlet, its vendor, its download
 // URL, its size and its keys, and stops. So the size cannot come from where
 // the other WIPI platform's comes from — KTF's `__adf__` has a `DisplaySize`
-// field, and `docs/ktf.md` has why adopting even that one is the wrong move
-// there.
+// field, which a KTF start that names no screen adopts; see
+// ktf.PackagedScreen and `docs/ktf.md`.
 //
 // **The archive says it another way: in the names of its own resources.** One
 // local title branches on the screen width and builds a different title screen
