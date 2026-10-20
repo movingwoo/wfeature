@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"bytes"
 	"fmt"
 	"image/color"
 
@@ -305,13 +306,15 @@ func (platform *NativePlatform) drawText(thread *armcore.Thread) (uint32, error)
 //	c0ce c1f5 2000 bfe4 c3bb ... 2e00 0000
 //	인   증   ' '  요   청       '.'  end
 //
-// and a reader that stops at the first zero byte stops at the space. The other
-// module hands over plain bytes with a zero after the last one. Both are read
-// by the same rule, which is what the shape of the two says rather than a
-// choice between them: **a zero ends the run when it is on a halfword boundary
-// or when the byte after it is zero too; anywhere else it is the pad of a
-// single-byte character.** The pads are then dropped, which is safe because no
-// byte of an EUC-KR character is zero.
+// and a reader that stops at the first zero byte stops at the space. That module
+// is of the later generation, as is every title whose runs are halfwords, and
+// its runs are read by the halfword rule: **a zero ends the run when it is on a
+// halfword boundary or when the byte after it is zero too; anywhere else it is
+// the pad of a single-byte character.** The pads are then dropped, which is
+// safe because no byte of an EUC-KR character is zero. The 2005 module hands
+// over plain bytes with a zero after the last one, and its run ends at that
+// zero wherever it falls: read by the halfword rule, a run of an odd length
+// took its terminator for a pad and ran on into whatever followed it.
 func (platform *NativePlatform) readText(address uint32, count int32) ([]byte, error) {
 	if count < 0 {
 		raw, err := platform.readString(address)
@@ -321,6 +324,10 @@ func (platform *NativePlatform) readText(address uint32, count int32) ([]byte, e
 			if raw = platform.readMapped(address, maxNativeTextLength); len(raw) == 0 {
 				return nil, err
 			}
+			raw = bytes.Clone(raw)
+		}
+		if platform.textUnit() == 1 {
+			return raw, nil
 		}
 		return platform.readPaddedText(address, raw), nil
 	}
@@ -335,7 +342,7 @@ func (platform *NativePlatform) readText(address uint32, count int32) ([]byte, e
 	if unit == 2 {
 		return nativeHalfwordRun(raw), nil
 	}
-	return raw, nil
+	return bytes.Clone(raw), nil
 }
 
 // readPaddedText carries on past a zero byte that is the pad of a single-byte
@@ -358,9 +365,18 @@ const nativeMemoryPage = 0x1000
 // does, so a run that reaches the end of what is mapped is what is there up to
 // that end. Guest memory is mapped a page at a time, so that is how it is read
 // once the whole of it cannot be.
+//
+// What it answers is the platform's own buffer for a read up to
+// maxNativeTextLength, which a title asks for at every line it draws: it is
+// good until the next read, and a caller that keeps what it read copies it.
 func (platform *NativePlatform) readMapped(address uint32, length int) []byte {
 	memory := platform.client.core.Memory()
-	data := make([]byte, length)
+	var data []byte
+	if length <= len(platform.textBuffer) {
+		data = platform.textBuffer[:length]
+	} else {
+		data = make([]byte, length)
+	}
 	if memory.Read(address, data) == nil {
 		return data
 	}

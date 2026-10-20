@@ -30,4 +30,11 @@ var (
 	// is also the answer for an unsupported execution variant, and a Host
 	// cannot tell a person "an earlier build wrote this" from it.
 	ErrCheckpointLegacy = errors.New("backend: this checkpoint was written in an earlier slot format")
+
+	// ErrCheckpointNotRunning is returned for a game that was not running: a
+	// quick save of one is refused, and so is the load of a slot that holds
+	// one, rather than bringing back a game that does not run. The platform
+	// puts what it saw in front; a Host tells the person to start the game
+	// again.
+	ErrCheckpointNotRunning = errors.New("backend: the game is not running")
 )

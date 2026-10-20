@@ -50,41 +50,55 @@ func nativeTextAt(t *testing.T, platform *NativePlatform, raw []byte) uint32 {
 	return address
 }
 
-// TestNativeTextReadsBothShapesOfARun covers the terminator. One module builds
-// its lines a halfword at a time, so a one-byte space carries a zero after it
-// and a reader that stops at the first zero byte stops at the space — three
-// quarters of a sentence lost. The other hands over plain bytes. One rule
-// reads both.
+// TestNativeTextReadsBothShapesOfARun covers the terminator. A later module
+// builds its lines a halfword at a time, so a one-byte space carries a zero
+// after it and a reader that stops at the first zero byte stops at the space —
+// three quarters of a sentence lost. The 2005 module hands over plain bytes,
+// and its run ends at its first zero wherever that falls: read by the halfword
+// rule, a run of an odd length took its terminator for a pad and ran on into
+// the next string.
 func TestNativeTextReadsBothShapesOfARun(t *testing.T) {
-	platform := newTestNativePlatform(t, nil)
 	for _, testCase := range []struct {
-		name string
-		raw  []byte
-		want string
+		name     string
+		platform func(t *testing.T) *NativePlatform
+		raw      []byte
+		want     string
 	}{
 		{
-			name: "plain bytes with a zero after the last",
-			raw:  []byte("WAIT..\x00\x00\x00\x00"),
-			want: "WAIT..",
+			name:     "plain bytes with a zero after the last",
+			platform: func(t *testing.T) *NativePlatform { return newTestNativePlatform(t, nil) },
+			raw:      []byte("WAIT..\x00\x00\x00\x00"),
+			want:     "WAIT..",
 		},
 		{
-			name: "a halfword for every character",
+			name:     "plain bytes of an odd length, and the next string after them",
+			platform: func(t *testing.T) *NativePlatform { return newTestNativePlatform(t, nil) },
+			// 인증 요청 is nine bytes; 다음 follows its terminator.
+			raw:  []byte{0xc0, 0xce, 0xc1, 0xf5, 0x20, 0xbf, 0xe4, 0xc3, 0xbb, 0x00, 0xb4, 0xd9, 0xc0, 0xbd, 0x00, 0x00},
+			want: "인증 요청",
+		},
+		{
+			name:     "a halfword for every character",
+			platform: nativeLaterTextPlatform,
 			// 인 증 ' ' 요 청, and then the zero halfword that ends it.
 			raw:  []byte{0xc0, 0xce, 0xc1, 0xf5, 0x20, 0x00, 0xbf, 0xe4, 0xc3, 0xbb, 0x00, 0x00, 0xb4, 0xd9},
 			want: "인증 요청",
 		},
 		{
-			name: "a halfword run ending on its boundary",
-			raw:  []byte{0xc0, 0xce, 0x00, 0x00, 0xc3, 0xbb},
-			want: "인",
+			name:     "a halfword run ending on its boundary",
+			platform: nativeLaterTextPlatform,
+			raw:      []byte{0xc0, 0xce, 0x00, 0x00, 0xc3, 0xbb},
+			want:     "인",
 		},
 		{
-			name: "nothing at all",
-			raw:  []byte{0x00, 0x00, 0x00, 0x00},
-			want: "",
+			name:     "nothing at all",
+			platform: nativeLaterTextPlatform,
+			raw:      []byte{0x00, 0x00, 0x00, 0x00},
+			want:     "",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			platform := testCase.platform(t)
 			address := nativeTextAt(t, platform, testCase.raw)
 			raw, err := platform.readText(address, -1)
 			if err != nil {
@@ -95,7 +109,6 @@ func TestNativeTextReadsBothShapesOfARun(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 // nativeLaterTextPlatform is a test platform whose module is of the later
@@ -171,7 +184,7 @@ func TestNativeTextReadsWhatThereIsOfARun(t *testing.T) {
 // answer as the width of a character. Zero is a division by zero the title's
 // own runtime ends the run over.
 func TestNativeMeasureTextAnswersTheWidthItIsDrawnAt(t *testing.T) {
-	platform := newTestNativePlatform(t, nil)
+	platform := nativeLaterTextPlatform(t)
 	face := platform.textFace()
 	a, b := face.Render('A').Advance, face.Render('B').Advance
 	run := nativeTextAt(t, platform, []byte("A\x00B\x00\x00\x00"))

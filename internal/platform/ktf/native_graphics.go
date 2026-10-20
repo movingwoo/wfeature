@@ -48,8 +48,8 @@ const nativeNoColour = 0xffffffff
 // A clear fills with the screen's background item, which is what a fill that
 // names no colour of its own takes. A later title is what says so: at the top
 // of every frame it sets item 2 to black and fills the whole screen with
-// nativeNoColour, and then scatters grey stars over the result. Filling with
-// white instead left the stars on a white sky. The earlier titles set no item
+// nativeNoColour, and then draws grey points over the result. Filling with
+// white instead left them on white. The earlier titles set no item
 // and clear the same way to white, which is what the item holds until a title
 // sets it. The rectangle says where the fill lands and the colour what it is,
 // so a smaller rectangle filled with nativeNoColour is the same fill over less
@@ -57,8 +57,10 @@ const nativeNoColour = 0xffffffff
 const nativeBackgroundColourItem = 2
 
 // nativeRectangleFill is the bit of a rectangle's mode that asks for its inside
-// to be filled. Every rectangle a title has been seen to draw passes a mode of
-// 2 and is a fill, the clear among them. A mode without the bit asks for no
+// to be filled. Both generations pass a mode of 2 at every rectangle they have
+// been seen to draw, and each is a fill: the 2005 module's 1x1 rectangles that
+// its own glyphs are made of (m5(rect, -1, colour, 2) above), and every call a
+// later title makes, its clear among them. A mode without the bit asks for no
 // fill — an outline, which this platform does not draw — and the inside is
 // left as it is rather than painted over.
 const nativeRectangleFill = 2

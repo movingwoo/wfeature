@@ -516,10 +516,13 @@ left to answer for the key. When one of them holds anything, it is an older
 entry the empty one stands in front of, and nothing is removed: taking the
 empty one away would hand a read that older save. A folder that takes no write,
 its earlier names unconverted or a conversion under way, takes no removal until
-it does. The memory store removes any empty entry, and a store without the
-interface keeps it. Nothing with a byte in it is removed this way. A guest's own
-removals stay on its platform's removal list. The earlier KTF native package
-uses it for the empty files earlier builds left ([KTF](ktf.md)).
+it does, and a key a name Win32 stored for an earlier build answers is not
+removed, since every key Win32 spelled the same reads that file. The memory
+store removes any empty entry, and a store without the interface keeps it.
+Nothing with a byte in it is removed this way. A guest's own removals stay on
+its platform's removal list. The earlier KTF native package uses it once, for
+the empty files earlier builds left, after recording their keys
+([KTF](ktf.md)).
 
 Record decoding rejects truncation and trailing bytes. A record list keeps a
 record of no bytes (length zero) apart from a deleted one (the tombstone length):

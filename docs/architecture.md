@@ -698,12 +698,12 @@ decoding. Restoration installs fresh built-in bindings without running the
 package's entry, factory or startup event. Custom Host bindings and active
 tracing refuse capture. A native package's writes wait in the platform until a
 file is closed or a frame ends, so a capture and a load both store what is
-waiting first; adoption then detaches the old runtime from the store, and the
-restored runtime takes over the names of the files the old one made, so an
-empty file the play made is still a file after the load. A title whose next
-frame is more than a minute away, or which has drawn nothing in a minute of its
-own time, is not running, and a capture of it is refused, as is a record of one
-at load. Elapsed time and deadlines rebase at
+waiting first; adoption then detaches the old runtime from the store. A load
+into a process no start ran in makes the saves' one migration a start makes
+before the restored title runs. A title that has drawn nothing at all, and
+whose next frame is more than a minute away or which has run for more than a
+minute, is not running: a capture of it is refused, as is a record of one at
+load, with `backend.ErrCheckpointNotRunning`. Elapsed time and deadlines rebase at
 adoption, excluding detached staging time.
 
 <a id="lgt-checkpoints"></a>

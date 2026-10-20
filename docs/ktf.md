@@ -149,10 +149,12 @@ The earlier native package draws through the display — a fill, a blit, text
 and a present — and through a second interface (`0x1002001`) with a pen
 colour, a point size, a rectangular clip, and points, lines and circle
 outlines in that colour. A rectangle is filled when its mode asks for a fill
-(every title passes 2, a fill); a fill that names no colour takes the
-display's background item, white until the title sets it. Lines and circles
-are the WIPI C table's line and arc, walked only inside the clip, and a point
-is at most as large as the screen's longer side. A counted text run counts the
+(both generations pass 2, a fill: the 2005 module for the 1x1 rectangles its
+own glyphs are made of, a later title at every call); a fill that names no
+colour takes the display's background item, white until the title sets it.
+Lines and circles are the WIPI C table's line and arc, walked only inside the
+clip; a clip record of no shape lifts the clip; and a point is at most as large
+as the screen's longer side. A counted text run counts the
 run's own units, halfwords for the later generation and bytes for the 2005
 module; a control character in a run inks nothing and takes a space's width.
 The display measures a run as far as it draws it, in the face it draws it in,
@@ -219,19 +221,23 @@ The earlier native package retains its existing buffered write/flush policy.
 See [save integrity](session.md#save-integrity) for failure recovery and limits.
 Its open makes a missing file in mode 4, BREW's create, and in mode 8, its
 append, which BREW refuses and which ends here as the modules' retry with 4
-does. Read-write (2) and read (1) open a file that is there and are refused for
-one that is not, and the titles fall back on their own (defaults, or mode 4 and
-then a write); a refused open that could write is logged once for its name, at
-debug level, so a title that took it for a save written shows in the run's log.
-A build of this platform lists the files it makes for a title in the store
-entry `native/made`, stored before the files at the same boundary. A stored
-file with nothing in it, which the package does not carry and no build of this
-platform made, is missing to every call on the name — open, existence,
-information and create — so a title sees one answer whichever it asks, and the
-empty entry is removed from the store when a title first asks about it. That
-is the migration for saves from earlier builds, whose every writing open made
-the file, which left one title reading its settings out of an empty file; a
-file this platform made empty is on the list and stays a file
+does; an append's cursor starts at the end of the file. Read-write (2) and read
+(1) open a file that is there and are refused for one that is not, and the
+titles fall back on their own (defaults, or mode 4 and then a write); a refused
+open that could write is logged once for its name, at debug level, so a title
+that took it for a save written shows in the run's log.
+
+Earlier builds made a file at every open that could write, and left it empty,
+which left one title reading its settings out of an empty file on every run.
+So once for a title's saves, before the title first runs on this build — at
+its start, or at a quick load into a process no start ran in — every file of
+its saves that holds nothing and that the package does not carry is removed:
+those files, and any an earlier build made empty on purpose, which nothing it
+stored tells apart. Their keys are recorded first in the store entry
+`native/leftovers`, which also says the migration is done; nothing is removed
+that was not recorded, a store that cannot list, be read or take the record is
+left as it is until the next start, and after the migration an empty file this
+build makes is a file like any other
 ([history](history/ktf.md#ktf-native-settings-2026-10-20)).
 
 A record database the archive carries, as one `qtcdb` file or as a `qtpdb`
@@ -289,10 +295,12 @@ Particular to this platform:
   file table empties a
   file in the store at the truncating open itself, so its handles are cursors
   on the file as it is and nothing of the truncation is left to carry.
-- A native title that is not running — its next frame more than a minute away,
-  or nothing drawn in a minute of its own time — is refused at a quick save and
-  at a quick load, rather than brought back as it was: an earlier build left the
-  title that read its settings out of an empty file so
+- A native title that is not running — one that has drawn nothing at all, and
+  whose next frame is more than a minute away or which has run for more than a
+  minute — is refused at a quick save and at a quick load, rather than brought
+  back as it was, and the page says to start the game again: an earlier build
+  left the title that read its settings out of an empty file so. A title that
+  has drawn is saved and loaded with any wait for its next frame
   ([history](history/ktf.md#ktf-native-settings-2026-10-20)).
 - A native package's write waits in the platform until a file is closed or a
   frame ends. A quick save and a quick load store what is waiting first, and

@@ -581,3 +581,24 @@ func testCheckpointServerSubprocess(t *testing.T, testName, platform string, cou
 		t.Fatalf("new server process failed: %v\n%s", err, output)
 	}
 }
+
+// TestCheckpointRefusalTellsAPersonToStartAGameThatIsNotRunning covers the
+// refusal a person acts on by starting the game again: a quick save of a game
+// that is not running, and a load of a slot that holds one. It is said the way
+// the page speaks, and the cause goes to the log.
+func TestCheckpointRefusalTellsAPersonToStartAGameThatIsNotRunning(t *testing.T) {
+	r := &sessionRunner{server: newTestServer(t, Options{})}
+	err := fmt.Errorf("KTF native checkpoint: %w: it has drawn nothing in 2m0s of its own time", backend.ErrCheckpointNotRunning)
+	for _, step := range []struct {
+		step checkpointStep
+		key  string
+	}{
+		{checkpointSaving, "checkpoint.refused.save-not-running"},
+		{checkpointLoading, "checkpoint.refused.load-not-running"},
+		{checkpointStarting, "checkpoint.refused.load-not-running"},
+	} {
+		if got := r.checkpointRefusal(step.step, "game", err); got != pageSentence(t, step.key) {
+			t.Errorf("%s: the page was told %q, want %s", step.step, got, step.key)
+		}
+	}
+}

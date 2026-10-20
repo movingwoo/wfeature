@@ -152,7 +152,7 @@ func (session *NativeSession) checkpointRefusal() error {
 		next = platform.frame.interval
 	}
 	if why := nativeNotRunning(next, framed, platform.screen.presents, platform.screen.draws, platform.clock.Now().Sub(platform.started)); why != "" {
-		return fmt.Errorf("KTF native checkpoint: the title is not running: %s", why)
+		return fmt.Errorf("KTF native checkpoint: %w: %s", backend.ErrCheckpointNotRunning, why)
 	}
 	return nil
 }
@@ -382,22 +382,22 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 			return err
 		}
 	}
-	// A title that was not running when it was saved is not brought back;
-	// an earlier build left one so. See maxNativeFrameInterval.
-	next, framed := time.Duration(0), saved.Frame != nil
-	if framed {
-		next = min(saved.Frame.Interval, time.Duration(math.MaxUint32)*time.Millisecond)
-	}
-	if why := nativeNotRunning(next, framed, saved.Presents, saved.Draws, saved.Elapsed); why != "" {
-		return fmt.Errorf("KTF native checkpoint of a title that is not running (%s): start the title again", why)
-	}
 	if saved.Frame != nil {
-		if saved.Frame.Interval <= 0 || saved.Frame.Interval > maxNativeFrameInterval || saved.Frame.Remaining == math.MinInt64 || math.Abs(float64(saved.Frame.Remaining))/saved.Speed >= float64(math.MaxInt64) {
+		if saved.Frame.Interval <= 0 || saved.Frame.Interval > time.Duration(math.MaxUint32)*time.Millisecond || saved.Frame.Remaining == math.MinInt64 || math.Abs(float64(saved.Frame.Remaining))/saved.Speed >= float64(math.MaxInt64) {
 			return invalid()
 		}
 		if err := function(saved.Frame.Function); err != nil {
 			return err
 		}
+	}
+	// A title that was not running when it was saved is not brought back;
+	// an earlier build left one so. See maxNativeFrameInterval.
+	next, framed := time.Duration(0), saved.Frame != nil
+	if framed {
+		next = saved.Frame.Interval
+	}
+	if why := nativeNotRunning(next, framed, saved.Presents, saved.Draws, saved.Elapsed); why != "" {
+		return fmt.Errorf("KTF native checkpoint: %w: %s", backend.ErrCheckpointNotRunning, why)
 	}
 	for i, colour := range saved.Colours {
 		if i > 0 && saved.Colours[i-1].Item >= colour.Item {

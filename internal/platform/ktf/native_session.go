@@ -129,6 +129,7 @@ func StartNativeSession(ctx context.Context, data []byte, options NativeSessionO
 	// Before Boot, because Install builds the screen from it.
 	platform.SetScreen(options.Width, options.Height)
 	platform.AttachSaves(options.SaveStore)
+	platform.migrateLeftovers()
 	platform.AttachAudio(options.AudioSink)
 	platform.audio.SetLogger(options.Logger)
 	platform.SetLogger(options.Logger)

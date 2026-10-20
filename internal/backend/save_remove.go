@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,7 +42,8 @@ func RemoveEmptySave(store SaveStore, name string) (bool, error) {
 // one is shadowing, and taking the empty one away would hand a read that older
 // save, so then nothing is removed. A folder that takes no write — one whose
 // earlier names could not be converted, or whose conversion is under way —
-// takes no removal either, until it does.
+// takes no removal either, until it does, and nothing is removed under a name
+// Win32 stored for an earlier build, which other keys may read too.
 func (store *DirectorySaveStore) RemoveEmptySave(name string) (bool, error) {
 	if store == nil {
 		return false, fmt.Errorf("save store has no root")
@@ -67,8 +67,8 @@ func (store *DirectorySaveStore) RemoveEmptySave(name string) (bool, error) {
 	if names.refusesWrites() {
 		return false, nil
 	}
-	paths, err := store.saveSpellings(key, names)
-	if err != nil || len(paths) == 0 {
+	paths, removable, err := store.saveSpellings(key, names)
+	if err != nil || !removable || len(paths) == 0 {
 		return false, err
 	}
 	for _, path := range paths {
@@ -90,78 +90,46 @@ func (store *DirectorySaveStore) RemoveEmptySave(name string) (bool, error) {
 }
 
 // saveSpellings lists every file one key's entry could be read from, as
-// locateSave looks for it. In an encoded folder that is, at each segment, its
-// encoded name and the names an earlier build gave it (earlierSaveSpellings),
-// each of which reads back as that segment and as no other. A folder without
-// the record is read at the whole key encoded and at the whole key spelled
-// exactly, and not at a mix of the two, which would name another key there.
-// On Windows a name Win32 stored for an earlier build is one too.
-func (store *DirectorySaveStore) saveSpellings(key string, names saveNames) ([]string, error) {
+// locateSave looks for it: in an encoded folder each name walkEarlierSaves
+// visits, which findEarlierSave chooses among, and in a folder without the
+// record the whole key encoded and the whole key spelled exactly, and not a
+// mix of the two, which would name another key there. It answers false for a
+// key that a name Win32 stored for an earlier build may answer: that file is
+// shared by every key Win32 spelled the same and is never moved, so it is
+// never taken away for one of them.
+func (store *DirectorySaveStore) saveSpellings(key string, names saveNames) ([]string, bool, error) {
 	segments := strings.Split(key, "/")
+	if saveNamesWin32 {
+		if _, found := store.win32Save(segments, names); found {
+			return nil, false, nil
+		}
+	}
 	var paths []string
 	add := func(path string) {
 		if !slices.Contains(paths, path) {
 			paths = append(paths, path)
 		}
 	}
-	var failure error
-	switch names.naming {
-	case namingEncoded:
-		var search func(directory string, depth int)
-		search = func(directory string, depth int) {
-			segment := segments[depth]
-			spellings := append([]string{encodeSaveName(segment)}, earlierSaveSpellings(segment)...)
-			for index, spelling := range spellings {
-				if saveNamesReserved(spelling) || saveNameLength(spelling) > maxSaveNameLength {
-					continue
-				}
-				path := filepath.Join(directory, spelling)
-				present, err := saveNameExists(path)
-				if err == nil && present && index != 0 {
-					present, err = spelledExactly(directory, spelling)
-				}
-				if err != nil {
-					failure = errors.Join(failure, err)
-					continue
-				}
-				if !present {
-					continue
-				}
-				info, err := os.Lstat(path)
-				if err != nil {
-					failure = errors.Join(failure, err)
-					continue
-				}
-				if depth == len(segments)-1 {
-					if !info.IsDir() {
-						add(path)
-					}
-				} else if info.IsDir() {
-					search(path, depth+1)
-				}
-			}
-		}
-		search(store.root, 0)
-	default:
-		encoded := filepath.Join(store.root, filepath.FromSlash(encodeSaveKey(key)))
-		if present, err := saveNameExists(encoded); err != nil {
-			failure = errors.Join(failure, err)
-		} else if present && !keyIsDirectory(encoded) {
-			add(encoded)
-		}
-		exact, found, err := exactSavePath(store.root, segments)
-		if err != nil {
-			failure = errors.Join(failure, err)
-		} else if found && !keyIsDirectory(exact) {
-			add(exact)
-		}
+	if names.naming == namingEncoded {
+		walkEarlierSaves(store.root, segments, func(path string, _ []string, _ bool, _ os.FileInfo) {
+			add(path)
+		})
+		return paths, true, nil
 	}
-	if saveNamesWin32 {
-		if at, found := store.win32Save(segments, names); found {
-			add(at)
-		}
+	encoded := filepath.Join(store.root, filepath.FromSlash(encodeSaveKey(key)))
+	if present, err := saveNameExists(encoded); err != nil {
+		return nil, false, err
+	} else if present && !keyIsDirectory(encoded) {
+		add(encoded)
 	}
-	return paths, failure
+	exact, found, err := exactSavePath(store.root, segments)
+	if err != nil {
+		return nil, false, err
+	}
+	if found && !keyIsDirectory(exact) {
+		add(exact)
+	}
+	return paths, true, nil
 }
 
 // RemoveEmptySave removes an empty entry.

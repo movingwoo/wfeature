@@ -82,15 +82,8 @@ type NativePlatform struct {
 	// copy of the same file, and a quick load starts it empty: what the
 	// restored title reads by name is the file as it is now.
 	written map[string][]byte
-	// made names every key this play has kept anything under, here or in a
-	// session this one displaced by a quick load: a file it made is its own,
-	// with or without anything in it. See NativePlatform.contents.
-	made map[string]bool
-	// recorded is the store's list of the files a build of this platform has
-	// made, read the first time it is asked about, which recordedRead says it
-	// has been; see NativePlatform.madeHere.
-	recorded     map[string]bool
-	recordedRead bool
+	// textBuffer is what a run of text is read into; see readMapped.
+	textBuffer [maxNativeTextLength]byte
 	// logger is where the platform says what a title did that a run should be
 	// able to find afterwards, and refusedWrites the names it has said it of;
 	// see NativePlatform.reportRefusedWrite. A nil logger says nothing.

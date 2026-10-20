@@ -11,16 +11,16 @@ import (
 )
 
 // One local title queries a second drawing interface beside the screen, and
-// draws through it everything that is not a bitmap or text: the stars it
-// scatters over its title screen, the sparks and trails of every firework, and
-// a ring around the point it aims at. Until it was answered every call on it
-// was a trap that answered zero, and the title drew none of those.
+// draws through it everything that is not a bitmap or text: the points of one
+// and two pixels and the lines its screens are animated with, and a ring of
+// radius 4. Until it was answered every call on it was a trap that answered
+// zero, and the title drew none of those.
 //
 // What each method takes comes off its call sites:
 //
-//	+0x10 (r, g, b), 255 on the stack   before every point, line and ring; a
-//	                                    grey when the title twinkles a star
-//	+0x28 (1) or (2)                    before the stars and before the sparks
+//	+0x10 (r, g, b), 255 on the stack   before every point, line and ring;
+//	                                    grey for some of the points
+//	+0x28 (1) or (2)                    before the points of each size
 //	+0x30 (record, 0)                   a byte 1, then four halfwords from
 //	                                    offset 4: x, y, width and height. The
 //	                                    whole screen at the top of every frame
@@ -47,9 +47,14 @@ const (
 )
 
 // nativeClipRectangle is the clip record's first byte for a rectangle, the
-// only shape a title has been seen to clip to. Another shape is refused
-// rather than read as a rectangle, and the clip stays as it was.
-const nativeClipRectangle = 1
+// only shape a title has been seen to clip to, and nativeClipNone the byte
+// for no shape at all, which lifts the clip as a null record does. Another
+// shape is refused rather than read as a rectangle, and the clip stays as it
+// was.
+const (
+	nativeClipNone      = 0
+	nativeClipRectangle = 1
+)
 
 // maxNativePointSize bounds a point, which is a square that size centred on
 // where it is drawn, on any screen a session runs at. On a screen it is bounded
@@ -117,7 +122,8 @@ func (platform *NativePlatform) shapesPointSize(thread *armcore.Thread) (uint32,
 // halfword boundary the title leaves alone, and the rectangle.
 const nativeClipRecordSize = 12
 
-// shapesClip sets where drawing lands. A null record lifts the clip.
+// shapesClip sets where drawing lands. A null record, or a record of no
+// shape, lifts the clip.
 func (platform *NativePlatform) shapesClip(thread *armcore.Thread) (uint32, error) {
 	address, err := thread.Register(1)
 	if err != nil {
@@ -131,7 +137,12 @@ func (platform *NativePlatform) shapesClip(thread *armcore.Thread) (uint32, erro
 	if err := platform.client.core.Memory().Read(address, record[:]); err != nil {
 		return 0, fmt.Errorf("read KTF native clip at %#x: %w", address, err)
 	}
-	if record[0] != nativeClipRectangle {
+	switch record[0] {
+	case nativeClipNone:
+		platform.shapes.clipped = false
+		return 1, nil
+	case nativeClipRectangle:
+	default:
 		return 0, nil
 	}
 	x, y, width, height := nativeHalfwords(record[4:], 4)

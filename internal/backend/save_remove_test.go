@@ -147,3 +147,22 @@ func TestRemoveEmptySaveLeavesAStoreThatCannotAlone(t *testing.T) {
 		t.Fatal("the entry went")
 	}
 }
+
+// TestRemoveEmptySaveLeavesAWin32NameOtherKeysRead covers a file an earlier
+// build stored on Windows under the name Win32 made of a key that is not UTF-8:
+// every key Win32 spelled the same reads it, so taking it away for one of them
+// takes it from the others. It stays, empty or not.
+func TestRemoveEmptySaveLeavesAWin32NameOtherKeysRead(t *testing.T) {
+	win32 := saveNamesWin32
+	saveNamesWin32 = true
+	t.Cleanup(func() { saveNamesWin32 = win32 })
+	key, other := "fs/\xbc\xbc\xc0\xcc.dat", "fs/\xb0\xa1\xb3\xaa.dat"
+	parent := t.TempDir()
+	leftoverBuild(t, parent, []string{"owner/fs/����.dat="})
+	store := NewDirectorySaveStore(filepath.Join(parent, "owner"))
+	wantSaves(t, store, map[string]string{key: "", other: ""})
+	if removed, err := store.RemoveEmptySave(key); removed || err != nil {
+		t.Fatalf("the file Win32 named was removed for one of its keys: %t, %v", removed, err)
+	}
+	wantSaves(t, store, map[string]string{key: "", other: ""})
+}

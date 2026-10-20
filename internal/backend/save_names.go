@@ -1609,6 +1609,28 @@ func findEarlierSave(root string, segments []string) (string, bool) {
 	var found string
 	var foundAt []string
 	var foundTime time.Time
+	walkEarlierSaves(root, segments, func(path string, spelled []string, allEncoded bool, info os.FileInfo) {
+		// The encoded path itself was asked for before the search.
+		if allEncoded {
+			return
+		}
+		if when := info.ModTime(); found == "" || when.After(foundTime) || when.Equal(foundTime) && slices.Compare(spelled, foundAt) < 0 {
+			found, foundAt, foundTime = path, slices.Clone(spelled), when
+		}
+	})
+	return found, found != ""
+}
+
+// walkEarlierSaves visits every entry one key could be under in an encoded
+// directory, the encoded path among them: at each segment the encoded name and
+// then the earlier ones (see earlierSaveSpellings), spelled exactly where the
+// name is not the encoded one, through each directory the file system follows.
+// visit is handed the entry's path, the spelling of each segment it was found
+// under — valid only for the call — whether every one of them is the encoded
+// name, and what the entry is without following a link at its end. A path
+// that cannot be looked at is passed over, and so is an entry that is a
+// directory.
+func walkEarlierSaves(root string, segments []string, visit func(path string, spelled []string, allEncoded bool, info os.FileInfo)) {
 	spelled := make([]string, len(segments))
 	var search func(directory string, depth int, encoded bool)
 	search = func(directory string, depth int, encoded bool) {
@@ -1631,13 +1653,8 @@ func findEarlierSave(root string, segments []string) (string, bool) {
 			allEncoded := encoded && index == 0
 			spelled[depth] = spelling
 			if depth == len(segments)-1 {
-				// The encoded path itself was asked for before the search.
-				info, err := os.Lstat(path)
-				if allEncoded || err != nil || info.IsDir() {
-					continue
-				}
-				if when := info.ModTime(); found == "" || when.After(foundTime) || when.Equal(foundTime) && slices.Compare(spelled, foundAt) < 0 {
-					found, foundAt, foundTime = path, slices.Clone(spelled), when
+				if info, err := os.Lstat(path); err == nil && !info.IsDir() {
+					visit(path, spelled, allEncoded, info)
 				}
 				continue
 			}
@@ -1648,7 +1665,6 @@ func findEarlierSave(root string, segments []string) (string, bool) {
 		}
 	}
 	search(root, 0, true)
-	return found, found != ""
 }
 
 // moveEarlierSave gives an entry found under an earlier spelling its encoded

@@ -124,13 +124,17 @@ func TestNativeShapesDrawInThePenInsideTheClip(t *testing.T) {
 	if inked(60, 60) {
 		t.Error("the refused clip replaced the one before it")
 	}
-	// A null record lifts the clip.
+	// A null record lifts the clip, and so does a record of no shape.
 	if got := nativeCall(t, platform.shapesClip, 0, 0, 0); got == 0 {
 		t.Error("lifting the clip was refused")
 	}
 	nativeCall(t, platform.shapesPoint, 0, nativeShapeRecord(t, platform, 60, 60))
 	if !inked(60, 60) {
 		t.Error("a point after the clip was lifted did not land")
+	}
+	nativeCall(t, platform.shapesClip, 0, nativeClipRecord(t, platform, nativeClipRectangle, 0, 0, 30, 30), 0)
+	if got := nativeCall(t, platform.shapesClip, 0, nativeClipRecord(t, platform, nativeClipNone, 0, 0, 0, 0), 0); got == 0 || platform.shapes.clipped {
+		t.Error("a clip record of no shape did not lift the clip")
 	}
 	// Off the screen is nowhere, not a failure.
 	nativeCall(t, platform.shapesCircle, 0, nativeShapeRecord(t, platform, -100, -100, 30))

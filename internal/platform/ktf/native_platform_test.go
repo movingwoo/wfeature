@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"image/color"
 	"log/slog"
 	"os"
@@ -364,6 +365,13 @@ func TestNativeOpenMakesAFileOnlyInTheEmptyingAndAppendingModes(t *testing.T) {
 	if got := string(store["fs/log.dat"]); got != "entry" {
 		t.Fatalf("store holds %q for the appended file, want what was written", got)
 	}
+	// An append to a file that is there writes after what it holds.
+	again := nativeCall(t, next.openFile, 0, nativeString(t, next, "log.dat"), nativeModeAppend)
+	nativeCall(t, next.writeFile, again, nativeString(t, next, "+more"), 5)
+	nativeCall(t, next.closeFile, again)
+	if got := string(store["fs/log.dat"]); got != "entry+more" {
+		t.Fatalf("store holds %q after a second append, want the first entry and then the second", got)
+	}
 }
 
 // TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing is the migration
@@ -379,16 +387,21 @@ func TestNativeOpenTakesAFileAnEarlierSessionLeftEmptyAsMissing(t *testing.T) {
 	}
 	platform := newTestNativePlatform(t, map[string][]byte{"a title/shipped.dat": []byte("from the package")})
 	platform.AttachSaves(store)
+	// What a start does before the title runs.
+	platform.migrateLeftovers()
 	option := nativeString(t, platform, "option.dat")
 	for _, mode := range []uint32{nativeModeRead, 2} {
 		if object := nativeCall(t, platform.openFile, 0, option, mode); object != 0 {
 			t.Errorf("mode %d opened the empty file an earlier session left", mode)
 		}
 	}
-	// The store says what the title was told: the leftover is gone from it.
+	// The leftover is gone from the store, and its name is recorded first.
 	// The emptied file the package carries, and the saved one, are not.
 	if _, ok := store["fs/option.dat"]; ok {
 		t.Error("the empty file an earlier session left is still in the store")
+	}
+	if records, err := backend.DecodeSaveRecords(store[nativeLeftoversKey]); err != nil || len(records) != 1 || string(records[0]) != "fs/option.dat" {
+		t.Errorf("the record of removed leftovers is %q (%v)", records, err)
 	}
 	// A shipped name and a file with something in it are files like any other.
 	if object := nativeCall(t, platform.openFile, 0, nativeString(t, platform, "shipped.dat"), 2); object == 0 || len(platform.files[object].data) != 0 {
@@ -426,6 +439,7 @@ func TestNativeLeftoverGoesFromTheSaveFolder(t *testing.T) {
 	}
 	platform := newTestNativePlatform(t, nil)
 	platform.AttachSaves(store)
+	platform.migrateLeftovers()
 	for _, name := range []string{"option.dat", "slot:1.dat", "kept.dat"} {
 		nativeCall(t, platform.openFile, 0, nativeString(t, platform, name), 2)
 	}
@@ -450,15 +464,64 @@ func TestNativeLeftoverGoesFromTheSaveFolder(t *testing.T) {
 	}
 }
 
+// nativeMigrationStore is a memory store a test can make fail the read of the
+// migration's record, or refuse its write.
+type nativeMigrationStore struct {
+	memorySaveStore
+	unreadable, refuse bool
+}
+
+func (store nativeMigrationStore) ReadSave(name string) ([]byte, bool, error) {
+	if store.unreadable && name == nativeLeftoversKey {
+		return nil, false, errors.New("the store cannot read the record")
+	}
+	data, ok := store.memorySaveStore[name]
+	return data, ok, nil
+}
+
+func (store nativeMigrationStore) StoreSave(name string, data []byte) error {
+	if store.refuse && name == nativeLeftoversKey {
+		return errors.New("the store refuses the record")
+	}
+	return store.memorySaveStore.StoreSave(name, data)
+}
+
+// TestNativeMigrationChangesNothingItCannotFirstRecord covers the migration's
+// own failures. A record that cannot be read may say the migration was made,
+// so nothing is looked at; a record the store will not take is a removal that
+// could not be undone, so nothing is removed. Either way the next start tries
+// again, and the saves are as they were.
+func TestNativeMigrationChangesNothingItCannotFirstRecord(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		store nativeMigrationStore
+	}{
+		{name: "an unreadable record", store: nativeMigrationStore{memorySaveStore: memorySaveStore{"fs/option.dat": {}}, unreadable: true}},
+		{name: "a refused record", store: nativeMigrationStore{memorySaveStore: memorySaveStore{"fs/option.dat": {}}, refuse: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			platform := newTestNativePlatform(t, nil)
+			platform.AttachSaves(test.store)
+			platform.migrateLeftovers()
+			if _, ok := test.store.memorySaveStore["fs/option.dat"]; !ok {
+				t.Error("the leftover was removed without its record")
+			}
+			if _, ok := test.store.memorySaveStore[nativeLeftoversKey]; ok {
+				t.Error("a record was written")
+			}
+		})
+	}
+}
+
 // TestNativeFileCallsAgreeAboutAFileAnEarlierSessionLeftEmpty is an empty file
-// an earlier build left, which is on no list of this platform's. Every call on
+// an earlier build left, which the start's migration removes. Every call on
 // the name answers the same way: it is not there, in the answer its generation
 // reads, it has no record, it opens in no mode, and creating it makes it —
 // after which every mode opens it. An answer of "there" beside an open that
 // refused it left a title that could create a file and never open it.
 //
-// A file this platform made and left empty is another thing: it is on the
-// list, and the next session finds it there in every call.
+// A file this platform made and left empty, after the migration, is another
+// thing: the next session finds it there in every call.
 func TestNativeFileCallsAgreeAboutAFileAnEarlierSessionLeftEmpty(t *testing.T) {
 	for _, generation := range []struct {
 		name    string
@@ -477,6 +540,7 @@ func TestNativeFileCallsAgreeAboutAFileAnEarlierSessionLeftEmpty(t *testing.T) {
 					platform.archive.Module = generation.module
 				}
 				platform.AttachSaves(store)
+				platform.migrateLeftovers()
 				return platform
 			}
 			// What an earlier build left: the empty file, and no list.
@@ -817,6 +881,15 @@ func (store memorySaveStore) RemoveEmptySave(name string) (bool, error) {
 	return true, nil
 }
 
+// SnapshotSaves lists what the store holds, as the Hosts' stores do.
+func (store memorySaveStore) SnapshotSaves() ([]backend.SaveEntry, error) {
+	entries := make([]backend.SaveEntry, 0, len(store))
+	for key, data := range store {
+		entries = append(entries, backend.SaveEntry{Key: key, Data: bytes.Clone(data)})
+	}
+	return entries, nil
+}
+
 func (store memorySaveStore) LoadSave(name string) ([]byte, bool) {
 	data, ok := store[name]
 	return data, ok
@@ -993,23 +1066,11 @@ func TestNativeSavesReachTheStoreAtABoundary(t *testing.T) {
 		t.Errorf("%d store writes during the burst, want none until a boundary", store.stores)
 	}
 	nativeCall(t, platform.closeFile, object)
-	// The close stores the file, and before it, the first time, the list of
-	// the files the platform has made with the file's name on it.
-	if store.stores != 2 {
-		t.Errorf("%d store writes at the close, want the file and the list", store.stores)
+	if store.stores != 1 {
+		t.Errorf("%d store writes at the close, want 1", store.stores)
 	}
 	if got := len(store.saves[nativeSaveKey("burst.dat")]); got != 128 {
 		t.Errorf("stored %d bytes, want the 128 the title wrote", got)
-	}
-	if records, err := backend.DecodeSaveRecords(store.saves[nativeMadeKey]); err != nil || len(records) != 1 || string(records[0]) != "burst.dat" {
-		t.Errorf("the list of made files is %q (%v)", records, err)
-	}
-	// Writing the file again stores the file and nothing else.
-	again := nativeCall(t, platform.openFile, 0, name, 2)
-	nativeCall(t, platform.writeFile, again, chunk, 16)
-	nativeCall(t, platform.closeFile, again)
-	if store.stores != 3 {
-		t.Errorf("%d store writes after the file was written again, want one more", store.stores)
 	}
 }
 

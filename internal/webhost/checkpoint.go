@@ -55,10 +55,11 @@ func (step checkpointStep) String() string {
 }
 
 // checkpointRefusal is what the page shows for a refused quick save or quick
-// load. Three refusals are ones a person can act on, and they are said the way
+// load. Four refusals are ones a person can act on, and they are said the way
 // the rest of the page speaks to them: a slot an earlier build wrote, writes
-// the running game had issued that the disk would not take, and saves a load
-// could not read. Every other refusal passes through as it is.
+// the running game had issued that the disk would not take, saves a load could
+// not read, and a game that is not running, which starting it again answers.
+// Every other refusal passes through as it is.
 //
 // The sentence takes the place of the cause, and the cause names the file and
 // what the store answered, so it goes to the log.
@@ -73,6 +74,10 @@ func (r *sessionRunner) checkpointRefusal(step checkpointStep, game string, err 
 		key = "checkpoint.refused.load-write"
 	case errors.Is(err, backend.ErrCheckpointSaveRead):
 		key = "checkpoint.refused.load-read"
+	case errors.Is(err, backend.ErrCheckpointNotRunning) && step == checkpointSaving:
+		key = "checkpoint.refused.save-not-running"
+	case errors.Is(err, backend.ErrCheckpointNotRunning):
+		key = "checkpoint.refused.load-not-running"
 	default:
 		return err.Error()
 	}

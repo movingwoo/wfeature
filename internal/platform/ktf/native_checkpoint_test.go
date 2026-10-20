@@ -279,6 +279,22 @@ func TestNativeCheckpointRefusesATitleThatIsNotRunning(t *testing.T) {
 	if _, err := session.CaptureCheckpoint(t.Context()); err == nil || !strings.Contains(err.Error(), "drawn nothing") {
 		t.Fatalf("a title that has drawn nothing in two minutes was saved: %v", err)
 	}
+	if _, err := session.CaptureCheckpoint(t.Context()); !errors.Is(err, backend.ErrCheckpointNotRunning) {
+		t.Fatalf("the refusal is not one a Host can tell a person about: %v", err)
+	}
+	// A title that has drawn ran, and a long wait for its next frame — a
+	// pause, a menu waiting on a key — is saved and loads.
+	session.platform.screen.presents, session.platform.screen.draws = 1, 1
+	session.platform.frame.interval = 2 * time.Hour
+	paused, err := session.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatalf("a paused title was refused: %v", err)
+	}
+	prepared, err := PrepareNativeSessionCheckpoint(archive, paused, NativeSessionOptions{SaveStore: store})
+	if err != nil {
+		t.Fatalf("a paused title's slot was refused: %v", err)
+	}
+	prepared.Discard()
 }
 
 // TestNativeCheckpointReadsARecordFromBeforeTheSecondDrawingInterface is a
@@ -364,6 +380,7 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 		}},
 		{"deadline overflow", func(s *nativeState) { s.Frame.Remaining = math.MinInt64 }},
 		{"a title not running, its next frame hours away", func(s *nativeState) {
+			s.Presents, s.Draws = 0, 0
 			s.Frame.Interval, s.Frame.Remaining = 0x209f770c*time.Millisecond, 0x209f770c*time.Millisecond
 		}},
 		{"a title not running, nothing drawn in hours", func(s *nativeState) {

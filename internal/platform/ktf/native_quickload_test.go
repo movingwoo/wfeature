@@ -600,6 +600,31 @@ func TestNativeQuickLoadReadsADirectoryWhereAFileWasAsNoFile(t *testing.T) {
 	}
 }
 
+// TestNativeQuickLoadIntoAFreshProcessMigratesTheSaves covers a load that no
+// start ran before: the saves' migration a start makes is made before the
+// restored title runs, so an empty file an earlier build left beside the save
+// is gone from the store, and recorded, by the time the title looks.
+func TestNativeQuickLoadIntoAFreshProcessMigratesTheSaves(t *testing.T) {
+	source := startNativeSaveFixture(t, testfixture.KTFNativeSaveArchive, newNativeSaveFixtureStore(t))
+	checkpoint := source.quickSave()
+	fresh := newNativeSaveFixtureStore(t, backend.SaveEntry{Key: "fs/option.dat", Data: []byte{}})
+	prepared, err := PrepareNativeSessionCheckpoint(source.archive, checkpoint, NativeSessionOptions{Clock: NewManualClock(time.Unix(500, 0)), SaveStore: fresh})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := prepared.Commit(t.Context(), nil, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restored.Close)
+	if _, found, _ := fresh.ReadSave("fs/option.dat"); found {
+		t.Error("the leftover is still in the store after a load into a fresh process")
+	}
+	if _, found, _ := fresh.ReadSave(nativeLeftoversKey); !found {
+		t.Error("the load made no record of the migration")
+	}
+}
+
 // TestNativeQuickLoadKeepsAnEmptyFileThisPlayMade is a save a title emptied and
 // left empty, a quick save, and a quick load in the same play. The file is the
 // play's own, so the restored title finds it where it left it: the load does
@@ -931,7 +956,7 @@ func TestNativeFileNameIsOneFileWhicheverWayItIsWritten(t *testing.T) {
 		t.Fatalf("wrote %d bytes", moved)
 	}
 	nativeCall(t, platform.closeFile, file)
-	if got, found := store["fs/slot.dat"]; !found || string(got) != "written" || len(store) != 2 || store[nativeMadeKey] == nil || platform.StoreFailures() != 0 {
+	if got, found := store["fs/slot.dat"]; !found || string(got) != "written" || len(store) != 1 || platform.StoreFailures() != 0 {
 		t.Fatalf("the store holds %v after %d refusals", store, platform.StoreFailures())
 	}
 	for _, name := range []string{"saves/slot.dat", "SLOT.DAT", "Saves\\Slot.DAT"} {

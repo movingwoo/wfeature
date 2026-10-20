@@ -388,26 +388,29 @@ type nativeSchedule struct {
 	due      time.Time
 }
 
-// maxNativeFrameInterval is the longest a title's next frame may be away, and
-// the longest it may run without drawing anything, in a state a quick save
-// keeps. A title runs by its frames and shows itself by drawing, and one that
-// asked for its next frame more than a minute away, or has drawn nothing in a
-// minute of its own time, is not running. The title that computed its
-// interval out of an empty settings file an earlier build left asked for 152
-// hours and showed a black screen for as long as anyone waited; on a clock that
-// jumped to that deadline it went on to a frame that drew nothing at all. A
+// maxNativeFrameInterval is how long a title that has drawn nothing at all may
+// wait for its next frame, or run, in a state a quick save keeps. Such a title
+// is not running: the one that computed its frame interval out of an empty
+// settings file an earlier build left asked for its next frame 152 hours away
+// and showed a black screen for as long as anyone waited, and on a clock that
+// jumped to that deadline it went on to frames that drew nothing at all. A
 // live session is given what the title asked for; a quick save of such a state
 // is refused, and so is the load of a record of one, rather than bringing back
-// a title that does not run.
+// a title that does not run. A title that has drawn is one that ran, and a
+// long wait for its next frame — a pause, a menu waiting on a key — is its
+// own business.
 const maxNativeFrameInterval = time.Minute
 
 // nativeNotRunning says why a title in this state is not running, or answers
 // the empty string when it is; see maxNativeFrameInterval.
 func nativeNotRunning(next time.Duration, framed bool, presents, draws int, elapsed time.Duration) string {
-	if framed && next > maxNativeFrameInterval {
-		return fmt.Sprintf("its next frame is %v away", next)
+	if presents != 0 || draws != 0 {
+		return ""
 	}
-	if presents == 0 && draws == 0 && elapsed > maxNativeFrameInterval {
+	if framed && next > maxNativeFrameInterval {
+		return fmt.Sprintf("it has drawn nothing, and its next frame is %v away", next)
+	}
+	if elapsed > maxNativeFrameInterval {
 		return fmt.Sprintf("it has drawn nothing in %v of its own time", elapsed.Round(time.Second))
 	}
 	return ""

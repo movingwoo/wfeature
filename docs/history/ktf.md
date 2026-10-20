@@ -80,7 +80,7 @@ This consolidation adds no execution or acceptance evidence.
 - [KTF dialogue clipping and deferred text input](#ktf-graphics-input-qa-2026-09-23)
 - [KTF input availability after rejected confirmation](#ktf-input-lifetime-2026-09-23)
 - [KTF slot creation and save overlay reads](#ktf-save-slots-2026-09-23)
-- [An earlier-package title's settings, sky and sparks, 2026-10-20](#ktf-native-settings-2026-10-20)
+- [An earlier-package title's settings and drawing calls, 2026-10-20](#ktf-native-settings-2026-10-20)
 
 <a id="implementation-ktf-platform-implementation-status"></a>
 
@@ -9212,7 +9212,7 @@ save files byte for byte. Physical iPhone replay remains a user confirmation.
 
 <a id="ktf-native-settings-2026-10-20"></a>
 
-## An earlier-package title's settings, sky and sparks, 2026-10-20
+## An earlier-package title's settings and drawing calls, 2026-10-20
 
 <a id="ktf-native-settings-2026-10-20-report-and-cause"></a>
 
@@ -9221,7 +9221,7 @@ save files byte for byte. Physical iPhone replay remains a user confirmation.
 A report said a title of the earlier native package showed only a black screen,
 and that it had worked in v0.6.0-pre. It had not: v0.6.0-pre and main both
 reach the same digest after 200 ticks from an empty save, and the title never
-ends a frame. Its module information file names application 19563.
+ends a frame.
 
 The title's start-up sets its frame interval to 50 ms, then opens its settings
 file in mode 2 and, when the open is refused, keeps that default. When the open
@@ -9247,8 +9247,8 @@ and to keep refusing read-write, which a title reads its settings through. A
 refused open that could write is now logged once for its name at debug level,
 so a title that took the refusal for a save written is found in the run's log
 rather than losing that save unseen. In a browser over a save tree holding the
-empty settings file, the title starts at 50 ms, draws its fireworks on a black
-sky, reaches stage selection, logs its one refused read-write open of the
+empty settings file, the title starts at 50 ms, draws its title screen on the
+background it sets, reaches stage selection, logs its one refused read-write open of the
 settings, and the empty file is gone from the tree.
 
 <a id="ktf-native-settings-2026-10-20-migration"></a>
@@ -9256,53 +9256,53 @@ settings, and the empty file is gone from the tree.
 ### Migration
 
 A save from an earlier build keeps the empty settings file, and the title would
-go on reading nothing out of it. So a stored file with nothing in it, which the
-package does not carry and no build of this platform made, is missing. The
-title takes its defaults, and the next time it saves its settings it makes the
-file through mode 4 and writes them.
+go on reading nothing out of it. So once for a title's saves, before the title
+first runs on this build — at its start, or at a quick load into a process no
+start ran in — every file of its saves that holds nothing and that the package
+does not carry is removed. Those are the files earlier builds made at a
+writable open, and any one an earlier build made empty on purpose; nothing that
+build stored tells the two apart, and either way the title goes the way it goes
+when the file is missing, which for the settings is its defaults. The next time
+it saves its settings it makes the file through mode 4 and writes them.
 
-What a build of this platform made is in the store entry `native/made`, a list
-of the keys it has made for the title, stored before the files at the boundary
-that first stores each one. A file made empty on purpose under this build is
-on it, and is a file in every later session. An earlier build kept no list, so
-an empty file it left — by its open for writing or on purpose, which nothing it
-stored tells apart — is a leftover, and the title goes the way it goes when the
-file is missing.
+The keys are recorded first, in the store entry `native/leftovers`, so a later
+build can make any of them again, and the record is what says the migration is
+done: after it, an empty file this build makes is a file like any other, in
+every call and every later session. Nothing is removed that was not recorded
+first. A store that cannot list what it holds, a record that cannot be read —
+it may say the migration was made — and a store that will not take the record
+each leave the saves as they are, and the next start tries again. The removal
+is the one a store makes (`backend.RemoveEmptySave`): only an entry with
+nothing in it, under every name a read could find it at, the encoded one and
+those an earlier build gave it. If one of those names holds an older save, the
+empty entry in front of it stays, since removing it would hand the title that
+older save; a name Win32 stored for an earlier build stays too, because every
+key Win32 spelled the same reads it.
 
-The rule is in the one lookup every call on a name makes, so open, existence,
-information and create agree about it. A first version applied it to the open
-alone: a title that made a file, opened it and wrote nothing was told on its
-next run that the file was there, its create answered success without making
-one, and every open of it was refused. Now the existence call answers that it
-is missing, in the answer the asking generation reads, and the create makes it.
-
-Within a play the names a session has kept anything under are known before the
-list is stored, and a quick load hands the displaced session's names to the
-restored one. Without that, a file a title had emptied was a leftover once the
-load had cleared the session's own table, and the same open that worked before
-the load was refused after it.
-
-The leftover is then removed from the store, the first time a title asks about
-it, so it goes from the save folder and from what an export carries rather than
-staying there unread. That is the one removal a store makes
-(`backend.RemoveEmptySave`): only an entry with nothing in it, under every name
-a read could find it at — the encoded one, and the names an earlier build or
-Win32 gave it — so that nothing is left to answer for the key. If one of those
-names holds an older save, the empty entry in front of it stays: removing it
-would hand the title that older save instead of the missing file it now sees. A
-guest's own removals stay on its platform's removal list.
+The first version applied the rule at the open alone, so the existence,
+information and create calls disagreed with it; the review round after it moved
+the rule into the lookup every call makes, made it carry over a quick load, kept
+a list of the files this build made so that one made empty on purpose stayed a
+file, and removed a leftover at the lookup that found it. A second review found
+what that design cost — a list that could not be read once was taken for an
+empty one and every file on it removed, a list the store refused let a quick
+save go on without it, and a lookup that wrote — and the migration once at the
+start replaced it, with no rule in the lookup at all.
 
 A quick save taken while the title was stuck held it with its next frame 152
 hours away, and loading it brought the stuck title back. The `run` command's
 manual clock jumps to a scheduled deadline instead of waiting for it, and a
 slot it took of the same title on v0.6.0-pre held the frame after that
 deadline: a 2 ms interval, and nothing drawn in 152 hours of the title's time.
-A title whose next frame is more than a minute away, or which has drawn
-nothing in a minute of its own time, is not running, so a quick save of one is
-refused and so is loading a record of one. A copy of the stuck slot from a
-browser session is refused with "its next frame is 152h2m1.612s away", the
-`run` slot with "it has drawn nothing in 152h2m2s of its own time", and a slot
-of the title running on this build loads.
+A title that has drawn nothing at all, and whose next frame is more than a
+minute away or which has run for more than a minute, is not running, so a quick
+save of one is refused and so is loading a record of one, and the page asks the
+player to start the game again. A copy of the stuck slot from a browser
+session is refused ("it has drawn nothing, and its next frame is
+152h2m1.612s away"), and so is the `run` slot ("it has drawn nothing in
+152h2m2s of its own time"); a slot of the title running on this build loads,
+and so does one of a title that has drawn and then waits long for its next
+frame, as a pause or a menu waiting on a key does.
 
 <a id="ktf-native-settings-2026-10-20-what-the-title-draws-with"></a>
 
@@ -9350,9 +9350,8 @@ answer, each from its call sites:
   stack, `+0x28` a point size of 1 or 2, `+0x30` a clip record (a byte 1, then
   x, y, width and height as halfwords from offset 4) whose answer one caller
   reads and draws only on a non-zero one, `+0x50` a point, `+0x54` a line and
-  `+0x5c` a circle of radius 4 round the aim. The stars of the title screen are
-  grey points, the fireworks are points of size 2 and lines, and the aim is the
-  circle. A line is the WIPI C table's line and a circle its arc all the way
+  `+0x5c` a circle of radius 4. The title's animated screens are points of
+  size 1 and 2, lines, and that circle. A line is the WIPI C table's line and a circle its arc all the way
   round, both walked only inside the clip, and a point, at most as large as the
   screen's longer side, is filled a row at a time. The pen, point size and clip are part of a native checkpoint, as a
   pointer: a record taken before has none and still loads, starting the
@@ -9363,7 +9362,7 @@ answer, each from its call sites:
 ### Validation
 
 From an empty save the title reaches its title screen, a tip, its main menu,
-stage selection and the game, where the aim, rockets and score bar draw, in a
+stage selection and the game, where its points, lines, circle and status bar draw, in a
 906-tick route with no slot left a trap. A copy of a debug save holding the
 empty settings file runs at a 50 ms interval with the change and at 152 hours
 without it. The open and migration tests fail on the previous open.
@@ -9375,9 +9374,17 @@ damaged (`checkpoint record is missing fields`) and loads with this one. Each ne
 the calls agreeing, an emptied file across a quick load, the record without the
 interface's state, the units of a count, the runs read as far as they go, the
 mode, the leftover's removal, a run of control characters, a point past the
-screen — fails on the version before it. Along the local test route the frames
+screen — fails on the version before it. A second review of the whole branch
+then found fifteen more, each answered: the migration above in place of the
+list and the lookup rule; an append's cursor at the end of the file; the "not
+running" rule held to titles that have drawn nothing, its refusal worded for
+the page; a terminated run of the 2005 module read as plain bytes, ending at
+its first zero; a clip record of no shape lifting the clip; a Win32 name left
+alone; the walk over a key's earlier names shared with the read that looks for
+them; the text read into one buffer of the platform's; and the title described
+by what it draws rather than named. Along the local test route the frames
 end and draw as often as before and match it byte for byte from the first menu
-on; on the title screen 180 pixels of the fireworks' lines differ, where the
+on; on the title screen 180 pixels of its lines differ, where the
 shared line breaks a tie the other way.
 
 The other native archives this file's earlier records describe are no longer in

@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
-	"maps"
 	"path"
 	"slices"
 	"strconv"
@@ -239,94 +238,72 @@ func (platform *NativePlatform) reportRefusedWrite(key string, mode uint32) {
 // probe wants and not what a player does.
 func (platform *NativePlatform) AttachSaves(store SaveStore) {
 	platform.saves = store
-	platform.recorded, platform.recordedRead = nil, false
 }
 
-// nativeMadeKey is the store entry that lists the files a build of this
-// platform has made for the title, as save records of their keys. It sits
-// outside the "fs/" space the title's own names are kept in, so no name a
-// title opens is it.
+// nativeLeftoversKey is the store entry that records the empty files
+// migrateLeftovers removed, as save records of their keys. It sits outside
+// the "fs/" space the title's own names are kept in, so no name a title opens
+// is it, and that it is there says the migration has been made.
+const nativeLeftoversKey = "native/leftovers"
+
+// nativeSaveLister is a store that can list what it holds, which the
+// migration needs to find what earlier builds left. The Hosts' directory store
+// and the memory store can.
+type nativeSaveLister interface {
+	SnapshotSaves() ([]backend.SaveEntry, error)
+}
+
+// migrateLeftovers removes, once for a title's saves and before the title runs
+// on them, the empty files earlier builds left.
 //
-// It is what tells a file a title made empty on purpose from the empty files
-// earlier builds left wherever a title opened a missing name for writing
-// (see NativePlatform.contents): a build that makes a file says so here first,
-// and an earlier build said nothing. A list longer than maxNativeMadeNames is
-// read as far as that and grows no further, which only leaves a later empty
-// file of such a title to the rule for leftovers.
-const nativeMadeKey = "native/made"
-
-const maxNativeMadeNames = 4096
-
-// madeHere reports whether a build of this platform made the file: this play,
-// or an earlier one that the store's list remembers.
-func (platform *NativePlatform) madeHere(key string) bool {
-	if platform.made[key] {
-		return true
-	}
-	platform.readRecorded()
-	return platform.recorded[key]
-}
-
-// readRecorded reads the store's list of made files, once. A list that cannot
-// be read is no list: the files it named are then taken as an earlier build's.
-func (platform *NativePlatform) readRecorded() {
-	if platform.recordedRead {
+// Builds before this one made a file at every open that could write, and the
+// store kept it with nothing in it, so a title that opens its settings to find
+// out whether it has any found an empty file on every later run and read its
+// settings out of nothing. Every file of the title's saves that holds nothing
+// and that the package does not carry is such a file, or one an earlier build
+// made empty on purpose — nothing that build stored tells the two apart — and
+// both are removed: the title goes the way it goes when the file is missing,
+// which for the one that read its settings out of nothing is its defaults.
+//
+// Their keys are recorded first, in nativeLeftoversKey, so a later build can
+// make any of them again, and the record is also what says the migration is
+// done: after it, a file this platform makes, empty or not, is a file like any
+// other. Nothing is removed that was not recorded first. A store that cannot
+// list what it holds, or be read, or take the record, is left as it is, and
+// the next start tries again.
+func (platform *NativePlatform) migrateLeftovers() {
+	lister, ok := platform.saves.(nativeSaveLister)
+	if !ok || platform.archive == nil {
 		return
 	}
-	platform.recordedRead = true
-	platform.recorded = map[string]bool{}
-	data, ok, err := backend.ReadSave(platform.saves, nativeMadeKey)
-	if err != nil || !ok {
+	if _, done, err := backend.ReadSave(platform.saves, nativeLeftoversKey); err != nil || done {
 		return
 	}
-	records, err := backend.DecodeSaveRecords(data)
+	entries, err := lister.SnapshotSaves()
 	if err != nil {
 		return
 	}
-	for _, record := range records[:min(len(records), maxNativeMadeNames)] {
-		platform.recorded[string(record)] = true
-	}
-}
-
-// storeRecorded puts the files this play has made on the store's list, if any
-// is not there yet. It is called where a boundary stores files, before it
-// stores them, so a file in the store that a build of this platform made is on
-// the list by the time the file is, and the list is written no more often
-// than the files: once for a name, at the boundary that first stores it. A
-// store that refuses the list still takes the files, and the next boundary
-// asks again.
-func (platform *NativePlatform) storeRecorded() {
-	if platform.saves == nil || len(platform.made) == 0 {
-		return
-	}
-	platform.readRecorded()
-	missing := false
-	for key := range platform.made {
-		if !platform.recorded[key] && len(platform.recorded) < maxNativeMadeNames {
-			missing = true
-			break
+	var leftovers []string
+	for _, entry := range entries {
+		name, inFiles := strings.CutPrefix(entry.Key, "fs/")
+		if !inFiles || strings.Contains(name, "/") || len(entry.Data) != 0 {
+			continue
 		}
-	}
-	if !missing {
-		return
-	}
-	names := slices.Collect(maps.Keys(platform.recorded))
-	for _, key := range slices.Sorted(maps.Keys(platform.made)) {
-		if len(names) < maxNativeMadeNames && !platform.recorded[key] {
-			names = append(names, key)
+		if _, packaged := platform.packagedFile(name); packaged {
+			continue
 		}
+		leftovers = append(leftovers, entry.Key)
 	}
-	slices.Sort(names)
-	records := make([][]byte, len(names))
-	for index, name := range names {
-		records[index] = []byte(name)
+	slices.Sort(leftovers)
+	records := make([][]byte, len(leftovers))
+	for index, key := range leftovers {
+		records[index] = []byte(key)
 	}
-	if err := platform.saves.StoreSave(nativeMadeKey, backend.EncodeSaveRecords(records)); err != nil {
-		platform.storeFailures++
+	if err := platform.saves.StoreSave(nativeLeftoversKey, backend.EncodeSaveRecords(records)); err != nil {
 		return
 	}
-	for _, name := range names {
-		platform.recorded[name] = true
+	for _, key := range leftovers {
+		_, _ = backend.RemoveEmptySave(platform.saves, key)
 	}
 }
 
@@ -349,9 +326,6 @@ func nativeFileKey(name string) string {
 // base name and without regard to case: the module names its files the way
 // they were written into the archive, and the archive's entry names are the
 // title's directory rather than a bare name.
-//
-// It is the one lookup every call on a name makes — open, existence,
-// information and create — so they all agree about whether a file is there.
 func (platform *NativePlatform) contents(name string) ([]byte, bool, error) {
 	if platform.archive == nil {
 		return nil, false, nil
@@ -361,35 +335,10 @@ func (platform *NativePlatform) contents(name string) ([]byte, bool, error) {
 	// wrote in an earlier session, and only then what the package shipped — a
 	// save has to win over the archive's copy of the same name, or a title
 	// would start every session from its shipped settings.
-	key := nativeFileKey(name)
-	if data, ok := platform.written[key]; ok {
+	if data, ok := platform.written[nativeFileKey(name)]; ok {
 		return data, true, nil
 	}
-	data, ok, err := platform.stored(platform.saves, name)
-	if err != nil || !ok || len(data) != 0 || platform.madeHere(key) {
-		return data, ok, err
-	}
-	if _, packaged := platform.packagedFile(name); packaged {
-		return data, true, nil
-	}
-	// A file with nothing in it, which the package does not carry and no build
-	// of this platform made, is a file that is not there. Builds before this
-	// one made a file at every open that could write, and the store kept it empty,
-	// so a title that opens its settings to find out whether it has any found
-	// an empty file on every later run and read its settings out of nothing.
-	// Taking such a file as missing in every call is the migration for those
-	// saves: the title goes the way it goes on its first run, and the next file
-	// it makes there is one this platform made. A file an earlier build made
-	// empty on purpose is taken the same way, which sends that title the way it
-	// goes when the file is missing; nothing that build stored tells the two
-	// apart. One this platform made empty is on its list and stays a file.
-	//
-	// The store is then made to say what the title is told: the empty entry is
-	// removed, so it goes from the save directory and from what an export
-	// carries. Nothing that holds a byte is ever removed, and a store that
-	// cannot remove it, or fails to, leaves it to read as missing all the same.
-	_, _ = backend.RemoveEmptySave(platform.saves, nativeSaveKey(key))
-	return nil, false, nil
+	return platform.stored(platform.saves, name)
 }
 
 // stored finds a file where it lives outside this session's own table: in a
@@ -513,10 +462,18 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 	if err := platform.client.core.Memory().Write(object, word); err != nil {
 		return 0, fmt.Errorf("write KTF native file object for %q: %w", name, err)
 	}
+	// An append's cursor starts at the end of the file, as BREW's append does,
+	// so what a title writes through it lands after what is there rather than
+	// over the front of it. Every other open starts at the front.
+	position := int64(0)
+	if int32(mode) == nativeModeAppend {
+		position = int64(len(data))
+	}
 	platform.files[object] = &nativeOpenFile{
 		name:      name,
 		key:       key,
 		data:      append([]byte(nil), data...),
+		position:  position,
 		writable:  writable,
 		truncated: truncated,
 	}
@@ -630,10 +587,6 @@ func (platform *NativePlatform) create(key string) { platform.keep(key, []byte{}
 // title that keeps one open.
 func (platform *NativePlatform) keep(key string, data []byte) {
 	platform.written[key] = data
-	if platform.made == nil {
-		platform.made = map[string]bool{}
-	}
-	platform.made[key] = true
 	// What the store would not take for this name is superseded: these are the
 	// bytes to store now.
 	delete(platform.refused, key)
@@ -667,7 +620,6 @@ func (platform *NativePlatform) flushSave(key string) {
 	if platform.saves == nil || !platform.unsaved[key] {
 		return
 	}
-	platform.storeRecorded()
 	if err := platform.saves.StoreSave(nativeSaveKey(key), platform.written[key]); err != nil {
 		// A store that refuses is not the title's problem: it wrote what it
 		// wrote, and the session still reads it back. The Host's log is where
@@ -717,9 +669,6 @@ func (platform *NativePlatform) storePending() (int, error) {
 		failed  []string
 		failure error
 	)
-	if len(platform.pendingSaves()) != 0 {
-		platform.storeRecorded()
-	}
 	for _, key := range platform.pendingSaves() {
 		if err := platform.saves.StoreSave(nativeSaveKey(key), platform.written[key]); err != nil {
 			platform.storeFailures++
@@ -759,9 +708,6 @@ func describeNativeFiles(keys []string) string {
 func (platform *NativePlatform) closeSaves() {
 	if platform.saves == nil {
 		return
-	}
-	if len(platform.pendingSaves()) != 0 {
-		platform.storeRecorded()
 	}
 	for _, key := range platform.pendingSaves() {
 		if err := platform.saves.StoreSave(nativeSaveKey(key), platform.written[key]); err != nil {
