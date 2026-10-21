@@ -232,13 +232,14 @@ func ktfNativeSaveArchive(frame bool) ([]byte, error) {
 	a.emit(lgtStr(0, 3, 0), lgtStr(1, 0, platform), lgtMovImm(0, 1), lgtBXLR)
 
 	// draw(object): count, put the count in the red channel of the whole
-	// screen, present it. It is the frame one form registers.
+	// screen — BREW's RGBVAL is 0xBBGGRR00, so red is the second byte — and
+	// present it. It is the frame one form registers.
 	var draw uint32
 	if frame {
 		draw = a.here()
 		a.emit(lgtPushLR, lgtMovReg(4, 0))
 		a.emit(lgtLdr(3, 4, frames), lgtAddImm(3, 3, 1), lgtStr(3, 4, frames))
-		a.emit(0xe1a03c03) // mov r3, r3, lsl #24
+		a.emit(0xe1a03403) // mov r3, r3, lsl #8
 		a.emit(lgtLdr(0, 4, screen), lgtMovImm(1, 0), lgtMovImm(2, 0))
 		method(screenRectangle)
 		a.emit(lgtLdr(0, 4, screen))

@@ -217,11 +217,13 @@ func TestNativeFileInterface(t *testing.T) {
 	}
 }
 
-// TestNativeFileCreatesOnWrite is the gate a title's start-up depends on: it
-// makes a scratch file to find out whether the handset has room, and a refused
-// create is what puts "not enough file system memory" on its screen. The
-// module's wrapper creates the name and then opens it to read and write.
-func TestNativeFileCreatesOnWrite(t *testing.T) {
+// TestNativeFileCreateThenReadWriteOpen is the gate a title's start-up depends
+// on: it makes a scratch file to find out whether the handset has room, and a
+// refused create is what puts "not enough file system memory" on its screen.
+// The module's wrapper creates the name and then opens it to read and write,
+// and that open finds the file the create made. The opens that make a file
+// themselves are TestNativeReadWriteOpenDoesNotCreate's.
+func TestNativeFileCreateThenReadWriteOpen(t *testing.T) {
 	platform := newTestNativePlatform(t, nil)
 	name := nativeString(t, platform, "scratch.dat")
 	if got := nativeCall(t, platform.createFile, 0, name); got != 0 {
@@ -259,7 +261,8 @@ func TestNativeFileCreatesOnWrite(t *testing.T) {
 // TestNativeReadWriteOpenDoesNotCreate covers BREW's open modes on a missing
 // name: only the create and append modes make the file. A title that reads its
 // settings with the read-write mode takes a refusal as "use the defaults", and
-// a file made for it would be read as settings that are not there.
+// a file made for it would be read as settings that are not there. The refusal
+// is a failure the interface's error report then gives.
 func TestNativeReadWriteOpenDoesNotCreate(t *testing.T) {
 	store := memorySaveStore{}
 	platform := newTestNativePlatform(t, nil)
@@ -268,6 +271,9 @@ func TestNativeReadWriteOpenDoesNotCreate(t *testing.T) {
 
 	if got := nativeCall(t, platform.openFile, 0, name, nativeModeReadWrite); got != 0 {
 		t.Fatalf("a read-write open of a missing name answered %#x, want a refusal", got)
+	}
+	if got := nativeCall(t, platform.lastFileError, 0); got != nativeFileFailed {
+		t.Errorf("the error after a refused read-write open is %d, want %d", got, nativeFileFailed)
 	}
 	if _, ok, err := platform.contents("option.dat"); ok || err != nil {
 		t.Fatalf("the refused open left a file: %t, %v", ok, err)
@@ -353,8 +359,8 @@ func TestNativeScreenFill(t *testing.T) {
 	if err := platform.client.core.Memory().Write(rectangle, record); err != nil {
 		t.Fatal(err)
 	}
-	// 0x0000ff00 is the blue of the title's own table.
-	nativeCall(t, platform.drawRectangle, 0, rectangle, nativeNoColour, 0x0000ff00)
+	// 0xff000000 is the blue of the title's own table.
+	nativeCall(t, platform.drawRectangle, 0, rectangle, nativeNoColour, 0xff000000)
 	frame, _ := platform.Frame()
 	if got := frame.RGBAAt(2, 3); got.B != 0xff || got.R != 0 || got.G != 0 {
 		t.Errorf("pixel inside the rectangle = %+v, want blue", got)

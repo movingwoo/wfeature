@@ -28,7 +28,8 @@ const nativeInterfaceGraphics = 0x1002001
 //	       trail: SetPointSize(size).
 //	+0x30  a record whose first byte is 1 and whose second halfword pair
 //	       is 240x320, once a frame: SetClip(clip, flags), with clip type 1
-//	       a rectangle. Its answer is what the module's wrapper returns.
+//	       a rectangle. Its answer is what the module's wrapper returns, and
+//	       it is BREW's SUCCESS, zero, as the draw calls' answers are.
 //	+0x50  a pointer to two halfwords filled from a particle's position:
 //	       DrawPoint(point).
 //	+0x54  a pointer to four halfwords, a trail segment's two ends:
@@ -57,6 +58,10 @@ const (
 	// nativeClipRecordSize is the kind's word and the rectangle behind it.
 	nativeClipRecordSize = 12
 )
+
+// nativeShapesFailed is BREW's EFAILED, what a call answers that did not do
+// what it was asked.
+const nativeShapesFailed = 1
 
 // nativeShapes is what the shape interface keeps between calls.
 type nativeShapes struct {
@@ -89,7 +94,7 @@ func (platform *NativePlatform) installShapes() {
 }
 
 // shapeColour sets the pen and answers the one it replaces, packed the way the
-// screen's colours are.
+// screen's colours are: BREW's 0xBBGGRR00.
 func (platform *NativePlatform) shapeColour(thread *armcore.Thread) (uint32, error) {
 	arguments, err := nativeArguments(thread, 4)
 	if err != nil {
@@ -101,7 +106,7 @@ func (platform *NativePlatform) shapeColour(thread *armcore.Thread) (uint32, err
 	}
 	previous := platform.shapes.colour
 	platform.shapes.colour = color.RGBA{R: uint8(arguments[1]), G: uint8(arguments[2]), B: uint8(arguments[3]), A: uint8(alpha)}
-	return uint32(previous.R)<<24 | uint32(previous.G)<<16 | uint32(previous.B)<<8, nil
+	return uint32(previous.B)<<24 | uint32(previous.G)<<16 | uint32(previous.R)<<8, nil
 }
 
 // shapePointSize sets how wide a point is and answers the size it replaces.
@@ -115,9 +120,9 @@ func (platform *NativePlatform) shapePointSize(thread *armcore.Thread) (uint32, 
 	return uint32(previous), nil
 }
 
-// shapeClip sets the clip from a record, or clears it, and answers whether the
-// record was one it could take. A kind it cannot take leaves the clip as it
-// was.
+// shapeClip sets the clip from a record, or clears it. It answers BREW's
+// SUCCESS, zero, when it took the record, and EFAILED for a kind it cannot
+// take, which leaves the clip as it was.
 func (platform *NativePlatform) shapeClip(thread *armcore.Thread) (uint32, error) {
 	address, err := thread.Register(1)
 	if err != nil {
@@ -125,7 +130,7 @@ func (platform *NativePlatform) shapeClip(thread *armcore.Thread) (uint32, error
 	}
 	if address == 0 {
 		platform.shapes.clipped = false
-		return 1, nil
+		return 0, nil
 	}
 	record := make([]byte, nativeClipRecordSize)
 	if err := platform.client.core.Memory().Read(address, record); err != nil {
@@ -137,9 +142,9 @@ func (platform *NativePlatform) shapeClip(thread *armcore.Thread) (uint32, error
 	case nativeClipRectangle:
 		platform.shapes.clipped, platform.shapes.clip = true, nativeRectangle(record[4:])
 	default:
-		return 0, nil
+		return nativeShapesFailed, nil
 	}
-	return 1, nil
+	return 0, nil
 }
 
 // nativeRectangle reads a rectangle record: four signed halfwords, a corner and
@@ -162,17 +167,22 @@ func (platform *NativePlatform) shapeBounds() image.Rectangle {
 	return bounds
 }
 
-// readHalfwords reads count signed halfwords from guest memory.
-func (platform *NativePlatform) readHalfwords(address uint32, count int, what string) ([]int32, error) {
-	record := make([]byte, 2*count)
+// nativeMaxShapeHalfwords is the longest shape record: a line's two ends.
+const nativeMaxShapeHalfwords = 4
+
+// readHalfwords fills values with signed halfwords from guest memory. A title
+// draws thousands of points a frame, so the record is read into a buffer the
+// call keeps on its stack rather than one it allocates.
+func (platform *NativePlatform) readHalfwords(address uint32, values []int32, what string) error {
+	var buffer [2 * nativeMaxShapeHalfwords]byte
+	record := buffer[:2*len(values)]
 	if err := platform.client.core.Memory().Read(address, record); err != nil {
-		return nil, fmt.Errorf("read KTF native %s at %#x: %w", what, address, err)
+		return fmt.Errorf("read KTF native %s at %#x: %w", what, address, err)
 	}
-	values := make([]int32, count)
 	for index := range values {
 		values[index] = int32(int16(binary.LittleEndian.Uint16(record[2*index:])))
 	}
-	return values, nil
+	return nil
 }
 
 // drawPoint draws one point, a square as wide as the point size with the point
@@ -183,16 +193,17 @@ func (platform *NativePlatform) drawPoint(thread *armcore.Thread) (uint32, error
 	if err != nil {
 		return 0, err
 	}
-	point, err := platform.readHalfwords(address, 2, "point")
-	if err != nil {
+	var point [2]int32
+	if err := platform.readHalfwords(address, point[:], "point"); err != nil {
 		return 0, err
 	}
 	size := max(1, int(platform.shapes.pointSize))
 	corner := image.Pt(int(point[0])-(size-1)/2, int(point[1])-(size-1)/2)
 	area := image.Rectangle{Min: corner, Max: corner.Add(image.Pt(size, size))}.Intersect(platform.shapeBounds())
+	frame, pen := platform.screen.frame, platform.shapes.pen()
 	for y := area.Min.Y; y < area.Max.Y; y++ {
 		for x := area.Min.X; x < area.Max.X; x++ {
-			platform.screen.frame.SetRGBA(x, y, platform.shapes.pen())
+			frame.SetRGBA(x, y, pen)
 		}
 	}
 	platform.screen.draws++
@@ -207,8 +218,8 @@ func (platform *NativePlatform) drawLine(thread *armcore.Thread) (uint32, error)
 	if err != nil {
 		return 0, err
 	}
-	line, err := platform.readHalfwords(address, 4, "line")
-	if err != nil {
+	var line [4]int32
+	if err := platform.readHalfwords(address, line[:], "line"); err != nil {
 		return 0, err
 	}
 	bounds := platform.shapeBounds()
@@ -235,8 +246,8 @@ func (platform *NativePlatform) drawCircle(thread *armcore.Thread) (uint32, erro
 	if err != nil {
 		return 0, err
 	}
-	circle, err := platform.readHalfwords(address, 3, "circle")
-	if err != nil {
+	var circle [3]int32
+	if err := platform.readHalfwords(address, circle[:], "circle"); err != nil {
 		return 0, err
 	}
 	centreX, centreY, radius := circle[0], circle[1], circle[2]
@@ -274,8 +285,10 @@ func (shapes *nativeShapes) pen() color.RGBA {
 // record every earlier build wrote. The record inside is that one unchanged, so
 // a checkpoint taken before the interface existed still loads — its title finds
 // the interface as a title first does — and a build that predates this record
-// refuses the new shape rather than dropping the pen. The two shapes have no
-// field in common, so a record decodes as one of them or neither.
+// refuses the new shape rather than dropping the pen. The two shapes share
+// only Version, so what tells them apart is the codec: it takes no record with
+// a field missing or one it does not know, and a record therefore decodes as
+// one of them or neither.
 type nativeShapesRecord struct {
 	Version uint32
 	State   nativeState

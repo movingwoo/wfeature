@@ -41,6 +41,8 @@ interface (`0x1002001`) in a pen, point size and rectangle clip it sets there,
 measures text with the display's `+0x0c` as the text call draws it, counts its
 text in halfwords, and clears with a fill in no colour, which takes the ground
 colour item 2 ([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-drawing)).
+A native colour is BREW's RGBVAL, `0xBBGGRR00`, in both generations
+([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-review)).
 
 The JVM context sits beside an ordinary image so representable object-header
 displacements retain canonical image class addresses during compiled access

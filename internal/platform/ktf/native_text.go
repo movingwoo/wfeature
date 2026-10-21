@@ -273,15 +273,15 @@ func (platform *NativePlatform) readText(address uint32, count int32) ([]byte, e
 	if count > maxNativeTextLength {
 		return nil, fmt.Errorf("KTF native text of %d bytes at %#x, limit %d", count, address, maxNativeTextLength)
 	}
-	length := int(count)
-	if platform.archive.AsksForInterfaceVersion() {
+	length, halfwords := int(count), platform.archive.AsksForInterfaceVersion()
+	if halfwords {
 		length *= 2
 	}
 	raw := make([]byte, length)
 	if err := platform.client.core.Memory().Read(address, raw); err != nil {
 		return nil, fmt.Errorf("read %d bytes of KTF native text at %#x: %w", length, address, err)
 	}
-	if platform.archive.AsksForInterfaceVersion() {
+	if halfwords {
 		return unpadHalfwords(raw), nil
 	}
 	return raw, nil

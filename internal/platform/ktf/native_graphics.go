@@ -13,12 +13,12 @@ import (
 // the module:
 //
 //	m5(rect, -1, colour, 2)  drew a run of 1x1 rectangles whose colours came
-//	                         from a 36-word table in the image, and that table
-//	                         is what names the colour format: it holds
-//	                         0xffffff00, 0x0000ff00, 0x00ff0000, 0xff000000,
-//	                         0x00ffff00, 0xff00ff00, 0xffff0000 and zero —
-//	                         white, blue, green, red, cyan, magenta, yellow
-//	                         and black, packed as 0xRRGGBB00.
+//	                         from a 36-word table in the image: 0xffffff00,
+//	                         0x0000ff00, 0x00ff0000, 0xff000000, 0x00ffff00,
+//	                         0xff00ff00, 0xffff0000 and zero. BREW's RGBVAL
+//	                         packs a colour as 0xBBGGRR00, and read that way
+//	                         the table is white, red, green, blue, yellow,
+//	                         magenta, cyan and black.
 //	m7()                     is the only call the title makes in a frame that
 //	                         draws nothing, which is what a present looks like.
 //
@@ -125,12 +125,16 @@ func (platform *NativePlatform) Draws() int {
 	return platform.screen.draws
 }
 
-// nativeColour decodes the packed colour the title's own palette established.
+// nativeColour decodes a colour packed as BREW's RGBVAL, 0xBBGGRR00. The table
+// above cannot tell red from blue; a later module's menu can: it fills a band
+// in 0xd9ae2700 against a border it blits in sky blue, 0x00b6ff, and read the
+// BREW way the band is a sky blue like it, 0x27aed9, where the other way reads
+// gold. See docs/history/ktf.md, "Review follow-ups".
 func nativeColour(packed uint32) color.RGBA {
 	return color.RGBA{
-		R: uint8(packed >> 24),
+		R: uint8(packed >> 8),
 		G: uint8(packed >> 16),
-		B: uint8(packed >> 8),
+		B: uint8(packed >> 24),
 		A: 0xff,
 	}
 }

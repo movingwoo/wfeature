@@ -114,6 +114,11 @@ func TestNativeShapesDrawInThePenTheySet(t *testing.T) {
 	if got := platform.Draws(); got != 4 {
 		t.Errorf("draws = %d, want 4", got)
 	}
+	// The pen a colour replaces is packed as the screen's colours are, BREW's
+	// 0xBBGGRR00.
+	if previous := nativeStackedCall(t, platform, platform.shapeColour, []uint32{0, 0, 0, 0}, 0xff); previous != 0x2010c000 {
+		t.Errorf("the second colour replaced %#x, want 0x2010c000", previous)
+	}
 }
 
 // TestNativeShapesStayInsideTheClip covers the clip the module sets once a
@@ -126,23 +131,23 @@ func TestNativeShapesStayInsideTheClip(t *testing.T) {
 	pen := color.RGBA{R: 0xff, A: 0xff}
 
 	clip := nativeHalfwords(t, platform, 1, 0, 0, 0, 10, 10)
-	if got := nativeCall(t, platform.shapeClip, 0, clip, 0); got != 1 {
-		t.Fatalf("a rectangle clip answered %d, want 1", got)
+	if got := nativeCall(t, platform.shapeClip, 0, clip, 0); got != 0 {
+		t.Fatalf("a rectangle clip answered %d, want SUCCESS", got)
 	}
 	nativeCall(t, platform.drawLine, 0, nativeHalfwords(t, platform, 0, 5, 30, 5))
 	if frame.RGBAAt(9, 5) != pen || frame.RGBAAt(10, 5) == pen {
 		t.Error("the line was not cut at the clip's edge")
 	}
 	unknown := nativeHalfwords(t, platform, 7, 0, 0, 0, 1, 1)
-	if got := nativeCall(t, platform.shapeClip, 0, unknown, 0); got != 0 {
-		t.Errorf("a clip kind it cannot take answered %d, want 0", got)
+	if got := nativeCall(t, platform.shapeClip, 0, unknown, 0); got != nativeShapesFailed {
+		t.Errorf("a clip kind it cannot take answered %d, want EFAILED", got)
 	}
 	nativeCall(t, platform.drawPoint, 0, nativeHalfwords(t, platform, 20, 20))
 	if frame.RGBAAt(20, 20) == pen {
 		t.Error("a refused clip cleared the one in force")
 	}
-	if got := nativeCall(t, platform.shapeClip, 0, 0, 0); got != 1 {
-		t.Errorf("clearing the clip answered %d, want 1", got)
+	if got := nativeCall(t, platform.shapeClip, 0, 0, 0); got != 0 {
+		t.Errorf("clearing the clip answered %d, want SUCCESS", got)
 	}
 	nativeCall(t, platform.drawPoint, 0, nativeHalfwords(t, platform, 20, 20))
 	if frame.RGBAAt(20, 20) != pen {
@@ -166,10 +171,21 @@ func TestNativeClearFillsWithTheGroundColour(t *testing.T) {
 	if got := frame.RGBAAt(5, 5); got != (color.RGBA{A: 0xff}) {
 		t.Errorf("a clear over a black ground is %v", got)
 	}
-	// A real colour is the colour, ground or not.
-	nativeCall(t, platform.drawRectangle, 0, 0, nativeNoColour, 0x00ff0000)
-	if got := frame.RGBAAt(5, 5); got != (color.RGBA{G: 0xff, A: 0xff}) {
-		t.Errorf("a green fill is %v", got)
+	// A real colour is the colour, ground or not, and BREW packs it as
+	// 0xBBGGRR00.
+	for _, fill := range []struct {
+		packed uint32
+		want   color.RGBA
+	}{
+		{0x0000ff00, color.RGBA{R: 0xff, A: 0xff}},
+		{0x00ff0000, color.RGBA{G: 0xff, A: 0xff}},
+		{0xff000000, color.RGBA{B: 0xff, A: 0xff}},
+		{0xd9ae2700, color.RGBA{R: 0x27, G: 0xae, B: 0xd9, A: 0xff}},
+	} {
+		nativeCall(t, platform.drawRectangle, 0, 0, nativeNoColour, fill.packed)
+		if got := frame.RGBAAt(5, 5); got != fill.want {
+			t.Errorf("a fill in %#x is %v, want %v", fill.packed, got, fill.want)
+		}
 	}
 }
 

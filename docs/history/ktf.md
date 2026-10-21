@@ -3786,6 +3786,10 @@ and a mode. The colour format came from the module's data: one call site walks a
 white, blue, green, red, cyan, magenta, yellow, black — so a colour is
 `0xRRGGBB00`, which the call site alone could not show.
 
+(Superseded: a colour is BREW's RGBVAL, `0xBBGGRR00`, which reads the same
+table as white, red, green, blue, yellow, magenta, cyan, black; see
+[Review follow-ups](#ktf-native-open-and-shapes-2026-10-21-review).)
+
 `+0x1c` ends a frame: it is the only call in a frame that draws nothing.
 
 **The title draws its own text**: there is no glyph call; the version string and
@@ -9426,3 +9430,31 @@ values.
 Driven through the page's key path on the later title: the star opens the grid
 menu, the four directions move its cursor as above, clear closes it, and left
 moves the main menu. The opt-in local native run passes.
+
+<a id="ktf-native-open-and-shapes-2026-10-21-review"></a>
+
+### Review follow-ups
+
+- **Colours are BREW's RGBVAL, `0xBBGGRR00`.** The 2005 module's table cannot
+  tell red from blue, and it was read as `0xRRGGBB00`. The later module's star
+  menu tells them apart: it blits a border whose pixels are sky blue
+  (`0x00b6ff`) and fills the band inside it with `0xd9ae2700`, which reads
+  `0x27aed9`, a sky blue like the border's, the BREW way and gold
+  (`0xd9ae27`) the other way; its
+  in-game bottom band reads blue the BREW way and orange the other. Read the
+  BREW way the 2005 table is white, red, green, blue, yellow, magenta, cyan,
+  black — the usual order. Rectangle fills, the clear's ground colour and the
+  text colour now decode that way, for both generations, and the previous pen
+  the shape interface's colour call answers is packed the same way. Saves and
+  checkpoints keep the colours as the title set them, so neither changes. The
+  2005 archive is not in the local corpus; its colours change with this
+  without a run to show them.
+- **SetClip answers SUCCESS.** It answered 1 for a clip it took and 0 for a
+  kind it could not take; it now answers 0 and EFAILED (1), BREW's codes, as
+  the draw calls beside it already answered 0. No local run reads it.
+- **A refused read-write open is a failure.** It now leaves the interface's
+  error report at EFAILED, as BREW's open does. A refused read-only open
+  leaves the report as it was, as before. No local run reaches a call to the
+  report.
+- The text call decides a counted run's unit once a call, and the shapes read
+  their records into a buffer on the stack and compute the pen once a shape.

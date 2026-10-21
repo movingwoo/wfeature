@@ -320,7 +320,7 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 		return 0, err
 	}
 	key, truncated := nativeFileKey(name), false
-	if ok && int32(mode) == nativeModeReadWrite && platform.leftover(key, name, data) {
+	if ok && int32(mode) == nativeModeReadWrite && platform.leftover(name, data) {
 		// Earlier builds made the file a read-write open asked for, so a
 		// title that reads its settings that way has an empty one in its
 		// save. Opening it would hand the title the same nothing to read that
@@ -343,7 +343,12 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 		if !writable || int32(mode) == nativeModeReadWrite {
 			// A file the package does not carry is a refusal, not a failure.
 			// The module opens names it may not have and answers for itself
-			// what to do about it.
+			// what to do about it. A refused read-write open also leaves its
+			// failure for nativeFileLastError, as BREW's open does; a refused
+			// read leaves the error as it was, as it always has here.
+			if int32(mode) == nativeModeReadWrite {
+				platform.fileResult(false)
+			}
 			return 0, nil
 		}
 		// Opening to create, or to append, creates the file. A title whose
@@ -379,11 +384,11 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 // session wrote it: a file the title created or emptied here is in the
 // session's own table, and an empty file the package carries is the package's.
 // Nothing is removed — the file stays in the store until the title writes it.
-func (platform *NativePlatform) leftover(key, name string, data []byte) bool {
+func (platform *NativePlatform) leftover(name string, data []byte) bool {
 	if len(data) != 0 {
 		return false
 	}
-	if _, wrote := platform.written[key]; wrote {
+	if _, wrote := platform.written[nativeFileKey(name)]; wrote {
 		return false
 	}
 	_, shipped := platform.packagedFile(name)
@@ -477,8 +482,8 @@ func (platform *NativePlatform) createFile(thread *armcore.Thread) (uint32, erro
 	// An empty file an earlier build left is replaced by the create, which
 	// makes it this session's: the read-write open that follows a create is
 	// then answered with the file the title just made.
-	if key := nativeFileKey(name); !ok || platform.leftover(key, name, data) {
-		platform.create(key)
+	if !ok || platform.leftover(name, data) {
+		platform.create(nativeFileKey(name))
 	}
 	return platform.fileResult(true), nil
 }
