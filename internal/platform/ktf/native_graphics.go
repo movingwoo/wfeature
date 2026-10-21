@@ -1,7 +1,6 @@
 package ktf
 
 import (
-	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
@@ -42,7 +41,20 @@ const (
 // "leave it alone". It is also what a fully saturated colour would be, so a
 // call that passes it for the fill is ambiguous; the one call site that does
 // passes no rectangle either, which reads as a clear.
+//
+// A clear fills with the ground colour the title set, which is BREW's own
+// definition of one: its ClearScreen is a fill of no rectangle in no colour,
+// and no colour means the user background item. A title that sets no ground
+// clears to white, as it always has here; one that sets white clears to white;
+// a later module that sets black clears to black.
 const nativeNoColour = 0xffffffff
+
+// nativeGroundColourItem is the colour item a clear fills with: BREW's
+// CLR_USER_BACKGROUND, which nativeTextColourItem's pairing also names.
+const nativeGroundColourItem = 2
+
+// nativeDefaultGround is what a title that sets no ground clears to.
+var nativeDefaultGround = color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 
 // nativeScreen is the frame the title draws into.
 type nativeScreen struct {
@@ -137,13 +149,15 @@ func (platform *NativePlatform) drawRectangle(thread *armcore.Thread) (uint32, e
 		if err := platform.client.core.Memory().Read(arguments[1], record); err != nil {
 			return 0, fmt.Errorf("read KTF native rectangle at %#x: %w", arguments[1], err)
 		}
-		x := int(int16(binary.LittleEndian.Uint16(record[0:])))
-		y := int(int16(binary.LittleEndian.Uint16(record[2:])))
-		width := int(int16(binary.LittleEndian.Uint16(record[4:])))
-		height := int(int16(binary.LittleEndian.Uint16(record[6:])))
-		bounds = image.Rect(x, y, x+width, y+height).Intersect(bounds)
+		bounds = nativeRectangle(record).Intersect(bounds)
 	}
 	fill := nativeColour(arguments[3])
+	if arguments[3] == nativeNoColour {
+		fill = nativeDefaultGround
+		if packed, ok := platform.colours[nativeGroundColourItem]; ok {
+			fill = nativeColour(packed)
+		}
+	}
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			platform.screen.frame.SetRGBA(x, y, fill)

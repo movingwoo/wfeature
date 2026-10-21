@@ -76,7 +76,7 @@ func (session *NativeSession) CaptureCheckpointWithSession(ctx context.Context, 
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
-	record, err := backend.EncodeCheckpointRecord(saved)
+	record, err := backend.EncodeCheckpointRecord(nativeShapesRecord{Version: nativeShapesRecordVersion, State: saved, Shapes: session.platform.shapes.capture()})
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
@@ -125,8 +125,8 @@ func PrepareNativeSessionCheckpoint(archive []byte, checkpoint backend.Checkpoin
 	if checkpoint.Variant != backend.CheckpointKTFNative {
 		return nil, backend.ErrCheckpointVersion
 	}
-	var saved nativeState
-	if err := backend.DecodeCheckpointRecord(checkpoint.Runtime, &saved); err != nil {
+	saved, shapes, err := decodeNativeRecord(checkpoint.Runtime)
+	if err != nil {
 		return nil, err
 	}
 	if saved.Version != nativeStateVersion {
@@ -143,6 +143,7 @@ func PrepareNativeSessionCheckpoint(archive []byte, checkpoint backend.Checkpoin
 	if err != nil {
 		return nil, err
 	}
+	prepared.session.platform.shapes = shapes.restore()
 	prepared.session.archiveIdentity = identity
 	prepared.session.options = options
 	prepared.session.platform.AttachSaves(prepared.placeholder)

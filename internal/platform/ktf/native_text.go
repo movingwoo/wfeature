@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"encoding/binary"
 	"fmt"
 	"image/color"
 
@@ -25,8 +26,11 @@ import (
 // comes off the two call sites rather than off the name:
 //
 //   - **count is -1 at both**, which is what a run of text with a terminator
-//     rather than a length is. A count that is not -1 has not been seen, and is
-//     taken as a number of bytes.
+//     rather than a length is. The 2005 module has not been seen to pass any
+//     other count, and one it passed is taken as a number of bytes. A later
+//     module passes 14 for "ne button game" and the run is fourteen halfwords
+//     long — the specification's count of wide characters, each holding one
+//     EUC-KR character as below — so that generation's count is halfwords.
 //   - **the text is EUC-KR bytes**, not the specification's wide characters:
 //     one module builds its lines by copying two bytes at a time out of a
 //     string in its own image, and those bytes decode as Korean and read as
@@ -48,6 +52,14 @@ const (
 	// module calls it with a font and two zeroes and uses the answer as the
 	// height of one line.
 	nativeScreenFontMetrics = 0x08
+	// nativeScreenMeasure answers how wide a run of text is drawn:
+	// MeasureText(display, font, text, count, most, fits), the call between
+	// the metrics and the drawing in the specification's table. A later
+	// module passes it the halfword runs it draws, with -1 for the count and
+	// for the most and null for fits, and divides by what comes back when it
+	// lays its help pages out; another of its call sites centres a line with
+	// it and draws at six pixels a character when it answers zero.
+	nativeScreenMeasure = 0x0c
 )
 
 // The colour items a module sets before it draws, and which of them the ink is.
@@ -76,6 +88,7 @@ func (platform *NativePlatform) installText() {
 	surface := nativeInterfaceSurface(nativeInterfaceApplication)
 	platform.client.Serve(surface, nativeScreenText, platform.drawText)
 	platform.client.Serve(surface, nativeScreenFontMetrics, platform.fontMetrics)
+	platform.client.Serve(surface, nativeScreenMeasure, platform.measureText)
 }
 
 // textFace is the face this platform draws a native package's text with. It is
@@ -108,6 +121,51 @@ func (platform *NativePlatform) fontMetrics(thread *armcore.Thread) (uint32, err
 		}
 	}
 	return uint32(face.Height()), nil
+}
+
+// measureText answers how wide a run is drawn, and through fits, when it is not
+// null, how many of its characters are drawn within most pixels. A most that
+// is negative is no limit, and then the answer is the whole run's width; with a
+// limit it is the width of the characters that fit. Each character is as wide
+// as drawText advances past it, so a line laid out with this is the line drawn.
+func (platform *NativePlatform) measureText(thread *armcore.Thread) (uint32, error) {
+	arguments, err := nativeArguments(thread, 4)
+	if err != nil {
+		return 0, err
+	}
+	address, count := arguments[2], int32(arguments[3])
+	stacked := platform.varargs(thread, 4)
+	most, err := stacked(1)
+	if err != nil {
+		return 0, err
+	}
+	fits, err := stacked(1)
+	if err != nil {
+		return 0, err
+	}
+	width, fitted := 0, 0
+	if address != 0 {
+		// A run that cannot be read measures as nothing, as it draws as
+		// nothing.
+		if raw, err := platform.readText(address, count); err == nil {
+			face := platform.textFace()
+			for _, character := range decodeEUCKR(raw) {
+				advance := face.Render(character).Advance
+				if int32(most) >= 0 && width+advance > int(int32(most)) {
+					break
+				}
+				width += advance
+				fitted++
+			}
+		}
+	}
+	if uint32(fits) != 0 {
+		word := binary.LittleEndian.AppendUint32(nil, uint32(fitted))
+		if err := platform.client.core.Memory().Write(uint32(fits), word); err != nil {
+			return 0, fmt.Errorf("write a KTF native text fit to %#x: %w", uint32(fits), err)
+		}
+	}
+	return uint32(width), nil
 }
 
 // drawText draws one run of text on the screen.
@@ -182,7 +240,9 @@ func (platform *NativePlatform) drawText(thread *armcore.Thread) (uint32, error)
 }
 
 // readText reads the run the caller named. A count of -1 is a terminator,
-// which is what both local call sites pass.
+// which is what both local call sites pass. Any other count is bytes for the
+// 2005 module and halfwords for a later one, whose halfwords are read by the
+// same rule as a terminated run's and end early at a zero one.
 //
 // **A terminator here is a zero halfword, not a zero byte**, and reading it as
 // a byte cost three quarters of a sentence. One module builds its lines a
@@ -213,9 +273,16 @@ func (platform *NativePlatform) readText(address uint32, count int32) ([]byte, e
 	if count > maxNativeTextLength {
 		return nil, fmt.Errorf("KTF native text of %d bytes at %#x, limit %d", count, address, maxNativeTextLength)
 	}
-	raw := make([]byte, count)
+	length := int(count)
+	if platform.archive.AsksForInterfaceVersion() {
+		length *= 2
+	}
+	raw := make([]byte, length)
 	if err := platform.client.core.Memory().Read(address, raw); err != nil {
-		return nil, fmt.Errorf("read %d bytes of KTF native text at %#x: %w", count, address, err)
+		return nil, fmt.Errorf("read %d bytes of KTF native text at %#x: %w", length, address, err)
+	}
+	if platform.archive.AsksForInterfaceVersion() {
+		return unpadHalfwords(raw), nil
 	}
 	return raw, nil
 }
@@ -234,6 +301,12 @@ func (platform *NativePlatform) readPaddedText(address uint32, first []byte) ([]
 		// zero: what was read up to it is the run.
 		return first, nil
 	}
+	return unpadHalfwords(raw), nil
+}
+
+// unpadHalfwords reads a run a halfword at a time up to a zero one, dropping
+// the zero byte that pads a single-byte character.
+func unpadHalfwords(raw []byte) []byte {
 	run := make([]byte, 0, len(raw))
 	for offset := 0; offset+1 < len(raw); offset += 2 {
 		high, low := raw[offset], raw[offset+1]
@@ -247,7 +320,7 @@ func (platform *NativePlatform) readPaddedText(address uint32, first []byte) ([]
 			run = append(run, low)
 		}
 	}
-	return run, nil
+	return run
 }
 
 // nativeBlendInk mixes ink into what is under it. The face does not cover a

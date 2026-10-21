@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"image/color"
 	"strings"
 	"testing"
@@ -218,13 +219,17 @@ func TestNativeFileInterface(t *testing.T) {
 
 // TestNativeFileCreatesOnWrite is the gate a title's start-up depends on: it
 // makes a scratch file to find out whether the handset has room, and a refused
-// create is what puts "not enough file system memory" on its screen.
+// create is what puts "not enough file system memory" on its screen. The
+// module's wrapper creates the name and then opens it to read and write.
 func TestNativeFileCreatesOnWrite(t *testing.T) {
 	platform := newTestNativePlatform(t, nil)
 	name := nativeString(t, platform, "scratch.dat")
-	file := nativeCall(t, platform.openFile, 0, name, 2)
+	if got := nativeCall(t, platform.createFile, 0, name); got != 0 {
+		t.Fatalf("create = %d, want 0", got)
+	}
+	file := nativeCall(t, platform.openFile, 0, name, nativeModeReadWrite)
 	if file == 0 {
-		t.Fatal("opening a missing name for writing was refused")
+		t.Fatal("opening the name the title created was refused")
 	}
 	payload := nativeString(t, platform, "written")
 	if got := nativeCall(t, platform.writeFile, file, payload, 7); got != 7 {
@@ -248,6 +253,87 @@ func TestNativeFileCreatesOnWrite(t *testing.T) {
 	}
 	if got := string(nativeRead(t, platform, buffer, 7)); got != "written" {
 		t.Errorf("read back %q, want %q", got, "written")
+	}
+}
+
+// TestNativeReadWriteOpenDoesNotCreate covers BREW's open modes on a missing
+// name: only the create and append modes make the file. A title that reads its
+// settings with the read-write mode takes a refusal as "use the defaults", and
+// a file made for it would be read as settings that are not there.
+func TestNativeReadWriteOpenDoesNotCreate(t *testing.T) {
+	store := memorySaveStore{}
+	platform := newTestNativePlatform(t, nil)
+	platform.AttachSaves(store)
+	name := nativeString(t, platform, "option.dat")
+
+	if got := nativeCall(t, platform.openFile, 0, name, nativeModeReadWrite); got != 0 {
+		t.Fatalf("a read-write open of a missing name answered %#x, want a refusal", got)
+	}
+	if _, ok, err := platform.contents("option.dat"); ok || err != nil {
+		t.Fatalf("the refused open left a file: %t, %v", ok, err)
+	}
+	platform.FlushSaves()
+	if len(store) != 0 {
+		t.Fatalf("the refused open reached the store: %v", store)
+	}
+	if got := platform.FileOpens(); len(got) != 1 || got[0].Mode != nativeModeReadWrite || got[0].Found {
+		t.Fatalf("opens = %+v, want one read-write open that found nothing", got)
+	}
+
+	for _, mode := range []uint32{nativeModeWriteTruncate, 8} {
+		other := nativeString(t, platform, fmt.Sprintf("made-%d.dat", mode))
+		if nativeCall(t, platform.openFile, 0, other, mode) == 0 {
+			t.Errorf("an open of mode %d did not create the file", mode)
+		}
+	}
+}
+
+// TestNativeReadWriteOpenRefusesAnEarlierBuildsEmptyFile covers the saves
+// earlier builds left: an empty file for every read-write open of a missing
+// name. It is answered as missing until the title writes it, and kept in the
+// store. An empty file the package carries, or one this session created or
+// emptied, is the file it is.
+func TestNativeReadWriteOpenRefusesAnEarlierBuildsEmptyFile(t *testing.T) {
+	store := memorySaveStore{"fs/option.dat": {}, "fs/blank.dat": {}}
+	platform := newTestNativePlatform(t, map[string][]byte{"a title/blank.dat": {}})
+	platform.AttachSaves(store)
+	option := nativeString(t, platform, "option.dat")
+
+	if got := nativeCall(t, platform.openFile, 0, option, nativeModeReadWrite); got != 0 {
+		t.Fatalf("the read-write open of the empty file left behind answered %#x, want a refusal", got)
+	}
+	if data, ok := store["fs/option.dat"]; !ok || len(data) != 0 {
+		t.Fatalf("the store's empty file was changed: %q, %t", data, ok)
+	}
+	// A plain read is answered as it always was.
+	if nativeCall(t, platform.openFile, 0, option, nativeModeRead) == 0 {
+		t.Error("a read open of the empty file was refused")
+	}
+	if nativeCall(t, platform.openFile, 0, nativeString(t, platform, "blank.dat"), nativeModeReadWrite) == 0 {
+		t.Error("the read-write open of an empty file the package carries was refused")
+	}
+
+	// The title's own create makes the file its own.
+	nativeCall(t, platform.createFile, 0, option)
+	object := nativeCall(t, platform.openFile, 0, option, nativeModeReadWrite)
+	if object == 0 {
+		t.Fatal("the read-write open after the title's create was refused")
+	}
+	if got := platform.files[object]; got == nil || len(got.data) != 0 {
+		t.Fatalf("the created file opened as %+v, want it empty", got)
+	}
+
+	// So does an emptying open, and what it wrote is what the next open reads.
+	again := newTestNativePlatform(t, nil)
+	again.AttachSaves(memorySaveStore{"fs/option.dat": {}})
+	name := nativeString(t, again, "option.dat")
+	emptied := nativeCall(t, again.openFile, 0, name, nativeModeWriteTruncate)
+	if emptied == 0 {
+		t.Fatal("the emptying open was refused")
+	}
+	nativeCall(t, again.closeFile, emptied)
+	if nativeCall(t, again.openFile, 0, name, nativeModeReadWrite) == 0 {
+		t.Error("the read-write open of a file this session emptied was refused")
 	}
 }
 
@@ -402,23 +488,26 @@ func TestNativeImageRefusesWhatItCannotDecode(t *testing.T) {
 
 // TestNativeKeyCodesAreTheOnesTheTitleActsOn pins the translation from the
 // WIPI codes every Host here already speaks to the codes this package's title
-// compares against. The pad values are what driving the title's own menus
-// proved; the digits are the block its numbered items answer to.
+// compares against. The pad values are what driving the titles' own menus
+// proved, at BREW's numbers; the digits are the block its numbered items answer
+// to.
 func TestNativeKeyCodesAreTheOnesTheTitleActsOn(t *testing.T) {
 	for _, test := range []struct {
 		from int32
 		to   uint32
 		what string
 	}{
-		{KeyUp, 0xe032, "up"},
-		{KeyDown, 0xe038, "down"},
-		{KeyLeft, 0xe034, "left"},
-		{KeyRight, 0xe036, "right"},
+		{KeyUp, 0xe031, "up"},
+		{KeyDown, 0xe032, "down"},
+		{KeyLeft, 0xe033, "left"},
+		{KeyRight, 0xe034, "right"},
 		{KeyFire, 0xe035, "select"},
 		{KeyClear, 0xe030, "clear"},
 		{'0', 0xe021, "the zero key"},
 		{'1', 0xe022, "the one key"},
 		{'9', 0xe02a, "the nine key"},
+		{'*', 0xe02b, "the star"},
+		{'#', 0xe02c, "the hash key"},
 	} {
 		got, ok := nativeKeyCode(test.from)
 		if !ok || got != test.to {
@@ -427,7 +516,7 @@ func TestNativeKeyCodesAreTheOnesTheTitleActsOn(t *testing.T) {
 	}
 	// A key the handset has no code for is refused rather than sent as itself:
 	// an unmapped value is indistinguishable from a mapping that is wrong.
-	for _, key := range []int32{KeyLeftSoft, KeyCall, KeyVolumeUp, '*', '#'} {
+	for _, key := range []int32{KeyLeftSoft, KeyCall, KeyVolumeUp} {
 		if _, ok := nativeKeyCode(key); ok {
 			t.Errorf("code %d was translated; it has no established code here", key)
 		}
@@ -639,9 +728,10 @@ func TestNativeSavesReachTheStoreAtABoundary(t *testing.T) {
 	platform.AttachSaves(store)
 
 	name := nativeString(t, platform, "burst.dat")
-	object := nativeCall(t, platform.openFile, 0, name, 2)
+	nativeCall(t, platform.createFile, 0, name)
+	object := nativeCall(t, platform.openFile, 0, name, nativeModeReadWrite)
 	if object == 0 {
-		t.Fatal("opening for writing did not create the file")
+		t.Fatal("opening the file the title created was refused")
 	}
 	chunk := nativeString(t, platform, "0123456789abcdef")
 	for round := 0; round < 8; round++ {

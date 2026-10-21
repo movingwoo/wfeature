@@ -143,17 +143,26 @@ type nativeOpenFile struct {
 	truncated bool
 }
 
-// The open modes, which the WIPI specification names and the module's own
-// wrapper corroborates: it retries a refused open of mode 2 or 8 with mode 4,
-// and a read that failed would have nothing to retry with. So 1 is the only
-// mode that cannot write, and anything else may create the file.
+// The open modes are BREW's: 1 reads, 2 reads and writes, 4 creates and 8
+// appends. The module's own wrapper corroborates the first two: it retries a
+// refused open of mode 2 or 8 with mode 4, and a read that failed would have
+// nothing to retry with. So 1 is the only mode that cannot write.
 //
-// Only 1 and 2 are reached by the local title — the specification is what says
-// what 4 means, and it says the size goes to zero. Serving it as an ordinary
-// write would leave the tail of a longer previous save behind the shorter one
-// that replaced it.
+// Only 4 makes a file that is not there. BREW takes no other mode for a
+// missing name, and that is what the retry is for: a refused 2 is how a title
+// learns it has to create. A title that reads its settings with 2 and falls
+// back on its own defaults when refused reads nothing out of a file the
+// platform made for it, and runs on whatever its buffer held. 8 still creates,
+// as it always has here; no title reached it.
+//
+// The specification is what says what 4 does to a file that is there, and it
+// says the size goes to zero. Serving it as an ordinary write would leave the
+// tail of a longer previous save behind the shorter one that replaced it.
 const (
 	nativeModeRead = 1
+	// nativeModeReadWrite is BREW's _OFM_READWRITE, which opens a file that is
+	// there and refuses one that is not.
+	nativeModeReadWrite = 2
 	// nativeModeWriteTruncate is the specification's MC_FILE_OPEN_WRTRUNC:
 	// "쓰기만 가능하고 파일이 존재하면 파일 크기를 0 으로 만듬".
 	nativeModeWriteTruncate = 4
@@ -310,8 +319,16 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 	if err != nil {
 		return 0, err
 	}
-	platform.opens = keepFirst(platform.opens, NativeFileOpen{Name: name, Mode: mode, Found: ok})
 	key, truncated := nativeFileKey(name), false
+	if ok && int32(mode) == nativeModeReadWrite && platform.leftover(key, name, data) {
+		// Earlier builds made the file a read-write open asked for, so a
+		// title that reads its settings that way has an empty one in its
+		// save. Opening it would hand the title the same nothing to read that
+		// stopped it before; it is answered as the missing file it stands in
+		// for, and the title's own create replaces it.
+		ok = false
+	}
+	platform.opens = keepFirst(platform.opens, NativeFileOpen{Name: name, Mode: mode, Found: ok})
 	if ok && int32(mode) == nativeModeWriteTruncate {
 		// The file is there and the mode says to empty it. Emptying it here
 		// rather than on the first write is what the mode means: a title that
@@ -323,15 +340,16 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 		data, truncated = nil, true
 	}
 	if !ok {
-		if !writable {
+		if !writable || int32(mode) == nativeModeReadWrite {
 			// A file the package does not carry is a refusal, not a failure.
 			// The module opens names it may not have and answers for itself
 			// what to do about it.
 			return 0, nil
 		}
-		// Opening for writing creates the file. A title whose save has never
-		// been written has no other way to make one, and the module treats a
-		// refused create as the end of the run rather than as an empty save.
+		// Opening to create, or to append, creates the file. A title whose
+		// save has never been written has no other way to make one, and the
+		// module treats a refused create as the end of the run rather than as
+		// an empty save.
 		platform.create(key)
 		// Only the mode that empties a file makes an emptied object. An open
 		// that made the file because there was none asked for the file.
@@ -354,6 +372,22 @@ func (platform *NativePlatform) openFile(thread *armcore.Thread) (uint32, error)
 		truncated: truncated,
 	}
 	return object, nil
+}
+
+// leftover reports whether an empty file is one an earlier build made for a
+// read-write open rather than one a title made. Neither the package nor this
+// session wrote it: a file the title created or emptied here is in the
+// session's own table, and an empty file the package carries is the package's.
+// Nothing is removed — the file stays in the store until the title writes it.
+func (platform *NativePlatform) leftover(key, name string, data []byte) bool {
+	if len(data) != 0 {
+		return false
+	}
+	if _, wrote := platform.written[key]; wrote {
+		return false
+	}
+	_, shipped := platform.packagedFile(name)
+	return !shipped
 }
 
 // fileInformation answers the interface's information call.
@@ -436,12 +470,15 @@ func (platform *NativePlatform) createFile(thread *armcore.Thread) (uint32, erro
 	if err != nil {
 		return 0, err
 	}
-	_, ok, err := platform.contents(name)
+	data, ok, err := platform.contents(name)
 	if err != nil {
 		return 0, err
 	}
-	if !ok {
-		platform.create(nativeFileKey(name))
+	// An empty file an earlier build left is replaced by the create, which
+	// makes it this session's: the read-write open that follows a create is
+	// then answered with the file the title just made.
+	if key := nativeFileKey(name); !ok || platform.leftover(key, name, data) {
+		platform.create(key)
 	}
 	return platform.fileResult(true), nil
 }

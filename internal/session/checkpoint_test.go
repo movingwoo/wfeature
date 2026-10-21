@@ -143,8 +143,13 @@ func TestCheckpointNativeRejectsMalformedAudioAndLeavesSaves(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var record map[string]json.RawMessage
-			if err := json.Unmarshal(checkpoint.Runtime, &record); err != nil {
+			// The native record is the shape interface's envelope around the
+			// runtime's own state, which is where the audio is.
+			var envelope, record map[string]json.RawMessage
+			if err := json.Unmarshal(checkpoint.Runtime, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(envelope["State"], &record); err != nil {
 				t.Fatal(err)
 			}
 			var audio backend.AudioState
@@ -160,7 +165,10 @@ func TestCheckpointNativeRejectsMalformedAudioAndLeavesSaves(t *testing.T) {
 				t.Fatal(err)
 			}
 			record["Clip"], record["Sounding"] = json.RawMessage("1"), json.RawMessage("true")
-			checkpoint.Runtime, err = json.Marshal(record)
+			if envelope["State"], err = json.Marshal(record); err != nil {
+				t.Fatal(err)
+			}
+			checkpoint.Runtime, err = json.Marshal(envelope)
 			if err != nil {
 				t.Fatal(err)
 			}
