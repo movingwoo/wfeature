@@ -37,9 +37,11 @@ func KTFNativeCheckpointArchive() ([]byte, error) {
 		0xe5940004, 0xe3a01010, 0xe59f201c, 0xe1a03004, 0xe590c000, 0xe59cc02c,
 		0xe1a0e00f, 0xe12fff1c, 0xe3a00001, 0xe8bd8010,
 		0x01001001, ktfImageBase+0x100)
-	// Frame increments its counter, fills the screen, and presents it.
+	// Frame increments its counter, fills the screen with the count in red —
+	// the second byte of BREW's 0xBBGGRR00, shifted there by lsl #8 — and
+	// presents it.
 	words(0x100,
-		0xe92d4010, 0xe1a04000, 0xe594300c, 0xe2833001, 0xe584300c, 0xe1a03c03,
+		0xe92d4010, 0xe1a04000, 0xe594300c, 0xe2833001, 0xe584300c, 0xe1a03403,
 		0xe5940018, 0xe3a01000, 0xe3a02000, 0xe590c000, 0xe59cc014,
 		0xe1a0e00f, 0xe12fff1c,
 		0xe5940018, 0xe590c000, 0xe59cc01c, 0xe1a0e00f, 0xe12fff1c,

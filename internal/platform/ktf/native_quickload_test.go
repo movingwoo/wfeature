@@ -132,17 +132,21 @@ func TestNativeQuickSaveStoresPendingWritesAndRecordsNoFileBytes(t *testing.T) {
 			fixture.wantStored("after the quick save", testfixture.KTFNativeSaveFile(second, first))
 			fixture.wantPending("after the quick save", nil)
 
-			var record nativeState
-			if err := backend.DecodeCheckpointRecord(checkpoint.Runtime, &record); err != nil {
+			var extended nativeShapesRecord
+			if err := backend.DecodeCheckpointRecord(checkpoint.Runtime, &extended); err != nil {
 				t.Fatal(err)
 			}
+			record := extended.State
 			want := []nativeFileState{{Object: fixture.word(testfixture.KTFNativeSaveHandle), Name: []byte(testfixture.KTFNativeSaveName),
 				Key: []byte(testfixture.KTFNativeSaveName), Position: 4, Writable: true}}
 			if record.Version != nativeStateVersion || !reflect.DeepEqual(record.Files, want) {
 				t.Fatalf("the record holds version %d and files %+v, want %+v", record.Version, record.Files, want)
 			}
-			var members map[string]json.RawMessage
-			if err := json.Unmarshal(checkpoint.Runtime, &members); err != nil {
+			var envelope, members map[string]json.RawMessage
+			if err := json.Unmarshal(checkpoint.Runtime, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(envelope["State"], &members); err != nil {
 				t.Fatal(err)
 			}
 			for _, member := range []string{"Buffers", "Written", "Resources"} {
@@ -167,10 +171,11 @@ func TestNativeQuickSaveStoresAnEmptyingOpen(t *testing.T) {
 			fixture.wantStored("after TRUNCATE", []byte{})
 			checkpoint := fixture.quickSave()
 			fixture.wantStored("after the quick save", []byte{})
-			var record nativeState
-			if err := backend.DecodeCheckpointRecord(checkpoint.Runtime, &record); err != nil {
+			var extended nativeShapesRecord
+			if err := backend.DecodeCheckpointRecord(checkpoint.Runtime, &extended); err != nil {
 				t.Fatal(err)
 			}
+			record := extended.State
 			if len(record.Files) != 1 || !record.Files[0].Truncated || record.Files[0].Length != 0 || record.Files[0].Position != 0 {
 				t.Fatalf("the emptied object was recorded as %+v", record.Files)
 			}
@@ -893,7 +898,8 @@ func TestNativeFileNameIsOneFileWhicheverWayItIsWritten(t *testing.T) {
 	store := memorySaveStore{}
 	platform := newTestNativePlatform(t, nil)
 	platform.AttachSaves(store)
-	file := nativeCall(t, platform.openFile, 0, nativeString(t, platform, "Saves\\Slot.DAT"), 2)
+	nativeCall(t, platform.createFile, 0, nativeString(t, platform, "saves/slot.dat"))
+	file := nativeCall(t, platform.openFile, 0, nativeString(t, platform, "Saves\\Slot.DAT"), nativeModeReadWrite)
 	if file == 0 {
 		t.Fatal("the open was refused")
 	}

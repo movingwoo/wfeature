@@ -456,21 +456,23 @@ func TestLocalKTFNativePackageRuns(t *testing.T) {
 
 		// The route into the game, in the title's own terms: the select key
 		// opens the menu from the title screen, again enters the first item,
-		// the left key moves to the second of its two choices, and select
+		// the right key moves to the second of its two choices, and select
 		// twice more picks a difficulty and starts. Driving it is what proves
 		// the input contract, because every screen after the first is one the
 		// title only reaches by being played.
 		images, draws := len(platform.images), platform.Draws()
+		routeFrames := 0
 		for _, step := range []struct {
 			key    uint32
 			frames int
 		}{
 			{NativeKeySelect, 60},
 			{NativeKeySelect, 60},
-			{NativeKeyLeft, 30},
+			{NativeKeyRight, 30},
 			{NativeKeySelect, 120},
 			{NativeKeySelect, 400},
 		} {
+			routeFrames += step.frames
 			if err := platform.Key(context.Background(), step.key, true); err != nil {
 				t.Fatalf("%s: key %#x down: %v", name, step.key, err)
 			}
@@ -488,8 +490,16 @@ func TestLocalKTFNativePackageRuns(t *testing.T) {
 		if len(platform.images) <= images {
 			t.Errorf("%s: the menu route loaded no further images (%d, was %d)", name, len(platform.images), images)
 		}
-		if platform.Draws() <= draws*4 {
+		// The 2005 module draws its menus' text as runs of rectangles, so its
+		// route draws many times what its title screen did. A later module
+		// draws its text whole and its title screen in thousands of points a
+		// frame, so what its route has to show is that it kept drawing: at
+		// least once a frame, on every frame of the route.
+		if !archive.AsksForInterfaceVersion() && platform.Draws() <= draws*4 {
 			t.Errorf("%s: the menu route drew %d, barely more than the %d before it", name, platform.Draws(), draws)
+		}
+		if archive.AsksForInterfaceVersion() && platform.Draws()-draws < routeFrames {
+			t.Errorf("%s: the menu route drew %d times in %d frames", name, platform.Draws()-draws, routeFrames)
 		}
 
 		if sink.messages == 0 {

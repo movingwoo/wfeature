@@ -27,14 +27,12 @@ import (
 // first two store a code and hand it to the current screen, so they are a key
 // pressed and a key released.
 //
-// The code space came out of the screen that acts on it. The title's own key
-// handler compares against 0xe030 and 0xe035, and driving those two moves its
-// menus, so a key is 0xE000 with a character in the low byte: the keypad's
-// digits are their own characters, and a handset's five-way pad is the digits
-// around the 5 — 2 up, 8 down, 4 left, 6 right, 5 the one that selects. That
-// is what a run proves rather than what a table says: pressing 0xe035 on the
-// title screen opens its menu, 0xe034 moves the selection along it, and 0xe035
-// again enters the game.
+// The codes are BREW's own virtual key codes. The 2005 module's key handler
+// compares against 0xe030 and 0xe035, which are BREW's clear and select, and
+// its title screen opens its menu on 0xe035 and moves along a two-choice menu
+// on 0xe034 — BREW's right, though a menu of two cannot tell it from left. A
+// later module's grid menu is what tells the pad apart: 0xe031 moves its
+// cursor up, 0xe032 down, 0xe033 left and 0xe034 right, as BREW numbers them.
 const (
 	// nativeEventStart runs the title's own start-up.
 	nativeEventStart = 0
@@ -188,21 +186,23 @@ func (platform *NativePlatform) deliverPosted(ctx context.Context) error {
 	return nil
 }
 
-// NativeKey is the code for one handset character. The digits are the keypad,
-// and the five-way pad is the ring around the 5.
-func NativeKey(character byte) uint32 { return nativeKeyBase | uint32(character) }
-
-// The keys a run has proved the title acts on.
+// The keys a run has proved the titles act on, at BREW's numbers.
 const (
-	NativeKeyUp     = nativeKeyBase | '2'
-	NativeKeyDown   = nativeKeyBase | '8'
-	NativeKeyLeft   = nativeKeyBase | '4'
-	NativeKeyRight  = nativeKeyBase | '6'
-	NativeKeySelect = nativeKeyBase | '5'
+	NativeKeyUp     = nativeKeyBase | 0x31
+	NativeKeyDown   = nativeKeyBase | 0x32
+	NativeKeyLeft   = nativeKeyBase | 0x33
+	NativeKeyRight  = nativeKeyBase | 0x34
+	NativeKeySelect = nativeKeyBase | 0x35
 	// NativeKeyClear is what the title's menus label CLR and treat as back.
 	// Three codes do that — this one, 0xE021 and 0xE02B — and this is the one
 	// the module names most often.
-	NativeKeyClear = nativeKeyBase | '0'
+	NativeKeyClear = nativeKeyBase | 0x30
+	// NativeKeyStar is the star key. A later module opens its settings and
+	// help menu on it, and has no other way there.
+	NativeKeyStar = nativeKeyBase | 0x2b
+	// NativeKeyPound is the hash key. No local title has been seen to act on
+	// it; it is BREW's number beside the star.
+	NativeKeyPound = nativeKeyBase | 0x2c
 )
 
 // nativeKeyDigitBase is the code for the 0 key; the digits run up from it.
@@ -234,11 +234,14 @@ func (platform *NativePlatform) Key(ctx context.Context, code uint32, pressed bo
 // nativeKeyCode translates the WIPI key values every Host here already speaks
 // into the codes this title acts on.
 //
-// The pad is what a run proves: the select key opens the title's menu, and the
-// two keys that move a selection along it are the ones a phone keypad puts
-// beside the 5. The digits are a second block, and the menu is what names it —
+// The pad is what a run proves: the select key opens the title's menu, and a
+// later module's grid menu moves its cursor on each of the four directions at
+// BREW's numbers. The digits are a second block, and the menu is what names it —
 // each of its numbered items answers to one code, in order, so the digit keys
 // run from 0 at 0xE021 rather than from their own characters.
+//
+// The soft keys, send and the volume pair stay unmapped: no title here has been
+// seen to act on BREW's numbers for them.
 //
 // A value with no code here is dropped by the caller rather than sent as
 // itself; see NativeSession.SendKey.
@@ -256,6 +259,10 @@ func nativeKeyCode(key int32) (uint32, bool) {
 		return NativeKeySelect, true
 	case KeyClear:
 		return NativeKeyClear, true
+	case KeyStar:
+		return NativeKeyStar, true
+	case KeyHash:
+		return NativeKeyPound, true
 	}
 	if key >= KeyNum0 && key <= KeyNum9 {
 		return nativeKeyDigitBase + uint32(key-KeyNum0), true

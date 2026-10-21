@@ -36,6 +36,13 @@ saves belong to the decimal ClassID from the information file. One local
 native archive still stops on its loading screen: it blits from a surface its
 start-up filled and that nothing later writes
 ([watch evidence](history/ktf.md#implementation-what-writes-this-for-a-title-nothing-is-unanswered-for)).
+A later module draws points, lines and circle outlines through BREW's shape
+interface (`0x1002001`) in a pen, point size and rectangle clip it sets there,
+measures text with the display's `+0x0c` as the text call draws it, counts its
+text in halfwords, and clears with a fill in no colour, which takes the ground
+colour item 2 ([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-drawing)).
+A native colour is BREW's RGBVAL, `0xBBGGRR00`, in both generations
+([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-review)).
 
 The JVM context sits beside an ordinary image so representable object-header
 displacements retain canonical image class addresses during compiled access
@@ -99,7 +106,11 @@ events at or above `0x5000` retain their type and two arguments; unknown
 reserved event kinds below that boundary remain errors. The session generates
 key repeats for descriptor packages at the handset's `KEYREPEAT` cadence
 (600 ms, then every 250 ms; `internal/keypad`). A native package receives a key
-as press (`0x101`), typed key (`0x100`) and release (`0x102`), and no repeat.
+as press (`0x101`), typed key (`0x100`) and release (`0x102`), and no repeat,
+in BREW's virtual key codes: the pad 0xE031–0xE034, select 0xE035, clear
+0xE030, the digits from 0xE021, star 0xE02B and hash 0xE02C; soft keys, send
+and volume stay unmapped
+([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-keys)).
 WIPI Java receives Host pointer events, and the Host is told a title takes
 touch only when one of its classes declares its own `pointerNotify(III)Z` body;
 native packages have no pointer support. An uncaught guest exception in a key
@@ -215,6 +226,11 @@ name with a line break where it would be written into a list (remove, rename,
 mkdir); `MC_fsGetFileStat` reads through the removal list like
 `MC_fsIsExist`.
 The earlier native package retains its existing buffered write/flush policy.
+Its open takes BREW's modes: only create (4) and append (8) make a missing file,
+and read-write (2) refuses one — and refuses an empty file the package does not
+carry and the session has not written, which builds before 2026-10-21 made for
+every such open; the empty file is kept
+([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-open)).
 See [save integrity](session.md#save-integrity) for failure recovery and limits.
 
 A record database the archive carries, as one `qtcdb` file or as a `qtpdb`
@@ -291,6 +307,10 @@ Particular to this platform:
   buffers. The record's screen is therefore held to 1,024 a side, the largest
   either Host starts a session at, as on LGT; an image the title decoded keeps
   the wider 4,096 bound.
+- A native record wraps that record with the shape interface's pen, point size
+  and clip. A record without them, as every build before 2026-10-21 wrote,
+  still loads with the interface a title starts with
+  ([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-checkpoint)).
 
 ## Diagnostics and limits
 

@@ -57,6 +57,8 @@ type NativePlatform struct {
 	installed bool
 	// screen is what the title draws into.
 	screen *nativeScreen
+	// shapes is what the shape interface keeps: its pen, point size and clip.
+	shapes *nativeShapes
 	// screenWidth and screenHeight are the handset the title is told it runs
 	// on. Zero is the platform's own; see SetScreen.
 	screenWidth  int
@@ -310,6 +312,7 @@ func (platform *NativePlatform) Install() error {
 	platform.images = map[uint32]*nativeImage{}
 	platform.installScreen()
 	platform.installText()
+	platform.installShapes()
 	platform.installSound()
 	platform.installTimed()
 	platform.installRemaining()

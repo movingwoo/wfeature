@@ -48,8 +48,9 @@ import (
 // store, each time it is opened.
 //
 // One object is kept at a time: HOLD and TRUNCATE do nothing while one is
-// kept, and FINISH does nothing without one. Opening for writing creates a file
-// that is not there, so PATCH and HOLD on a missing save leave four bytes; and
+// kept, and FINISH does nothing without one. PATCH and HOLD create the save
+// before they open it to read and write, as a BREW module's own wrapper does —
+// that open makes nothing — so on a missing save they leave four bytes; and
 // FINISH after TRUNCATE leaves part B alone at the front of the file, because
 // that is where the cursor of an emptied file stands.
 //
@@ -159,13 +160,14 @@ func ktfNativeSaveArchive(frame bool) ([]byte, error) {
 		screenRectangle        = 0x14
 		screenPresent          = 0x1c
 		filesOpen              = 0x08
+		filesCreate            = 0x10
 		fileClose              = 0x04
 		fileRead               = 0x0c
 		fileWrite              = 0x14
 		fileStatus             = 0x18
 
-		// 1 is the only mode that cannot write, 4 empties a file that exists,
-		// and any other writes over what is there.
+		// 1 is the only mode that cannot write, 2 writes over a file that is
+		// there and makes none, and 4 makes the file or empties it.
 		openRead     = 1
 		openWrite    = 2
 		openTruncate = 4
@@ -230,13 +232,14 @@ func ktfNativeSaveArchive(frame bool) ([]byte, error) {
 	a.emit(lgtStr(0, 3, 0), lgtStr(1, 0, platform), lgtMovImm(0, 1), lgtBXLR)
 
 	// draw(object): count, put the count in the red channel of the whole
-	// screen, present it. It is the frame one form registers.
+	// screen — BREW's RGBVAL is 0xBBGGRR00, so red is the second byte — and
+	// present it. It is the frame one form registers.
 	var draw uint32
 	if frame {
 		draw = a.here()
 		a.emit(lgtPushLR, lgtMovReg(4, 0))
 		a.emit(lgtLdr(3, 4, frames), lgtAddImm(3, 3, 1), lgtStr(3, 4, frames))
-		a.emit(0xe1a03c03) // mov r3, r3, lsl #24
+		a.emit(0xe1a03403) // mov r3, r3, lsl #8
 		a.emit(lgtLdr(0, 4, screen), lgtMovImm(1, 0), lgtMovImm(2, 0))
 		method(screenRectangle)
 		a.emit(lgtLdr(0, 4, screen))
@@ -268,6 +271,13 @@ func ktfNativeSaveArchive(frame bool) ([]byte, error) {
 		method(filesOpen)
 		a.emit(lgtMovReg(5, 0), lgtCmpImm(5, 0))
 		a.branch(equal, done)
+	}
+	// create asks the file interface to make the save, which is a file that
+	// is there already when it answers.
+	create := func() {
+		a.emit(lgtLdr(0, 4, files))
+		a.literal(1, saveName)
+		method(filesCreate)
 	}
 	// write hands count bytes of one of the object's fields to the file in r5.
 	write := func(field, count uint32) {
@@ -301,6 +311,7 @@ func ktfNativeSaveArchive(frame bool) ([]byte, error) {
 			shut()
 		}},
 		{KTFNativeSaveKeyPatch - '0', func() {
+			create()
 			open(openWrite)
 			write(progress, 4)
 			shut()
@@ -324,6 +335,7 @@ func ktfNativeSaveArchive(frame bool) ([]byte, error) {
 		}},
 		{KTFNativeSaveKeyHold - '0', func() {
 			unlessKept()
+			create()
 			open(openWrite)
 			a.emit(lgtStr(5, 4, kept))
 			write(progress, 4)

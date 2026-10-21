@@ -3786,6 +3786,10 @@ and a mode. The colour format came from the module's data: one call site walks a
 white, blue, green, red, cyan, magenta, yellow, black — so a colour is
 `0xRRGGBB00`, which the call site alone could not show.
 
+(Superseded: a colour is BREW's RGBVAL, `0xBBGGRR00`, which reads the same
+table as white, red, green, blue, yellow, magenta, cyan, black; see
+[Review follow-ups](#ktf-native-open-and-shapes-2026-10-21-review).)
+
 `+0x1c` ends a frame: it is the only call in a frame that draws nothing.
 
 **The title draws its own text**: there is no glyph call; the version string and
@@ -3840,6 +3844,9 @@ the five-way pad is the ring around the 5:
 ```
 0xe032 up      0xe034 left    0xe035 select    0xe036 right    0xe038 down
 ```
+
+(Superseded: the codes are BREW's virtual key codes, and the pad is 0xe031 to
+0xe034; see [The keys are BREW's](#ktf-native-open-and-shapes-2026-10-21-keys).)
 
 Neither KTF generation needs the pad rule the other two platforms carry (`lgt.md`
 "A release stops a character the pad has moved on from"). Measured: two titles
@@ -9270,3 +9277,184 @@ in the server builds.
 `go vet ./...` pass with the new regression tests, and both server profiles
 build. The active debug server was restarted with the fix, preserving all 24
 save files byte for byte. Physical iPhone replay remains a user confirmation.
+
+<a id="ktf-native-open-and-shapes-2026-10-21"></a>
+
+## A later native module: a read-write open, and the shape interface
+
+<a id="ktf-native-open-and-shapes-2026-10-21-report-and-cause"></a>
+
+### Report and cause
+
+A later-generation native archive (SHA-256
+`06fbd5d0e902f96d4468a3b495231c6ae1feb0c8ea34750f9f87f0c53ce5a246`) showed a
+black screen and never started, on a fresh save as on the player's. Its start event asks for its first frame `0x209f770c` ms away —
+152 hours.
+
+The title reads its settings by opening `option.dat` in mode 2, and falls back
+on a 50 ms frame when the open is refused. The platform
+created the file for any mode but 1, so the open made an empty file, the read
+moved nothing, and the interval came out of whatever the buffer held. The empty
+file was then stored in the save, so every later start read it again. Refusing
+mode 2 for a missing name alone gives 50 ms and a drawn title screen on a fresh
+save; the player's save, which holds the empty file, still gave 152 hours.
+
+The modes are BREW's — 1 read, 2 read and write, 4 create, 8 append — and BREW
+takes no mode but create for a name that is not there. The 2005 module's own
+wrapper agrees: it creates the name before a mode-2 open and retries a refused
+mode 2 or 8 with mode 4 ([its wrapper](#implementation-a-file-is-an-object-and-the-modules-own-wrapper-names-its-methods)).
+Mode 2 creating was an inference from that retry made while the package was
+read as WIPI, and no title depended on it: the 2005 module never opens a
+missing name in mode 2. Mode 8 still creates, as before; no title reaches it.
+
+<a id="ktf-native-open-and-shapes-2026-10-21-open"></a>
+
+### The open, and the empty files earlier builds left
+
+A mode-2 open of a missing name is refused, like a mode-1 open. A mode-2 open
+of an empty file is refused too when the package does not carry it and this
+session did not create, empty or write it — the file every earlier build made
+for such an open. Nothing is deleted: the store keeps the empty file until the
+title writes it, a mode-1 open and the exists and information calls answer it
+as before, and the title's own create or mode-4 open makes it the session's,
+after which mode 2 opens it. On a copy of the player's save the title starts at
+50 ms and the empty file is left as it was.
+
+The title's own settings screen shows the wrapper at work: its mode-2 opens are
+refused, it opens mode 4, writes 28 bytes and closes, and the next mode-2 open
+finds the file. A later start reads it back. Over the player's empty file the
+same mode-4 open empties and rewrites it, after which the save is an ordinary
+one.
+
+<a id="ktf-native-open-and-shapes-2026-10-21-drawing"></a>
+
+### What the title draws with
+
+Once started, the title screen drew white behind everything, cut its one line of text to
+`ne butt` and stopped on the first OK with the guest C runtime's
+`unknown KTF native supervisor call 0xab` — its divide-by-zero report.
+
+- **The clear.** The title sets colour item 2 to black and clears with a fill of
+  no rectangle in `0xffffffff`. BREW's clear is exactly that call, filling with
+  the user background item, so a fill in no colour now takes item 2, and white
+  when the title set none — what both readings in
+  [The screen draws text](#implementation-the-screen-draws-text) already
+  produce.
+- **Counted text.** It draws `ne button game` (the `O` is the OK key's icon)
+  with a count of 14 over a run of fourteen halfwords, each holding one
+  character the way terminated runs do. A later module's count is halfwords;
+  the 2005 module has passed no count, and one it passed is still bytes.
+- **The measure.** Display `+0x0c` takes a font, a run, a count, a width limit
+  and a pointer for how many characters fit. The help pages divide by what one
+  call site returns, which is where the zero came from; another call site
+  centres a line and falls back on six pixels a character when it is told
+  zero. It answers what the text call advances past.
+- **The shape interface**, `0x1002001`, BREW's IGraphics. Its five methods came
+  off their call sites: `+0x10` takes the same byte three times and `0xff` on
+  the stack ahead of every point and line (colour); `+0x28` takes 1 ahead of a
+  run of points and 2 ahead of a trail's head (point size); `+0x30` takes a
+  record whose first byte is 1 followed by 0, 0, 240, 320, once a frame
+  (rectangle clip, whose answer the module's wrapper returns); `+0x50` and
+  `+0x54` take two and four halfwords from a particle's position and a trail
+  segment's ends (point, line); `+0x5c` takes three, the middle of the screen
+  and 4 or 12, around the in-game cursor (circle). No fill mode is ever set, so
+  a circle is its outline.
+
+On 600 frames of title, help, menu and play the title calls no slot the
+platform does not serve except helper `+0x10`, below.
+
+<a id="ktf-native-open-and-shapes-2026-10-21-checkpoint"></a>
+
+### Quick save
+
+The shape interface's pen, point size and clip are state a frame can leave
+behind, so a native checkpoint now wraps the earlier record with them, as the
+LGT Java media record does. A record without them — every quick save made
+before — still loads, with the interface a title starts with. On this title a
+quick save taken by the earlier build loads; one taken mid-title loads and
+carries on drawing.
+
+<a id="ktf-native-open-and-shapes-2026-10-21-limits"></a>
+
+### Validation and limits
+
+The opt-in local native run now passes on this archive. Its menu-route draw
+check was written for the 2005 module, whose menus draw text as rectangles and
+so draw many times its title screen; for a later module it asks instead that
+the route drew at least once a frame. The 2005 archive is not in the local
+corpus, so what the open change does to it rests on its wrapper as recorded
+above rather than on a run.
+
+- Helper slot `+0x10` is called twice when a save is loaded, comparing a stored
+  fifteen-byte code with one the title derives — the helper table's order puts
+  `strcmp` there. Unserved, it answers 0, "equal". A different answer takes the
+  branch that clears 0x54 bytes of the save structure, so it is left unserved
+  until what the code is, and what the title does when it differs, is known.
+- A quick save taken while the title was stopped at 152 hours restores that
+  state; a checkpoint is execution state.
+- The keys were wrong for the pad and missing the star; see the next section.
+- The pen's alpha is carried and not acted on, every colour the title sets
+  being opaque, and the point size applies to points only: BREW gives a line's
+  width a call of its own, which the title never makes.
+
+<a id="ktf-native-open-and-shapes-2026-10-21-keys"></a>
+
+### The keys are BREW's
+
+The pad codes this platform sent were read off the 2005 module as `0xE000`
+plus a keypad character, the pad being the digits around the 5. Its evidence
+was three facts: its handler compares against 0xE030 and 0xE035, 0xE035 opens
+its menu, and 0xE034 moves along a menu of two choices — which cannot tell left
+from right. All three are equally BREW's own virtual key codes: 0xE030 clear,
+0xE034 right, 0xE035 select.
+
+The later module tells them apart. Its settings and help menu is a grid of
+four by two, and on it 0xE031 moves the cursor up, 0xE032 down, 0xE033 left and
+0xE034 right; its main menu moves left on 0xE033 and right on 0xE034. The codes
+sent before were 0xE032 for up (BREW's down), 0xE038 for down, 0xE034 for left
+(BREW's right) and 0xE036 for right, which this title takes as a select. The
+star, 0xE02B, is the only way into that grid menu; it was not sent.
+
+The pad is now 0xE031 to 0xE034 and select 0xE035, as BREW numbers them; the
+star is 0xE02B and the hash key 0xE02C. Clear (0xE030) and the digits (0xE021
+up) were already BREW's. The soft keys, send and the volume pair stay
+unmapped: no title here has been seen to act on BREW's numbers for them.
+
+The 2005 module is not in the local corpus. Its recorded route sends 0xE034 for
+the second of its two choices, as before, so the route is unchanged in what it
+sends; that its up and down are BREW's rests on the same three facts. Only the
+native package, a module information file beside one raw module, takes this
+table; descriptor packages, including the WIPI 1.1 ones, receive the WIPI key
+values.
+
+Driven through the page's key path on the later title: the star opens the grid
+menu, the four directions move its cursor as above, clear closes it, and left
+moves the main menu. The opt-in local native run passes.
+
+<a id="ktf-native-open-and-shapes-2026-10-21-review"></a>
+
+### Review follow-ups
+
+- **Colours are BREW's RGBVAL, `0xBBGGRR00`.** The 2005 module's table cannot
+  tell red from blue, and it was read as `0xRRGGBB00`. The later module's star
+  menu tells them apart: it blits a border whose pixels are sky blue
+  (`0x00b6ff`) and fills the band inside it with `0xd9ae2700`, which reads
+  `0x27aed9`, a sky blue like the border's, the BREW way and gold
+  (`0xd9ae27`) the other way; its
+  in-game bottom band reads blue the BREW way and orange the other. Read the
+  BREW way the 2005 table is white, red, green, blue, yellow, magenta, cyan,
+  black — the usual order. Rectangle fills, the clear's ground colour and the
+  text colour now decode that way, for both generations, and the previous pen
+  the shape interface's colour call answers is packed the same way. Saves and
+  checkpoints keep the colours as the title set them, so neither changes. The
+  2005 archive is not in the local corpus; its colours change with this
+  without a run to show them.
+- **SetClip answers SUCCESS.** It answered 1 for a clip it took and 0 for a
+  kind it could not take; it now answers 0 and EFAILED (1), BREW's codes, as
+  the draw calls beside it already answered 0. No local run reads it.
+- **A refused read-write open is a failure.** It now leaves the interface's
+  error report at EFAILED, as BREW's open does. A refused read-only open
+  leaves the report as it was, as before. No local run reaches a call to the
+  report.
+- The text call decides a counted run's unit once a call, and the shapes read
+  their records into a buffer on the stack and compute the pen once a shape.

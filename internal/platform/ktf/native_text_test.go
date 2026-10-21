@@ -112,7 +112,7 @@ func TestNativeTextReadsBothShapesOfARun(t *testing.T) {
 func TestNativeDrawTextPutsInkOnTheScreen(t *testing.T) {
 	platform := newTestNativePlatform(t, nil)
 	ink := color.RGBA{R: 0x20, G: 0x40, B: 0x60, A: 0xff}
-	nativeCall(t, platform.screenColour, 0, nativeTextColourItem, 0x20406000)
+	nativeCall(t, platform.screenColour, 0, nativeTextColourItem, 0x60402000)
 
 	const x, y = 30, 40
 	address := nativeTextAt(t, platform, []byte("A\x00"))

@@ -250,7 +250,8 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 	}
 	defer source.Close()
 	// One open file, so the record has a file entry for the cases to damage.
-	if nativeCall(t, source.platform.openFile, 0, nativeString(t, source.platform, "Slot.dat"), 2) == 0 {
+	nativeCall(t, source.platform.createFile, 0, nativeString(t, source.platform, "Slot.dat"))
+	if nativeCall(t, source.platform.openFile, 0, nativeString(t, source.platform, "Slot.dat"), nativeModeReadWrite) == 0 {
 		t.Fatal("the fixture could not open a file")
 	}
 	saved, err := source.CaptureCheckpoint(t.Context())
@@ -295,11 +296,11 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 		{"speed", func(s *nativeState) { s.Speed = 100 }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var record nativeState
+			var record nativeShapesRecord
 			if err := backend.DecodeCheckpointRecord(saved.Runtime, &record); err != nil {
 				t.Fatal(err)
 			}
-			test.mutate(&record)
+			test.mutate(&record.State)
 			bad := saved
 			bad.Runtime, err = backend.EncodeCheckpointRecord(record)
 			if err != nil {
