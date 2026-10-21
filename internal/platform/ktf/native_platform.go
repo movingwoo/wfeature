@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -119,9 +120,6 @@ type NativePlatform struct {
 	// posted holds the events the title has sent itself and not yet been given
 	// back. See nativeObjectPostEvent.
 	posted []nativePostedEvent
-	// resumes holds the calls the title asked to have run once more. See
-	// nativeObjectResume.
-	resumes []nativeResume
 	// colours holds what the title set through nativeScreenColour, by the item
 	// number it named. Nothing draws with them yet; they are kept because the
 	// call that sets them is on the route to a screen this platform can not
@@ -163,6 +161,13 @@ const (
 	// the interval has passed. So what it has to be is monotonic milliseconds,
 	// and this platform has one of those already.
 	nativeSlotElapsed = 0xb0
+	// nativeSlotSeconds and nativeSlotDate are BREW's GETTIMESECONDS and
+	// GETJULIANDATE: the local time in seconds since BREW's epoch, and a
+	// count of those seconds as a date. A later title keeps the time of day
+	// it reads through the two when a game starts, and a trap's zero left it
+	// reading the date out of whatever its stack held.
+	nativeSlotSeconds = 0xb4
+	nativeSlotDate    = 0xb8
 	// nativeSlotCurrentApplication answers with the object the module's
 	// factory built. The module asks for it from thirty-nine call sites rather
 	// than carrying it, and reads the fields it set on it itself.
@@ -184,6 +189,10 @@ const (
 	// halfwords are taken as a size and kept; the halfword at 0xe is kept
 	// beside it.
 	nativeObjectDisplayInfo = 0x10
+	// nativeObjectActiveApplet is BREW's ActiveApplet, the ClassID of the
+	// applet in front. One later title compares it with its own before it
+	// reads the handset's identity, and the title is the only applet here.
+	nativeObjectActiveApplet = 0x20
 )
 
 // The interface numbers the module queries, in the order it asks for them.
@@ -292,6 +301,8 @@ func (platform *NativePlatform) Install() error {
 	client.Serve(NativePlatformTable, nativeSlotInitial, nativeAnswerZero)
 	client.Serve(NativePlatformTable, nativeSlotMilliseconds, platform.milliseconds)
 	client.Serve(NativePlatformTable, nativeSlotElapsed, platform.milliseconds)
+	client.Serve(NativePlatformTable, nativeSlotSeconds, platform.laterOnly(platform.seconds))
+	client.Serve(NativePlatformTable, nativeSlotDate, platform.laterOnly(platform.date))
 	client.Serve(NativePlatformTable, nativeSlotCurrentApplication, platform.currentApplication)
 	client.Serve(NativePlatformTable, nativeSlotCreateObject, platform.createObject)
 
@@ -299,9 +310,10 @@ func (platform *NativePlatform) Install() error {
 	client.Serve(NativeEntryObject, nativeObjectRelease, nativeAnswerOne)
 	client.ServeQueryInterface(NativeEntryObject, nativeObjectQueryInterface)
 	client.Serve(NativeEntryObject, nativeObjectDisplayInfo, platform.displayInfo)
+	client.Serve(NativeEntryObject, nativeObjectActiveApplet, platform.activeApplet)
 	client.Serve(NativeEntryObject, nativeObjectSchedule, platform.schedule)
 	client.Serve(NativeEntryObject, nativeObjectPostEvent, platform.postEvent)
-	client.Serve(NativeEntryObject, nativeObjectResume, platform.resume)
+	client.Serve(NativeEntryObject, nativeObjectCancelTimer, platform.cancelTimer)
 	client.Serve(NativeEntryObject, nativeObjectLoadResource, platform.loadResource)
 	client.Serve(NativeEntryObject, nativeObjectFreeResource, platform.freeResource)
 
@@ -315,6 +327,7 @@ func (platform *NativePlatform) Install() error {
 	platform.installShapes()
 	platform.installSound()
 	platform.installTimed()
+	platform.installNetwork()
 	platform.installRemaining()
 	for _, identifier := range []uint32{nativeInterfaceSound, nativeInterfaceTimed} {
 		client.Serve(nativeInterfaceSurface(identifier), nativeSourceAddListener, platform.addListener(identifier))
@@ -330,11 +343,17 @@ func nativeAnswerCertificate(*armcore.Thread) (uint32, error) {
 }
 func nativeAnswerOne(*armcore.Thread) (uint32, error) { return 1, nil }
 
-// allocate answers the platform table's allocator.
+// allocate answers the platform table's allocator. A size of nothing is
+// answered with null rather than refused, which is what BREW's own heap does
+// with it: one title sizes each of its sounds from a table whose last entry is
+// zero, keeps whatever it was handed and reads zero bytes into it.
 func (platform *NativePlatform) allocate(thread *armcore.Thread) (uint32, error) {
 	size, err := thread.Register(0)
 	if err != nil {
 		return 0, err
+	}
+	if size == 0 {
+		return 0, nil
 	}
 	return platform.client.Allocate(size)
 }
@@ -360,9 +379,65 @@ func (platform *NativePlatform) free(thread *armcore.Thread) (uint32, error) {
 	return 0, nil
 }
 
+// activeApplet answers with the title's own ClassID.
+func (platform *NativePlatform) activeApplet(*armcore.Thread) (uint32, error) {
+	identifier, _ := platform.archive.ApplicationIdentifier()
+	return identifier, nil
+}
+
 // milliseconds answers the module's clock.
 func (platform *NativePlatform) milliseconds(*armcore.Thread) (uint32, error) {
 	return uint32(platform.clock.Now().Sub(platform.started) / time.Millisecond), nil
+}
+
+// nativeEpoch is where BREW counts its seconds from: the 6th of January 1980,
+// where GPS time starts.
+var nativeEpoch = time.Date(1980, time.January, 6, 0, 0, 0, 0, time.UTC)
+
+// nativeDateSize is BREW's JulianType: year, month, day, hour, minute, second
+// and day of the week, a halfword each.
+const nativeDateSize = 14
+
+// seconds answers GETTIMESECONDS.
+func (platform *NativePlatform) seconds(*armcore.Thread) (uint32, error) {
+	return platform.localSeconds(), nil
+}
+
+// localSeconds is the session's clock as BREW counts it: seconds since its
+// epoch in the local time a handset shows, which is the zone the guest's Java
+// calendar reads too.
+func (platform *NativePlatform) localSeconds() uint32 {
+	now := platform.clock.Now()
+	_, offset := now.In(time.Local).Zone()
+	seconds := int64(now.Sub(nativeEpoch)/time.Second) + int64(offset)
+	return uint32(min(max(seconds, 0), math.MaxUint32))
+}
+
+// date answers GETJULIANDATE(seconds, date) by filling the date those seconds
+// name, counted the way GETTIMESECONDS counts them. Zero seconds is the clock
+// now. The day of the week counts from Monday.
+func (platform *NativePlatform) date(thread *armcore.Thread) (uint32, error) {
+	arguments, err := nativeArguments(thread, 2)
+	if err != nil {
+		return 0, err
+	}
+	seconds, out := arguments[0], arguments[1]
+	if out == 0 {
+		return 0, nil
+	}
+	if seconds == 0 {
+		seconds = platform.localSeconds()
+	}
+	moment := nativeEpoch.Add(time.Duration(seconds) * time.Second)
+	record := make([]byte, nativeDateSize)
+	fields := []int{moment.Year(), int(moment.Month()), moment.Day(), moment.Hour(), moment.Minute(), moment.Second(), (int(moment.Weekday()) + 6) % 7}
+	for index, value := range fields {
+		binary.LittleEndian.PutUint16(record[2*index:], uint16(value))
+	}
+	if err := platform.client.core.Memory().Write(out, record); err != nil {
+		return 0, fmt.Errorf("write KTF native date at %#x: %w", out, err)
+	}
+	return 0, nil
 }
 
 // currentApplication hands back the object the module's factory built.

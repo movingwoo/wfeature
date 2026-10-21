@@ -233,6 +233,21 @@ func (platform *NativePlatform) blit(thread *armcore.Thread) (uint32, error) {
 		platform.screen.blits = append(platform.screen.blits, record)
 	}
 	source, ok := platform.images[record.Pixels]
+	// A later module's image is an IDIB, and so is a picture such a title
+	// builds itself from one's header: both are read from guest memory, where
+	// the title draws into them. See native_dib.go.
+	if view, isDIB := platform.dibAt(record.Pixels); isDIB {
+		var own *nativeImage
+		if ok {
+			own = source
+		}
+		if !platform.drawDIB(view, record, own) {
+			platform.screen.missed++
+			return 0, nil
+		}
+		platform.screen.draws++
+		return 1, nil
+	}
 	if !ok {
 		// An image the platform never built is not an error: the title asks
 		// the factory for classes this platform does not make, keeps what it

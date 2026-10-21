@@ -9458,3 +9458,305 @@ moves the main menu. The opt-in local native run passes.
   report.
 - The text call decides a counted run's unit once a call, and the shapes read
   their records into a buffer on the stack and compute the pen once a shape.
+
+<a id="ktf-new-archives-2026-10-21"></a>
+
+## Newly added archives — 2026-10-21
+
+A player's run of newly added archives stopped on five KTF ones: a descriptor
+package whose older relocatable module faulted when a cut scene was skipped,
+and four archives of the earlier native package, all later modules, that
+stopped while starting. A sixth was a descriptor package cut off inside its
+first entry: its zip ends 143,018 bytes in, inside a JAR declared at 336,967
+compressed bytes, so it has no central directory and no descriptor. That is a
+download that did not finish, not a package this platform could read.
+
+<a id="ktf-new-archives-2026-10-21-statics"></a>
+
+### A subclass's statics are not moved
+
+The older module faulted in a reset its chapter loader runs, the first store
+into a static array of a class that extends another of the module's classes:
+the array's word read 84, and the store read 84 as an array header. Every one
+of the class's 69 statics held 84 at the first tick, against zero in the image,
+and a watch named the platform as the writer. Linking moves a subclass's fields
+past its superclass's by adding the superclass's size, 84, to each field record
+the class owns ([rebasing](#implementation-the-older-modules-run-under-the-platform-and-all-three-of-them-play)),
+and a static's record ends in its value rather than an offset. Statics are now
+left alone; the title skips its prologue, loads the chapter and plays.
+
+Of the eight local older-module archives this one alone has statics in a
+subclass of a module class (79, in three classes). All eight give the same
+1,500-tick digest before and after.
+
+<a id="ktf-new-archives-2026-10-21-helper-table"></a>
+
+### The flat table is BREW's helper table
+
+BREW's own helper table, in its SDK's order, puts at each byte offset what this
+platform had already found there from call sites: the copies and `sprintf` at
+the bottom, the allocator at `0x68` and `0x6c`, the reallocator at `0x74`, the
+two millisecond clocks at `0xac` and `0xb0`, the system free at `0xbc` and the
+current applet at `0xc0`. The object handed to the entry is BREW's shell the
+same way: the factory query at `0x08`, the device information at `0x10`, the
+timer at `0x2c`, the resource pair at `0x48` and `0x50` and the self-post at
+`0x54`. Three of the four archives stopped on slots the table names:
+
+- **`strcmp` (`0x10`).** One title finds its resources by name in a directory
+  of its own. The trap's zero matched the first entry for every name, the size
+  it then computed was -40, and the allocator refused 4,294,967,256 bytes.
+- **`atoi` (`0x90`).** Another reads a count out of a one-character field of its
+  data file, adds the save files it finds, and sizes a table by the sum. With
+  the trap's zero and no saves it asked for zero bytes.
+- **An allocation of nothing.** The third reads its fourteen sounds from one
+  file into buffers sized by a table whose last entry is zero, and reads zero
+  bytes into the last. BREW's heap answers a zero size with null rather than a
+  failure, so the allocator now does.
+- **`memcmp` (`0xdc`).** Served beside them, where one title searches what it
+  loaded for a run of bytes; the trap found the run at the first byte.
+
+**The shell's `0x30` is CancelTimer.** It had been read off a module no longer
+in the local corpus as a request to be called once more, delivered on the next
+tick. A BREW timer is one-shot, and the usual way to keep a frame running is to
+cancel and set it again inside the frame; one title does exactly that, and the
+reading ran its frame on every tick as well as when its timer came due, 1,200
+calls in 600 ticks. It now cancels the frame when it names it. A native
+checkpoint keeps the list the reading queued, because the codec takes no record
+with a field missing: it is written empty, and a record an earlier build took
+loads without its queued calls, which the title never asked for.
+
+**ActiveApplet (`0x20`)** answers the title's own ClassID. One title compares
+it with its own before it reads the handset's identity, and the title is the
+only applet this platform runs.
+
+**The 2005 module keeps its answers.** Its image reaches `0xdc` too, which
+answered it zero as a trap, and it has always run that way; it is not in the
+local corpus, so what a real answer would change for it cannot be measured, and
+a comparison that has always come out equal could decide differently about a
+save it wrote. So every helper this platform first serves here — `strcmp`,
+`atoi`, `memcmp`, `f_op`, `f_cmp`, STREXPAND, GETTIMESECONDS and GETJULIANDATE —
+answers the 2005 module with that zero and writes nothing, and the factory
+writes nothing through its pointers for it either.
+
+<a id="ktf-new-archives-2026-10-21-image"></a>
+
+### The image factory describes the image
+
+The factory at `0x64` is BREW's SetupNativeImage, the call behind CONVERTBMP:
+`(class, bitmap, &info, &reallocated)`. The two pointers were not written. One
+title keeps the description beside each image in its own record, and with it
+left as the title cleared it the screen stayed black for 600 ticks; another's
+title picture was missing. For a later module the factory now fills the
+description — width, height, colour count, not animated, frame width — and sets
+the flag, and both draw their pictures. The flag is set because
+the image is this platform's own copy, and BREW names the system free for an
+image whose flag came back set, which is how this platform frees one. The
+title that reads the flag frees the bitmap it built.
+
+<a id="ktf-new-archives-2026-10-21-seek"></a>
+
+### A seek from the end
+
+One title checks a file it has just read by seeking to -1 from the end and
+reading one byte. The end-relative seek followed the 2005 module's wrapper,
+which counts back from the last byte, so the cursor landed past the end and the
+read found nothing. The title took its file for damaged, gave up its start-up
+before it loaded a picture, and faulted drawing one. A later module now moves
+from the end by the offset, as BREW does; the 2005 module, which is not in the
+local corpus, keeps its wrapper's arithmetic.
+
+<a id="ktf-new-archives-2026-10-21-owner"></a>
+
+### The owner check behind helper `0x10`
+
+The 2026-10-21 record left `0x10` unserved on the archive that needed the open
+fix, because a different answer clears 0x54 bytes of its save structure
+([limits](#ktf-native-open-and-shapes-2026-10-21-limits)). That code is an
+owner: the save carries a phone number, and the title compares it with the
+handset's, which it reads from offset 10 of the handset record. When they
+differ it clears the record and keeps the number it read, as a handset given
+another subscriber's save would. The packaged record carries a number of its
+own, so the first start with `strcmp` served clears it once — a counter on the
+title's play screen reads 0 instead of 50 from then on — and later starts
+compare equal. That title first started on this platform with the open fix of
+the same day, and the local debug save holds no such record. On 600 ticks
+without input its frames are unchanged; on a key route through the manual
+clock they are unchanged until tick 1,209, where the record is cleared, and
+serving `strcmp` alone accounts for the difference.
+
+The handset record's first ten bytes are a model name: another title compares
+them with three handset models it treats apart. This platform writes the
+subscriber number from offset 0, so the number the first title reads at offset
+10 is the number's eleventh character. The record is left as it was: no local
+title depends on either field holding more.
+
+<a id="ktf-new-archives-2026-10-21-dib"></a>
+
+### A later module's image is BREW's IDIB
+
+One title, drawn for a 128x160 handset, stopped as its first round loaded, on a
+division by zero. While it starts it measures the image the factory returns for
+one of its pictures: it reads the word at `+8` of the object, or failing that
+`+0xc`, as a pointer to pixels in the same block, takes the bytes per pixel
+from the low bits of the first pixel and the header's length from the distance
+to the pixels, and divides by what it measured when the round loads. The
+object was the 2005 module's eight bytes, a pointer to the bitmap this
+platform keeps, so it measured whatever the arena held after them. A pixel
+pointer at `+8` is where BREW's device-independent bitmap, IDIB, keeps it, and
+the rest of what the title does says the same: it copies the header of a
+factory image in front of blocks of its own, fills their pixels — a 256 by 256
+picture its race is drawn from — and blits them, and it draws into the pixels
+of images the factory built.
+
+A later module's image is now an IDIB: the trapped table of BREW's DIB class
+(`0x1001045`), the pixel pointer at `+8`, the transparent value `0xf81f` at
+`+0x10`, the width and height at `+0x14`, the pitch at `+0x18`, no palette, 16
+bits a pixel and BREW's 5-6-5 scheme at `+0x1c`, then the pixels in rows from
+the top, header and pixels in one block. The blit reads any object carrying
+that table as an IDIB, out of guest memory. A pixel the title has not changed
+in one of the factory's images draws from the decoded picture, in its own
+colour and left out when it is the transparent magenta, as it always did; a
+pixel the title wrote, and every pixel of an IDIB it built, draws as the 5-6-5
+it holds, and is left out only by a transparent copy (raster operation 7, or
+BREW 1.0's 4) when it holds the transparent value. The 2005 module reads its
+image's first word as the bitmap and keeps the object it had.
+
+The other three later titles never read the object's contents: with all of it,
+its first word included, set to an unmapped address from the first call, their
+2,338-tick keyed routes draw the same frames. Two of them draw the same frames
+with either object. The third draws one icon in another colour at five steps
+between ticks 1,653 and 1,705 and the same frames before and after; giving the
+eight-byte object the IDIB's size reproduces the IDIB's frames exactly, so the
+difference is where the title's later allocations land, not anything it reads
+in an image.
+
+<a id="ktf-new-archives-2026-10-21-race"></a>
+
+### The race
+
+Measured, the round still did not run, for two more reasons.
+
+- **`f_op` (`0x94`) and `f_cmp` (`0x98`)** are BREW's double arithmetic and
+  comparisons, behind its FADD, FSUB, FMUL, FDIV, FPOW and FCMP_* macros: two
+  doubles, each in two registers with its low word first, the operation
+  stacked after them, and an `f_op` result in r0 and r1. The title calls them
+  tens of thousands of times a race, and the trap's zero made every result
+  nothing.
+- **An end with no frame.** Between two screens the title cancels its timer
+  ([CancelTimer](#ktf-new-archives-2026-10-21-helper-table)) and waits for its
+  sound or its timed service to end; the end is what starts the next screen.
+  The tick answered both only while a frame was registered, so the title
+  waited for ever. Both now end on their own clocks, frame or none, and a Host
+  is told to look again at the timed service's end, or every 50 milliseconds
+  while a sound plays, whose end the platform cannot schedule.
+
+It now plays: through its menus into its licence course, and on to the result
+screen a time-out brings, where it waits for a key.
+
+<a id="ktf-new-archives-2026-10-21-network"></a>
+
+### A socket that never connects
+
+Another title opens a stream socket through BREW's network manager
+(`AEECLSID_NET`, `0x1001105`, OpenSocket at `+0x14`) while it starts, before it
+has anything to send, and loads its pictures only once it has one: without one
+it faulted drawing a picture it never loaded. The [network decision](../network.md)
+refuses connections, and refusing even the socket kept the title from starting.
+So the manager now hands out a socket — BREW's `AEECLSID_SOCKET`, `0x100102d`,
+one object for every socket, since none of them ever has a peer — and the
+socket refuses what a socket is for, the way a handset with no network does:
+Connect, Read and Write answer `AEE_NET_ERROR`, and GetLastError answers
+`AEE_NET_ENETDOWN`. Connect fails at once rather than through its callback,
+which BREW calls only for a connection it started. The checkpoint carries the
+socket as the interface object it is.
+
+Before each game the title asks whether to look up its ranking. Declining shows
+the ranking it kept and goes into play. Accepting asks for the server's address
+(GetHostByName, `+0x0c`), which is never answered, as a lookup out of coverage
+is not: 8.7 seconds of guest time later the title gives up by itself, says the
+server could not be reached and asks again. Answering the lookup with a failure
+would mean calling the title back from the platform, which nothing else here
+needs.
+
+<a id="ktf-new-archives-2026-10-21-text"></a>
+
+### Its text
+
+Given a socket, it showed an empty message box. It builds the box's text with
+helper `0xe4`, BREW's STREXPAND, which widens a byte string into the wide one
+the display draws: a character below 128 becomes a halfword with a zero beside
+it, and the two bytes of a Korean character are copied side by side into one,
+the halfword the display already reads as that character. It stops at the count
+it is given, the source's terminator or the destination's size, and ends what it
+wrote with a zero halfword when there is room.
+
+With the text there, the choices under the box were drawn from the left edge of
+the screen, outside it. The text call's flags had been carried and not acted on,
+one bit read from two samples
+([The screen draws text](#implementation-the-screen-draws-text)). BREW's display
+header names them: `0x8000` is IDF_TEXT_TRANSPARENT, `0x10`, `0x20` and `0x40`
+align left, centre and right, and `0x100`, `0x200` and `0x400` top, middle and
+bottom. An aligned call has its x or y ignored and lines the text up against its
+background rectangle, the screen when that is null, and the text is clipped to
+the rectangle. So `0x8220` at the screen's centre is text centred both ways.
+This title centres its captions and choices with x zero and right-aligns its
+loading line, and text is now aligned and clipped that way. Of the other later
+titles two pass no alignment and draw the same frames, and one draws no text
+through this call; one centres two captions in a rectangle the size of the
+screen with x at its middle, and those two now sit in the middle rather than
+start there.
+
+<a id="ktf-new-archives-2026-10-21-fill"></a>
+
+### Filled rectangles
+
+Each frame of its title screen sets the graphics interface's fill mode and fill
+colour and draws two rectangles, the white bars its top line and its prompt sit
+on. The interface's `+0x18`, `+0x20` and `+0x58` are SetFillMode, SetFillColor
+and DrawRect, and they now draw them: the outline in the pen, and with the fill
+on the inside in the fill colour. A mode other than one turns the fill off, as
+the specification has it, and the header gives no starting fill colour, so it
+starts black, as the pen does. The fill joins the pen and the clip in the
+checkpoint: the record is now version 4, and a version 3 record, which only
+builds of this day wrote, loads with the fill off.
+
+<a id="ktf-new-archives-2026-10-21-date"></a>
+
+### The time of day
+
+When a game starts it reads the time of day through helpers `0xb4` and `0xb8`,
+BREW's GETTIMESECONDS and GETJULIANDATE, and keeps the hour, minute and second
+as seconds since midnight. Both were traps, so the date came out of whatever
+its stack held. GETTIMESECONDS now answers the session's clock as BREW counts
+it, local seconds since 6 January 1980, in the zone the guest's Java calendar
+reads, and GETJULIANDATE fills BREW's seven halfwords from such a count, reading
+the clock for zero, its week starting on Monday. One other later title reads the
+seconds, and draws the same frames.
+
+<a id="ktf-new-archives-2026-10-21-limits"></a>
+
+### Where the four stand
+
+All four reach play: one from its title screen through a menu into its first
+scene, one through its title and story into its first maps, one through its
+menus into its races, and one through its title, menu and choice of region into
+fishing. The racing title is drawn for a 128x160 handset and never asks the
+screen's size, so it needs that screen chosen. The fishing title calls two slots
+nothing answers, once each while it starts: the network manager's SetLinger
+(`+0x20`), whose answer it does not use, and `+0x08` of a carrier interface
+(`0x18000fc`), whose purpose is not established.
+
+Validation: unit tests for each slot, the IDIB layout and its blits, the socket
+and its checkpoint, the version 3 shapes record, the alignment, the 2005
+module's helper answers, the static rebase and a checkpoint that carries an
+earlier build's queued call. Keyed 2,338-tick routes over the manual clock
+compare the later titles with the build before the IDIB, as above, and with the
+build before the socket, the text and the fill: two of them and the racing
+title draw the same frames, and one draws its two centred captions in the
+middle. Against the build before all of this, the one later title that ran
+there differs where `strcmp` clears its packaged record, and otherwise only in
+the five steps of the allocation-layout icon above; the eight older-module
+archives draw the same frames on the same route, and the one that faulted
+skipping its prologue now plays on past it. `go vet`, `go test` with and
+without the debug tag, `go test -race ./internal/...` and the web tests pass
+over the repository's packages.

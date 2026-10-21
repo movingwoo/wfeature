@@ -41,6 +41,13 @@ identifiers are not rewritten without evidence for a different identity rule;
 `checkgames` reports a save owner claimed under more than one AID
 ([CLI](cli.md#checkgames)).
 
+A package of the carrier's earlier Java platform is not one of these: a MIDP
+1.0 JAR whose classes link against the carrier's own `mmpp/…` extension
+classes, with a `.jad` descriptor and an `.idx` index beside it and no
+`app_info`. No loader here runs that platform, and detection reports such an
+archive as one no platform claims
+([history](history/lgt.md#lgt-earlier-java-package-2026-10-21)).
+
 ## Execution and Java
 
 The platform executes native Clets and its supported AOT Java surface. Java

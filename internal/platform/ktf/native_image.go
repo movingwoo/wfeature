@@ -101,9 +101,21 @@ func nativeBitmapLength(header []byte) (uint32, bool) {
 	return uint32(needed), true
 }
 
+// The factory is BREW's SetupNativeImage, the call behind its CONVERTBMP, and
+// for a later module it answers through the two pointers after the bitmap
+// beside the image: a description of the image and whether the image is a
+// block of its own. One later title sizes every blit from the description, so
+// an answer that left it as the title cleared it drew each picture zero pixels
+// wide and the screen stayed black.
+//
+// nativeImageInfoSize is that description: its width, height and colour count
+// as halfwords, a byte saying whether it is animated and one of padding, and
+// the width of one frame.
+const nativeImageInfoSize = 10
+
 // createObject answers the platform table's factory.
 func (platform *NativePlatform) createObject(thread *armcore.Thread) (uint32, error) {
-	arguments, err := nativeArguments(thread, 2)
+	arguments, err := nativeArguments(thread, 4)
 	if err != nil {
 		return 0, err
 	}
@@ -138,17 +150,80 @@ func (platform *NativePlatform) createObject(thread *armcore.Thread) (uint32, er
 	if err != nil {
 		return 0, err
 	}
+	object, err := platform.imageObject(kept, decoded)
+	if err != nil {
+		return 0, err
+	}
+	platform.images[object] = &nativeImage{data: kept, length: length, bytes: bytes, frame: decoded}
+	// The 2005 module passes two pointers there too and has always run with
+	// nothing written through them. What they point at is not known, and it
+	// is not in the local corpus to measure, so they are filled for a later
+	// module only.
+	if platform.archive.AsksForInterfaceVersion() {
+		if err := platform.describeImage(arguments[2], arguments[3], decoded, header); err != nil {
+			return 0, err
+		}
+	}
+	return object, nil
+}
+
+// imageObject builds the object the factory hands back. The 2005 module reads
+// the object's first word and indexes the bitmap through it, so its object is
+// that word and one more; a later module's is an IDIB over the same picture.
+// The blit draws either from the decoded picture, so what the screen shows is
+// the same.
+func (platform *NativePlatform) imageObject(kept uint32, decoded *image.RGBA) (uint32, error) {
+	if platform.archive.AsksForInterfaceVersion() {
+		return platform.dibObject(decoded)
+	}
 	object, err := platform.client.Allocate(8)
 	if err != nil {
 		return 0, err
 	}
 	word := make([]byte, 4)
 	binary.LittleEndian.PutUint32(word, kept)
-	if err := memory.Write(object, word); err != nil {
+	if err := platform.client.core.Memory().Write(object, word); err != nil {
 		return 0, fmt.Errorf("write KTF native image object at %#x: %w", object, err)
 	}
-	platform.images[object] = &nativeImage{data: kept, length: length, bytes: bytes, frame: decoded}
 	return object, nil
+}
+
+// describeImage fills the description and the flag the factory answers
+// through. The flag is always set: the image is this platform's own copy, so
+// the bitmap the title built is the title's to free, and the image goes back
+// through the deallocator that knows what it is (nativeSlotDestroyObject),
+// which is the one BREW names for an image whose flag came back set.
+//
+// The colour count is the palette's for a bitmap that has one. A deeper
+// bitmap's would not fit the halfword, and it is answered as zero.
+func (platform *NativePlatform) describeImage(info, reallocated uint32, decoded *image.RGBA, header []byte) error {
+	memory := platform.client.core.Memory()
+	if info != 0 {
+		colours := 0
+		if depth := int(binary.LittleEndian.Uint16(header[bitmapBitsPerPixelField:])); depth <= 8 {
+			colours = int(binary.LittleEndian.Uint32(header[bitmapPaletteSizeField:]))
+			if colours == 0 || colours > 1<<depth {
+				colours = 1 << depth
+			}
+		}
+		width, height := decoded.Bounds().Dx(), decoded.Bounds().Dy()
+		record := make([]byte, nativeImageInfoSize)
+		binary.LittleEndian.PutUint16(record[0:], uint16(width))
+		binary.LittleEndian.PutUint16(record[2:], uint16(height))
+		binary.LittleEndian.PutUint16(record[4:], uint16(colours))
+		// A bitmap is one frame, so it is not animated and its frame is the
+		// whole width.
+		binary.LittleEndian.PutUint16(record[8:], uint16(width))
+		if err := memory.Write(info, record); err != nil {
+			return fmt.Errorf("write KTF native image description at %#x: %w", info, err)
+		}
+	}
+	if reallocated != 0 {
+		if err := memory.Write(reallocated, []byte{1}); err != nil {
+			return fmt.Errorf("write KTF native image flag at %#x: %w", reallocated, err)
+		}
+	}
+	return nil
 }
 
 // refresh re-reads an image whose bitmap the title has drawn into since it was

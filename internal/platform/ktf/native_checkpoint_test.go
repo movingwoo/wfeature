@@ -122,7 +122,6 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 	nativeCall(t, p.addListener(nativeInterfaceTimed), 0, callback, counter)
 	nativeCall(t, p.addListener(nativeInterfaceSound), 0, callback, counter)
 	nativeCall(t, p.startTimed, 0, 20)
-	nativeCall(t, p.resume, 0, callback, counter)
 	p.posted = []nativePostedEvent{{Class: testfixture.KTFNativeCheckpointApplicationID, Event: 0x1234, First: 57, Secon: 91}}
 	p.fileFailure = nativeFileFailed
 	p.colours = map[uint32]uint32{17: 0x11223300}
@@ -199,8 +198,8 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		count, err := pair.session.Client.ReadWord(counter)
-		if err != nil || count != 3 {
-			t.Fatalf("pending resume, timer and sound callbacks = %d, %v", count, err)
+		if err != nil || count != 2 {
+			t.Fatalf("pending timer and sound callbacks = %d, %v", count, err)
 		}
 	}
 	if freshStore.attempts != 0 {
@@ -432,5 +431,59 @@ func TestNativeSessionCheckpointContinuesWithoutStartup(t *testing.T) {
 	}
 	if _, err := restored.CaptureCheckpoint(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// An earlier build queued a call to run once more where the title had
+// cancelled its timer, and its checkpoints carry that queue. The call was never
+// one the title asked for, so a record that holds one loads and runs on without
+// it.
+func TestNativeCheckpointDropsAnEarlierBuildsQueuedCall(t *testing.T) {
+	archive, err := testfixture.KTFNativeCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := backend.NewMemorySaveStore(nil)
+	clock := NewManualClock(time.Unix(10, 0))
+	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: clock, SaveStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	saved, err := source.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record nativeShapesRecord
+	if err := backend.DecodeCheckpointRecord(saved.Runtime, &record); err != nil {
+		t.Fatal(err)
+	}
+	if len(record.State.Resumes) != 0 {
+		t.Fatalf("a capture wrote %d queued calls", len(record.State.Resumes))
+	}
+	callback, counter := uint32(testfixture.KTFNativeCheckpointCallback), uint32(testfixture.KTFNativeCheckpointCallbackCounter)
+	record.State.Resumes = []nativeResume{{Function: callback, Context: counter}}
+	earlier := saved
+	if earlier.Runtime, err = backend.EncodeCheckpointRecord(record); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := PrepareNativeSessionCheckpoint(archive, earlier, NativeSessionOptions{Clock: NewManualClock(time.Unix(500, 0)), SaveStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Discard()
+	restored, err := prepared.Commit(t.Context(), source, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	for range 3 {
+		restored.SkipToNextDeadline()
+		if _, err := restored.Tick(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count, err := restored.Client.ReadWord(counter); err != nil || count != 0 {
+		t.Fatalf("the queued call ran %d times after the load, %v", count, err)
 	}
 }

@@ -37,7 +37,7 @@ func TestNativeClipRefusedWhileSoundingEndsTheSound(t *testing.T) {
 	if got := nativeCall(t, platform.setClip, 0, 0, put(refused)); got != 0 {
 		t.Fatalf("an unplayable clip answered %d, want 0", got)
 	}
-	if err := platform.advanceSound(context.Background()); err != nil {
+	if _, err := platform.advanceSound(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if platform.sounding {
