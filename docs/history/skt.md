@@ -36,6 +36,7 @@ This consolidation adds no execution or acceptance evidence.
 - [SKT input and tile rendering (2026-09-29)](#skt-qa-2026-09-29)
 - [SKT retained-session resume (2026-09-30)](#skt-resume-2026-09-30)
 - [Text input offered when no strict route names a field (2026-10-20)](#skt-text-input-2026-10-20)
+- [WIPI FileSystem and DataBase (2026-10-22)](#skt-wipi-storage-2026-10-22)
 
 <a id="implementation-skvm-and-the-skt-platform"></a>
 
@@ -3118,3 +3119,220 @@ paint, a focus its fields do not have kept the record empty and every edit stale
 (`TestHostXTextFieldRepeatedFocusOffKeepsThePaintedField`). The rest of the
 review is recorded in [the LGT history](lgt.md#lgt-text-input-review-2026-10-20).
 
+<a id="skt-wipi-storage-2026-10-22"></a>
+
+## WIPI FileSystem and DataBase (2026-10-22)
+
+*Later the same day these members were held to the common contract; see
+[the note below](#skt-wipi-storage-contract-2026-10-22), which supersedes the
+numbers and several answers here.*
+
+The WIPI Java surface had six `FileSystem` members and no `org.kwis.msp.db`.
+This adds the rest of `FileSystem` — every path member with and without its
+access flag, `list`, `rename`, `rmdir`, `getCreationTime`, `available`,
+`totalSpace`, `getMaxFilenameLength`, `toCString` and the constructor —
+`File.write(int)`, and the whole `DataBase` class with its two exceptions and
+its two callback interfaces. The current behavior is in
+[the WIPI library's README](../../internal/api/wipi/README.md#storage).
+
+**No local archive calls any of it.** A scan of the class files of the 106 SKT
+archives present found no reference to `org.kwis.msp.db`, as a class or as a
+name string, and the three Jlets call `FileSystem.exists`, `isFile` and
+`remove` and nothing else here. So every answer comes from the specification,
+and from the KTF and LGT `DataBase` where those settled a contract on a title.
+
+### What the specification leaves open
+
+- The WIPI 1.2.1 `FileSystem` page stops after `rmdir(String, int)`, and the
+  `DataBase` page inside `updateRecord`. The rest — `rename`,
+  `getCreationTime`, `toCString`, `available`, the `isFile` and `isDirectory`
+  details, `sortRecord`, `listDataBases`, `getAccessMode`, the getters and the
+  full throws clauses — is from the WIPI 2.0 pages of the same classes.
+  `totalSpace` is described on neither and is answered as `MC_fsTotalSpace`
+  describes its C counterpart.
+- `DataComparator`'s `EQUIVALENT`, `FOLLOWS` and `PRECEDES` have no values on
+  either page. MIDP's `RecordComparator` values, 0, 1 and -1, are published;
+  a title compiles the constants into its own code, so the sort reads only the
+  sign of an answer.
+- The 2.0 text of `remove(String, int)` says a missing file throws nothing and,
+  in the same entry, lists `IOException` for one. The 1.2.1 page and
+  `remove(String)` throw, and both forms here do.
+- `MAX_FILENAME_LENGTH` is `static int` on the 1.2.1 page and `static final`
+  on the 2.0 one. It is declared final: a title that reads it with `getstatic`
+  still finds it.
+
+### Decisions and why
+
+**A directory is a path with a file below it, or one this session's `mkdir`
+made.** The save store keeps files only; nothing records an empty directory.
+KTF and LGT answer every directory question with "accepted and ignored", and
+until now `isDirectory` here always answered false and `mkdir` did nothing.
+`list` makes that untenable — it names the directories it finds — so
+`FileSystem.exists`, `isDirectory` and `mkdir` now answer from the same rule,
+the specification's: `exists` takes a directory as well as a file, and `mkdir`
+throws `IOException` for a name that has one. A title that reads that
+exception as "this player has been here before" is told the truth whenever
+there is a file below the directory, which is the case that matters to a save.
+`XFile`'s `exists`, `mkdir` and `rmdir` are unchanged. What the rule cannot
+answer is an empty directory an earlier session made: it is gone.
+
+**`list` reads the store.** A title that lists its save folder after a restart
+must find what earlier sessions wrote, so the names come from
+`backend.ListSaves` as well as from the session, without the removal list and
+without what it hides; a store that cannot list leaves the names the session
+knows. A name is the entry without its directory, as `MC_fsList` answers —
+KTF's Java `list` answers full paths. The archive's own files are listed,
+because `exists` finds them.
+
+**A rename is one store batch.** `storeXFileLocked` became
+`storeXFilesLocked`, which writes any number of paths and one removal list
+together; a single path is written exactly as before. A rename writes the new
+path's bytes and the old path's removal in one batch, so no later session finds
+the file under both names or under neither, and a batch the store refuses
+undoes the rename in the session and throws `IOException`.
+
+**Numbers.** The store keeps no creation time, so `getCreationTime` answers 0
+for every file, as KTF's does: a fixed answer orders every file the same way in
+every session, where the time of the reading session would make an old save
+look new. `available` and `totalSpace` both answer 512 KiB, `XFile.fsavail`'s
+budget, with nothing charged against it, as `XFile.fsused` answers 0; the one
+relation a title can check between them, total at least available, holds. The
+longest name, 255, is KTF's answer and is not enforced: no name a title uses
+comes near it, and refusing one a handset took would fail a save.
+
+**A database's existence and record size are in `jdb/.index`.** The records
+are under `jdb/<name>` in the shared record form, the key KTF gives the same
+class, which has no room for a record size; KTF keeps none, and its
+`getRecordSize` answers 0. The index is what makes a database exist, because
+the store has no delete: a deleted database leaves an emptied record list and
+its name off the index. An index or a record list this runtime did not write —
+one that does not parse, names a database twice, or holds a record longer than
+its record size — is refused with `DataBaseException` rather than read in part,
+and is never written over.
+
+**A change the store refuses is not made.** Every change is stored as it is
+made, a creation or a deletion in one batch with the index, and a refusal is
+the `DataBaseException` the specification gives a record that cannot be
+stored, with the session's records left as the store has them. That is KTF's
+contract. SKT's RMS keeps a refused write and retries it later; here a title
+that retries a refused insert would get the record twice.
+
+**Ids, reads and the budget.** Ids start at 0, as on KTF and LGT, and a deleted
+id is reused by the next insert, as the specification says and LGT does — KTF
+appends. A read answers the record size's bytes, zeros past a shorter record,
+because the specification says a read is a whole record and a title written for
+a handset reads that many; KTF and LGT answer the stored length. A database
+holds 512 KiB of record list, the RMS budget, which also bounds a record size:
+a read is padded to it, so an unbounded size would be an unbounded allocation
+per read.
+
+**What stays as KTF settled it.** `openDataBase` without `create` throws for a
+missing database, which is how a title learns it is starting for the first
+time. A close does nothing and the object stays usable. Every object on one
+name is one database; a delete empties it, and a write through an object held
+across the delete creates it again with its record size, so a title saving
+through a handle it kept is not saving into nothing. `getAccessMode` answers
+`PRIVATE_ACCESS`, KTF's 1; LGT answers 3.
+
+**Where this departs from KTF and LGT.** The specification declares
+`DataBaseException` and `DataBaseRecordException` each extending `Exception`,
+and so do these; KTF and LGT declare the record exception under the database
+one, with no recorded evidence for it. A title compiled against a handset's
+library wrote its handlers for the specification's hierarchy, and under the
+other one a handler for `DataBaseException` takes a record error it was not
+written for. `listDataBases` and `sortRecord` answer null where there is
+nothing, as the specification says; KTF answers empty arrays. `sortRecord` is a
+stable merge sort that reads a comparator's answer by its sign, as KTF's
+insertion sort does.
+
+**Not declared:** `DataComparatorInteger`, `DataComparatorString` and
+`DataFilterInteger`, which `sortRecord`'s signature does not need.
+
+**Quick save.** A session holding a `DataBase` object could not be quick saved
+before: the object's state had no checkpoint form, and capture refused the
+unknown payload. A database's record is now its name, record size and modified
+time; a load reads its records from the current saves through the bounded
+rebuild reader, as files and record stores are read, and refuses the load when
+they cannot be read.
+
+### Validation
+
+Tests: `TestStorageSurfaceDeclaresTheSpecificationsMembers` and
+`TestStorageExceptionsAndConstants` in `internal/api/wipi`;
+`TestWIPIStorageMembersAreServed`,
+`TestWIPIFileSystemListFindsEarlierSessionsFiles`,
+`TestWIPIFileSystemListWithoutAListingStore`,
+`TestWIPIFileSystemDirectories`,
+`TestWIPIFileSystemRenameReachesLaterSessions`,
+`TestWIPIFileSystemRenameRefusals`,
+`TestWIPIFileSystemRenameRefusedByTheStoreChangesNothing`,
+`TestWIPIFileSystemSmallMembersAndFileWriteByte`,
+`TestWIPIDataBasePersistsAcrossSessions`,
+`TestWIPIDataBaseOpenAndNameFailures`, `TestWIPIDataBaseRecordFailures`,
+`TestWIPIDataBaseObjectsShareRecordsAcrossADelete`,
+`TestWIPIDataBaseRefusedStoreChangesNothing`,
+`TestWIPIDataBaseRefusesAnUnreadableSave`, `TestWIPIDataBaseSortRecord` and
+`TestWIPIDataBaseCheckpointRestoresOverCurrentSaves` in
+`internal/platform/skt`. The persistence tests run a second runtime over the
+same directory store. Seven deliberate breakages — no store listing, no rename
+rollback, the record exception under the database one, no read padding, an
+unstable sort, no id reuse, no index write at creation — each failed at least
+one of them.
+
+Two of the three local Jlets ran 1,500 ticks each on this build and on the
+build before it, with a scratch save directory: the same state, the same count
+of lit pixels and the same final frame, with `FileSystem.exists` answered by
+its new handler and no class missing.
+
+Across every unique local SKT archive, a 500-tick run under the build before
+these changes and after them writes the same set of save keys; the frames and
+the save bytes that differ differ as much between two runs of the earlier
+build, because SKT runs at wall-clock pace (see
+[the KTF record of the same run](ktf.md#ktf-storage-spec-2026-10-22)).
+
+<a id="skt-wipi-storage-contract-2026-10-22"></a>
+
+### Held to the common storage contract (2026-10-22)
+
+[The WIPI storage contract](../wipi-storage.md) now decides every answer above
+for KTF, LGT and SKT alike, and SKT was brought to it. What changed:
+
+- **Names.** A backslash separates segments as a slash does in every `File`,
+  `FileSystem` and `DataBase` name, where SKT had refused it as a name the
+  store cannot keep. The 255-byte bound is enforced on every `File` and
+  `FileSystem` name, counted in UTF-8 on the path that leaves, so a leading
+  separator does not count; a null name is `NullPointerException` to every one
+  of them. `XFile` keeps taking longer names and keeps refusing a backslash.
+- **Directories.** `mkdir` writes its name to a list at `wipi/directories`,
+  outside every scope a title names, so a directory made and left empty is
+  still there after a restart. A save tree from before the list has none,
+  which is no directory made; nothing is migrated.
+- **Removing a file.** `remove(name, flag)` returns for a name that is not a
+  file, as the specification words the flagged form; `remove(name)` still
+  throws.
+- **Space.** `totalSpace` is 1 MiB, and `available` and
+  `DataBase.getSizeAvailable` are 1 MiB less what the title has stored: each
+  file and database less the archive's file of the same name, one shorter
+  than that counting nothing, and the whole floored at zero. Nothing is
+  refused for space; the bound is 4 MiB per WIPI file (`IOException`) and per
+  database's records (`DataBaseException`), in place of the 512 KiB budget.
+- **Databases.** A read answers the bytes stored, unpadded; the record size is
+  not enforced; `getDataBaseSize` sums the record bytes; `getLastModified` is
+  the last write in this session or the session's first open, no longer the
+  first read. `create` with a record size below one is
+  `IllegalArgumentException` whether or not the database is there. A name is
+  its key's path, so `dir/save` is a database and `./save` is `save`. A record
+  list the index does not name is a database, takes the record size of the
+  open that finds it, and the index keeps it; the format of `jdb/` and
+  `jdb/.index` is unchanged, and the index reads every line it read before.
+
+The readings SKT took where the contract was silent became the contract the
+same day: a database's null name is `DataBaseException`, which the
+specification gives `getAccessMode`; a file shorter than the archive's file of
+its name counts as nothing rather than as a negative amount; `create` with a
+record size below one is refused even for a database that exists;
+`remove(name, flag)` throws only for a removal the store refuses; and a
+database name is a path. `TestWIPIFileSystem*`, `TestWIPIStorageBackslash*`,
+`TestWIPIFileWritesAreBoundedAt4MiB` and
+`TestWIPIDataBase*` in `internal/platform/skt` cover every rule, and twelve
+deliberate breakages, one per new rule, each made one of them fail.

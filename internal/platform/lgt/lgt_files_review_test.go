@@ -36,9 +36,10 @@ func openJavaFile(t *testing.T, client *Client, name string, mode uint32) uint32
 	return object
 }
 
-// A seek or a write that would take a file past the cap is refused the way any
-// other bad file call is, before anything is allocated for it: a title's
-// garbage offset or length must not size a host allocation.
+// A seek or a write that would take a file past the cap is refused before
+// anything is allocated for it: a title's garbage offset or length must not
+// size a host allocation. The cap is the common contract's 4 MiB, and a write
+// past it fails as a write does, with M_E_NOSPACE.
 func TestFileSeekAndWriteStopAtTheFileSizeCap(t *testing.T) {
 	client, _, files := reviewFiles(t, nil)
 	handle := files.open("big.dat", fileOpenReadWrite)
@@ -57,11 +58,11 @@ func TestFileSeekAndWriteStopAtTheFileSizeCap(t *testing.T) {
 	if got := seek(1, 1); got != wipiError || client.files[handle].cursor != maxFileBytes {
 		t.Fatalf("a relative seek past the cap answered %d and left the cursor at %d", got, client.files[handle].cursor)
 	}
-	if got := int32(callSlot(t, client, slotFsWrite, handle, files.buffer, 1)); got != wipiError || len(client.files[handle].data) != 0 {
+	if got := int32(callSlot(t, client, slotFsWrite, handle, files.buffer, 1)); got != wipiNoSpace || len(client.files[handle].data) != 0 {
 		t.Fatalf("a write past the cap answered %d and left %d bytes", got, len(client.files[handle].data))
 	}
 	seek(0, 0)
-	if got := int32(callSlot(t, client, slotFsWrite, handle, files.buffer, 0xffffffff)); got != wipiError {
+	if got := int32(callSlot(t, client, slotFsWrite, handle, files.buffer, 0xffffffff)); got != wipiNoSpace {
 		t.Fatalf("a write of 0xffffffff bytes answered %d", got)
 	}
 	// Inside the cap a write past the end fills the gap with zeros, as before.
@@ -74,7 +75,8 @@ func TestFileSeekAndWriteStopAtTheFileSizeCap(t *testing.T) {
 
 // A cursor a checkpoint record restored far past the end of a file is kept, as
 // the record has it, and the first write there is refused rather than sizing a
-// host allocation from the record.
+// host allocation from the record: the IOException a write through a File or
+// a stream on one fails with.
 func TestARestoredCursorPastTheCapCannotGrowAJavaFile(t *testing.T) {
 	ctx := context.Background()
 	store := newFaultStore(t, map[string]string{"fs/save.dat": "0123"})
@@ -86,16 +88,16 @@ func TestARestoredCursorPastTheCapCannotGrowAJavaFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	open.cursor = maxFileBytes
-	if written, err := javaFileWriteByte(client, ctx, client.thread, []uint32{object, 'Z'}); err != nil || int32(written) != wipiError {
-		t.Fatalf("write(int) past the cap = %d, %v", int32(written), err)
+	if _, err := javaFileWriteByte(client, ctx, client.thread, []uint32{object, 'Z'}); thrownClass(err) != javaIOExceptionClass {
+		t.Fatalf("write(int) past the cap answered %v", err)
 	}
 	sink, err := javaFileOpenOutputStream(client, ctx, client.thread, []uint32{object})
 	if err != nil {
 		t.Fatal(err)
 	}
 	client.javaRun.sinks[sink] = []byte("MARKER")
-	if _, err := javaByteSinkFlush(client, ctx, client.thread, []uint32{sink}); err == nil {
-		t.Fatal("a stream drained past the cap was accepted")
+	if _, err := javaByteSinkFlush(client, ctx, client.thread, []uint32{sink}); thrownClass(err) != javaIOExceptionClass {
+		t.Fatalf("a stream drained past the cap answered %v", err)
 	}
 	if string(open.data) != "0123" || open.dirty {
 		t.Fatalf("the refused writes left %d bytes, dirty=%t", len(open.data), open.dirty)
@@ -273,7 +275,7 @@ func TestTwoDataBaseObjectsShareTheirRecords(t *testing.T) {
 	ctx := context.Background()
 	stored := func(t *testing.T, store *faultStore) []string {
 		t.Helper()
-		data, ok := store.MemorySaveStore.LoadSave("fs/save.db")
+		data, ok := store.MemorySaveStore.LoadSave("jdb/save.db")
 		if !ok {
 			return nil
 		}
@@ -390,19 +392,20 @@ func TestAFailedStartStopsTheThreadsItStarted(t *testing.T) {
 	}
 }
 
-// A platform list and the scope itself are not guest files: a title that
-// writes a file under one of those names cannot change what the platform
-// reads back as its list, or put a file where the scope's directory is.
+// A platform list and the scope itself are not guest files: a title cannot
+// open a file under one of those names — the file calls refuse it as a name
+// no file can have — so it cannot change what the platform reads back as its
+// list, or put a file where the scope's directory is.
 func TestAGuestFileCannotTakeThePlatformsKeys(t *testing.T) {
 	t.Run("the path lists", func(t *testing.T) {
-		_, store, files := reviewFiles(t, nil)
+		client, store, files := reviewFiles(t, nil)
 		kept := files.open("real.dat", fileOpenReadWrite)
 		files.write(kept, "keep")
 		files.close(kept)
-		for _, name := range []string{"/.removed", ".CREATED", "/.created/inside"} {
-			handle := files.open(name, fileOpenReadWrite)
-			files.write(handle, "real.dat\nbogus")
-			files.close(handle)
+		for _, name := range []string{"/.removed", ".CREATED", "/.created/inside", "/.Directories"} {
+			if handle := int32(callSlot(t, client, slotFsOpen, files.name(name), fileOpenReadWrite)); handle != wipiBadFileName {
+				t.Fatalf("open %q answered %d, want M_E_BADFILENAME", name, handle)
+			}
 		}
 		if strings.Contains(store.held("fs/.removed"), "real.dat") || strings.Contains(store.held("fs/.created"), "bogus") {
 			t.Fatalf("the guest wrote over the platform's lists: %q, %q", store.held("fs/.removed"), store.held("fs/.created"))
@@ -423,11 +426,12 @@ func TestAGuestFileCannotTakeThePlatformsKeys(t *testing.T) {
 		client := fixtureClient(t)
 		client.saveStore = backend.NewDirectorySaveStore(root)
 		files := newGuestFiles(t, client)
-		for _, name := range []string{"/", "real.dat"} {
-			handle := files.open(name, fileOpenReadWrite)
-			files.write(handle, "keep")
-			files.close(handle)
+		if handle := int32(callSlot(t, client, slotFsOpen, files.name("/"), fileOpenReadWrite)); handle != wipiBadFileName {
+			t.Fatalf("open \"/\" answered %d, want M_E_BADFILENAME", handle)
 		}
+		handle := files.open("real.dat", fileOpenReadWrite)
+		files.write(handle, "keep")
+		files.close(handle)
 		data, found, err := backend.ReadSave(backend.NewDirectorySaveStore(root), "fs/real.dat")
 		if err != nil || !found || string(data) != "keep" {
 			t.Fatalf("after a write of \"/\" the save store holds %q for real.dat (found=%t, err=%v)", data, found, err)

@@ -140,11 +140,17 @@ package declares landscape operation.
 
 ## Saves and sound
 
-MIDP RMS and vendor files share the Host save boundary. `XFile` keys live
-under `fs/` beside RMS. A writable open of a missing path creates the file: an
-empty one that every later read sees at once — `exists` and `isFile` answer
-true, `filesize` and `sizeOf` 0, a later open finds it — and that is stored no
-later than the handle's flush or close or the end of the session. That is
+MIDP RMS and vendor files share the Host save boundary. A Jlet's WIPI `File`,
+`FileSystem` and `DataBase` use the same boundary and answer as
+[the WIPI storage contract](wipi-storage.md) says: `FileSystem` answers about
+the `fs/` paths `XFile` uses, the directories `mkdir` made are a list at
+`wipi/directories`, and a database is `jdb/<name>` with an index at
+`jdb/.index` (see [the WIPI library](../internal/api/wipi/README.md#storage)).
+`XFile` keys live under `fs/` beside RMS. A writable open of a missing path
+creates the file: an empty one that every later read sees at once — `exists`
+and `isFile` answer true, `filesize` and `sizeOf` 0, a later open finds it —
+and that is stored no later than the handle's flush or close or the end of the
+session. That is
 `XFile` with the write bit, WIPI `File` `WRITE`, `READ_WRITE` and
 `WRITE_TRUNC`, and `com.xce.io.FileOutputStream`, appending or not. A
 read-only open of a missing path is an `IOException` and makes nothing.
@@ -187,9 +193,11 @@ all, leaves it empty) and 4 `READ_WRITE`; any other mode is an `IOException`.
 over as their java.io counterparts do — a truncating open, through the private
 `XFile.truncate`, which leaves an existing empty file rather than a removed
 one — and `(String, true)` appends; `FileInputStream.read` of zero bytes
-answers 0. `XFile`'s own modes never truncate. A write that would grow a file
-past 16 MiB (`xFileMaxBytes`) fails with -1, so a seek far past the end cannot
-make the process allocate gigabytes; `fsavail` still reports 512 KiB.
+answers 0. `XFile`'s own modes never truncate. An `XFile` write that would
+grow a file past 16 MiB (`xFileMaxBytes`) fails with -1, so a seek far past the
+end cannot make the process allocate gigabytes, and `fsavail` still reports
+512 KiB; a WIPI `File` holds at most the contract's 4 MiB, and its write past
+that, through the `File` or its stream, is `IOException`.
 
 **A removed file is gone, not empty.** `XFile.unlink` and `FileSystem.remove`
 make the path absent to every later read: `exists` and `isFile` answer false,
@@ -202,14 +210,16 @@ same name included. Opening the path for writing again brings it back as an
 empty file, and a write through a handle left open on it brings it back holding
 what was written; the store that writes it takes the name off the list in the
 same batch as its bytes. Removing a name that does not exist changes and stores
-nothing: `unlink` answers 0, as it always did, and `remove` throws the
-`IOException` the specification gives a missing file. Removing a file made or
+nothing: `unlink` answers 0, as it always did; `remove(name)` throws the
+`IOException` the specification gives a missing file, and `remove(name, flag)`
+returns, as the contract has the flagged form do. Removing a file made or
 written in this session that never reached the store, and that the archive does
 not package, stores nothing either, since a later session would not find it. A
 name with a line break cannot go on the list, so nothing is removed: `unlink`
-answers -1 for it and `remove` throws `IOException`, the specification's answer
-for a file it could not remove. A removal the store refuses stands for the
-session and waits for the session's end, as a refused write does; `remove`
+answers -1 for it and both forms of `remove` throw `IOException` for such a
+file, the specification's answer for a file it could not remove. A removal the
+store refuses stands for the session and waits for the session's end, as a
+refused write does; `remove`
 reports it with an `IOException`, and `unlink` answers 0. An empty file an
 earlier build's `unlink` left behind is a present empty file: nothing records
 which empty files were removals. `/.removed` and paths below it are refused, as
@@ -222,9 +232,9 @@ The missing-name answers rest on the local corpus rather than a handset. A
 missing name changes nothing a title does. It found 44 `XFile.unlink` call
 sites in 17 titles, every one discarding the answer; 41 sit inside a handler
 and the other 3 in methods whose callers catch `Exception`. The specification
-does not describe `XFile`, so `unlink` keeps its answer. The scan covers SKT
-alone: KTF's and LGT's `FileSystem.remove` still throw nothing for a missing
-name.
+does not describe `XFile`, so `unlink` keeps its answer. The three `remove`
+call sites are the unflagged form, whose answer the WIPI storage contract now
+gives every platform.
 
 An SGS save load that cannot read `nv/data` stops the script with the error
 rather than handing the title zeros it would save over its progress.

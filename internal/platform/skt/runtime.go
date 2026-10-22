@@ -199,6 +199,18 @@ type Runtime struct {
 	fileMu       sync.Mutex
 	files        map[string]*xFileNode
 	removedFiles map[string]bool
+	// wipiDirectories are the directories WIPI FileSystem.mkdir made, by save
+	// key, as the store's directory list holds them: read once per session,
+	// nil until then. The store holds no directory of its own, only the files
+	// below one, so the list is what keeps an empty one. fileMu guards it. See
+	// wipi_filesystem.go.
+	wipiDirectories map[string]bool
+	// wipiDatabaseMu guards the WIPI DataBase state: one record list per name,
+	// shared by every DataBase object open on it, and the index of the
+	// databases the store holds, read once. See wipi_database.go.
+	wipiDatabaseMu    sync.Mutex
+	wipiDatabases     map[string]*wipiDatabase
+	wipiDatabaseIndex map[string]int32
 	// now reads the wall clock RecordStore.getLastModified reports. It is a
 	// field so a test can pin it; nothing else in this runtime depends on
 	// real time.

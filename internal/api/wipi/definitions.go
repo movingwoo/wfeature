@@ -9,7 +9,10 @@ import (
 )
 
 // definitions is the WIPI Java surface the local corpus links against, and
-// nothing beyond it. Each class names its MIDP counterpart as its superclass,
+// beyond it only the storage classes, whose members are declared as the
+// specification has them: `File`, `FileSystem` and `org.kwis.msp.db` are where
+// a title keeps its progress, and a member missing there fails a save rather
+// than a screen. Each class with a MIDP counterpart names it as its superclass,
 // so a member the two share is inherited rather than declared twice: the whole
 // of `Graphics` below is the handful of calls MIDP does not have.
 func definitions(vibrator *backend.Vibrator) []jvm.ClassDefinition {
@@ -24,6 +27,11 @@ func definitions(vibrator *backend.Vibrator) []jvm.ClassDefinition {
 		backLightDefinition(),
 		fileDefinition(),
 		fileSystemDefinition(),
+		dataBaseExceptionDefinition(DataBaseExceptionClass),
+		dataBaseExceptionDefinition(DataBaseRecordExceptionClass),
+		dataFilterDefinition(),
+		dataComparatorDefinition(),
+		dataBaseDefinition(),
 		clipDefinition(),
 		playListenerDefinition(),
 		playerDefinition(),
@@ -508,6 +516,7 @@ func fileDefinition() jvm.ClassDefinition {
 			{Name: "read", Descriptor: "([BII)I", Access: publicNative},
 			{Name: "write", Descriptor: "([B)I", Access: publicNative},
 			{Name: "write", Descriptor: "([BII)I", Access: publicNative},
+			{Name: "write", Descriptor: "(I)I", Access: publicNative, Throws: []string{jvm.IOExceptionClass}},
 			{Name: "seek", Descriptor: "(I)V", Access: publicNative},
 			{Name: "tell", Descriptor: "()I", Access: publicNative},
 			{Name: "sizeOf", Descriptor: "()I", Access: publicNative},
@@ -520,18 +529,61 @@ func fileDefinition() jvm.ClassDefinition {
 	}
 }
 
+// The access flags a path is named under, and the longest name. The
+// specification gives the flags these numbers and leaves the length to the
+// handset; 255 bytes is the length the WIPI storage contract
+// (docs/wipi-storage.md) sets on every platform here.
+const (
+	PrivateAccess     int32 = 1
+	SharedAccess      int32 = 2
+	SystemAccess      int32 = 3
+	MaxFilenameLength int32 = 255
+)
+
+// fileSystemDefinition is the static half of WIPI's filesystem. Every member
+// that names a path comes twice, once with the access flag that picks the
+// private, shared or system directory and once without it, meaning the
+// private one. A title has only the one directory here, so the platform
+// answers both forms alike, as docs/wipi-storage.md has every platform do.
 func fileSystemDefinition() jvm.ClassDefinition {
+	const text = "Ljava/lang/String;"
+	io := []string{jvm.IOExceptionClass}
+	guarded := []string{jvm.IOExceptionClass, "java/lang/SecurityException"}
 	return jvm.ClassDefinition{
 		Name:      FileSystemClass,
 		SuperName: "java/lang/Object",
 		Access:    jvm.AccessPublic | jvm.AccessFinal,
+		Fields: []jvm.FieldDefinition{
+			{Name: "PRIVATE_ACCESS", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(PrivateAccess)},
+			{Name: "SHARED_ACCESS", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(SharedAccess)},
+			{Name: "SYSTEM_ACCESS", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(SystemAccess)},
+			{Name: "MAX_FILENAME_LENGTH", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(MaxFilenameLength)},
+		},
 		Methods: []jvm.MethodDefinition{
-			{Name: "exists", Descriptor: "(Ljava/lang/String;)Z", Access: publicStaticNat},
-			{Name: "isFile", Descriptor: "(Ljava/lang/String;)Z", Access: publicStaticNat},
-			{Name: "isDirectory", Descriptor: "(Ljava/lang/String;)Z", Access: publicStaticNat},
-			{Name: "remove", Descriptor: "(Ljava/lang/String;)V", Access: publicStaticNat},
-			{Name: "mkdir", Descriptor: "(Ljava/lang/String;)V", Access: publicStaticNat},
-			{Name: "sizeOf", Descriptor: "(Ljava/lang/String;)I", Access: publicStaticNat},
+			{Name: "<init>", Descriptor: "()V", Access: publicMethod, Body: superInit("java/lang/Object", "()V")},
+			{Name: "available", Descriptor: "()I", Access: publicStaticNat},
+			{Name: "totalSpace", Descriptor: "()I", Access: publicStaticNat},
+			{Name: "getMaxFilenameLength", Descriptor: "()I", Access: publicStatic, Body: answerInt(MaxFilenameLength)},
+			{Name: "toCString", Descriptor: "(" + text + ")[B", Access: publicStaticNat},
+			{Name: "exists", Descriptor: "(" + text + ")Z", Access: publicStaticNat, Throws: io},
+			{Name: "exists", Descriptor: "(" + text + "I)Z", Access: publicStaticNat, Throws: guarded},
+			{Name: "isFile", Descriptor: "(" + text + ")Z", Access: publicStaticNat, Throws: io},
+			{Name: "isFile", Descriptor: "(" + text + "I)Z", Access: publicStaticNat, Throws: guarded},
+			{Name: "isDirectory", Descriptor: "(" + text + ")Z", Access: publicStaticNat, Throws: io},
+			{Name: "isDirectory", Descriptor: "(" + text + "I)Z", Access: publicStaticNat, Throws: guarded},
+			{Name: "getCreationTime", Descriptor: "(" + text + ")I", Access: publicStaticNat, Throws: io},
+			{Name: "getCreationTime", Descriptor: "(" + text + "I)I", Access: publicStaticNat, Throws: guarded},
+			{Name: "list", Descriptor: "(" + text + ")Ljava/util/Vector;", Access: publicStaticNat, Throws: io},
+			{Name: "list", Descriptor: "(" + text + "I)Ljava/util/Vector;", Access: publicStaticNat, Throws: guarded},
+			{Name: "mkdir", Descriptor: "(" + text + ")V", Access: publicStaticNat, Throws: io},
+			{Name: "mkdir", Descriptor: "(" + text + "I)V", Access: publicStaticNat, Throws: guarded},
+			{Name: "rmdir", Descriptor: "(" + text + ")V", Access: publicStaticNat, Throws: io},
+			{Name: "rmdir", Descriptor: "(" + text + "I)V", Access: publicStaticNat, Throws: guarded},
+			{Name: "remove", Descriptor: "(" + text + ")V", Access: publicStaticNat, Throws: io},
+			{Name: "remove", Descriptor: "(" + text + "I)V", Access: publicStaticNat, Throws: guarded},
+			{Name: "rename", Descriptor: "(" + text + text + ")V", Access: publicStaticNat, Throws: io},
+			{Name: "rename", Descriptor: "(" + text + text + "I)V", Access: publicStaticNat, Throws: guarded},
+			{Name: "sizeOf", Descriptor: "(" + text + ")I", Access: publicStaticNat},
 		},
 	}
 }

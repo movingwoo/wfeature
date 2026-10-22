@@ -361,11 +361,6 @@ func TestCheckpointRefusesAnOpenFileBehindItsSave(t *testing.T) {
 			files.write(second, "TWO")
 			return map[string]string{"fs/save.dat": "onered", "fs/SAVE.dat": "TWO"}, func() { files.close(first); files.close(second) }
 		},
-		"its name is not one a save can have": func(files *guestFiles) (map[string]string, func()) {
-			first := files.open(".removed/save.dat", fileOpenReadWrite)
-			files.write(first, "lost")
-			return nil, func() { files.close(first) }
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := newFaultStore(t, map[string]string{"fs/save.dat": "stored"})
@@ -402,14 +397,15 @@ func TestCheckpointRefusesAnOpenFileBehindItsSave(t *testing.T) {
 	}
 }
 
-// A Java File can hold the same container a DataBase writes. Neither pending
-// buffer may be chosen over the other by a quick step, under any spelling of
-// their shared save key.
-func TestCheckpointRefusesPendingFileAndDatabaseOnOneKey(t *testing.T) {
+// A file "rank.db" and the database "rank" are two things, kept apart
+// (docs/wipi-storage.md), so a write waiting in each is no competition: a quick
+// save or load goes on, and the title's later closes store both.
+func TestCheckpointKeepsAFileAndADatabaseOfOneName(t *testing.T) {
+	unnamed := string((&databaseContent{recordSize: 4}).encode())
 	for _, path := range []string{"rank.db", "./rank.db", "//rank.db"} {
 		for _, operation := range []string{"save", "load"} {
 			t.Run(path+"/"+operation, func(t *testing.T) {
-				store := newFaultStore(t, nil)
+				store := newFaultStore(t, map[string]string{databaseSaveKey("rank"): unnamed})
 				fixture := newJavaThreadFixture(t, store)
 				client := fixture.client
 				database := openFixtureDatabase(t, client, "rank", 4)
@@ -428,44 +424,34 @@ func TestCheckpointRefusesPendingFileAndDatabaseOnOneKey(t *testing.T) {
 				if _, err := javaFileOpen(client, t.Context(), client.thread, []uint32{file, name, 4}); err != nil {
 					t.Fatal(err)
 				}
-				// The header stays valid, but the File now has an issued write.
 				if written, err := javaFileWriteByte(client, t.Context(), client.thread, []uint32{file, 'W'}); err != nil || written != 1 {
 					t.Fatalf("File.write = %d, %v", written, err)
 				}
-				store.refuse = true
 				insertFixtureRecord(t, client, database, []byte{5, 6, 7, 8})
-				store.refuse = false
 				fixture.settle()
-				_, open, err := client.javaFileHandle(file)
-				if err != nil {
-					t.Fatal(err)
-				}
 				held := client.javaRun.databases[database]
-				before, attempts := store.snapshot(t), store.attempts
 				if operation == "save" {
 					_, err = fixture.session.CaptureCheckpoint(t.Context())
 				} else {
 					_, err = commitFixture(t, fixture.archive, checkpoint, fixture.session, store)
 				}
-				if !errors.Is(err, backend.ErrCheckpointSaveWrite) || !strings.Contains(err.Error(), "rank") {
-					t.Fatalf("quick %s with competing file and database writes = %v", operation, err)
+				if err != nil {
+					t.Fatalf("quick %s with a file and a database of one name = %v", operation, err)
 				}
-				if store.attempts != attempts || !reflect.DeepEqual(store.snapshot(t), before) || !open.dirty || !held.unsaved || fixture.session.client != client {
-					t.Fatal("the refused step changed the saves, lost an issued write or replaced the session")
+				if operation == "load" {
+					return
 				}
-				// The title, not the checkpoint, chooses which write comes last.
 				if _, err := javaFileClose(client, t.Context(), client.thread, []uint32{file}); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := javaCloseDataBase(client, t.Context(), client.thread, []uint32{database}); err != nil {
 					t.Fatal(err)
 				}
-				if store.held("fs/rank.db") != string(held.encode()) {
-					t.Fatal("the title's later database close did not keep both records")
+				if store.held("fs/rank.db") != "W" {
+					t.Fatalf("the file holds %q, want the title's own byte", store.held("fs/rank.db"))
 				}
-				fixture.settle()
-				if _, err := fixture.session.CaptureCheckpoint(t.Context()); err != nil {
-					t.Fatalf("capture after the title resolved its writes: %v", err)
+				if store.held(databaseSaveKey("rank")) != string(held.encode()) {
+					t.Fatal("the database does not hold both records")
 				}
 			})
 		}
@@ -589,18 +575,23 @@ func TestCheckpointLoadAfterReadFailureKeepsIssuedWrites(t *testing.T) {
 func TestCheckpointRetriesWhatTheStoreRefused(t *testing.T) {
 	archive := fixtureArchive(t)
 	t.Run("the removal list", func(t *testing.T) {
+		// A rename stores the file under its new name and then the list that
+		// hides the old one; that list is what waits. (A removal the store
+		// refuses outright does not happen, so it leaves nothing waiting.)
 		store := newFaultStore(t, map[string]string{"fs/save.dat": "stored"})
 		session := checkpointFixtureSession(t, archive, store)
 		files := newGuestFiles(t, session.client)
-		store.refuse = true
-		callSlot(t, session.client, slotFsRemove, files.name("save.dat"))
+		session.client.saveStore = keyRefusingWrites{faultStore: store, key: fileRemovedKey}
+		callSlot(t, session.client, slotFsRename, files.name("save.dat"), files.name("moved.dat"), 1)
 		if !session.client.removedUnsaved || store.held("fs/.removed") != "<absent>" {
-			t.Fatal("a removal the store refused was not remembered")
+			t.Fatal("a removal list the store refused was not remembered")
 		}
+		store.refuse = true
 		if _, err := session.CaptureCheckpoint(context.Background()); !errors.Is(err, backend.ErrCheckpointSaveWrite) {
 			t.Fatalf("a quick save over a list the store still refuses = %v", err)
 		}
 		store.refuse = false
+		session.client.saveStore = store
 		roundTripCheckpoint(t, archive, session)
 		if store.held("fs/.removed") != fileListMarker+"\nsave.dat" || session.client.removedUnsaved {
 			t.Fatalf("the quick save left the removal list at %q", store.held("fs/.removed"))
@@ -622,7 +613,7 @@ func TestCheckpointRetriesWhatTheStoreRefused(t *testing.T) {
 		}
 		store.refuse = false
 		roundTripCheckpoint(t, fixture.archive, fixture.session)
-		if held.unsaved || !bytes.Equal([]byte(store.held("fs/rank.db")), held.encode()) {
+		if held.unsaved || !bytes.Equal([]byte(store.held("jdb/rank.db")), held.encode()) {
 			t.Fatal("the quick save did not store the database the store had refused")
 		}
 	})
@@ -644,7 +635,7 @@ func TestCheckpointRetriesWhatTheStoreRefused(t *testing.T) {
 		if store.attempts != attempts+1 || held.unsaved || fixture.client.javaRun.databases[second].unsaved {
 			t.Fatalf("the quick save stored %d times and left a write waiting", store.attempts-attempts)
 		}
-		if len(held.records) != 2 || store.held("fs/rank.db") != string(held.encode()) {
+		if len(held.records) != 2 || store.held("jdb/rank.db") != string(held.encode()) {
 			t.Fatal("the quick save did not store both objects' inserts")
 		}
 	})
@@ -660,14 +651,14 @@ func TestCheckpointRetriesWhatTheStoreRefused(t *testing.T) {
 		store.refuse = false
 		second := openFixtureDatabase(t, fixture.client, "rank", 4)
 		insertFixtureRecord(t, fixture.client, second, []byte{9, 9, 9, 9})
-		newer := store.held("fs/rank.db")
+		newer := store.held("jdb/rank.db")
 		fixture.settle()
 		// The second object took up the records the closed one could not
 		// store, and its insert stored them with its own: the quick save has
 		// nothing left to store or to wait for.
 		roundTripCheckpoint(t, fixture.archive, fixture.session)
-		if store.held("fs/rank.db") != newer || fixture.client.javaRun.databases[first].unsaved {
-			t.Fatalf("the quick save stored the closed database or kept it waiting: container changed %t", store.held("fs/rank.db") != newer)
+		if store.held("jdb/rank.db") != newer || fixture.client.javaRun.databases[first].unsaved {
+			t.Fatalf("the quick save stored the closed database or kept it waiting: container changed %t", store.held("jdb/rank.db") != newer)
 		}
 	})
 	t.Run("a database whose container changed since", func(t *testing.T) {
@@ -681,11 +672,11 @@ func TestCheckpointRetriesWhatTheStoreRefused(t *testing.T) {
 		// write and all, so its insert stores both and nothing is behind.
 		second := openFixtureDatabase(t, fixture.client, "rank", 4)
 		insertFixtureRecord(t, fixture.client, second, []byte{9, 9, 9, 9})
-		newer := store.held("fs/rank.db")
+		newer := store.held("jdb/rank.db")
 		fixture.settle()
 		roundTripCheckpoint(t, fixture.archive, fixture.session)
 		held := fixture.client.javaRun.databases[first]
-		if store.held("fs/rank.db") != newer || held.unsaved || len(held.records) != 2 || newer != string(held.encode()) {
+		if store.held("jdb/rank.db") != newer || held.unsaved || len(held.records) != 2 || newer != string(held.encode()) {
 			t.Fatalf("the quick save changed the container or lost an insert: %d records", len(held.records))
 		}
 	})
@@ -1154,8 +1145,8 @@ func TestCheckpointRebuildIsBoundedAndReadsEachSaveOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("four handles on one file of sixteen bytes on a budget of sixteen: %v", err)
 	}
-	// The file once and the two lists: three reads for four handles.
-	if reads != 3 || len(restored.client.files) != 4 {
+	// The file once and the three lists: four reads for four handles.
+	if reads != 4 || len(restored.client.files) != 4 {
 		t.Fatalf("four handles on one file made %d store reads", reads)
 	}
 	if _, _, err := commit(15); !errors.Is(err, backend.ErrCheckpointSaveRead) {
@@ -1438,11 +1429,11 @@ func TestCheckpointRebuildsAnOpenDataBaseFromTheStore(t *testing.T) {
 		// the load stores that and then reads the saves a second time.
 		files := newGuestFiles(t, fixture.client)
 		files.write(files.open("unclosed.dat", fileOpenReadWrite), "issued")
-		newer, attempts := store.held("fs/save.db"), store.attempts
+		newer, attempts := store.held("jdb/save.db"), store.attempts
 
 		restored := mustCommitFixture(t, fixture.archive, checkpoint, fixture.session, store)
 		client := restored.client
-		if store.held("fs/save.db") != newer || store.attempts != attempts+1 || store.held("fs/unclosed.dat") != "issued" {
+		if store.held("jdb/save.db") != newer || store.attempts != attempts+1 || store.held("fs/unclosed.dat") != "issued" {
 			t.Fatal("the load changed the container, or stored something other than the displaced session's write")
 		}
 		if got := databaseRecord(t, client, database, 0); string(got) != "second" {
@@ -1456,7 +1447,7 @@ func TestCheckpointRebuildsAnOpenDataBaseFromTheStore(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := &databaseContent{recordSize: 16, records: [][]byte{[]byte("fourth"), []byte("third")}, deleted: []bool{false, false}}
-		if store.held("fs/save.db") != string(want.encode()) {
+		if store.held("jdb/save.db") != string(want.encode()) {
 			t.Fatal("the update did not land on the container as it was")
 		}
 	})
@@ -1500,7 +1491,7 @@ func TestCheckpointRebuildsAnOpenDataBaseFromTheStore(t *testing.T) {
 	})
 	t.Run("a container this runtime does not read", func(t *testing.T) {
 		store, fixture, _, checkpoint := start(t)
-		store.behind(t, "fs/save.db", "not a container")
+		store.behind(t, "jdb/save.db", "not a container")
 		before, client := store.snapshot(t), fixture.session.client
 		if _, err := commitFixture(t, fixture.archive, checkpoint, fixture.session, store); !errors.Is(err, backend.ErrCheckpointSaveRead) || !strings.Contains(err.Error(), "save") {
 			t.Fatalf("a load over an undecodable container = %v", err)

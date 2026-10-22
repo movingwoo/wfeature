@@ -253,7 +253,17 @@ only while 4095 handles of its table are held at once. The WIPI C file table ref
 not a save key of its own (`/`, `.`, a `..` component) in every slot, and a
 name with a line break where it would be written into a list (remove, rename,
 mkdir); `MC_fsGetFileStat` reads through the removal list like
-`MC_fsIsExist`.
+`MC_fsIsExist`. Table 7 follows the specification's `MC_fs*` order in every
+slot: 11 is `MC_fsTotalSpace` and 15 is `MC_fsTell`, and its directory slots
+are `MC_fsRmDir` 9, `MC_fsList` 10, `MC_fsSetMode` 13 and `MC_fsGetCounts` 14.
+Files, directories, space and Java databases answer as
+[the WIPI storage contract](wipi-storage.md) has every platform answer: a
+directory is the root, a recorded `mkdir` (`db/.dirs` for C, `fs/.dirs` for
+Java) or a name a file lies below; names are at most 255 bytes; a title has
+1 MiB less what it stored; a Java database keeps its creation record size in
+`jdb/.sizes`. The record table's `MC_dbSortRecords` orders by bytes or through
+the title's own compare and filter functions, and `MC_dbGetAccessMode` answers
+the private area ([history](history/ktf.md#ktf-storage-spec-2026-10-22)).
 The earlier native package retains its existing buffered write/flush policy.
 Its open takes BREW's modes: only create (4) and append (8) make a missing file,
 and read-write (2) refuses one — and refuses an empty file the package does not

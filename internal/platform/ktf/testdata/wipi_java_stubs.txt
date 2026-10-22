@@ -76,14 +76,6 @@ org/kwis/msp/lcdui/Jlet destroyApp (Z)V noop
 # or removed, and no entry carries a creation time. The original runtime stubs
 # the same directory calls.
 org/kwis/msp/io/FileSystem <init> ()V noop
-org/kwis/msp/io/FileSystem getCreationTime (Ljava/lang/String;)I zero
-org/kwis/msp/io/FileSystem getCreationTime (Ljava/lang/String;I)I zero
-org/kwis/msp/io/FileSystem isDirectory (Ljava/lang/String;)Z zero
-org/kwis/msp/io/FileSystem isDirectory (Ljava/lang/String;I)Z zero
-org/kwis/msp/io/FileSystem mkdir (Ljava/lang/String;)V noop
-org/kwis/msp/io/FileSystem mkdir (Ljava/lang/String;I)V noop
-org/kwis/msp/io/FileSystem rmdir (Ljava/lang/String;)V noop
-org/kwis/msp/io/FileSystem rmdir (Ljava/lang/String;I)V noop
 
 # Component geometry and the container lifecycle. The lwc classes exist so
 # guest hierarchies resolve; no widget toolkit lays them out. The original

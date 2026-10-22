@@ -129,9 +129,9 @@ func TestDrawImageSkipsWhatTheEncodingDeclaredTransparent(t *testing.T) {
 	}
 }
 
-// TestDecodeNextImageReportsNoFurtherFrames covers the call a title makes
-// after it has finished with an image. Answering "one more frame" would have a
-// loop ask forever.
+// TestDecodeNextImageReportsNoFurtherFrames covers the call that walks an
+// animated image a frame at a time. Answering "one more frame" for a still
+// image would have a loop ask forever.
 func TestDecodeNextImageReportsNoFurtherFrames(t *testing.T) {
 	client := fixtureClient(t)
 	handle, _ := createTestImage(t, client, encodedTestImage(t, 4, 4))

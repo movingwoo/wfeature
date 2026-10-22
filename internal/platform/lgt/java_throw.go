@@ -173,7 +173,7 @@ func (client *Client) throwJava(thread *armcore.Thread, class string, object uin
 		client.logger.Debug("LGT java throw is uncaught", "class", class,
 			"open", len(client.javaTry), "depth", client.javaCallDepth)
 	}
-	return &javaUncaughtThrow{Class: class, What: what}
+	return &javaUncaughtThrow{Class: class, Object: object, What: what}
 }
 
 // javaUncaughtThrow is an exception with nothing of the application's own left
@@ -186,7 +186,10 @@ func (client *Client) throwJava(thread *armcore.Thread, class string, object uin
 // on an LGT Java title stopping reads that.
 type javaUncaughtThrow struct {
 	Class string
-	What  string
+	// Object is what was thrown, so that a platform call the throw came out of
+	// can throw it on to the title's caller (rethrowFromCallback).
+	Object uint32
+	What   string
 }
 
 // The sentinel's own words are not repeated here: every path that reports one
@@ -197,6 +200,24 @@ func (throw *javaUncaughtThrow) Error() string {
 }
 
 func (throw *javaUncaughtThrow) Unwrap() error { return ErrJavaAppUnsupported }
+
+// rethrowFromCallback carries an exception out of a guest call the platform
+// made on the title's behalf — a sortRecord filter or comparator — to the
+// title's own caller. A throw inside the callback that nothing there catches
+// ends the callback with javaUncaughtThrow, because a frame outside it cannot
+// be jumped to from inside (see throwJava); the callback's call is over by
+// the time it comes back here, so the same object thrown again now, at the
+// depth of the call the title made, reaches the title's try region the way a
+// throw from the platform method itself would. KTF and SKT hand the title the
+// exception the same way (docs/wipi-storage.md). Any other failure is
+// answered as it was.
+func (client *Client) rethrowFromCallback(thread *armcore.Thread, err error) error {
+	var uncaught *javaUncaughtThrow
+	if errors.As(err, &uncaught) && uncaught.Object != 0 {
+		return client.throwJava(thread, uncaught.Class, uncaught.Object, uncaught.What)
+	}
+	return err
+}
 
 // throwJavaPlatform throws one of the exceptions the platform itself raises:
 // the object is this platform's to build, and it is an instance of the class

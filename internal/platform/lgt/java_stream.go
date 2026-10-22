@@ -766,7 +766,7 @@ func (client *Client) javaByteSinkOf(object uint32) ([]byte, uint32, error) {
 // what it is given, which is what the specification says a caller that hands
 // over a whole int gets.
 func javaByteSinkWrite(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	held, sink, err := client.javaByteSinkOf(arguments[0])
 	if err != nil {
@@ -775,12 +775,12 @@ func javaByteSinkWrite(
 	if err := javaSinkRoom(held, 1); err != nil {
 		return 0, err
 	}
-	return 0, client.putJavaSink(sink, append(held, byte(arguments[1])))
+	return 0, client.putJavaSink(thread, sink, append(held, byte(arguments[1])))
 }
 
 // javaByteSinkWriteRange is `write([BII)`, slot 12: a run of an array.
 func javaByteSinkWriteRange(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	held, sink, err := client.javaByteSinkOf(arguments[0])
 	if err != nil {
@@ -797,12 +797,12 @@ func javaByteSinkWriteRange(
 	if err := javaSinkRoom(held, int(count)); err != nil {
 		return 0, err
 	}
-	return 0, client.putJavaSink(sink, append(held, data[offset:offset+count]...))
+	return 0, client.putJavaSink(thread, sink, append(held, data[offset:offset+count]...))
 }
 
 // javaByteSinkWriteAll is `write([B)`, slot 11: the whole of an array.
 func javaByteSinkWriteAll(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	held, sink, err := client.javaByteSinkOf(arguments[0])
 	if err != nil {
@@ -815,7 +815,7 @@ func javaByteSinkWriteAll(
 	if err := javaSinkRoom(held, len(data)); err != nil {
 		return 0, err
 	}
-	return 0, client.putJavaSink(sink, append(held, data...))
+	return 0, client.putJavaSink(thread, sink, append(held, data...))
 }
 
 // javaByteSinkFlush is `flush()`, slot 13. A sink is bytes in memory: there
@@ -832,7 +832,7 @@ func javaByteSinkFlush(
 	// flush and close are where those writes reach the store. A store that
 	// refuses is the IOException the two declare; the write waits in the File.
 	if err := client.drainJavaSinkToFile(sink); err != nil {
-		return 0, err
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, ": "+err.Error())
 	}
 	if err := client.storeJavaSinkFile(sink); err != nil {
 		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, ": "+err.Error())
@@ -922,7 +922,7 @@ func javaWrapSink(
 // javaSinkAppend is every fixed-width write on a data stream: the low `width`
 // bytes of the value, most significant first.
 func javaSinkAppend(width int) func(*Client, context.Context, *armcore.Thread, []uint32) (uint32, error) {
-	return func(client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32) (uint32, error) {
+	return func(client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32) (uint32, error) {
 		held, sink, err := client.javaByteSinkOf(arguments[0])
 		if err != nil {
 			return 0, err
@@ -934,14 +934,14 @@ func javaSinkAppend(width int) func(*Client, context.Context, *armcore.Thread, [
 		for shift := (width - 1) * 8; shift >= 0; shift -= 8 {
 			held = append(held, byte(value>>uint(shift)))
 		}
-		return 0, client.putJavaSink(sink, held)
+		return 0, client.putJavaSink(thread, sink, held)
 	}
 }
 
 // javaSinkWriteLong is `writeLong(long)`: eight bytes, and the one write whose
 // value arrives in two registers.
 func javaSinkWriteLong(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	held, sink, err := client.javaByteSinkOf(arguments[0])
 	if err != nil {
@@ -954,7 +954,7 @@ func javaSinkWriteLong(
 	for shift := 56; shift >= 0; shift -= 8 {
 		held = append(held, byte(value>>uint(shift)))
 	}
-	return 0, client.putJavaSink(sink, held)
+	return 0, client.putJavaSink(thread, sink, held)
 }
 
 // javaSinkWriteUTF is `writeUTF(String)`: a two-byte length and then the text
@@ -965,7 +965,7 @@ func javaSinkWriteLong(
 // two bytes rather than one, and a character outside the basic plane is the
 // two surrogates that stand for it rather than four bytes.
 func javaSinkWriteUTF(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	held, sink, err := client.javaByteSinkOf(arguments[0])
 	if err != nil {
@@ -983,7 +983,7 @@ func javaSinkWriteUTF(
 		return 0, err
 	}
 	held = append(held, byte(len(encoded)>>8), byte(len(encoded)))
-	return 0, client.putJavaSink(sink, append(held, encoded...))
+	return 0, client.putJavaSink(thread, sink, append(held, encoded...))
 }
 
 // javaStreamReadUTF is `DataInputStream.readUTF()`, slot 32: a two-byte length

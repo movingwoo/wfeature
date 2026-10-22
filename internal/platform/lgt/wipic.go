@@ -109,18 +109,35 @@ const (
 	slotGetFontAscent   uint32 = 0xe5
 	slotGetFontDescent  uint32 = 0xe6
 	slotGetStringWidth  uint32 = 0xe7
+	// The image calls run in the v2.x specification's order from
+	// `MC_grpCreateImage` at 0xe9 to `MC_grpEncodeImage` at 0xed: create,
+	// createSubImage, destroy, decodeNext, encode. Both ends are confirmed by
+	// calls (a title's create, and an encoder whose answer goes straight into a
+	// create), and so is the destroy in the middle: 27 of 132 local titles call
+	// 0xeb, mostly one call for each create, and the three call sites taken
+	// apart are all release code — `if (img) { 0xeb(img); img = 0; }`, `if
+	// (*pp) 0xeb(*pp);`, and a destructor that frees a buffer, calls 0xeb and
+	// clears the structure. This table had destroy at 0xea and decodeNext at
+	// 0xeb, which is the v1.2.1 list (it has no createSubImage) moved up by one,
+	// a value from the first commit with no call behind it: every one of those
+	// releases was answered "no further frame" and freed nothing, so a Clet,
+	// which has no collector, kept every image it had let go in the surface
+	// region. No local title calls 0xea or 0xec in a 1,500-tick run; they are
+	// placed by the order between the confirmed slots.
 	slotCreateImage     uint32 = 0xe9
-	slotDestroyImage    uint32 = 0xea
-	slotDecodeNextImage uint32 = 0xeb
+	slotCreateSubImage  uint32 = 0xea
+	slotDestroyImage    uint32 = 0xeb
+	slotDecodeNextImage uint32 = 0xec
 	slotEncodeImage     uint32 = 0xed
 	slotPostEvent       uint32 = 0xee
 	// The graphics block ends with the two polygon calls, which is where the
-	// specification's function order puts them once the block's two unnamed
-	// slots are counted — one before `MC_grpCopyArea` and one before
-	// `MC_grpPostEvent`, both of which the identified slots around them fix.
-	// A title's tutorial confirms the reading: it calls `0xf0` with a surface,
-	// two stack addresses, a point count of four and a context, which is
-	// `MC_grpFillPolygon(dst, xPoints, yPoints, nPoints, pgc)` and nothing
+	// v2.x specification's function order puts them: the block runs in that
+	// order from `MC_grpGetImageProperty` at 0xc8 with no gaps. The two slots
+	// once read as unnamed gaps are the v2.x additions the v1.2.1 list lacks,
+	// `MC_grpDrawImageRegion` at 0xd6 (not served) and `MC_grpCreateSubImage`
+	// at 0xea. A title's tutorial confirms the reading: it calls `0xf0` with a
+	// surface, two stack addresses, a point count of four and a context, which
+	// is `MC_grpFillPolygon(dst, xPoints, yPoints, nPoints, pgc)` and nothing
 	// else in the block.
 	slotDrawPolygon     uint32 = 0xef
 	slotFillPolygon     uint32 = 0xf0
@@ -146,6 +163,13 @@ const (
 	slotFsList       uint32 = 0x19a
 	slotFsTotalSpace uint32 = 0x19b
 	slotFsAvailable  uint32 = 0x19c
+	// slotFsSetMode is MC_fsSetMode(fileName, fmode, aMode) and slotFsGetCounts
+	// is MC_fsGetCounts(dirName, aMode): the two entries the order puts between
+	// available and tell, both of which titles do call. No local run has
+	// reached either, so the order is the whole of the evidence for them; see
+	// wipic_file.go for what each answers.
+	slotFsSetMode   uint32 = 0x19d
+	slotFsGetCounts uint32 = 0x19e
 	// slotFsTell is MC_fsTell(fd). The file block runs in the specification's
 	// own order from MC_fsOpen at 0x190 — open, read, write, close, seek,
 	// fileAttribute, remove, rename, mkDir, rmDir, list, totalSpace,
@@ -225,7 +249,10 @@ const (
 	wipiBadFileName int32 = -3
 	wipiExists      int32 = -5
 	wipiInvalid     int32 = -9
+	wipiLongName    int32 = -11
 	wipiNoEntry     int32 = -12
+	wipiNoSpace     int32 = -13
+	wipiNotEmpty    int32 = -15
 	wipiShortBuffer int32 = -18
 )
 
@@ -258,14 +285,14 @@ func knownWIPICSlot(slot uint32) bool {
 		slotGetRGBPixels, slotSetRGBPixels, slotFlushLcd, slotGetPixelFromRGB,
 		slotGetRGBFromPixel, slotGetDisplayInfo, slotRepaint, slotGetFont,
 		slotGetFontHeight, slotGetFontAscent, slotGetFontDescent,
-		slotGetStringWidth, slotCreateImage, slotDestroyImage,
+		slotGetStringWidth, slotCreateImage, slotCreateSubImage, slotDestroyImage,
 		slotDecodeNextImage, slotEncodeImage, slotPostEvent, slotDrawPolygon, slotFillPolygon,
 		slotIMGetSupportedModeCount, slotIMGetSupportedModes,
 		slotIMSetCurrentMode, slotIMGetCurrentMode, slotIMHandleInput,
 		slotFsOpen, slotFsRead, slotFsWrite,
 		slotFsClose, slotFsSeek, slotFsFileAttribute, slotFsRemove,
 		slotFsRename, slotFsMkDir, slotFsRmDir, slotFsList, slotFsTotalSpace,
-		slotFsAvailable, slotFsTell, slotFsIsExist,
+		slotFsAvailable, slotFsSetMode, slotFsGetCounts, slotFsTell, slotFsIsExist,
 		slotNetConnect, slotNetClose, slotNetSocket, slotNetSocketStandard, slotNetSocketConnect,
 		slotNetSocketWrite,
 		slotNetSocketRead, slotNetSocketClose, slotNetSetReadCB, slotNetSetWriteCB,
@@ -723,6 +750,9 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 	case slotCreateImage:
 		return client.createImage(thread)
 
+	case slotCreateSubImage:
+		return client.createSubImage(thread)
+
 	case slotDestroyImage:
 		return client.destroyImage(thread)
 
@@ -771,7 +801,8 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 
 	case slotFsOpen, slotFsRead, slotFsWrite, slotFsClose, slotFsSeek,
 		slotFsFileAttribute, slotFsRemove, slotFsRename, slotFsMkDir, slotFsRmDir,
-		slotFsList, slotFsTotalSpace, slotFsAvailable, slotFsTell, slotFsIsExist:
+		slotFsList, slotFsTotalSpace, slotFsAvailable, slotFsSetMode, slotFsGetCounts,
+		slotFsTell, slotFsIsExist:
 		return client.handleFile(thread, slot)
 
 	case slotNetConnect:

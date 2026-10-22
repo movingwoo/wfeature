@@ -141,7 +141,7 @@ func TestMadeDirectoryIsRememberedAcrossSessions(t *testing.T) {
 // `MC_fsGetFileStat` disagreeing about one name was the difference between a
 // title that plays and one that quits inside `startApp`.
 func TestAMadeDirectoryIsThereToBothQuestions(t *testing.T) {
-	const noSuchName = int32(-22) // M_E_BADRECID, which wipicErrorBadParam spells unsigned.
+	const noSuchName = int32(-12) // M_E_NOENT, which wipicErrorNotFound spells unsigned.
 	const record = platformDataBase + 0xc000
 	saves := t.TempDir()
 	_, runtime := newTestRuntime(t)
@@ -161,16 +161,19 @@ func TestAMadeDirectoryIsThereToBothQuestions(t *testing.T) {
 		t.Fatalf("stat of the directory just made = %d, want 0", got)
 	}
 	// MH_FileInfo is { attrib, creationTime, size }. A directory holds no
-	// bytes, and the attribute word is left as it is rather than guessed at:
-	// the bit that would say "directory" is a HAL number the specification
-	// does not print.
+	// bytes and keeps no time, and its attribute word carries MC_FILE_IS_DIR,
+	// 0x01 in the specification's HAL page.
 	info := make([]byte, 12)
 	if err := runtime.client.core.Memory().Read(record, info); err != nil {
 		t.Fatal(err)
 	}
 	for index, field := range []string{"attributes", "creation time", "size"} {
-		if got := binary.LittleEndian.Uint32(info[index*4:]); got != 0 {
-			t.Fatalf("the %s of a made directory = %d, want 0", field, got)
+		want := uint32(0)
+		if index == 0 {
+			want = 0x01
+		}
+		if got := binary.LittleEndian.Uint32(info[index*4:]); got != want {
+			t.Fatalf("the %s of a made directory = %d, want %d", field, got, want)
 		}
 	}
 

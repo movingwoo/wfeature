@@ -9760,3 +9760,167 @@ archives draw the same frames on the same route, and the one that faulted
 skipping its prologue now plays on past it. `go vet`, `go test` with and
 without the debug tag, `go test -race ./internal/...` and the web tests pass
 over the repository's packages.
+
+<a id="ktf-storage-spec-2026-10-22"></a>
+
+## Storage slots filled from the specification — 2026-10-22
+
+A comparison of the WIPI C surface with the specification found five slots of
+the file table and two of the record table that did not answer what the
+specification puts there. Slots 10 and 11 of table 7 were still the record
+count and record size of an earlier reading of the table, which took the first
+register for a handle; slot 15 answered zero; slots 9, 13 and 14 had no answer;
+and the record table's slots 8 and 9 answered `M_E_INVALID`. Everywhere else
+the table runs in the specification's order, and
+[The two storage tables](#implementation-the-two-storage-tables) already named
+10 and 11 for what they are: the code was what had not moved.
+
+**Slot 11 kept a title on its title screen.** Two of 293 local titles call it
+once while they start, with no argument: r0 held `0x35001d81` in both, which the
+old handler read as a handle and refused. One of them then showed its "not
+enough storage" message after the first key and went no further; answering the
+total space, it went through its menu into its first scene (20 of 21 route
+snapshots differed). The other drew the same frames either way. No local title
+calls slots 9, 10, 13, 14 or 15 on the general route (a 300-tick wait, then
+`fire` twenty times, 2,760 ticks).
+
+<a id="ktf-storage-spec-2026-10-22-slots"></a>
+
+### What each slot answers
+
+- 11, `MC_fsTotalSpace()`: the 1 MiB per-game budget that `MC_fsAvailable`
+  counts down from, so the free space is never more than the total.
+- 15, `MC_fsTell(fd)`: the handle's cursor, or `M_E_BADFD` for a handle that is
+  not open. The one title known to call it does so from its save loader right
+  after seeking to the end, and drops the answer, which is why zero had passed.
+- 10, `MC_fsList(name, buf, bufSize, aMode)`: the entries' names, each
+  NUL-terminated, the list ended by a second NUL; an empty directory is the two
+  NULs alone. A list the buffer cannot hold answers `M_E_SHORTBUF` and writes
+  nothing; a name that is not a key answers `M_E_BADFILENAME`.
+- 14, `MC_fsGetCounts(dirName, aMode)`: how many entries `MC_fsList` names.
+- 9, `MC_fsRmDir(dirName, aMode)`: `M_E_NOTEMPTY` when anything is under the
+  name, asked first; `M_E_NOENT` when `MC_fsMkDir` never recorded it; otherwise
+  the name leaves `db/.dirs`, which lasts a restart.
+- 13, `MC_fsSetMode(fileName, fmode, aMode)`: `M_E_INVALID` for a mode outside
+  1 to 3, `M_E_NOENT` for a missing file, success otherwise. The store keeps no
+  mode, so a file set read-only can still be written.
+- Record table 8, `MC_dbSortRecords(dbID, buf, len, compare, filter)`: the
+  record ids by their bytes, ascending, without a compare. A compare or filter
+  is a function in the title, run on the calling thread the way a pixel
+  operation is, over copies of the records in one WIPI C block that is given
+  back afterwards; a positive compare puts its first record first — the reverse
+  of `qsort` — and a filter keeps a record by answering more than zero. Ids are
+  this table's one-based ones, records that compare equal keep their id order,
+  and the database does not change. `M_E_SHORTBUF`, `M_E_INVALID` and
+  `M_E_BADFD` are the specification's.
+- Record table 9, `MC_dbGetAccessMode(name)`: `MC_DIR_PRIVATE_ACCESS` (1) for a
+  database that exists, `M_E_NOENT` for one that does not, `M_E_INVALID` for a
+  null name.
+
+<a id="ktf-storage-spec-2026-10-22-listing"></a>
+
+### A directory is read from the save store
+
+The store is flat, so a directory is a prefix its names share plus the names
+`MC_fsMkDir` recorded. A listing read from memory and the archive alone would
+tell a title whose saves an earlier session wrote that its directory is empty,
+and a title that lists its folder to find its save slots would start a new game
+over them. The save store can now list its keys (`backend.ListSaves`; a
+`DirectorySaveStore` reads them back from the files, as a backup does, so it
+answers what every earlier build stored), and the certificate adapter adds the
+two keys it answers itself. A directory's entries are drawn from the open
+stores, the `db/` saves, the packaged files and the Java side's files (its `fs/`
+saves and this session's writes), and the recorded directories, less both
+removal lists and the names of the lists themselves.
+
+Java `FileSystem.list` had the same gap: it read the archive and this session's
+writes, so files saved in an earlier session were missing from it. It now
+includes the `fs/` saves. `FileSystem.totalSpace()` answers what `available()`
+does, since nothing on the Java side counts what is used.
+
+Validation: unit tests for every slot — the total space with a stray r0, a
+listing in a second session over a directory store with a removed file and a
+recorded directory, the buffer and name failures, the order of `MC_fsRmDir`'s
+answers and its persistence, the mode, the sort by bytes and through Thumb
+compare and filter functions with the copies given back, the access mode, the
+Java listing after a restart and `totalSpace` against `available` — and backend
+listing tests (case spelled out in the path, a dotted index, a directory
+prefix, a climbing directory refused, the memory and detached stores).
+
+Real archives: the title that stopped on its title screen now runs its route to
+the first scene, drawing the same 21 snapshots, frame for frame, as a build
+with slot 11 alone. A 500-tick run of every unique local archive (513 of them,
+all three platforms) under the build before these changes and after them ends
+on the same frame for every KTF and LGT archive. Of the SKT archives, 24 end on
+different frames; 17 of those also differ between two runs of the earlier
+build, because SKT runs at wall-clock pace. No SKT run writes a different set of
+save keys. Three SKT save trees differ only in content: two in the two
+timestamp bytes of an install record, and one in a record store the title
+rewrites with time-dependent bytes. No run reports an error the earlier build
+does not.
+
+<a id="ktf-storage-spec-2026-10-22-contract"></a>
+
+### One contract for the three platforms
+
+The same day's audit found the three platforms answering the same WIPI storage
+questions three ways, each a simplification made where its code was written
+rather than anything a title showed. [WIPI storage](../wipi-storage.md) is now
+the one answer, and this platform changed where it differed:
+
+- **Directories.** `FileSystem.exists` answers for a directory too,
+  `isDirectory` no longer answers false for everything, and `mkdir` and `rmdir`
+  record and refuse rather than doing nothing; a made directory is kept in
+  `fs/.dirs`, as the C table keeps its own in `db/.dirs`. `list` answers the
+  names directly below a directory, as a handset lists one, where it used to
+  answer every file below with its whole path; a title that opened what it was
+  handed opened the directory's path twice. `MC_fsIsExist`, `MC_fsFileAttribute`
+  and `MC_fsMkDir` take a directory implied by its contents, and the root, as
+  the directories they are. A directory's attribute word is `MC_FILE_IS_DIR`
+  (`0x01`, from the specification's HAL page); a missing name is `M_E_NOENT`
+  where it was `M_E_BADRECID`. The test that a folder of saves answered "no"
+  on every run now expects "yes" once a file is in it: the point it was written
+  for, that asking never ends the session, still holds.
+- **Names** over 255 bytes, counted on the path they stand for, are
+  `M_E_LONGNAME` and `IOException`; a null name is `NullPointerException` to a
+  file call and `DataBaseException` to a database call, where it used to stop
+  the session. A backslash is a separator, as LGT has always read one, so
+  `data\save.dat` is `data/save.dat` where the store used to refuse it. A Java
+  database's name is read the same way, so `/scores` and `scores` are one
+  database; the removal list reads an earlier build's spelling by the same
+  rule, so a database deleted as `/scores` stays deleted. `remove(name)` throws
+  for a missing file and `remove(name, flag)` does not, as the specification
+  words each.
+- **Space** is one figure for both halves: 1 MiB less what the title stored, the
+  archive's own bytes not counted. `FileSystem.available` answered 4 MiB and
+  the C slots counted only the stores open in the session. A write past 4 MiB
+  is `M_E_NOSPACE`, where it was `M_E_INVALID`.
+- **Databases.** `DataBaseRecordException` extends `Exception`, not
+  `DataBaseException`: a title's handler for the database exception would
+  otherwise take a missing record, and a title whose `DataBaseException`
+  handler resets its save would lose it over a record it only had to create.
+  An insert takes the lowest freed id. `getRecordSize` answers the creation
+  size, kept in `jdb/.sizes`, where it answered 0. `getLastModified` answers
+  the last write or the first open of the session, not the time of the
+  question. `getAccessMode` of a missing database, and an open with `create`
+  and a size of 0 or less, throw what the specification gives them;
+  `listDataBases` names the databases of earlier sessions too and is `null`
+  when there is none, as `sortRecord` is for no record; a buffer too short for
+  a record is `IllegalArgumentException`.
+
+`TestContract*` in `storage_contract_test.go` holds each rule.
+
+Validation across the three platforms: unit tests for every rule on each
+(`TestContract*` here, `TestStorageContract*` on LGT, the `TestWIPIFileSystem*`
+and `TestWIPIDataBase*` tests on SKT), `go vet`, `go test` with and without the
+debug tag, `go test -race ./internal/...` and the web tests. Every unique local
+archive (513) ran 500 ticks under the build before this day's storage work and
+after it: every KTF and LGT archive ends on the same frame, no exit code
+changed, and no run reports an error the earlier build does not; the SKT frames
+that differ differ as two runs of one build do. The saves differ only where the
+contract says they should: the lists of made directories (`fs/.dirs`, LGT's
+`fs/.directories`) and of record sizes (`jdb/.sizes`) appear where a title
+makes a directory or a database, two titles' `db/.dirs` no longer records a
+directory their archive already has, and six LGT titles no longer write a
+removal list for a file that was never there. The title that stopped on its
+title screen still reaches its first scene with the same 21 snapshots.

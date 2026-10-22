@@ -80,10 +80,10 @@ func readFramebufferPixel(t *testing.T, runtime *initializationRuntime, framebuf
 	return uint16(data[0]) | uint16(data[1])<<8
 }
 
-// TestDatabaseSlot15AcceptsAnOpenStream covers the KTF custom slot a title
-// calls while loading a save: it takes the open handle alone, and an unknown
-// handle is refused the way the other handle-taking slots refuse one.
-func TestDatabaseSlot15AcceptsAnOpenStream(t *testing.T) {
+// TestFileTellAnswersTheCursor covers MC_fsTell at slot 15, which a title
+// calls while loading a save: it takes the open handle alone and answers the
+// cursor without moving it, and an unknown handle answers M_E_BADFD.
+func TestFileTellAnswersTheCursor(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	store := &runtimeCFile{name: "OptionSave", data: []byte("options")}
 	runtime.cFiles = map[string]*runtimeCFile{store.name: store}
@@ -95,26 +95,26 @@ func TestDatabaseSlot15AcceptsAnOpenStream(t *testing.T) {
 	if err := thread.SetRegister(0, cFileHandleBit|1); err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.handleWIPICFileCall(thread, wipicFileTouchStream)
+	result, err := runtime.handleWIPICFileCall(thread, wipicFileTell)
 	if err != nil {
-		t.Fatalf("slot 15 error = %v", err)
+		t.Fatalf("MC_fsTell error = %v", err)
 	}
-	if result != 0 {
-		t.Fatalf("slot 15 = %#x, want 0", result)
+	if result != 3 {
+		t.Fatalf("MC_fsTell = %#x, want 3", result)
 	}
 	if handle := runtime.cFileHandles[cFileHandleBit|1]; handle.position != 3 || string(handle.store.data) != "options" {
-		t.Fatalf("slot 15 disturbed the stream: position %d data %q", handle.position, handle.store.data)
+		t.Fatalf("MC_fsTell disturbed the stream: position %d data %q", handle.position, handle.store.data)
 	}
 
 	if err := thread.SetRegister(0, cFileHandleBit|9); err != nil {
 		t.Fatal(err)
 	}
-	result, err = runtime.handleWIPICFileCall(thread, wipicFileTouchStream)
+	result, err = runtime.handleWIPICFileCall(thread, wipicFileTell)
 	if err != nil {
-		t.Fatalf("slot 15 with an unknown handle error = %v", err)
+		t.Fatalf("MC_fsTell with an unknown handle error = %v", err)
 	}
-	if result != wipicErrorInvalid {
-		t.Fatalf("slot 15 with an unknown handle = %#x, want %#x", result, wipicErrorInvalid)
+	if result != wipicErrorBadFD {
+		t.Fatalf("MC_fsTell with an unknown handle = %#x, want %#x", result, wipicErrorBadFD)
 	}
 }
 

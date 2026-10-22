@@ -50,6 +50,7 @@ This consolidation adds no execution or acceptance evidence.
 - [Newly added archives — 2026-10-19](#lgt-new-archives-2026-10-19)
 - [A name field the key rule refused — 2026-10-20](#lgt-text-input-2026-10-20)
 - [Text input review follow-ups — 2026-10-20](#lgt-text-input-review-2026-10-20)
+- [Image slots, C library names and the storage contract — 2026-10-22](#lgt-slot-corrections-2026-10-22)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -1976,10 +1977,20 @@ A title's tutorial reached `0xf0` and stopped. The graphics block runs from
 number is a name once the block's two gaps are counted. `MC_grpCopyArea`, the
 fifteenth function, sits at `0xd7` rather than `0xd6`; `MC_grpPostEvent`, the
 thirty-seventh, at `0xee` rather than `0xed`. Identified slots on either side
-fix both (`MC_grpDrawImage` at `0xd5`, `MC_grpDrawString` at `0xda`,
-`MC_grpDecodeNextImage` at `0xeb`), so the offset is +1 after the first gap and
-+2 after the second. The block's last two functions, `MC_grpDrawPolygon` and
-`MC_grpFillPolygon`, land on `0xef` and `0xf0`.
+fix the first gap (`MC_grpDrawImage` at `0xd5`, `MC_grpDrawString` at `0xda`),
+so the offset is +1 after the first gap and +2 after the second. The block's
+last two functions, `MC_grpDrawPolygon` and `MC_grpFillPolygon`, land on `0xef`
+and `0xf0`.
+
+**Corrected 2026-10-22.** This passage also listed `MC_grpDecodeNextImage` at
+`0xeb` among the identified slots. It was not one: `0xeb` was the table's value
+from its first commit, with no call behind it. The count was made against the
+v1.2.1 list, and the two gaps are the two functions the v2.x order adds to that
+list, `MC_grpDrawImageRegion` at `0xd6` and `MC_grpCreateSubImage` at `0xea`;
+in the v2.x order, which LGT's blocks follow, this block has no gap at all. So
+`0xeb` is `MC_grpDestroyImage`, which 27 local titles call, and
+`MC_grpDecodeNextImage` is `0xec`. See
+[The image slots follow the v2.x order](#lgt-image-slots-2026-10-22).
 
 A later caller identifies `MC_grpEncodeImage` at `0xed`: six arguments encode a
 framebuffer crop into an owned BMP buffer, immediately consumed by
@@ -4134,7 +4145,10 @@ That change moved five titles, each then needing something of its own:
   order: the first sits just before the two-bound `substring` at 28, the second is
   the last non-static method of a run whose `readInt` is at 28.
 - **`FileSystem.isFile` cannot be answered differently from `exists`.** Nothing
-  here creates a directory, so an existing name is a file's.
+  here creates a directory, so an existing name is a file's. (Superseded
+  2026-10-22: `exists` now also answers for a directory — the root, one `mkdir`
+  made, or a name with something below it — and `isFile` for a file alone; see
+  [The storage contract](#lgt-storage-contract-2026-10-22).)
 
 <a id="implementation-a-title-recolours-a-picture-and-does-not-fix-its-checksum"></a>
 
@@ -7773,3 +7787,217 @@ LGT loader nor the SKT one (whose classes link against `com/skt/m/…`) applies,
 and detection answers `no-marker`. Running it would take a MIDP 1.0 platform
 with the carrier's `mmpp` extension classes and its package layout; nothing of
 that exists here, and building it is not planned for now (decided 2026-10-21).
+
+<a id="lgt-slot-corrections-2026-10-22"></a>
+
+## Image slots, C library names and the storage contract — 2026-10-22
+
+A comparison of the slot table with the v2.x specification's function order
+(2026-10-21) found one slot served as the wrong function, five C library slots
+served without a name, and two file slots and nineteen Java storage members
+missing. The same day the three platforms' storage was put under one contract,
+[WIPI storage](../wipi-storage.md), and the file slots and Java members were
+built to it.
+
+<a id="lgt-image-slots-2026-10-22"></a>
+
+### The image slots follow the v2.x order
+
+Counted from `MC_grpGetImageProperty` at `0xc8`, the v2.x order puts the image
+calls at `0xe9` `MC_grpCreateImage`, `0xea` `MC_grpCreateSubImage`, `0xeb`
+`MC_grpDestroyImage`, `0xec` `MC_grpDecodeNextImage` and `0xed`
+`MC_grpEncodeImage`. The table had the destroy at `0xea` and the next-frame call
+at `0xeb` from its first commit (2026-08-15), with no call behind either: the
+v1.2.1 list, which has no `MC_grpCreateSubImage`, moved up by one. The create
+and the encoder were confirmed by calls; the two "unnamed gaps" the block was
+read as having are the two functions v2.x adds (corrected
+[above](#implementation-0xf0-is-mc_grpfillpolygon-and-the-block-has-two-unnamed-slots-in-it)).
+
+From 1,500-tick runs of the 132 local titles (2026-10-21):
+
+- 27 titles call `0xeb`, 5,228 times in all, mostly once after each `0xe9`.
+  Three call sites in three titles, disassembled, are release code:
+  `if (obj->img) { 0xeb(obj->img); obj->img = 0; } return 1;`,
+  `if (*pp) 0xeb(*pp);`, and a destructor that frees a buffer, calls `0xeb` and
+  then clears the structure with `memset`. Served as `MC_grpDecodeNextImage`,
+  every one of them was answered "no further frame" and freed nothing.
+- A Clet has no collector (`collectForAllocation` runs for a Java title only),
+  so the images it let go stayed in the 16 MiB surface region.
+- An A/B with `0xeb` as `MC_grpDestroyImage` and `0xec` as
+  `MC_grpDecodeNextImage`, seven titles for 3,000 ticks each: the frame digests
+  were identical at all 12 checkpoints; surface use after 3,000 ticks was
+  1.17–2.57 MB before and 0.31–1.13 MB after, and live framebuffers 380–2,094
+  before and 2–744 after.
+- No title calls `0xea` or `0xec` in those runs. Both are placed by the order
+  between the confirmed slots.
+
+`MC_grpCreateSubImage(srcImage, startx, starty, width, height)`, with the height
+on the stack, answers a new image of `width`×`height` holding the source's
+pixels from `(startx, starty)`, or NULL. The decisions:
+
+- **The region has to lie inside the source and hold at least one pixel**, or
+  the answer is NULL, the specification's one failure answer; an unknown source
+  is NULL too, and a refusal allocates nothing. Clipping would answer an image
+  of a size the caller did not ask for, which a caller walking it through its
+  framebuffer pointer with its own width would overrun. `MC_grpEncodeImage`
+  clips, and can, because its answer carries its size in the bitmap header.
+- The source is read back from guest memory first, since a Clet writes images
+  through their pointers, and the copy is an image of its own: destroying the
+  source leaves it.
+- **The mask comes with the pixels**, as the specification says. A colour-keyed
+  source gives a sub image with the same key and a mask read off the copied
+  pixels, which is where the key is after a guest has moved pixels around; a
+  source with only a positional mask gives the matching part of it; a source
+  with neither gives an image with neither.
+- A surface region too full for the copy stops the run, as it does for
+  `MC_grpCreateImage`: it is this platform's shortfall, which a NULL would pass
+  off as the title's.
+
+After the change (2026-10-22), a title that calls `0xe9` and `0xeb` 71 times
+each in 1,500 ticks has every `0xeb` served as a destroy, and its final frame,
+step count and guest time are identical to the previous build's; a title that
+makes no image call is identical as well.
+
+<a id="lgt-stdlib-names-2026-10-22"></a>
+
+### Every served C library slot has a name
+
+`importImplemented` reads a C library slot that `stdlibSlotNames` does not name
+as one `handleStdlibSVC` does not serve. Five served slots had no name: `setjmp`
+(`0x32`, the jump half of a Java try region), `vsprintf` (`0x3f9`), `rand`
+(`0x403`), `srand` (`0x404`) and `malloc` (`0x426`). A trace printed them as
+`unnamed`, and `apiscan` reported one title as "gap 1 (stdlib 0x32)" although
+all 675 of its `setjmp` calls in 600 ticks were served. The five are named now,
+and a test runs slots `0` to `0x7ff` through the handler and holds the set it
+serves and the set the table names equal.
+
+<a id="lgt-storage-contract-2026-10-22"></a>
+
+### The storage contract
+
+KTF, LGT and SKT now answer a title's files, directories and databases the
+same way, as [WIPI storage](../wipi-storage.md) gives it; a platform that
+answers otherwise has a defect. What changed here, and why:
+
+- **New C slots and Java members.** `MC_fsSetMode` (`0x19d`) and
+  `MC_fsGetCounts` (`0x19e`) are placed by the file block's order, between
+  `MC_fsAvailable` and `MC_fsTell`, both of which titles call; no 2026-10-21
+  run reached either (a call stopped a run then, and none stopped there). The
+  seventeen `FileSystem` members, `File.seek`, `File.openDataOutputStream` and
+  `DataBase.sortRecord` are served. `sortRecord` calls the title's own
+  `DataFilter` and `DataComparator` back the way a `Runnable`'s `run` is
+  reached: by the member its class record names, or through the slot its
+  interface table gives. One local title's class list names `File.seek`.
+- **Names.** A name is read one way by every file and database call: a
+  backslash separates segments as a slash does (as this platform always read
+  it), and leading separators, empty and `.` segments are dropped. The
+  longest name is 255 bytes of that path — a C name's own bytes, a Java
+  `String`'s UTF-8 bytes — on every call (`M_E_LONGNAME`, `IOException`); it
+  used to be counted on the name as spelled, and a spelling of more than 509
+  bytes had no save key at all. A name no file can have — a `..` segment,
+  the platform's own lists, the title's own directory where a file is meant —
+  is `M_E_BADFILENAME` or `IOException` there too, where an open of one used
+  to hand out a handle whose writes reached nothing. The archive is asked for
+  the path too: its own lookup drops one leading slash, so
+  `//data/a.txt` and `\data\a.txt` missed a packaged file that `data/a.txt`
+  found. A null name is `NullPointerException` to a `File` or `FileSystem`
+  call and `DataBaseException` to a `DataBase` call.
+- **Directories.** A directory is the root, a name `mkdir` recorded, or a name
+  with a file or a made directory below it. The store makes no directory
+  entries, so the names `mkdir` makes are kept in a list beside the saves,
+  `fs/.directories`, the platform's own like `.removed` and `.created`; old
+  saves need nothing, since they made none. `MC_fsMkDir` and `MC_fsRmDir`,
+  which used to succeed whatever they were asked, now answer `M_E_EXIST`,
+  `M_E_NOTEMPTY`, `M_E_NOENT` and, for the root, `M_E_BADFILENAME`;
+  `MC_fsIsExist` and `MC_fsFileAttribute` answer for a directory
+  (`MC_FILE_IS_DIR`, 0x01, the v2.0 HAL's value); `MC_fsList` ends an empty
+  list with two NULs where it wrote one; `MC_fsRemove` answers `M_E_NOENT` for
+  a name that is not a file. Java `exists`, `isDirectory`, `list`, `mkdir`,
+  `rmdir` and `remove` follow the same table, `list` of a name that is not a
+  directory and `remove(name)` of one that is not a file throwing the
+  specification's `IOException`, and `remove(name, flag)` returning. A make
+  that always succeeds would tell a title that reads success as its first run
+  that every run is the first.
+- **Refused removals.** A removal the store refuses no longer happens: the
+  removal list is given to the store before the session lets the file go,
+  and a refusal leaves the file, with `MC_fsRemove` answering `M_E_ERROR`,
+  either `remove` throwing `IOException` and `deleteDataBase` throwing
+  `DataBaseException`. The removal used to happen in the session and wait to
+  be stored, so a title was told it had removed a file the next session could
+  still find. A rename, which has stored the file under its new name by then,
+  still leaves a refused list waiting.
+- **Space.** The room is 1 MiB, and the room left is that less what the title
+  has stored: for each file it wrote, its size less the size of its archive's
+  file of the same name, and for each database the bytes of its records. A
+  file written shorter than the archive's adds nothing rather than taking the
+  difference off another. The archive's paths are asked about once a session
+  and again only after a write of theirs. Nothing is refused for room. The
+  bound on untrusted input is 4 MiB for one file, down from 16 MiB, and for one
+  database's records; a write past it is `M_E_NOSPACE`, an `IOException` from a
+  `File` or a stream on one (where a stream write used to stop the run and
+  `File.write` to answer -1), or a `DataBaseException`.
+- **Databases.** `DataBaseRecordException` extends `Exception`, not
+  `DataBaseException`. The record size is no longer enforced (a longer record
+  used to be refused); `closeDataBase` leaves the object usable (it used to
+  stop it); `getAccessMode` answers `PRIVATE_ACCESS` for a database that exists
+  and throws for one that does not (it answered 3 for any name);
+  `listDataBases` is null when there is none; `getDataBaseSize` sums the
+  records' bytes (it answered the container's size); `getLastModified` is the
+  last write in the session or the session's first open;
+  `selectRecord(int, byte[], int)` throws `IllegalArgumentException` for a
+  buffer the record does not fit; `openDataBase` with `create` and a record
+  size of 0 or less throws `IllegalArgumentException`, whether or not the
+  database exists, and a container an earlier build wrote without a record
+  size takes the size of the open that finds it. A write through an object
+  opened before the database was deleted makes it again and puts its name
+  back on the index.
+- **Database names** are read as file names are, so `/save`, `\save` and
+  `save` are one database and `dir/scores` is a database in `dir` (a `/` or
+  `\` used to be refused, and names were at most 128 bytes). The name is the
+  path from then on: what `getDataBaseName` and `listDataBases` answer. The
+  index of names is read a line at a time exactly as written; it used to trim
+  each line, which left a database whose name began or ended with a space
+  out of `listDataBases`. Names in an index an earlier build wrote are single
+  segments, so they read the same; one that is no name now (`.`, `..`) is
+  left out of the listing.
+- **Containers are no files.** A database here is still one container file
+  under `fs/`, `<name>.db`, where the other two platforms keep databases apart
+  from the files, and the file calls used to see it as a file of the title's.
+  Now the containers of the databases the index names are filtered out of
+  what the file calls see, with no change to the store: no listing, count,
+  existence, kind or creation-time answer has one, a resource read finds
+  none, and a database in a directory does not make the directory one. An
+  open that would create a file at a container's path, and a rename onto
+  one, are refused as a name no file can be kept under, because the file
+  would be the container; an open to read, a removal, a rename from it and
+  an `rmdir` answer as for a name that is not a file. A container the index
+  does not name (one an earlier build left without its name) is still a file
+  to them, and a packaged file at a container's path is hidden while the
+  database is there.
+- **Databases leave the files.** The filter above left one difference: a
+  title here could not keep a file `X.db` beside a database `X`, which KTF and
+  SKT allow. A database now has a scope of its own, `jdb/<name>.db` with the
+  index of names at `jdb/.index`, and a store an earlier build wrote moves
+  there the first time a session reads its databases: the containers and the
+  index go to the store in one batch, and only once it has taken them are the
+  old paths put on the removal list. A store that refuses the batch keeps its
+  layout, and the session reads and writes the databases where they were,
+  with the filter hiding them, until a later session can move them; a second
+  session finds the move made and writes nothing. A quick save taken before
+  the move holds its databases by name and loads after it from the scope.
+  `TestDatabasesMoveOutOfTheFilesOnce`, `TestARefusedMoveKeepsTheEarlierLayout`,
+  `TestAQuickSaveFromBeforeTheMoveLoadsAfterIt` and
+  `TestStorageContractDatabasesAreNoFiles` hold it; the checkpoint test that
+  refused a pending file and database on one key now keeps both, since they
+  are no longer one key. Over the corpus at 500 ticks from empty saves, every
+  LGT title ends on the same frame as before; the eight that keep databases
+  hold them under `jdb/` with each container and the index byte for byte what
+  the earlier build wrote under `fs/`, and no longer write `fs/.created` for
+  them.
+- **A comparator's exception is the title's.** A `sortRecord` filter or
+  comparator that throws without catching used to stop the run, because the
+  frame that catches it is outside the call this platform makes into the
+  title. The uncaught throw now carries its object out of that call, and
+  `sortRecord` throws it again at the depth of the title's own call, where the
+  title's try region takes it, as on KTF and SKT
+  (`TestStorageContractDatabaseSortRecordThrowsToTheTitle`).

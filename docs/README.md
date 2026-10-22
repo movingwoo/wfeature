@@ -42,6 +42,7 @@ the page screenshots the root `README.md` shows.
 | [SKT checkpoints](skt-checkpoints.md) | The SKT Java and SGS quick save/load contract; KTF and LGT are in [architecture](architecture.md#quick-load-and-ordinary-saves) and their platform pages. |
 | [LCDUI](lcdui.md), [native text input](native-text-input.md) | Screens, widgets, Host keyboard/IME, and input ownership. |
 | [Rapid fire](rapid-fire.md) | The keypad's rapid-fire switch, its timing and measured cost. |
+| [WIPI storage](wipi-storage.md) | The one contract KTF, LGT and SKT keep for WIPI files, directories, space and databases. |
 | [RMS](rms.md) | MIDP record storage and layout. |
 | [Audio](audio.md), [audio ownership](audio-ownership.md), [hqx](hqx.md) | Sound formats/timelines, clip ownership and output recovery, and image scaling. |
 | [Network](network.md), [authentication](authentication.md) | Offline policy and recognized compatibility services. |
