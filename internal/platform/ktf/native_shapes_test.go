@@ -3,6 +3,7 @@ package ktf
 import (
 	"encoding/binary"
 	"errors"
+	"image"
 	"image/color"
 	"testing"
 	"time"
@@ -325,5 +326,205 @@ func TestNativeShapesSurviveAQuickLoad(t *testing.T) {
 		if err == nil || errors.Is(err, backend.ErrCheckpointVersion) != bad.version {
 			t.Errorf("%s was answered with %v", bad.name, err)
 		}
+	}
+}
+
+// TestNativeShapesFillRectangles covers the fill a later title draws its bars
+// with: a rectangle's outline is in the pen, and with the fill mode on its
+// inside is in the fill colour. The mode turns on for one and off for anything
+// else, as the specification has it, and answers the mode it set.
+func TestNativeShapesFillRectangles(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	frame := platform.screen.frame
+	under := color.RGBA{R: 1, G: 2, B: 3, A: 0xff}
+	for y := 0; y < 60; y++ {
+		for x := 0; x < 60; x++ {
+			frame.SetRGBA(x, y, under)
+		}
+	}
+	pen, fill := color.RGBA{R: 0xc0, A: 0xff}, color.RGBA{B: 0xc0, A: 0xff}
+	nativeStackedCall(t, platform, platform.shapeColour, []uint32{0, 0xc0, 0, 0}, 0xff)
+	if previous := nativeStackedCall(t, platform, platform.shapeFillColour, []uint32{0, 0, 0, 0xc0}, 0xff); previous != 0 {
+		t.Errorf("the first fill colour replaced %#x, want the black a title starts with", previous)
+	}
+
+	// An outline: the inside is left as it was.
+	nativeCall(t, platform.drawShapeRectangle, 0, nativeHalfwords(t, platform, 10, 10, 5, 4))
+	for _, pixel := range []struct {
+		x, y int
+		want color.RGBA
+	}{
+		{10, 10, pen}, {14, 10, pen}, {10, 13, pen}, {14, 13, pen}, {12, 10, pen}, {10, 12, pen},
+		{12, 12, under}, {15, 10, under}, {10, 14, under},
+	} {
+		if got := frame.RGBAAt(pixel.x, pixel.y); got != pixel.want {
+			t.Errorf("an outline drew %v at %d,%d, want %v", got, pixel.x, pixel.y, pixel.want)
+		}
+	}
+
+	if got := nativeCall(t, platform.shapeFillMode, 0, 1); got != 1 {
+		t.Errorf("turning the fill on answered %d, want 1", got)
+	}
+	nativeCall(t, platform.drawShapeRectangle, 0, nativeHalfwords(t, platform, 20, 20, 5, 4))
+	if got := frame.RGBAAt(22, 22); got != fill {
+		t.Errorf("a filled rectangle's inside is %v, want %v", got, fill)
+	}
+	if got := frame.RGBAAt(20, 20); got != pen {
+		t.Errorf("a filled rectangle's outline is %v, want the pen %v", got, pen)
+	}
+
+	// A value that is neither true nor false turns the fill off.
+	if got := nativeCall(t, platform.shapeFillMode, 0, 2); got != 0 {
+		t.Errorf("a fill mode of 2 answered %d, want 0", got)
+	}
+	nativeCall(t, platform.drawShapeRectangle, 0, nativeHalfwords(t, platform, 30, 30, 5, 4))
+	if got := frame.RGBAAt(32, 32); got != under {
+		t.Errorf("after the fill was turned off the inside is %v", got)
+	}
+	// A rectangle with no width draws nothing, and one that runs off the
+	// clip is cut at it.
+	nativeCall(t, platform.drawShapeRectangle, 0, nativeHalfwords(t, platform, 40, 40, 0, 4))
+	if got := frame.RGBAAt(40, 40); got != under {
+		t.Errorf("a rectangle with no width drew %v", got)
+	}
+	nativeCall(t, platform.shapeClip, 0, nativeHalfwords(t, platform, 1, 0, 0, 0, 50, 50), 0)
+	nativeCall(t, platform.shapeFillMode, 0, 1)
+	nativeCall(t, platform.drawShapeRectangle, 0, nativeHalfwords(t, platform, 45, 45, 10, 10))
+	if frame.RGBAAt(49, 47) != fill || frame.RGBAAt(50, 47) != under {
+		t.Error("a filled rectangle was not cut at the clip's edge")
+	}
+}
+
+// TestNativeShapesEarlierRecordLoadsWithoutAFill covers the record a build
+// that drew no filled shapes wrote: it loads with its pen and clip, and with
+// the fill a title starts with.
+func TestNativeShapesEarlierRecordLoadsWithoutAFill(t *testing.T) {
+	archive, err := testfixture.KTFNativeCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := backend.NewMemorySaveStore(nil)
+	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: NewManualClock(time.Time{}), SaveStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	set := nativeShapesState{Colour: 0x11223344, PointSize: 3, Clipped: true, ClipX: 1, ClipY: 2, ClipWidth: 30, ClipHeight: 40, Filled: true, FillColour: 0x55667788}
+	source.platform.shapes = set.restore()
+	saved, err := source.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record nativeShapesRecord
+	if err := backend.DecodeCheckpointRecord(saved.Runtime, &record); err != nil {
+		t.Fatal(err)
+	}
+	outline := nativeOutlineShapesRecord{Version: nativeOutlineShapesRecordVersion, State: record.State, Shapes: nativeOutlineShapesState{
+		Colour: set.Colour, PointSize: set.PointSize, Clipped: set.Clipped,
+		ClipX: set.ClipX, ClipY: set.ClipY, ClipWidth: set.ClipWidth, ClipHeight: set.ClipHeight,
+	}}
+	earlier := saved
+	if earlier.Runtime, err = backend.EncodeCheckpointRecord(outline); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := PrepareNativeSessionCheckpoint(archive, earlier, NativeSessionOptions{Clock: NewManualClock(time.Time{})})
+	if err != nil {
+		t.Fatalf("a record without the fill was refused: %v", err)
+	}
+	want := set
+	starting := newNativeShapes().capture()
+	want.Filled, want.FillColour = starting.Filled, starting.FillColour
+	if got := prepared.session.platform.shapes.capture(); got != want {
+		t.Errorf("a record without the fill restored %+v, want %+v", got, want)
+	}
+	prepared.Discard()
+
+	// The earlier record at a version it never had is refused as a version.
+	outline.Version++
+	if earlier.Runtime, err = backend.EncodeCheckpointRecord(outline); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := PrepareNativeSessionCheckpoint(archive, earlier, NativeSessionOptions{Clock: NewManualClock(time.Time{})})
+	if candidate != nil {
+		candidate.Discard()
+	}
+	if !errors.Is(err, backend.ErrCheckpointVersion) {
+		t.Errorf("an earlier record at another version was answered with %v", err)
+	}
+}
+
+// TestNativeTextFollowsItsAlignment covers BREW's alignment flags: an aligned
+// call has its x or y ignored and lands against the background rectangle, the
+// screen when there is none, and the text is clipped to that rectangle. A
+// later title centres the choices under its message box this way with x zero.
+func TestNativeTextFollowsItsAlignment(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	frame := platform.screen.frame
+	face := platform.textFace()
+	nativeCall(t, platform.screenColour, 0, nativeTextColourItem, 0)
+	ink := color.RGBA{A: 0xff}
+	address := nativeTextAt(t, platform, []byte("MMMM\x00"))
+	width := 4 * face.Render('M').Advance
+	inked := func(area image.Rectangle) (image.Rectangle, bool) {
+		var found image.Rectangle
+		any := false
+		for y := area.Min.Y; y < area.Max.Y; y++ {
+			for x := area.Min.X; x < area.Max.X; x++ {
+				if frame.RGBAAt(x, y) == ink {
+					point := image.Rect(x, y, x+1, y+1)
+					if !any {
+						found, any = point, true
+					}
+					found = found.Union(point)
+				}
+			}
+		}
+		return found, any
+	}
+	clear := func() { nativeCall(t, platform.drawRectangle, 0, 0, nativeNoColour, 0xffffff00) }
+	draw := func(x, y int32, background, flags uint32) {
+		nativeStackedCall(t, platform, platform.drawText, []uint32{0, 0, address, 0xffffffff}, uint32(x), uint32(y), background, flags)
+	}
+	screen := frame.Bounds()
+
+	for _, test := range []struct {
+		name  string
+		flags uint32
+		left  int
+	}{
+		{name: "centred", flags: 0x8020, left: (screen.Dx() - width) / 2},
+		{name: "right", flags: 0x8040, left: screen.Dx() - width},
+		{name: "left", flags: 0x8010, left: 0},
+	} {
+		clear()
+		draw(7, 100, 0, test.flags)
+		found, ok := inked(screen)
+		if !ok {
+			t.Fatalf("%s text left no ink", test.name)
+		}
+		// The glyph's own side bearing is all that separates its ink from
+		// where the run starts.
+		if found.Min.X < test.left || found.Min.X > test.left+face.Render('M').Advance/2 {
+			t.Errorf("%s text starts at %d, want the run to start at %d", test.name, found.Min.X, test.left)
+		}
+	}
+
+	// Centred both ways in a rectangle of the title's own, and kept inside it.
+	box := nativeHalfwords(t, platform, 40, 60, int16(width+20), int16(face.Height()+40))
+	clear()
+	draw(0, 0, box, 0x8220)
+	found, ok := inked(screen)
+	if !ok {
+		t.Fatal("text centred in a rectangle left no ink")
+	}
+	top := 60 + (face.Height()+40-face.Height())/2
+	if found.Min.Y < top || found.Max.Y > top+face.Height() || found.Min.X < 50 {
+		t.Errorf("text centred in the rectangle covers %v, want inside the line at %d,%d", found, 50, top)
+	}
+	small := nativeHalfwords(t, platform, 0, 0, 5, 200)
+	clear()
+	draw(0, 100, small, 0x8000)
+	if found, ok := inked(screen); ok && found.Max.X > 5 {
+		t.Errorf("text drawn in a rectangle 5 wide reached x %d", found.Max.X)
 	}
 }

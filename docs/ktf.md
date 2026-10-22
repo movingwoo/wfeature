@@ -26,6 +26,10 @@ entry: a header naming the BSS size and a relocation table, then a segment
 whose entry is handed the platform callback table and asks it for one
 interface by name. The module publishes a class table that this side links
 ([the older modules](history/ktf.md#implementation-the-older-modules-run-under-the-platform-and-all-three-of-them-play)).
+Linking moves a subclass's instance fields past its superclass's when both are
+the module's own, and leaves its statics alone: a static's last word is its
+value, not an offset
+([history](history/ktf.md#ktf-new-archives-2026-10-21-statics)).
 
 The earlier native package has no descriptor and no JAR: a module information
 file, a raw ARM module and the title's resource files. Its signature chain
@@ -43,6 +47,31 @@ text in halfwords, and clears with a fill in no colour, which takes the ground
 colour item 2 ([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-drawing)).
 A native colour is BREW's RGBVAL, `0xBBGGRR00`, in both generations
 ([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-review)).
+The flat table below the module is BREW's helper table and the object handed
+to the entry is its shell, slot for slot. Beside the copies the table answers
+a later module's `strcmp`, `atoi`, `memcmp`, the double arithmetic `f_op` and
+`f_cmp`, STREXPAND, GETTIMESECONDS and GETJULIANDATE, and its allocator
+answers a request for nothing with null, as BREW's heap does. The shell
+answers ActiveApplet with the title's own ClassID, and its `+0x30` is
+CancelTimer, which earlier builds ran as a request to be called once more. The
+image factory is SetupNativeImage: beside a later module's image it fills the
+image's description and sets the flag saying the image is a block of its own.
+The 2005 module, which is not in the local corpus, keeps the answers it has
+always run with from those helpers and that factory
+([history](history/ktf.md#ktf-new-archives-2026-10-21-helper-table)).
+A later module's image is BREW's IDIB, 5-6-5 pixels behind a header in one
+block, and the blit reads any IDIB's pixels from guest memory, so what a title
+draws into one, or builds from one's header, is what it blits; the 2005
+module keeps its own object
+([history](history/ktf.md#ktf-new-archives-2026-10-21-dib)). The sound and the
+timed service end on their own clocks whether or not a frame is registered
+([history](history/ktf.md#ktf-new-archives-2026-10-21-race)). The network
+manager opens a socket that refuses to connect, and never answers a lookup
+([history](history/ktf.md#ktf-new-archives-2026-10-21-network)). Text follows
+BREW's alignment flags against its background rectangle and is clipped to it
+([history](history/ktf.md#ktf-new-archives-2026-10-21-text)), and the shape
+interface also fills rectangles
+([history](history/ktf.md#ktf-new-archives-2026-10-21-fill)).
 
 The JVM context sits beside an ordinary image so representable object-header
 displacements retain canonical image class addresses during compiled access
@@ -231,6 +260,10 @@ and read-write (2) refuses one — and refuses an empty file the package does no
 carry and the session has not written, which builds before 2026-10-21 made for
 every such open; the empty file is kept
 ([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-open)).
+A later module seeks from the end the way BREW does, by an offset that is
+negative to move back; the 2005 module's end-relative seek keeps its own
+wrapper's arithmetic
+([history](history/ktf.md#ktf-new-archives-2026-10-21-seek)).
 See [save integrity](session.md#save-integrity) for failure recovery and limits.
 
 A record database the archive carries, as one `qtcdb` file or as a `qtpdb`
@@ -307,10 +340,13 @@ Particular to this platform:
   buffers. The record's screen is therefore held to 1,024 a side, the largest
   either Host starts a session at, as on LGT; an image the title decoded keeps
   the wider 4,096 bound.
-- A native record wraps that record with the shape interface's pen, point size
-  and clip. A record without them, as every build before 2026-10-21 wrote,
+- A native record wraps that record with the shape interface's pen, point size,
+  clip and fill. A record without them, as every build before 2026-10-21 wrote,
   still loads with the interface a title starts with
-  ([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-checkpoint)).
+  ([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-checkpoint)),
+  and one with the pen, size and clip but no fill loads with the fill off
+  ([history](history/ktf.md#ktf-new-archives-2026-10-21-fill)). A socket a
+  title opened is an interface object and is carried as one.
 
 ## Diagnostics and limits
 
@@ -333,8 +369,11 @@ Known limits include animated image playback, unapplied graphics alpha and
 WIPI-C context transparency and origin fields, unpainted LWC components
 (deliberately: no record of the original runtime's components exists),
 dialogs answered without being shown, the native archive that stops on its
-loading screen, and the lack of archive evidence for automatic landscape
-selection. Published instance-field divergence is diagnosed rather than
-repaired using an invented precedence rule. The full list with reasons is
+loading screen, a later native archive drawn for a 128x160 handset that has to
+have that screen chosen
+([history](history/ktf.md#ktf-new-archives-2026-10-21-limits)), and the lack
+of archive evidence for automatic landscape selection. Published
+instance-field divergence is diagnosed rather than repaired using an invented
+precedence rule. The full list with reasons is
 [Deliberately incomplete](history/ktf.md#implementation-deliberately-incomplete).
 Corpus startup counts do not establish complete gameplay or save restoration.

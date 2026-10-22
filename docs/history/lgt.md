@@ -7750,3 +7750,26 @@ whose base digest held across three runs gave three digests in eight more runs
 of the base, and two of those in eight runs of the fixes. No title was driven
 to a name screen for these fixes.
 
+<a id="lgt-earlier-java-package-2026-10-21"></a>
+
+## A package of the earlier Java platform — 2026-10-21
+
+A newly added archive was refused at start with "the archive is not a KTF, LGT
+or SKT game". It is whole — its JAR's 155 entries read and inflate — and it is
+a package of the carrier's Java platform from before WIPI:
+
+- `DESC.jad` and `MANIFEST.MF` declare a MIDlet for `MIDP-1.0` and `CLDC-1.0`,
+  with the carrier's own keys beside the standard ones (`MIDletX-LCD-Size:
+  176,200`, `MIDletX-No-Command`, `MIDletX-Expire-Date`), and the JAR's URL
+  names the carrier's Java download path.
+- The JAR holds class files and the title's resources, and its classes link
+  against `javax/microedition/{lcdui,io,rms,midlet}` and the carrier's
+  `mmpp/microedition/lcdui/GraphicsX`, `mmpp/media/…` and `mmpp/phone/…`.
+- `<n>.idx` beside `<n>.jar` indexes the JAR's entries by name, offset and
+  size, and the `.db` files beside them are the title's record stores.
+
+There is no `app_info`, no `binary.mod` and nothing compiled, so neither the
+LGT loader nor the SKT one (whose classes link against `com/skt/m/…`) applies,
+and detection answers `no-marker`. Running it would take a MIDP 1.0 platform
+with the carrier's `mmpp` extension classes and its package layout; nothing of
+that exists here, and building it is not planned for now (decided 2026-10-21).

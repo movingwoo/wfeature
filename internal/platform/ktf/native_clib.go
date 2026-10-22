@@ -3,6 +3,7 @@ package ktf
 import (
 	"bytes"
 	"fmt"
+	"math"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/wipic"
@@ -24,8 +25,22 @@ const (
 	nativeSlotMemorySet  = 0x04
 	nativeSlotStringCopy = 0x08
 	nativeSlotStringJoin = 0x0c
-	nativeSlotStringSize = 0x14
-	nativeSlotFormat     = 0x20
+	// nativeSlotStringOrder is BREW's strcmp. A later title looks its
+	// resources up by name with it, and a trap's zero matched the first
+	// entry of every directory: the size it then computed was negative.
+	nativeSlotStringOrder = 0x10
+	nativeSlotStringSize  = 0x14
+	nativeSlotFormat      = 0x20
+	// nativeSlotDecimal is BREW's atoi. A later title reads a count out of
+	// a one-digit text field with it and sizes a table by the answer.
+	nativeSlotDecimal = 0x90
+	// nativeSlotFloatOperation and nativeSlotFloatCompare are BREW's f_op and
+	// f_cmp, the double arithmetic and comparisons its FADD, FSUB, FMUL, FDIV,
+	// FPOW and FCMP_* macros call. A later title computes with them every
+	// frame of a race, tens of thousands of calls, and a trap's zero made
+	// every result nothing.
+	nativeSlotFloatOperation = 0x94
+	nativeSlotFloatCompare   = 0x98
 	// nativeSlotBoundedCopy is a second copy, and the module reaches it from
 	// one place: it measures a string with the length slot, allocates that many
 	// bytes and one more, and copies the string's own length into the block —
@@ -39,6 +54,15 @@ const (
 	// first bytes of a sound resource and compares four of them against the
 	// literals "MMMD" and "cmid", which are the two formats it can play.
 	nativeSlotCompare = 0xcc
+	// nativeSlotMemoryOrder is BREW's memcmp, where 0xcc is its strncmp. A
+	// later title searches a sound it has loaded for a run of bytes with it,
+	// and a trap's zero found the run at the first place it looked. The 2005
+	// module reaches the slot too and keeps the zero it ran with (laterOnly).
+	nativeSlotMemoryOrder = 0xdc
+	// nativeSlotWiden is BREW's STREXPAND, which turns a byte string into the
+	// wide one the display draws. A later title builds the text of its
+	// message box with it, and a trap left the box empty.
+	nativeSlotWiden = 0xe4
 )
 
 // nativeMaxString bounds every string this library reads out of guest memory,
@@ -59,10 +83,32 @@ func (platform *NativePlatform) installLibrary() {
 	client.Serve(NativePlatformTable, nativeSlotMemorySet, platform.memorySet)
 	client.Serve(NativePlatformTable, nativeSlotStringCopy, platform.stringCopy)
 	client.Serve(NativePlatformTable, nativeSlotStringJoin, platform.stringJoin)
+	client.Serve(NativePlatformTable, nativeSlotStringOrder, platform.laterOnly(platform.stringOrder))
 	client.Serve(NativePlatformTable, nativeSlotStringSize, platform.stringSize)
 	client.Serve(NativePlatformTable, nativeSlotFormat, platform.format)
+	client.Serve(NativePlatformTable, nativeSlotDecimal, platform.laterOnly(platform.decimal))
+	client.Serve(NativePlatformTable, nativeSlotFloatOperation, platform.laterOnly(platform.floatOperation))
+	client.Serve(NativePlatformTable, nativeSlotFloatCompare, platform.laterOnly(platform.floatCompare))
 	client.Serve(NativePlatformTable, nativeSlotBoundedCopy, platform.memoryCopy)
 	client.Serve(NativePlatformTable, nativeSlotCompare, platform.memoryCompare)
+	client.Serve(NativePlatformTable, nativeSlotMemoryOrder, platform.laterOnly(platform.memoryCompare))
+	client.Serve(NativePlatformTable, nativeSlotWiden, platform.laterOnly(platform.widen))
+}
+
+// laterOnly answers a helper slot for a later module, and the 2005 module with
+// the zero a trap gave it. The helpers served here for later titles are ones
+// the 2005 module has always run without — one of them, `0xdc`, it is known
+// to reach — and it is not in the local corpus, so what a real answer would
+// change for it cannot be measured: a comparison that has always come out
+// equal could, for one, decide differently about a save it wrote. So it keeps
+// the answers it ran with.
+func (platform *NativePlatform) laterOnly(handler NativeSlotHandler) NativeSlotHandler {
+	return func(thread *armcore.Thread) (uint32, error) {
+		if !platform.archive.AsksForInterfaceVersion() {
+			return 0, nil
+		}
+		return handler(thread)
+	}
 }
 
 // nativeArguments reads the first four arguments of a trapped call.
@@ -204,6 +250,138 @@ func (platform *NativePlatform) stringJoin(thread *armcore.Thread) (uint32, erro
 	return arguments[0], nil
 }
 
+// stringOrder compares two terminated strings byte by byte, unsigned, and
+// answers the sign of the first difference.
+func (platform *NativePlatform) stringOrder(thread *armcore.Thread) (uint32, error) {
+	arguments, err := nativeArguments(thread, 2)
+	if err != nil {
+		return 0, err
+	}
+	left, err := platform.readString(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	right, err := platform.readString(arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	return uint32(int32(bytes.Compare(left, right))), nil
+}
+
+// decimal reads a signed decimal number the way C's atoi does: leading white
+// space, one optional sign, then digits up to the first byte that is not one.
+// The value wraps as the 32-bit int it is returned in.
+func (platform *NativePlatform) decimal(thread *armcore.Thread) (uint32, error) {
+	address, err := thread.Register(0)
+	if err != nil {
+		return 0, err
+	}
+	text, err := platform.readString(address)
+	if err != nil {
+		return 0, err
+	}
+	index := 0
+	for index < len(text) && (text[index] == ' ' || text[index] >= '\t' && text[index] <= '\r') {
+		index++
+	}
+	negative := false
+	if index < len(text) && (text[index] == '+' || text[index] == '-') {
+		negative = text[index] == '-'
+		index++
+	}
+	value := uint32(0)
+	for ; index < len(text) && text[index] >= '0' && text[index] <= '9'; index++ {
+		value = value*10 + uint32(text[index]-'0')
+	}
+	if negative {
+		value = -value
+	}
+	return value, nil
+}
+
+// The operation numbers f_op and f_cmp take, as BREW's header numbers them.
+const (
+	nativeFloatAdd          = 0
+	nativeFloatSubtract     = 1
+	nativeFloatMultiply     = 2
+	nativeFloatDivide       = 3
+	nativeFloatLess         = 4
+	nativeFloatLessEqual    = 5
+	nativeFloatEqual        = 6
+	nativeFloatGreater      = 7
+	nativeFloatGreaterEqual = 8
+	nativeFloatPower        = 9
+)
+
+// floatOperands reads the two doubles an f_op or f_cmp call takes, each in two
+// registers with its low word first, and the operation after them on the
+// stack.
+func (platform *NativePlatform) floatOperands(thread *armcore.Thread) (left, right float64, operation uint32, err error) {
+	arguments, err := nativeArguments(thread, 4)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	stacked, err := platform.varargs(thread, 4)(1)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	left = math.Float64frombits(uint64(arguments[1])<<32 | uint64(arguments[0]))
+	right = math.Float64frombits(uint64(arguments[3])<<32 | uint64(arguments[2]))
+	return left, right, uint32(stacked), nil
+}
+
+// floatOperation answers f_op with a double in r0 and r1, low word first. An
+// operation it does not name answers zero.
+func (platform *NativePlatform) floatOperation(thread *armcore.Thread) (uint32, error) {
+	left, right, operation, err := platform.floatOperands(thread)
+	if err != nil {
+		return 0, err
+	}
+	result := 0.0
+	switch operation {
+	case nativeFloatAdd:
+		result = left + right
+	case nativeFloatSubtract:
+		result = left - right
+	case nativeFloatMultiply:
+		result = left * right
+	case nativeFloatDivide:
+		result = left / right
+	case nativeFloatPower:
+		result = math.Pow(left, right)
+	}
+	bits := math.Float64bits(result)
+	if err := thread.SetRegister(1, uint32(bits>>32)); err != nil {
+		return 0, err
+	}
+	return uint32(bits), nil
+}
+
+// floatCompare answers f_cmp: 1 when the comparison it names holds, else 0.
+func (platform *NativePlatform) floatCompare(thread *armcore.Thread) (uint32, error) {
+	left, right, operation, err := platform.floatOperands(thread)
+	if err != nil {
+		return 0, err
+	}
+	holds := false
+	switch operation {
+	case nativeFloatLess:
+		holds = left < right
+	case nativeFloatLessEqual:
+		holds = left <= right
+	case nativeFloatEqual:
+		holds = left == right
+	case nativeFloatGreater:
+		holds = left > right
+	case nativeFloatGreaterEqual:
+		holds = left >= right
+	}
+	if holds {
+		return 1, nil
+	}
+	return 0, nil
+}
+
 func (platform *NativePlatform) stringSize(thread *armcore.Thread) (uint32, error) {
 	address, err := thread.Register(0)
 	if err != nil {
@@ -214,6 +392,51 @@ func (platform *NativePlatform) stringSize(thread *armcore.Thread) (uint32, erro
 		return 0, err
 	}
 	return uint32(len(text)), nil
+}
+
+// widen answers STREXPAND(source, count, destination, size). Each character of
+// up to count bytes of source, as far as its terminator, becomes one halfword:
+// a single-byte character widened with a zero, and the two bytes of an EUC-KR
+// character copied side by side, which is the halfword the display reads as
+// that character (native_text.go). It writes no further than size bytes, and
+// ends what it wrote with a zero halfword when there is room for one.
+func (platform *NativePlatform) widen(thread *armcore.Thread) (uint32, error) {
+	arguments, err := nativeArguments(thread, 4)
+	if err != nil {
+		return 0, err
+	}
+	source, count, destination, size := arguments[0], int32(arguments[1]), arguments[2], int32(arguments[3])
+	if destination == 0 || size < 2 {
+		return 0, nil
+	}
+	var text []byte
+	if count > 0 {
+		if source == 0 {
+			return 0, fmt.Errorf("KTF native library call on a null string")
+		}
+		memory := platform.client.core.Memory()
+		if text, _, err = readGuestString(memory, source, uint32(min(count, nativeMaxString)), 1); err != nil {
+			return 0, fmt.Errorf("read KTF native string at %#x: %w", source, err)
+		}
+	}
+	room := min(int(size), nativeMaxString*2) &^ 1
+	wide := make([]byte, 0, min(room, 2*len(text)+2))
+	for index := 0; index < len(text) && len(wide)+2 <= room; index++ {
+		character := text[index]
+		if character < 0x80 || index+1 == len(text) {
+			wide = append(wide, character, 0)
+			continue
+		}
+		index++
+		wide = append(wide, character, text[index])
+	}
+	if len(wide)+2 <= room {
+		wide = append(wide, 0, 0)
+	}
+	if err := platform.client.core.Memory().Write(destination, wide); err != nil {
+		return 0, fmt.Errorf("write %d bytes of wide text at %#x: %w", len(wide), destination, err)
+	}
+	return 0, nil
 }
 
 // format renders into a caller-supplied buffer. The variadic arguments follow

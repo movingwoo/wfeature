@@ -44,6 +44,9 @@ something the game handles.
 | KTF | WIPI C net table, `connect` | accepts a callback request (at most 16 pending), then reports failure through it; without a callback or with a full queue, refuses immediately |
 | KTF | WIPI C net table, everything else | `0xffffffff` |
 | KTF | `MC_knlGetAccessLevel` | `0xff`: all API groups are permitted; individual network operations still fail |
+| KTF native | BREW network manager, `OpenSocket` | a socket, one object for every socket |
+| KTF native | BREW socket, `Connect`, `Read`, `Write` | `AEE_NET_ERROR` at once; `GetLastError` answers `AEE_NET_ENETDOWN` |
+| KTF native | BREW network manager, `GetHostByName` | never answered, as out of coverage |
 | LGT | `MC_netConnect` | accepted within a 64-request bound, then fails through its callback; recognized local notification dials report local readiness |
 | LGT | `MC_netClose` | success, because the call returns void; drops unreported dials |
 | LGT | the rest of the net block — socket create (`0x25a` and `0x7d0`), connect/write/read/close, both callback setters | error, except the recognized local notification/empty-save socket |
@@ -103,6 +106,20 @@ was tried and ended one title at its own startup error screen: it requires
 `& 0xbc` to equal `0xbc` and never reaches a call that could be refused. With
 every group granted, every other local title drew the same frames and made no
 new network call (`wipicAccessLevel` in `internal/platform/ktf/initialization.go`).
+
+**A BREW socket is created, then refused.** The earlier KTF native package is
+BREW ([ktf.md](ktf.md)). One later title opens a socket through BREW's network
+manager while it starts and loads its pictures only once it has one, so a
+refused socket ended its start-up. Creating a socket reaches nothing: the
+manager hands one out, and Connect, Read and Write answer `AEE_NET_ERROR` at
+once, with GetLastError naming `AEE_NET_ENETDOWN`, a handset's answer with no
+network. Connect refuses by its return value because BREW calls its callback
+only for a connection it started. A lookup is never answered, as one out of
+coverage is not; the title that asks gives up by itself after 8.7 seconds of
+guest time and says its server could not be reached, and answering it would
+take a platform call into the guest that nothing else in the package needs.
+`internal/platform/ktf/native_network.go` holds this
+([history](history/ktf.md#ktf-new-archives-2026-10-21-network)).
 
 ## Local LGT protocol compatibility
 

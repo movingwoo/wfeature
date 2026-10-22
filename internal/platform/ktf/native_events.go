@@ -83,50 +83,35 @@ const (
 	maxNativePostedEvents = 1024
 )
 
-// nativeObjectResume takes a function and a context and no interval, which is
-// what separates it from the schedule beside it: the title asks to be called
-// once more rather than every so many milliseconds. It is delivered on the
-// next pass and not re-armed — a title that wants another asks again, and the
-// local one does.
-const nativeObjectResume = 0x30
+// nativeObjectCancelTimer is BREW's CancelTimer, the slot after its SetTimer
+// (nativeObjectSchedule): it takes the function and context a timer was set
+// with and cancels that timer, or every timer of the context when no function
+// is named.
+// It was read as a request to be called once more, and a title that cancels
+// its frame and sets it again inside that frame — the way BREW's one-shot
+// timers are kept running — then ran the frame on every pass as well as when
+// its timer came due.
+const nativeObjectCancelTimer = 0x30
 
-// nativeResume is one of those calls.
+// nativeResume is one call that reading queued. A checkpoint an earlier build
+// took still carries the list; see restoreNativeState.
 type nativeResume struct {
 	Function uint32
 	Context  uint32
 }
 
-// resume queues one.
-func (platform *NativePlatform) resume(thread *armcore.Thread) (uint32, error) {
+// cancelTimer cancels the frame when it is the timer named, and answers BREW's
+// SUCCESS whether or not it was.
+func (platform *NativePlatform) cancelTimer(thread *armcore.Thread) (uint32, error) {
 	arguments, err := nativeArguments(thread, 3)
 	if err != nil {
 		return 0, err
 	}
-	if arguments[1] == 0 {
-		return 0, nil
+	function, user := arguments[1], arguments[2]
+	if frame := platform.frame; frame != nil && frame.context == user && (function == 0 || frame.function == function) {
+		platform.frame = nil
 	}
-	if len(platform.resumes) >= maxNativePostedEvents {
-		return 0, fmt.Errorf("KTF native title has asked to be resumed %d times without being run", len(platform.resumes))
-	}
-	platform.resumes = append(platform.resumes, nativeResume{Function: arguments[1], Context: arguments[2]})
-	return 1, nil
-}
-
-// deliverResumes runs what the title asked to have run once more. Like the
-// posted events the queue is taken whole first, because the function it runs
-// is the one that asks for the next one.
-func (platform *NativePlatform) deliverResumes(ctx context.Context) error {
-	if len(platform.resumes) == 0 {
-		return nil
-	}
-	queued := platform.resumes
-	platform.resumes = nil
-	for _, call := range queued {
-		if _, err := platform.client.CallExport(ctx, call.Function, []uint32{call.Context}); err != nil {
-			return fmt.Errorf("KTF native resume at %#x: %w", call.Function, err)
-		}
-	}
-	return nil
+	return 0, nil
 }
 
 // nativePostedEvent is one event the title sent itself.
@@ -333,19 +318,19 @@ func (platform *NativePlatform) stopTimed(*armcore.Thread) (uint32, error) {
 }
 
 // advanceTimed tells the title when its wait is over.
-func (platform *NativePlatform) advanceTimed(ctx context.Context) error {
+func (platform *NativePlatform) advanceTimed(ctx context.Context) (bool, error) {
 	if !platform.timedRunning || platform.clock.Now().Before(platform.timedDue) {
-		return nil
+		return false, nil
 	}
 	platform.timedRunning = false
 	listener, ok := platform.listenerFor(nativeInterfaceTimed)
 	if !ok {
-		return nil
+		return false, nil
 	}
 	if _, err := platform.Deliver(ctx, listener, nativeTimedEventKind, nativeTimedEventEnd); err != nil {
-		return fmt.Errorf("KTF native timed service ended: %w", err)
+		return true, fmt.Errorf("KTF native timed service ended: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // Listeners reports what the module registered, in order.
@@ -428,20 +413,22 @@ func (platform *NativePlatform) Tick(ctx context.Context) (bool, error) {
 	if err := platform.deliverPosted(ctx); err != nil {
 		return false, err
 	}
-	if err := platform.deliverResumes(ctx); err != nil {
+	// The sound and the timed service end on their own clocks, frame or no
+	// frame: a title can cancel its frame and wait for its sound to finish,
+	// which one later title does between two screens, and the end is what
+	// starts it again. They are answered before the frame, so a title that is
+	// waiting on one hears about it and then runs the frame that acts on it,
+	// rather than a frame later.
+	heard, err := platform.advanceSound(ctx)
+	if err != nil {
+		return false, err
+	}
+	ended, err := platform.advanceTimed(ctx)
+	if err != nil {
 		return false, err
 	}
 	if platform.frame == nil || platform.frame.function == 0 {
-		return len(platform.posted) > 0 || len(platform.resumes) > 0, nil
-	}
-	// The sound and the timed service are answered before the frame, so a
-	// title that is waiting on one hears about it and then runs the frame that
-	// acts on it, rather than a frame later.
-	if err := platform.advanceSound(ctx); err != nil {
-		return false, err
-	}
-	if err := platform.advanceTimed(ctx); err != nil {
-		return false, err
+		return heard || ended || len(platform.posted) > 0, nil
 	}
 	// The schedule is read after those two and not before: both run the
 	// title's own listeners, and a listener that re-arms replaces the schedule
@@ -488,14 +475,30 @@ func (platform *NativePlatform) Speed() float64 {
 	return platform.pace.Speed()
 }
 
-// NextFrame reports when the title's frame is next due, on the title's own
-// clock. A Host waiting for it wants NativeSession.NextDeadline, which is the
-// same instant on the Host's.
+// nativeSoundPoll is how often a title with no frame, waiting on a sound it
+// started, is looked at again. The end of a clip is the audio timeline's to
+// know, so it is found by looking rather than by a deadline of its own.
+const nativeSoundPoll = 50 * time.Millisecond
+
+// NextFrame reports when a tick next has something to do, on the title's own
+// clock: the title's frame, or with no frame the end of the timed service or
+// the next look at the sound the title is waiting on. A Host waiting for it
+// wants NativeSession.NextDeadline, which is the same instant on the Host's.
 func (platform *NativePlatform) NextFrame() (time.Time, bool) {
-	if platform.frame == nil || platform.frame.function == 0 {
-		return time.Time{}, false
+	if platform.frame != nil && platform.frame.function != 0 {
+		return platform.frame.due, true
 	}
-	return platform.frame.due, true
+	var due time.Time
+	pending := false
+	if platform.timedRunning {
+		due, pending = platform.timedDue, true
+	}
+	if platform.sounding {
+		if look := platform.clock.Now().Add(nativeSoundPoll); !pending || look.Before(due) {
+			due, pending = look, true
+		}
+	}
+	return due, pending
 }
 
 // UntilNextFrame reports how long a Host should wait before ticking again. It

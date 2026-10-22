@@ -49,11 +49,13 @@ type nativeState struct {
 	TimedRunning bool
 	Frame        *nativeFrameState
 	Posted       []nativePostedEvent
-	Resumes      []nativeResume
-	Colours      []nativeColourState
-	Audio        backend.AudioState
-	Clip         backend.AudioHandle
-	Sounding     bool
+	// Resumes is written empty and read only to be checked: the codec takes
+	// no record with a field missing, and an earlier build filled it.
+	Resumes  []nativeResume
+	Colours  []nativeColourState
+	Audio    backend.AudioState
+	Clip     backend.AudioHandle
+	Sounding bool
 }
 
 type nativeBlockState struct {
@@ -152,7 +154,7 @@ func (session *NativeSession) captureNativeState(now time.Time) (nativeState, er
 	saved := nativeState{Version: nativeStateVersion, Application: platform.application, FileTable: platform.fileTable, Speed: platform.Speed(),
 		Elapsed: now.Sub(platform.started), SessionElapsed: now.Sub(session.started), FileFailure: platform.fileFailure,
 		Listeners: slices.Clone(platform.listeners), TimedDue: captureHeapDeadline(platform.timedDue, now), TimedRunning: platform.timedRunning,
-		Posted: slices.Clone(platform.posted), Resumes: slices.Clone(platform.resumes), Clip: platform.clip, Sounding: platform.sounding}
+		Posted: slices.Clone(platform.posted), Clip: platform.clip, Sounding: platform.sounding}
 	if !now.Add(-saved.Elapsed).Equal(platform.started) || !now.Add(-saved.SessionElapsed).Equal(session.started) {
 		return nativeState{}, fmt.Errorf("KTF native checkpoint clock exceeds its duration range")
 	}
@@ -460,7 +462,10 @@ func restoreNativeState(archive *NativeArchive, saved nativeState, options Nativ
 			position: record.Position, writable: record.Writable, truncated: record.Truncated}
 	}
 	platform.fileFailure = saved.FileFailure
-	platform.listeners, platform.posted, platform.resumes = slices.Clone(saved.Listeners), slices.Clone(saved.Posted), slices.Clone(saved.Resumes)
+	// Resumes is what an earlier build queued when the title cancelled its
+	// timer, a call the title never asked for, so a record that carries any
+	// is loaded without them; see nativeObjectCancelTimer.
+	platform.listeners, platform.posted = slices.Clone(saved.Listeners), slices.Clone(saved.Posted)
 	platform.timedDue, platform.timedRunning = saved.TimedDue.restore(now), saved.TimedRunning
 	if frame := saved.Frame; frame != nil {
 		platform.frame = &nativeSchedule{frame.Interval, frame.Function, frame.Context, now.Add(frame.Remaining)}

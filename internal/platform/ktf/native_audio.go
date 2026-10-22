@@ -158,25 +158,25 @@ func (platform *NativePlatform) guestElapsed() time.Duration {
 // the title so. The module keeps a flag it sets when it starts a sound and
 // clears only in the function its listener calls, so a platform that never
 // reports the end leaves a title believing its music is still playing.
-func (platform *NativePlatform) advanceSound(ctx context.Context) error {
+func (platform *NativePlatform) advanceSound(ctx context.Context) (bool, error) {
 	if platform.audio == nil {
-		return nil
+		return false, nil
 	}
 	platform.audio.Advance(platform.guestElapsed())
 	// No clip while sounding is a sounding clip that setClip closed and could
 	// not replace, so it has ended as surely as one that played out.
 	if !platform.sounding || platform.clip != 0 && platform.audio.Playing(platform.clip) {
-		return nil
+		return false, nil
 	}
 	platform.sounding = false
 	listener, ok := platform.listenerFor(nativeInterfaceSound)
 	if !ok {
-		return nil
+		return false, nil
 	}
 	if _, err := platform.Deliver(ctx, listener, nativeSoundEventKind, nativeSoundEventEnd); err != nil {
-		return fmt.Errorf("KTF native clip ended: %w", err)
+		return true, fmt.Errorf("KTF native clip ended: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // ClipRefusals reports clips this platform would not play, which is what says

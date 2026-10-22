@@ -833,10 +833,15 @@ func (platform *NativePlatform) writeFile(thread *armcore.Thread) (uint32, error
 	return length, nil
 }
 
-// seekFile answers the file object's seek. The module's own wrapper computes
-// the same position from the same two arguments and then passes them through,
-// so this follows its arithmetic rather than a convention of its own — its
-// end-relative case counts back from the last byte.
+// seekFile answers the file object's seek. The 2005 module's own wrapper
+// computes the same position from the same two arguments and then passes them
+// through, so for that generation this follows its arithmetic — its
+// end-relative case counts back from the last byte. A later module seeks the
+// way BREW's IFILE_Seek does, from the end by an offset that is negative to
+// move back. One checks a file it has just read by seeking to -1 from the end
+// and reading one byte, and the 2005 reading put that past the last byte,
+// where the read found nothing: the title took its own file for damaged and
+// gave up its start-up before it loaded a picture, then faulted drawing one.
 func (platform *NativePlatform) seekFile(thread *armcore.Thread) (uint32, error) {
 	file, err := platform.openFileFor(thread)
 	if err != nil {
@@ -855,7 +860,11 @@ func (platform *NativePlatform) seekFile(thread *armcore.Thread) (uint32, error)
 	case nativeSeekStart:
 		position = int64(int32(offset))
 	case nativeSeekEnd:
-		position = int64(len(file.data)) - 1 - int64(int32(offset))
+		if platform.archive.AsksForInterfaceVersion() {
+			position = int64(len(file.data)) + int64(int32(offset))
+		} else {
+			position = int64(len(file.data)) - 1 - int64(int32(offset))
+		}
 	case nativeSeekCurrent:
 		position += int64(int32(offset))
 	default:

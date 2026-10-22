@@ -213,6 +213,72 @@ func TestAModuleSubclassFieldMovesPastItsSuperclass(t *testing.T) {
 	}
 }
 
+// A static field's record ends in the static's value rather than an offset,
+// and the guest reads that word as the value. Moving it with the instance
+// fields gave every static of a subclass its superclass's size: one local
+// title's reference statics all held 84, and its first store into one of
+// those arrays read 84 as an array header and faulted.
+func TestAModuleSubclassStaticKeepsItsValue(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	parent := writeModuleClassFields(t, runtime, "game/Base", 0, "first", "Ljava/lang/Object;", 0, 24)
+	child := writeModuleClassFields(t, runtime, "game/Leaf", parent, "own", "Ljava/lang/Object;", 0, 8)
+
+	// The subclass's table gains a static beside its instance field, null
+	// as the archive ships every static.
+	descriptor, err := runtime.readAOTWords(child+8, 1, "class descriptor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	table, err := runtime.readAOTWords(descriptor[0]+moduleDescriptorFieldTable, 1, "field table")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instanceField, err := runtime.readAOTWords(table[0], 1, "instance field")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullName, err := runtime.allocateBytes(append([]byte{0}, append([]byte("[I+shared"), 0)...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := make([]byte, javaFieldSize)
+	binary.LittleEndian.PutUint32(record[0:], 0x0009)
+	binary.LittleEndian.PutUint32(record[4:], child)
+	binary.LittleEndian.PutUint32(record[8:], fullName)
+	static, err := runtime.allocateBytes(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, err := runtime.allocateWords([]uint32{instanceField[0], static, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pointer [4]byte
+	binary.LittleEndian.PutUint32(pointer[:], fields)
+	if err := runtime.client.core.Memory().Write(descriptor[0]+moduleDescriptorFieldTable, pointer[:]); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.moduleClassByName = map[string]uint32{"game/Base": parent, "game/Leaf": child}
+	if err := runtime.linkModuleClasses(); err != nil {
+		t.Fatalf("linkModuleClasses() error = %v", err)
+	}
+	value, err := runtime.readWord(static + 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != 0 {
+		t.Fatalf("subclass static = %#x after linking, want the null it shipped with", value)
+	}
+	moved, err := runtime.readWord(instanceField[0] + 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved != 24 {
+		t.Fatalf("subclass instance field offset = %d, want 24 past its superclass", moved)
+	}
+}
+
 // A class whose superclass is one of this platform's is the case the guest is
 // already right about: those fields are not in the guest payload at all, so
 // adding the platform class's size would move every field past the end of the

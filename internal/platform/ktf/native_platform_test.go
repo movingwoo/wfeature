@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image/color"
+	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -635,7 +637,7 @@ func TestNativeTimedServiceReportsItsEnd(t *testing.T) {
 	if got := nativeCall(t, platform.startTimed, 0, 250); got != 1 {
 		t.Fatalf("starting answered %d, want 1", got)
 	}
-	if err := platform.advanceTimed(context.Background()); err != nil {
+	if _, err := platform.advanceTimed(context.Background()); err != nil {
 		t.Fatalf("before the time is up: %v", err)
 	}
 	if !platform.timedRunning {
@@ -644,7 +646,7 @@ func TestNativeTimedServiceReportsItsEnd(t *testing.T) {
 	clock.Advance(300 * time.Millisecond)
 	// The listener has no function to call, so delivering is a no-op; what is
 	// under test is that the platform stops waiting exactly once.
-	if err := platform.advanceTimed(context.Background()); err != nil {
+	if _, err := platform.advanceTimed(context.Background()); err != nil {
 		t.Fatalf("at the deadline: %v", err)
 	}
 	if platform.timedRunning {
@@ -1292,30 +1294,39 @@ func TestNativePostedEventsComeBackOnTheNextTick(t *testing.T) {
 	}
 }
 
-// TestNativeResumeRunsOnceAndIsNotRearmed covers the other half of the same
-// contract. The title asks to be called once more; a platform that kept
-// calling would be running a frame the title never asked for.
-func TestNativeResumeRunsOnceAndIsNotRearmed(t *testing.T) {
+// TestNativeCancelTimerCancelsTheTimerItNames covers BREW's CancelTimer. A
+// title keeps its one-shot frame running by cancelling it and setting it again
+// inside the frame, and a platform that read the cancel as a request to run
+// the function once more ran that frame on every pass as well as when its
+// timer came due.
+func TestNativeCancelTimerCancelsTheTimerItNames(t *testing.T) {
 	platform := newTestNativePlatform(t, nil)
-	// The module's own entry is `bx lr`, so it is something this can call.
-	if got := nativeCall(t, platform.resume, 0, ImageBase, 0x1234); got == 0 {
-		t.Fatal("asking to be resumed was refused")
+	nativeCall(t, platform.schedule, 0, 50, ImageBase, 0x1234)
+	// Another function or another context names another timer.
+	for _, other := range [][2]uint32{{ImageBase + 4, 0x1234}, {ImageBase, 0x9999}} {
+		if got := nativeCall(t, platform.cancelTimer, 0, other[0], other[1]); got != 0 {
+			t.Fatalf("cancel answered %d, want BREW's SUCCESS", got)
+		}
+		if platform.frame == nil {
+			t.Fatalf("cancelling %#x/%#x cancelled the frame", other[0], other[1])
+		}
 	}
-	if len(platform.resumes) != 1 || platform.resumes[0] != (nativeResume{Function: ImageBase, Context: 0x1234}) {
-		t.Fatalf("resumes = %+v, want the one that was asked for", platform.resumes)
+	nativeCall(t, platform.cancelTimer, 0, ImageBase, 0x1234)
+	if platform.frame != nil {
+		t.Fatal("the frame survived the cancel that named it")
 	}
-	if err := platform.deliverResumes(context.Background()); err != nil {
-		t.Fatalf("deliver a resume: %v", err)
+	if ran, err := platform.Tick(context.Background()); err != nil || ran {
+		t.Fatalf("a tick after the cancel ran %t, %v; want nothing to run", ran, err)
 	}
-	if len(platform.resumes) != 0 {
-		t.Error("a resume was left queued after it ran")
+	// No function cancels every timer of the context.
+	nativeCall(t, platform.schedule, 0, 50, ImageBase, 0x1234)
+	nativeCall(t, platform.cancelTimer, 0, 0, 0x1234)
+	if platform.frame != nil {
+		t.Fatal("cancelling the context's timers left the frame")
 	}
-	// A null function is nothing to call rather than a jump to zero.
-	if got := nativeCall(t, platform.resume, 0, 0, 0); got != 0 {
-		t.Errorf("a resume with no function answered %d, want 0", got)
-	}
-	if len(platform.resumes) != 0 {
-		t.Error("a resume with no function was queued")
+	// Cancelling a timer that was never set is harmless.
+	if got := nativeCall(t, platform.cancelTimer, 0, ImageBase, 0x1234); got != 0 {
+		t.Fatalf("cancelling nothing answered %d", got)
 	}
 }
 
@@ -1486,5 +1497,402 @@ func TestNativeImageKeepsItsOwnBitmap(t *testing.T) {
 	// The rows are bottom-up, so the row written first is the bottom one.
 	if got := source.frame.RGBAAt(0, 1); got != palette[2] {
 		t.Errorf("what the title drew reads as %v, want %v", got, palette[2])
+	}
+}
+
+// servedSlot is the handler a slot answers with, found the way a guest call
+// finds it: by the surface and byte offset BREW's tables give it.
+func servedSlot(t *testing.T, platform *NativePlatform, surface NativeSurface, offset uint32) NativeSlotHandler {
+	t.Helper()
+	handler, ok := platform.client.served[nativeSlotKey{surface: surface, slot: offset / 4}]
+	if !ok {
+		t.Fatalf("%s offset %#x is still a trap", surface, offset)
+	}
+	return handler
+}
+
+// TestNativeLibraryOrdersAndReadsNumbers covers the comparisons and the number
+// reader BREW's helper table keeps beside its copies. A trap answers each of
+// them with zero, which every caller reads as "the same" or "nothing": one
+// later title's resource directory matched its first entry for every name, a
+// sound search matched at its first byte, and a table sized by a count read
+// out of a text field came out empty.
+func TestNativeLibraryOrdersAndReadsNumbers(t *testing.T) {
+	platform := newLaterNativePlatform(t)
+	order := servedSlot(t, platform, NativePlatformTable, nativeSlotStringOrder)
+	apple, applet, banana := nativeString(t, platform, "apple"), nativeString(t, platform, "applet"), nativeString(t, platform, "banana")
+	high := nativeString(t, platform, "\xb0\xa1")
+	for _, test := range []struct {
+		left, right uint32
+		want        int32
+	}{
+		{apple, apple, 0}, {apple, applet, -1}, {applet, apple, 1}, {banana, apple, 1},
+		// Bytes compare unsigned, so a Korean string sorts after ASCII.
+		{high, apple, 1},
+	} {
+		if got := int32(nativeCall(t, order, test.left, test.right)); got != test.want {
+			t.Errorf("strcmp(%#x, %#x) = %d, want %d", test.left, test.right, got, test.want)
+		}
+	}
+
+	// memcmp runs the length it is given, through a terminator.
+	memory := servedSlot(t, platform, NativePlatformTable, nativeSlotMemoryOrder)
+	left := nativeString(t, platform, "ab\x00cd")
+	right := nativeString(t, platform, "ab\x00ce")
+	if got := nativeCall(t, memory, left, right, 4); got != 0 {
+		t.Errorf("memcmp over the equal four bytes = %d, want 0", int32(got))
+	}
+	if got := int32(nativeCall(t, memory, left, right, 5)); got >= 0 {
+		t.Errorf("memcmp past the terminator = %d, want below zero", got)
+	}
+
+	decimal := servedSlot(t, platform, NativePlatformTable, nativeSlotDecimal)
+	for text, want := range map[string]int32{
+		"0": 0, "7": 7, "999": 999, " \t-42x": -42, "+5": 5, "": 0, "x1": 0, "2147483648": math.MinInt32,
+	} {
+		if got := int32(nativeCall(t, decimal, nativeString(t, platform, text))); got != want {
+			t.Errorf("atoi(%q) = %d, want %d", text, got, want)
+		}
+	}
+}
+
+// TestNativeAllocationOfNothingIsNull covers BREW's heap, which answers a
+// request for no bytes with null rather than failing it. One later title sizes
+// each of its sounds from a table whose last entry is zero, keeps what it was
+// handed and reads zero bytes into it.
+func TestNativeAllocationOfNothingIsNull(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	allocate := servedSlot(t, platform, NativePlatformTable, nativeSlotAllocate)
+	if got := nativeCall(t, allocate, 0); got != 0 {
+		t.Errorf("an allocation of nothing answered %#x, want null", got)
+	}
+	if got := nativeCall(t, allocate, 16); got == 0 {
+		t.Error("an allocation of sixteen bytes answered null")
+	}
+}
+
+// TestNativeImageFactoryDescribesTheImage covers what BREW's SetupNativeImage
+// answers beside the image for a later module: a description, which one later
+// title sizes every blit from, and the flag saying the image is a block of its
+// own. The 2005 module passes two pointers there too and has always run with
+// nothing written through them, which it still does.
+func TestNativeImageFactoryDescribesTheImage(t *testing.T) {
+	describe := func(platform *NativePlatform) (uint32, []byte, byte) {
+		t.Helper()
+		bitmap := buildBitmap(3, 2, []color.RGBA{{A: 0xff}, {R: 0xff, A: 0xff}}, []byte{1, 0, 1, 0, 0, 1, 0, 0})
+		source, err := platform.client.Allocate(uint32(len(bitmap)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := platform.client.core.Memory().Write(source, bitmap); err != nil {
+			t.Fatal(err)
+		}
+		out, err := platform.client.Allocate(nativeImageInfoSize + 4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := platform.client.core.Memory().Write(out, bytes.Repeat([]byte{0xee}, nativeImageInfoSize+4)); err != nil {
+			t.Fatal(err)
+		}
+		info, flag := out, out+nativeImageInfoSize+2
+		object := nativeCall(t, platform.createObject, nativeClassImage, source, info, flag)
+		return object, nativeRead(t, platform, info, nativeImageInfoSize), nativeRead(t, platform, flag, 1)[0]
+	}
+
+	object, record, flag := describe(newLaterNativePlatform(t))
+	if object == 0 {
+		t.Fatal("the factory refused a bitmap")
+	}
+	want := []byte{3, 0, 2, 0, 2, 0, 0, 0, 3, 0}
+	if !bytes.Equal(record, want) {
+		t.Errorf("description = % x, want % x (width, height, colours, not animated, frame width)", record, want)
+	}
+	if flag != 1 {
+		t.Errorf("reallocation flag = %d, want 1: the image is this platform's own copy", flag)
+	}
+
+	object, record, flag = describe(newTestNativePlatform(t, nil))
+	if object == 0 {
+		t.Fatal("the factory refused a bitmap for the 2005 module")
+	}
+	if !bytes.Equal(record, bytes.Repeat([]byte{0xee}, nativeImageInfoSize)) || flag != 0xee {
+		t.Errorf("for the 2005 module the factory wrote % x and flag %#x, want both left alone", record, flag)
+	}
+}
+
+// TestNativeActiveAppletIsTheTitle covers BREW's ActiveApplet. The title is
+// the only applet this platform runs, and one later title compares the answer
+// with its own ClassID before it reads the handset's identity.
+func TestNativeActiveAppletIsTheTitle(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	platform.archive.Info.Records = [][]uint32{{0x686f, 0, 0x3e8, 0, 0x10100000}}
+	if got := nativeCall(t, servedSlot(t, platform, NativeEntryObject, nativeObjectActiveApplet), 0); got != 0x686f {
+		t.Errorf("active applet = %#x, want the title's ClassID 0x686f", got)
+	}
+}
+
+// TestNativeSeekFromTheEndAnswersTheGenerationThatAsked covers the end-relative
+// seek the two generations read differently. A later module moves back from
+// the end by a negative offset, the way BREW's IFILE_Seek does: one reads the
+// last byte of a file it has just read to check it, and finding nothing there
+// it gave up its start-up.
+func TestNativeSeekFromTheEndAnswersTheGenerationThatAsked(t *testing.T) {
+	files := map[string][]byte{"a title/data.bin": []byte("0123456789")}
+	for _, test := range []struct {
+		name   string
+		module []byte
+		offset int32
+	}{
+		{name: "the 2005 module", module: nil, offset: 0},
+		{name: "a module that asks for a version", module: nativeGateModule(), offset: -1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			platform := newTestNativePlatform(t, files)
+			if test.module != nil {
+				platform.archive.Module = test.module
+			}
+			file := nativeCall(t, platform.openFile, 0, nativeString(t, platform, "data.bin"), nativeModeRead)
+			if file == 0 {
+				t.Fatal("the package's file did not open")
+			}
+			if got := nativeCall(t, platform.seekFile, file, nativeSeekEnd, uint32(test.offset)); got != 0 {
+				t.Fatalf("seek answered %d, want 0", got)
+			}
+			buffer, err := platform.client.Allocate(4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := nativeCall(t, platform.readFile, file, buffer, 1); got != 1 {
+				t.Fatalf("read %d bytes at the end, want the last one", got)
+			}
+			if got := nativeRead(t, platform, buffer, 1)[0]; got != '9' {
+				t.Errorf("read %q, want the last byte '9'", got)
+			}
+		})
+	}
+}
+
+// TestNativeLibraryWidensText covers BREW's STREXPAND, which a later title
+// builds the text of its message box with: each character becomes a halfword,
+// a single-byte one widened with a zero and a Korean one copied whole, the way
+// the display reads a run. It stops at the count, the source's terminator or
+// the destination's size, and ends what it wrote when there is room.
+func TestNativeLibraryWidensText(t *testing.T) {
+	platform := newLaterNativePlatform(t)
+	widen := servedSlot(t, platform, NativePlatformTable, nativeSlotWiden)
+	source := nativeString(t, platform, "1 \xb0\xa1!")
+	destination, err := platform.client.Allocate(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clear := func() {
+		t.Helper()
+		if err := platform.client.core.Memory().Write(destination, bytes.Repeat([]byte{0xee}, 32)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, test := range []struct {
+		name        string
+		count, size uint32
+		want        []byte
+	}{
+		{name: "the whole run", count: 5, size: 32, want: []byte{'1', 0, ' ', 0, 0xb0, 0xa1, '!', 0, 0, 0, 0xee}},
+		{name: "a count past the terminator", count: 99, size: 32, want: []byte{'1', 0, ' ', 0, 0xb0, 0xa1, '!', 0, 0, 0, 0xee}},
+		{name: "a count inside the run", count: 2, size: 32, want: []byte{'1', 0, ' ', 0, 0, 0, 0xee}},
+		{name: "a size with no room to end it", count: 5, size: 6, want: []byte{'1', 0, ' ', 0, 0xb0, 0xa1, 0xee}},
+		{name: "an odd size", count: 5, size: 5, want: []byte{'1', 0, ' ', 0, 0xee}},
+		{name: "nothing to widen", count: 0, size: 32, want: []byte{0, 0, 0xee}},
+	} {
+		clear()
+		nativeCall(t, widen, source, test.count, destination, test.size)
+		if got := nativeRead(t, platform, destination, len(test.want)); !bytes.Equal(got, test.want) {
+			t.Errorf("%s: wrote % x, want % x", test.name, got, test.want)
+		}
+	}
+	// The display reads the wide run back as the text it came from.
+	clear()
+	nativeCall(t, widen, source, 5, destination, 32)
+	if raw, err := platform.readText(destination, -1); err != nil || decodeEUCKR(raw) != "1 가!" {
+		t.Errorf("the widened run reads as %q (%v), want %q", decodeEUCKR(raw), err, "1 가!")
+	}
+}
+
+// TestNativeEarlierModuleKeepsItsHelperAnswers covers the 2005 module, which is
+// not in the local corpus: the helper slots served here for later titles
+// answer it with the zero a trap gave it and write nothing, which is what it
+// has always run with.
+func TestNativeEarlierModuleKeepsItsHelperAnswers(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	first, second := nativeString(t, platform, "12"), nativeString(t, platform, "34")
+	out, err := platform.client.Allocate(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untouched := bytes.Repeat([]byte{0xee}, 32)
+	if err := platform.client.core.Memory().Write(out, untouched); err != nil {
+		t.Fatal(err)
+	}
+	for _, slot := range []struct {
+		offset    uint32
+		arguments []uint32
+	}{
+		{nativeSlotStringOrder, []uint32{first, second}},
+		{nativeSlotDecimal, []uint32{first}},
+		{nativeSlotFloatOperation, []uint32{0, 0x3ff00000, 0, 0x40000000}},
+		{nativeSlotFloatCompare, []uint32{0, 0x3ff00000, 0, 0x40000000}},
+		{nativeSlotSeconds, nil},
+		{nativeSlotDate, []uint32{0, out}},
+		{nativeSlotMemoryOrder, []uint32{first, second, 2}},
+		{nativeSlotWiden, []uint32{first, 2, out, 32}},
+	} {
+		if got := nativeCall(t, servedSlot(t, platform, NativePlatformTable, slot.offset), slot.arguments...); got != 0 {
+			t.Errorf("helper %#x answered the 2005 module %#x, want zero", slot.offset, got)
+		}
+	}
+	if got := nativeRead(t, platform, out, 32); !bytes.Equal(got, untouched) {
+		t.Errorf("a helper wrote % x for the 2005 module, want nothing written", got)
+	}
+}
+
+// nativeFloatCall runs f_op or f_cmp on two doubles, each passed low word
+// first in two registers, with the operation stacked, and answers r0 and r1.
+func nativeFloatCall(t *testing.T, platform *NativePlatform, handler NativeSlotHandler, left, right float64, operation uint32) (uint32, uint32) {
+	t.Helper()
+	thread := armcore.NewThread(armcore.NewContext())
+	l, r := math.Float64bits(left), math.Float64bits(right)
+	for index, value := range []uint32{uint32(l), uint32(l >> 32), uint32(r), uint32(r >> 32)} {
+		if err := thread.SetRegister(index, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stack := ThreadStackBase + uint32(ThreadStackSize) - 0x200
+	if err := thread.SetRegister(armcore.RegisterSP, stack); err != nil {
+		t.Fatal(err)
+	}
+	if err := platform.client.core.Memory().Write(stack, binary.LittleEndian.AppendUint32(nil, operation)); err != nil {
+		t.Fatal(err)
+	}
+	low, err := handler(thread)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	high, err := thread.Register(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return low, high
+}
+
+// TestNativeLibraryComputesDoubles covers BREW's f_op and f_cmp, the double
+// arithmetic one later title races with: tens of thousands of calls a race,
+// and a trap made every result nothing.
+func TestNativeLibraryComputesDoubles(t *testing.T) {
+	platform := newLaterNativePlatform(t)
+	operation := servedSlot(t, platform, NativePlatformTable, nativeSlotFloatOperation)
+	for _, test := range []struct {
+		left, right float64
+		kind        uint32
+		want        float64
+	}{
+		{1.5, 2.25, nativeFloatAdd, 3.75},
+		{1.5, 2.25, nativeFloatSubtract, -0.75},
+		{1.5, -2, nativeFloatMultiply, -3},
+		{1, 8, nativeFloatDivide, 0.125},
+		{2, 10, nativeFloatPower, 1024},
+		{2, 10, 99, 0},
+	} {
+		low, high := nativeFloatCall(t, platform, operation, test.left, test.right, test.kind)
+		if got := math.Float64frombits(uint64(high)<<32 | uint64(low)); got != test.want {
+			t.Errorf("f_op(%v, %v, %d) = %v, want %v", test.left, test.right, test.kind, got, test.want)
+		}
+	}
+	compare := servedSlot(t, platform, NativePlatformTable, nativeSlotFloatCompare)
+	for _, test := range []struct {
+		left, right float64
+		kind, want  uint32
+	}{
+		{1, 2, nativeFloatLess, 1}, {2, 2, nativeFloatLess, 0},
+		{2, 2, nativeFloatLessEqual, 1}, {3, 2, nativeFloatLessEqual, 0},
+		{2, 2, nativeFloatEqual, 1}, {2, 3, nativeFloatEqual, 0},
+		{3, 2, nativeFloatGreater, 1}, {2, 2, nativeFloatGreater, 0},
+		{2, 2, nativeFloatGreaterEqual, 1}, {1, 2, nativeFloatGreaterEqual, 0},
+		{1, 2, 99, 0},
+	} {
+		if got, _ := nativeFloatCall(t, platform, compare, test.left, test.right, test.kind); got != test.want {
+			t.Errorf("f_cmp(%v, %v, %d) = %d, want %d", test.left, test.right, test.kind, got, test.want)
+		}
+	}
+}
+
+// TestNativeClockAnswersTheDate covers BREW's GETTIMESECONDS and GETJULIANDATE,
+// which a later title reads the time of day through when a game starts. The
+// seconds are local time counted from BREW's epoch, and the date is those
+// seconds read back, its week starting on Monday.
+func TestNativeClockAnswersTheDate(t *testing.T) {
+	start := time.Date(2007, time.March, 4, 5, 6, 7, 0, time.Local)
+	platform := newTestNativePlatformOn(t, nil, NewManualClock(start))
+	platform.archive.Module = nativeGateModule()
+	_, offset := start.Zone()
+	want := uint32(start.Unix() - nativeEpoch.Unix() + int64(offset))
+	if got := nativeCall(t, servedSlot(t, platform, NativePlatformTable, nativeSlotSeconds)); got != want {
+		t.Errorf("seconds = %d, want %d", got, want)
+	}
+	date := servedSlot(t, platform, NativePlatformTable, nativeSlotDate)
+	out, err := platform.client.Allocate(nativeDateSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func() []uint16 {
+		raw := nativeRead(t, platform, out, nativeDateSize)
+		fields := make([]uint16, nativeDateSize/2)
+		for index := range fields {
+			fields[index] = binary.LittleEndian.Uint16(raw[2*index:])
+		}
+		return fields
+	}
+	// A Sunday, the last day of BREW's week.
+	nativeCall(t, date, 0, out)
+	if got, want := read(), []uint16{2007, 3, 4, 5, 6, 7, 6}; !slices.Equal(got, want) {
+		t.Errorf("the date now = %v, want %v", got, want)
+	}
+	// The epoch itself, a Sunday too; one day on is a Monday.
+	nativeCall(t, date, 24*60*60, out)
+	if got, want := read(), []uint16{1980, 1, 7, 0, 0, 0, 0}; !slices.Equal(got, want) {
+		t.Errorf("a day after the epoch = %v, want %v", got, want)
+	}
+	// A null date is nothing to fill.
+	nativeCall(t, date, 0, 0)
+}
+
+// TestNativeTickEndsSoundAndTimedServiceWithoutAFrame covers a title that
+// cancels its frame and waits: one later title stops its frame between two
+// screens and starts the next when its sound or its timed service ends. The
+// tick still answers both, and the Host is told when to look again.
+func TestNativeTickEndsSoundAndTimedServiceWithoutAFrame(t *testing.T) {
+	clock := NewManualClock(time.Time{})
+	platform := newTestNativePlatformOn(t, nil, clock)
+	platform.listeners = append(platform.listeners, NativeListener{Source: nativeInterfaceTimed})
+	if _, pending := platform.NextFrame(); pending {
+		t.Fatal("a platform with nothing running asks to be ticked")
+	}
+	nativeCall(t, platform.startTimed, 0, 250)
+	due, pending := platform.NextFrame()
+	if !pending || !due.Equal(clock.Now().Add(250*time.Millisecond)) {
+		t.Errorf("the next look is %v (%v), want the timed service's end", due, pending)
+	}
+	clock.Advance(300 * time.Millisecond)
+	progressed, err := platform.Tick(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !progressed || platform.timedRunning {
+		t.Errorf("a tick with no frame left the timed service running (progressed %v)", progressed)
+	}
+
+	// A sounding clip is looked at every poll interval, the end of it being
+	// what the platform cannot schedule.
+	platform.sounding = true
+	if due, pending := platform.NextFrame(); !pending || !due.Equal(clock.Now().Add(nativeSoundPoll)) {
+		t.Errorf("while sounding the next look is %v (%v), want one poll away", due, pending)
 	}
 }

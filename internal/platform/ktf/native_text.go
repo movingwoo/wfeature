@@ -38,12 +38,17 @@ import (
 //   - **y is the top of the line, not a baseline.** One module lays three lines
 //     out with `(screen height - 3 * line height) / 2` and steps by the line
 //     height, which only centres a block if the y it passes is the top of it.
-//   - **the background rectangle is null at both**, so nothing is filled.
-//   - **the flags are carried and not acted on.** They are `0x8020` at one call
-//     site and `0x8220` at the other, and the one extra bit belongs to the call
-//     that passes the middle of the screen for x and y — which reads as an
-//     alignment. That is a reading of one bit from two samples, so it is
-//     written down rather than acted on: text lands at the point it was given.
+//   - **the background rectangle is what the text is aligned in**, and it is
+//     clipped to it too. It is null at most call sites, which is the screen;
+//     one later title passes the screen itself.
+//   - **the flags are BREW's IDF_ bits, and they align the text.** `0x8020` is
+//     IDF_TEXT_TRANSPARENT with IDF_ALIGN_CENTER, and `0x8220` adds
+//     IDF_ALIGN_MIDDLE. An aligned call has its x or y ignored: the call that
+//     passes the middle of the screen for both is the one asking to be centred
+//     both ways, and a later title passes 0x8020 with x zero for the choices
+//     it centres under its message box, and IDF_ALIGN_RIGHT, 0x40, for its
+//     loading line. Every call seen is transparent, so text never clears the
+//     ground behind it, and none sets a rectangle flag, so nothing is filled.
 //
 // See docs/history/ktf.md, "The screen draws text".
 const (
@@ -74,6 +79,21 @@ const (
 // what it is drawn on. That is what "invisible" looked like the first time
 // round: white ink on the white a clear leaves behind.
 const nativeTextColourItem = 1
+
+// BREW's text alignments, from the flag word: one horizontal and one vertical,
+// each against the background rectangle. IDF_ALIGN_FILL and IDF_ALIGN_SPREAD,
+// which the specification says its SDK does not support, leave the point as it
+// was given.
+const (
+	nativeAlignHorizontal = 0x0f0
+	nativeAlignLeft       = 0x010
+	nativeAlignCenter     = 0x020
+	nativeAlignRight      = 0x040
+	nativeAlignVertical   = 0xf00
+	nativeAlignTop        = 0x100
+	nativeAlignMiddle     = 0x200
+	nativeAlignBottom     = 0x400
+)
 
 // nativeDefaultTextColour is what a title that sets no colour gets. It is dark
 // because the ground a clear leaves is light.
@@ -188,8 +208,28 @@ func (platform *NativePlatform) drawText(thread *armcore.Thread) (uint32, error)
 	if err != nil {
 		return 0, err
 	}
+	background, err := stacked(1)
+	if err != nil {
+		return 0, err
+	}
+	flags, err := stacked(1)
+	if err != nil {
+		return 0, err
+	}
 	if address == 0 {
 		return 1, nil
+	}
+	frame := platform.screen.frame
+	area, bounds := frame.Bounds(), frame.Bounds()
+	if background != 0 {
+		// A rectangle that cannot be read is a run not drawn, for the reason
+		// a run that cannot be read is below.
+		record := make([]byte, 8)
+		if err := platform.client.core.Memory().Read(uint32(background), record); err != nil {
+			return 1, nil
+		}
+		area = nativeRectangle(record)
+		bounds = bounds.Intersect(area)
 	}
 
 	raw, err := platform.readText(address, count)
@@ -210,8 +250,26 @@ func (platform *NativePlatform) drawText(thread *armcore.Thread) (uint32, error)
 		ink = nativeColour(packed)
 	}
 	face := platform.textFace()
-	frame := platform.screen.frame
-	bounds := frame.Bounds()
+	width := 0
+	for _, character := range text {
+		width += face.Render(character).Advance
+	}
+	switch uint32(flags) & nativeAlignHorizontal {
+	case nativeAlignLeft:
+		x = int32(area.Min.X)
+	case nativeAlignCenter:
+		x = int32(area.Min.X + (area.Dx()-width)/2)
+	case nativeAlignRight:
+		x = int32(area.Max.X - width)
+	}
+	switch uint32(flags) & nativeAlignVertical {
+	case nativeAlignTop:
+		y = int32(area.Min.Y)
+	case nativeAlignMiddle:
+		y = int32(area.Min.Y + (area.Dy()-face.Height())/2)
+	case nativeAlignBottom:
+		y = int32(area.Max.Y - face.Height())
+	}
 	cursor := x
 	for _, character := range text {
 		bitmap := face.Render(character)

@@ -322,6 +322,18 @@ func (runtime *initializationRuntime) rebaseModuleFields(class, descriptorAddres
 			if owner != class {
 				continue
 			}
+			// A static's last word is its value, not an offset, and the
+			// guest reads it as one: a subclass whose statics were moved by
+			// its superclass's size started with every reference static
+			// holding that size, and one local title's first store into
+			// such an array read the word as an array header and faulted.
+			flags, err := runtime.readWord(pointer)
+			if err != nil {
+				return err
+			}
+			if flags&0x0008 != 0 {
+				continue
+			}
 			offset, err := runtime.readWord(pointer + 12)
 			if err != nil {
 				return err

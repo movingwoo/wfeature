@@ -19,11 +19,14 @@ import (
 const nativeInterfaceGraphics = 0x1002001
 
 // The shape interface's methods, by byte offset. Each came off its call sites
-// in the one local module that asks for the interface, and each shape is the
-// one BREW's header gives the method at that place in its table.
+// in the local modules that ask for the interface, and each shape is the one
+// BREW's header gives the method at that place in its table.
 //
 //	+0x10  r1, r2 and r3 are the same byte and the stacked word is 0xff,
 //	       ahead of every point and line: SetColor(r, g, b, alpha).
+//	+0x18  1, once a frame ahead of two rectangles: SetFillMode(fill).
+//	+0x20  white and a stacked 0xff between the two: SetFillColor(r, g, b,
+//	       alpha).
 //	+0x28  1 ahead of a run of points, 2 ahead of the point that heads a
 //	       trail: SetPointSize(size).
 //	+0x30  a record whose first byte is 1 and whose second halfword pair
@@ -34,20 +37,27 @@ const nativeInterfaceGraphics = 0x1002001
 //	       DrawPoint(point).
 //	+0x54  a pointer to four halfwords, a trail segment's two ends:
 //	       DrawLine(line).
+//	+0x58  a pointer to four halfwords, 0, 0, 240, 20 and then 0, 300, 240,
+//	       20, the bars a later title draws its title line and its prompt on:
+//	       DrawRect(rectangle), a corner and a size.
 //	+0x5c  a pointer to three halfwords, the middle of the screen and then
 //	       4 or 12, around the cursor of a game in play: DrawCircle(circle),
-//	       a centre and a radius. The module never sets a fill mode, so a
-//	       circle is its outline, which is what the specification starts in.
+//	       a centre and a radius. The module that draws circles never sets a
+//	       fill mode, so a circle is its outline, which is what the
+//	       specification starts in.
 //
-// No caller reads what the colour, the size or a shape answers; they answer
-// what the specification says they answer.
+// No caller reads what a colour, the fill mode, the size or a shape answers;
+// they answer what the specification says they answer.
 const (
-	nativeShapesColour    = 0x10
-	nativeShapesPointSize = 0x28
-	nativeShapesClip      = 0x30
-	nativeShapesPoint     = 0x50
-	nativeShapesLine      = 0x54
-	nativeShapesCircle    = 0x5c
+	nativeShapesColour     = 0x10
+	nativeShapesFillMode   = 0x18
+	nativeShapesFillColour = 0x20
+	nativeShapesPointSize  = 0x28
+	nativeShapesClip       = 0x30
+	nativeShapesPoint      = 0x50
+	nativeShapesLine       = 0x54
+	nativeShapesRectangle  = 0x58
+	nativeShapesCircle     = 0x5c
 )
 
 // The clip record's kinds. A rectangle is the only one the local module sets;
@@ -73,12 +83,17 @@ type nativeShapes struct {
 	// clip is the rectangle shapes are drawn inside, when clipped is set.
 	clipped bool
 	clip    image.Rectangle
+	// filled says a rectangle's inside is drawn too, in fill. Its alpha is
+	// carried and not acted on, as the pen's is.
+	filled bool
+	fill   color.RGBA
 }
 
 // newNativeShapes is the interface as a title finds it: a black pen one pixel
-// wide, and no clip.
+// wide, no clip, and shapes drawn as outlines. The header gives no fill colour
+// to start with, so it starts black, as the pen does.
 func newNativeShapes() *nativeShapes {
-	return &nativeShapes{colour: color.RGBA{A: 0xff}, pointSize: 1}
+	return &nativeShapes{colour: color.RGBA{A: 0xff}, pointSize: 1, fill: color.RGBA{A: 0xff}}
 }
 
 // installShapes registers the shape interface.
@@ -86,16 +101,31 @@ func (platform *NativePlatform) installShapes() {
 	platform.shapes = newNativeShapes()
 	surface := nativeInterfaceSurface(nativeInterfaceGraphics)
 	platform.client.Serve(surface, nativeShapesColour, platform.shapeColour)
+	platform.client.Serve(surface, nativeShapesFillMode, platform.shapeFillMode)
+	platform.client.Serve(surface, nativeShapesFillColour, platform.shapeFillColour)
 	platform.client.Serve(surface, nativeShapesPointSize, platform.shapePointSize)
 	platform.client.Serve(surface, nativeShapesClip, platform.shapeClip)
 	platform.client.Serve(surface, nativeShapesPoint, platform.drawPoint)
 	platform.client.Serve(surface, nativeShapesLine, platform.drawLine)
+	platform.client.Serve(surface, nativeShapesRectangle, platform.drawShapeRectangle)
 	platform.client.Serve(surface, nativeShapesCircle, platform.drawCircle)
 }
 
 // shapeColour sets the pen and answers the one it replaces, packed the way the
 // screen's colours are: BREW's 0xBBGGRR00.
 func (platform *NativePlatform) shapeColour(thread *armcore.Thread) (uint32, error) {
+	return platform.setShapeColour(thread, &platform.shapes.colour)
+}
+
+// shapeFillColour sets the fill colour and answers the one it replaces, as the
+// pen does.
+func (platform *NativePlatform) shapeFillColour(thread *armcore.Thread) (uint32, error) {
+	return platform.setShapeColour(thread, &platform.shapes.fill)
+}
+
+// setShapeColour sets one colour from SetColor's arguments, (r, g, b, alpha)
+// after the interface, and answers the colour it replaces.
+func (platform *NativePlatform) setShapeColour(thread *armcore.Thread, colour *color.RGBA) (uint32, error) {
 	arguments, err := nativeArguments(thread, 4)
 	if err != nil {
 		return 0, err
@@ -104,9 +134,24 @@ func (platform *NativePlatform) shapeColour(thread *armcore.Thread) (uint32, err
 	if err != nil {
 		return 0, err
 	}
-	previous := platform.shapes.colour
-	platform.shapes.colour = color.RGBA{R: uint8(arguments[1]), G: uint8(arguments[2]), B: uint8(arguments[3]), A: uint8(alpha)}
+	previous := *colour
+	*colour = color.RGBA{R: uint8(arguments[1]), G: uint8(arguments[2]), B: uint8(arguments[3]), A: uint8(alpha)}
 	return uint32(previous.B)<<24 | uint32(previous.G)<<16 | uint32(previous.R)<<8, nil
+}
+
+// shapeFillMode turns filling on for one and off for anything else — the
+// specification turns it off for a value that is neither true nor false — and
+// answers the mode it set.
+func (platform *NativePlatform) shapeFillMode(thread *armcore.Thread) (uint32, error) {
+	mode, err := thread.Register(1)
+	if err != nil {
+		return 0, err
+	}
+	platform.shapes.filled = mode == 1
+	if platform.shapes.filled {
+		return 1, nil
+	}
+	return 0, nil
 }
 
 // shapePointSize sets how wide a point is and answers the size it replaces.
@@ -239,6 +284,45 @@ func (platform *NativePlatform) drawLine(thread *armcore.Thread) (uint32, error)
 	return 0, nil
 }
 
+// drawShapeRectangle draws one rectangle: its inside in the fill colour when
+// the fill mode is on, and then its outline a pixel wide in the pen. The record
+// is read as the screen's rectangles are, so a negative size turns it round,
+// and one with no width or no height draws nothing.
+func (platform *NativePlatform) drawShapeRectangle(thread *armcore.Thread) (uint32, error) {
+	address, err := thread.Register(1)
+	if err != nil {
+		return 0, err
+	}
+	var rectangle [4]int32
+	if err := platform.readHalfwords(address, rectangle[:], "rectangle"); err != nil {
+		return 0, err
+	}
+	shape := image.Rect(int(rectangle[0]), int(rectangle[1]), int(rectangle[0]+rectangle[2]), int(rectangle[1]+rectangle[3]))
+	if shape.Empty() {
+		return 0, nil
+	}
+	bounds := platform.shapeBounds()
+	frame := platform.screen.frame
+	paint := func(area image.Rectangle, colour color.RGBA) {
+		area = area.Intersect(bounds)
+		for y := area.Min.Y; y < area.Max.Y; y++ {
+			for x := area.Min.X; x < area.Max.X; x++ {
+				frame.SetRGBA(x, y, colour)
+			}
+		}
+	}
+	if platform.shapes.filled {
+		paint(shape, color.RGBA{R: platform.shapes.fill.R, G: platform.shapes.fill.G, B: platform.shapes.fill.B, A: 0xff})
+	}
+	pen := platform.shapes.pen()
+	paint(image.Rect(shape.Min.X, shape.Min.Y, shape.Max.X, shape.Min.Y+1), pen)
+	paint(image.Rect(shape.Min.X, shape.Max.Y-1, shape.Max.X, shape.Max.Y), pen)
+	paint(image.Rect(shape.Min.X, shape.Min.Y, shape.Min.X+1, shape.Max.Y), pen)
+	paint(image.Rect(shape.Max.X-1, shape.Min.Y, shape.Max.X, shape.Max.Y), pen)
+	platform.screen.draws++
+	return 0, nil
+}
+
 // drawCircle draws one circle's outline a pixel wide. A radius of zero is its
 // centre, and a negative one draws nothing.
 func (platform *NativePlatform) drawCircle(thread *armcore.Thread) (uint32, error) {
@@ -295,25 +379,56 @@ type nativeShapesRecord struct {
 	Shapes  nativeShapesState
 }
 
-// nativeShapesRecordVersion is the layout of nativeShapesRecord.
-const nativeShapesRecordVersion = 3
+// nativeShapesRecordVersion is the layout of nativeShapesRecord. Version 3 had
+// no fill; nativeOutlineShapesRecord reads it.
+const nativeShapesRecordVersion = 4
 
 type nativeShapesState struct {
-	// Colour is the pen as 0xRRGGBBAA.
+	// Colour is the pen as 0xRRGGBBAA, and FillColour the fill colour.
+	Colour                              uint32
+	PointSize                           uint32
+	Clipped                             bool
+	ClipX, ClipY, ClipWidth, ClipHeight int32
+	Filled                              bool
+	FillColour                          uint32
+}
+
+// nativeOutlineShapesRecord is the record a build that drew no filled shapes
+// wrote. It loads with the fill a title starts with, which is the fill that
+// build's titles drew with: none.
+type nativeOutlineShapesRecord struct {
+	Version uint32
+	State   nativeState
+	Shapes  nativeOutlineShapesState
+}
+
+const nativeOutlineShapesRecordVersion = 3
+
+type nativeOutlineShapesState struct {
 	Colour                              uint32
 	PointSize                           uint32
 	Clipped                             bool
 	ClipX, ClipY, ClipWidth, ClipHeight int32
 }
 
+// packRGBA packs a colour as 0xRRGGBBAA, the way a record carries one.
+func packRGBA(colour color.RGBA) uint32 {
+	return uint32(colour.R)<<24 | uint32(colour.G)<<16 | uint32(colour.B)<<8 | uint32(colour.A)
+}
+
+func unpackRGBA(packed uint32) color.RGBA {
+	return color.RGBA{R: uint8(packed >> 24), G: uint8(packed >> 16), B: uint8(packed >> 8), A: uint8(packed)}
+}
+
 func (shapes *nativeShapes) capture() nativeShapesState {
-	colour := shapes.colour
 	return nativeShapesState{
-		Colour:    uint32(colour.R)<<24 | uint32(colour.G)<<16 | uint32(colour.B)<<8 | uint32(colour.A),
+		Colour:    packRGBA(shapes.colour),
 		PointSize: uint32(shapes.pointSize),
 		Clipped:   shapes.clipped,
 		ClipX:     int32(shapes.clip.Min.X), ClipY: int32(shapes.clip.Min.Y),
 		ClipWidth: int32(shapes.clip.Dx()), ClipHeight: int32(shapes.clip.Dy()),
+		Filled:     shapes.filled,
+		FillColour: packRGBA(shapes.fill),
 	}
 }
 
@@ -334,16 +449,18 @@ func (saved nativeShapesState) validate() error {
 func (saved nativeShapesState) restore() *nativeShapes {
 	x, y := int(saved.ClipX), int(saved.ClipY)
 	return &nativeShapes{
-		colour:    color.RGBA{R: uint8(saved.Colour >> 24), G: uint8(saved.Colour >> 16), B: uint8(saved.Colour >> 8), A: uint8(saved.Colour)},
+		colour:    unpackRGBA(saved.Colour),
 		pointSize: uint8(saved.PointSize),
 		clipped:   saved.Clipped,
 		clip:      image.Rect(x, y, x+int(saved.ClipWidth), y+int(saved.ClipHeight)),
+		filled:    saved.Filled,
+		fill:      unpackRGBA(saved.FillColour),
 	}
 }
 
-// decodeNativeRecord reads a checkpoint's runtime record in either shape. One
-// without the shape interface's state answers the interface a title starts
-// with.
+// decodeNativeRecord reads a checkpoint's runtime record in any of its shapes.
+// One without the shape interface's state answers the interface a title starts
+// with, and one without the fill answers the fill it starts with.
 func decodeNativeRecord(data []byte) (nativeState, nativeShapesState, error) {
 	var extended nativeShapesRecord
 	if err := backend.DecodeCheckpointRecord(data, &extended); err == nil {
@@ -356,8 +473,21 @@ func decodeNativeRecord(data []byte) (nativeState, nativeShapesState, error) {
 		return extended.State, extended.Shapes, nil
 	}
 	// The codec checks the whole schema before it allocates, so trying the
-	// two shapes in turn cannot half restore a record or accept a field
-	// neither has.
+	// shapes in turn cannot half restore a record or accept a field none of
+	// them has.
+	var outline nativeOutlineShapesRecord
+	if err := backend.DecodeCheckpointRecord(data, &outline); err == nil {
+		if outline.Version != nativeOutlineShapesRecordVersion {
+			return nativeState{}, nativeShapesState{}, fmt.Errorf("KTF native shapes checkpoint version %d: %w", outline.Version, backend.ErrCheckpointVersion)
+		}
+		shapes := newNativeShapes().capture()
+		shapes.Colour, shapes.PointSize, shapes.Clipped = outline.Shapes.Colour, outline.Shapes.PointSize, outline.Shapes.Clipped
+		shapes.ClipX, shapes.ClipY, shapes.ClipWidth, shapes.ClipHeight = outline.Shapes.ClipX, outline.Shapes.ClipY, outline.Shapes.ClipWidth, outline.Shapes.ClipHeight
+		if err := shapes.validate(); err != nil {
+			return nativeState{}, nativeShapesState{}, err
+		}
+		return outline.State, shapes, nil
+	}
 	var saved nativeState
 	if err := backend.DecodeCheckpointRecord(data, &saved); err != nil {
 		return nativeState{}, nativeShapesState{}, err
