@@ -44,14 +44,15 @@ func closeJavaSink(client *Client, sink uint32) error {
 func TestTheDatabaseIndexIsNotAGuestFile(t *testing.T) {
 	client, store, files := reviewFiles(t, nil)
 	openFixtureDatabase(t, client, "save", 16)
-	indexKey := fileSaveScope + databaseIndexName
+	indexKey := databaseIndexKey
 	if got := store.held(indexKey); got != "save" {
 		t.Fatalf("the index holds %q after the database was made", got)
 	}
+	// A file call refuses the name outright, as one no file can have.
 	for _, name := range []string{"__databases__.db", "/./__DATABASES__.DB", "__databases__.db/inside"} {
-		handle := files.open(name, fileOpenReadWrite)
-		files.write(handle, "bogus\nnames")
-		files.close(handle)
+		if handle := int32(callSlot(t, client, slotFsOpen, files.name(name), fileOpenReadWrite)); handle != wipiBadFileName {
+			t.Fatalf("open %q answered %d, want M_E_BADFILENAME", name, handle)
+		}
 		if got := store.held(indexKey); got != "save" {
 			t.Fatalf("a guest file %q wrote the index: %q", name, got)
 		}
@@ -69,11 +70,15 @@ func TestTheDatabaseIndexIsNotAGuestFile(t *testing.T) {
 	if got := store.held(indexKey); got != "save" {
 		t.Fatalf("a database named after the index wrote it: %q", got)
 	}
+	// Nor does the root list where earlier builds kept the index, from either
+	// kind of created list. (Their containers are hidden by the removal list
+	// the move into the database scope writes; see
+	// TestDatabasesMoveOutOfTheFilesOnce.)
 	for _, list := range []string{"__databases__.db\nsave.db", fileListMarker + "\n__databases__.db\nsave.db"} {
 		store.behind(t, fileCreatedKey, list)
 		next := fixtureClient(t)
 		next.saveStore = store
-		if listed := next.listDirectory("/"); containsExact(listed, databaseIndexName) || !containsExact(listed, "save.db") {
+		if listed := next.listDirectory("/"); containsExact(listed, databaseIndexName) {
 			t.Fatalf("over the created list %q the root lists %q", list, listed)
 		}
 	}
@@ -128,7 +133,7 @@ func TestACollectedObjectKeepsAWriteTheStoreRefused(t *testing.T) {
 	ctx := context.Background()
 	stored := func(t *testing.T, store *faultStore) []string {
 		t.Helper()
-		data, ok := store.MemorySaveStore.LoadSave("fs/save.db")
+		data, ok := store.MemorySaveStore.LoadSave("jdb/save.db")
 		if !ok {
 			return nil
 		}
@@ -206,16 +211,18 @@ func TestACollectedObjectKeepsAWriteTheStoreRefused(t *testing.T) {
 	})
 }
 
-// The two path lists name only paths that have a save: a name the store has
-// no key for leaves them as they are, and an entry of that kind a list holds
-// is read as nothing.
+// The path lists name only paths that have a save: a name the store has no
+// key for is refused by the file calls and leaves them as they are, and an
+// entry of that kind a list holds is read as nothing.
 func TestPathListsHoldOnlyNamesWithASave(t *testing.T) {
 	client, store, files := reviewFiles(t, nil)
-	for _, name := range []string{"/.created", "../outside.dat", "/.removed/inside"} {
-		handle := files.open(name, fileOpenReadWrite)
-		files.write(handle, "x")
-		files.close(handle)
-		callSlot(t, client, slotFsRemove, files.name(name))
+	for _, name := range []string{"/.created", "../outside.dat", "/.removed/inside", "/.directories"} {
+		if handle := int32(callSlot(t, client, slotFsOpen, files.name(name), fileOpenReadWrite)); handle != wipiBadFileName {
+			t.Fatalf("open %q answered %d, want M_E_BADFILENAME", name, handle)
+		}
+		if code := int32(callSlot(t, client, slotFsRemove, files.name(name))); code != wipiBadFileName {
+			t.Fatalf("remove %q answered %d, want M_E_BADFILENAME", name, code)
+		}
 	}
 	if len(client.createdFiles()) != 0 || len(client.removedFiles()) != 0 {
 		t.Fatalf("the lists hold %v and %v", client.created, client.removed)

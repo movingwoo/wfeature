@@ -1487,8 +1487,10 @@ func init() {
 		runtimeNetworkClass:           runtimeNetworkClassDefinition(),
 		runtimeURLClass:               runtimeURLClassDefinition(),
 		runtimeDataBaseExceptionClass: runtimeExceptionClass(runtimeDataBaseExceptionClass, "java/lang/Exception"),
-		runtimeDataBaseRecordClass:    runtimeExceptionClass(runtimeDataBaseRecordClass, runtimeDataBaseExceptionClass),
-		runtimeSchemeExceptionClass:   runtimeExceptionClass(runtimeSchemeExceptionClass, "java/io/IOException"),
+		// The two are siblings, as the specification draws them: a handler a
+		// title wrote for one must not take the other (docs/wipi-storage.md).
+		runtimeDataBaseRecordClass:  runtimeExceptionClass(runtimeDataBaseRecordClass, "java/lang/Exception"),
+		runtimeSchemeExceptionClass: runtimeExceptionClass(runtimeSchemeExceptionClass, "java/io/IOException"),
 		// The runtime-owned interfaces exist so a guest that implements or
 		// references one resolves it. Their methods dispatch by name on the
 		// receiver, because an AOT class carries no interface list to link
@@ -2640,6 +2642,11 @@ func runtimeClassGetResourceAsStream(runtime *initializationRuntime, vm *jvm.VM,
 type runtimeDataBaseStore struct {
 	name    string
 	records [][]byte
+	// recordSize is the size the database was created with, from
+	// javaDatabaseSizes; modified is getLastModified, in guest milliseconds:
+	// the last write this session, or the session's first open.
+	recordSize int32
+	modified   int64
 }
 
 // runtimeDataBaseException is what openDataBase owes a title that asked for a
@@ -2751,13 +2758,9 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 	if len(arguments) < 3 {
 		return jvm.VoidValue(), fmt.Errorf("DataBase.openDataBase expected name, record size, and create flag, got %d arguments", len(arguments))
 	}
-	nameObject, err := arguments[0].Reference()
+	name, err := databaseName(arguments[0])
 	if err != nil {
 		return jvm.VoidValue(), err
-	}
-	name, ok := jvm.StringText(nameObject)
-	if !ok {
-		return jvm.VoidValue(), fmt.Errorf("DataBase.openDataBase name is not a string")
 	}
 	recordSize, err := arguments[1].Int32()
 	if err != nil {
@@ -2769,6 +2772,13 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 	}
 	if !storableName(javaDatabaseScope, name) {
 		return jvm.VoidValue(), runtimeDataBaseException("database name cannot be stored: " + name)
+	}
+	if create != 0 && recordSize <= 0 {
+		message := fmt.Sprintf("a record size of %d", recordSize)
+		return jvm.VoidValue(), &jvm.GuestException{
+			Object:  &jvm.Object{ClassName: "java/lang/IllegalArgumentException", Native: message},
+			Message: message,
+		}
 	}
 	store := runtime.databases[name]
 	if store == nil {
@@ -2802,6 +2812,22 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 		}
 		runtime.databases[name] = store
 		delete(runtime.detachedDatabases, name)
+		// The record size is the creating open's. A database an earlier
+		// build created has none on record, and takes the size of the open
+		// that finds it from here on.
+		if source == storageAbsent {
+			if err := runtime.setJavaDatabaseSize(name, recordSize); err != nil {
+				return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+			}
+		} else if runtime.javaDatabaseSizes()[name] == 0 && recordSize > 0 {
+			if err := runtime.setJavaDatabaseSize(name, recordSize); err != nil {
+				return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+			}
+		}
+		store.recordSize = runtime.javaDatabaseSizes()[name]
+	}
+	if store.modified == 0 {
+		store.modified = runtime.guestMillis()
 	}
 	database := &jvm.Object{
 		ClassName: "org/kwis/msp/db/DataBase",
@@ -2857,17 +2883,29 @@ func runtimeDataBaseInsert(runtime *initializationRuntime, _ *jvm.VM, arguments 
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if len(store.records) >= maxDataBaseRecords {
+	// WIPI record identifiers are zero-based, unlike one-based MIDP records,
+	// and an insert takes the lowest one a delete freed before it grows the
+	// list, as the specification has it.
+	identifier := len(store.records)
+	for index, record := range store.records {
+		if record == nil {
+			identifier = index
+			break
+		}
+	}
+	if identifier >= maxDataBaseRecords {
 		return jvm.VoidValue(), fmt.Errorf("DataBase record count exceeds %d", maxDataBaseRecords)
 	}
-	staged := &runtimeDataBaseStore{name: store.name, records: append(append([][]byte(nil), store.records...), data)}
-	if err := staged.persist(runtime); err != nil {
-		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+	staged := &runtimeDataBaseStore{name: store.name, records: append([][]byte(nil), store.records...)}
+	if identifier == len(staged.records) {
+		staged.records = append(staged.records, data)
+	} else {
+		staged.records[identifier] = data
 	}
-	store.records = staged.records
-	runtime.bindDetachedDatabase(store)
-	// WIPI record identifiers are zero-based, unlike one-based MIDP records.
-	return jvm.IntValue(int32(len(store.records) - 1)), nil
+	if err := runtime.storeDatabaseRecords(store, staged); err != nil {
+		return jvm.VoidValue(), err
+	}
+	return jvm.IntValue(int32(identifier)), nil
 }
 
 // runtimeDataBaseBytes copies record content from a [B argument, applying the
@@ -2961,12 +2999,29 @@ func runtimeDataBaseUpdate(runtime *initializationRuntime, _ *jvm.VM, arguments 
 	}
 	staged := &runtimeDataBaseStore{name: store.name, records: append([][]byte(nil), store.records...)}
 	staged.records[index] = data
+	if err := runtime.storeDatabaseRecords(store, staged); err != nil {
+		return jvm.VoidValue(), err
+	}
+	return jvm.VoidValue(), nil
+}
+
+// storeDatabaseRecords stores a database's new record list, bounded as every
+// platform bounds one (docs/wipi-storage.md), and takes it as the store's.
+func (runtime *initializationRuntime) storeDatabaseRecords(store, staged *runtimeDataBaseStore) error {
+	total := 0
+	for _, record := range staged.records {
+		total += len(record)
+	}
+	if total > maxStoredBytes {
+		return runtimeDataBaseException(fmt.Sprintf("database %s would hold %d bytes", store.name, total))
+	}
 	if err := staged.persist(runtime); err != nil {
-		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+		return runtimeDataBaseException(err.Error())
 	}
 	store.records = staged.records
+	store.modified = runtime.guestMillis()
 	runtime.bindDetachedDatabase(store)
-	return jvm.VoidValue(), nil
+	return nil
 }
 
 func runtimeDataBaseDelete(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -2988,11 +3043,9 @@ func runtimeDataBaseDelete(runtime *initializationRuntime, _ *jvm.VM, arguments 
 	}
 	staged := &runtimeDataBaseStore{name: store.name, records: append([][]byte(nil), store.records...)}
 	staged.records[index] = nil
-	if err := staged.persist(runtime); err != nil {
-		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+	if err := runtime.storeDatabaseRecords(store, staged); err != nil {
+		return jvm.VoidValue(), err
 	}
-	store.records = staged.records
-	runtime.bindDetachedDatabase(store)
 	return jvm.VoidValue(), nil
 }
 

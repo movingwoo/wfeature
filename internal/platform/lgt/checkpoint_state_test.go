@@ -836,9 +836,18 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			// The two lists are stored before a checkpoint is taken, and one
 			// the store will not take refuses it.
 			"removedUnsaved": boundary, "createdUnsaved": boundary,
+			// So is the list of made directories, which is the store's like
+			// the other two.
+			"directories": store, "directoriesUnsaved": boundary,
+			// The space count's memory of what it read is read again.
+			"storedSizes": rebuilt,
 			// So is the database index, which waits here when the store
 			// refused it.
 			"databaseIndexWaiting": boundary, "databaseIndexPending": boundary,
+			// Where the databases are kept is the store's, decided again by
+			// the session a load makes, and their counts start again as the
+			// paths' do.
+			"databaseLayout": store, "databaseEpochs": rebuilt,
 			// Every restored buffer is level with the store, so the counts
 			// start again from nothing.
 			"fileEpochs": rebuilt,
@@ -871,6 +880,8 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			// Reclaimed records wait only while the store refuses them, and a
 			// quick save stores them first or is refused.
 			"collectedDatabases": boundary,
+			// Taken again from the objects' own recorded times.
+			"databaseModified": rebuilt,
 			// A checkpoint is never taken inside a paint, and the text the
 			// last paint read is read again by the next one.
 			"painting": boundary, "paintTextReads": boundary, "paintTextOverflow": boundary,
@@ -906,8 +917,11 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 		// retried before a checkpoint is taken, and the rest of its
 		// bookkeeping starts again with the records a load reads, which the
 		// objects on one database share again.
-		"javaDatabase":    {"name": recorded, "closed": recorded, "databaseContent": rebuilt},
-		"databaseContent": {"recordSize": recorded, "records": store, "deleted": store, "modified": recorded, "unsaved": boundary, "synced": rebuilt},
+		"javaDatabase": {"name": recorded, "closed": recorded, "databaseContent": rebuilt},
+		// A database whose container is gone when a load commits was deleted
+		// under its objects, and is marked so again.
+		"databaseContent": {"recordSize": recorded, "records": store, "deleted": store, "modified": recorded, "unsaved": boundary, "synced": rebuilt,
+			"unlisted": rebuilt},
 		"javaGraphics": {
 			"surface": recorded, "color": recorded, "translateX": recorded, "translateY": recorded,
 			"clipX": recorded, "clipY": recorded, "clipWidth": recorded, "clipHeight": recorded, "clipSet": recorded,

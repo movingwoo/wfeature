@@ -175,7 +175,8 @@ func TestJavaStringIndexOfCharacter(t *testing.T) {
 
 // Closing a database twice is defined as doing nothing the second time, and one
 // title closes at the end of its save and again on the way out of the routine
-// that called it. An object that was never a database is still a stop.
+// that called it. A close releases nothing the title can see, so the object
+// still answers. An object that was never a database is still a stop.
 func TestJavaDatabaseClosesTwiceWithoutFailing(t *testing.T) {
 	client := fixtureClient(t)
 	name, err := client.newJavaString("save")
@@ -192,9 +193,8 @@ func TestJavaDatabaseClosesTwiceWithoutFailing(t *testing.T) {
 	if _, err := javaCloseDataBase(client, nil, nil, []uint32{database}); err != nil {
 		t.Errorf("the second close failed: %v", err)
 	}
-	// A closed database is not a database to read records out of.
-	if _, err := javaDataBaseRecordCount(client, nil, nil, []uint32{database}); err == nil {
-		t.Error("a closed database answered a record count")
+	if count, err := javaDataBaseRecordCount(client, nil, nil, []uint32{database}); err != nil || count != 0 {
+		t.Errorf("a closed database answered a record count of %d, %v", count, err)
 	}
 	if _, err := javaCloseDataBase(client, nil, nil, []uint32{0xdeadbeef}); err == nil {
 		t.Error("closing something this platform never opened was accepted")

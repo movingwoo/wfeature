@@ -26,24 +26,40 @@ func closeDatabaseHandle(t *testing.T, runtime *initializationRuntime, handle ui
 // table's own scope: a regular file named "db" where the directory belongs,
 // after which every save of the title failed. A name with ".." failed its key
 // on the first read and left the session unable to save anything; a name with
-// a line break wrote a removal list that hid two unrelated files.
+// a line break wrote a removal list that hid two unrelated files. The root is
+// a directory to every question about one (docs/wipi-storage.md) and still no
+// file to open.
 func TestFileNamesThatAreNotKeysOfTheirOwnAreRefused(t *testing.T) {
 	root := t.TempDir()
 	_, runtime := newTestRuntime(t)
 	runtime.client.saveStore = NewDirectorySaveStore(root)
 
-	for _, name := range []string{"/", ".", "./", "a/../b", ".."} {
+	for _, name := range []string{"/", ".", "./"} {
+		if got := databaseCall(t, runtime, wipicFileOpen, name, 4); got != wipicErrorInvalid {
+			t.Errorf("open(%q) = %#x, want M_E_INVALID", name, got)
+		}
+		if got := databaseCall(t, runtime, wipicFileExists, name); got != 0 {
+			t.Errorf("exists(%q) = %#x, want 0 for the root", name, got)
+		}
+		if got := databaseCall(t, runtime, wipicFileStatByName, name, 0); got != 0 {
+			t.Errorf("stat(%q) = %#x, want 0 for the root", name, got)
+		}
+		if got := databaseCall(t, runtime, wipicFileMakeDirectory, name, 1); got != wipicErrorExists {
+			t.Errorf("mkdir(%q) = %#x, want M_E_EXIST for the root", name, got)
+		}
+	}
+	for _, name := range []string{"a/../b", ".."} {
 		if got := databaseCall(t, runtime, wipicFileOpen, name, 4); got != wipicErrorInvalid {
 			t.Errorf("open(%q) = %#x, want M_E_INVALID", name, got)
 		}
 		if got := databaseCall(t, runtime, wipicFileExists, name); got != wipicErrorNotFound {
 			t.Errorf("exists(%q) = %#x, want M_E_NOENT", name, got)
 		}
-		if got := databaseCall(t, runtime, wipicFileStatByName, name, 0); got != wipicErrorBadParam {
-			t.Errorf("stat(%q) = %#x, want M_E_BADRECID", name, got)
+		if got := databaseCall(t, runtime, wipicFileStatByName, name, 0); got != wipicErrorBadFileName {
+			t.Errorf("stat(%q) = %#x, want M_E_BADFILENAME", name, got)
 		}
-		if got := databaseCall(t, runtime, wipicFileMakeDirectory, name, 1); got != wipicErrorBadParam {
-			t.Errorf("mkdir(%q) = %#x, want M_E_BADRECID", name, got)
+		if got := databaseCall(t, runtime, wipicFileMakeDirectory, name, 1); got != wipicErrorBadFileName {
+			t.Errorf("mkdir(%q) = %#x, want M_E_BADFILENAME", name, got)
 		}
 	}
 	if runtime.saveReadError != nil {
@@ -150,7 +166,7 @@ func TestStatAfterRemoveReportsNoFile(t *testing.T) {
 	if got := databaseCall(t, runtime, wipicFileExists, "save.dat"); got != wipicErrorNotFound {
 		t.Fatalf("exists after the delete = %#x, want M_E_NOENT", got)
 	}
-	if got := databaseCall(t, runtime, wipicFileStatByName, "save.dat", 0); got != wipicErrorBadParam {
-		t.Fatalf("stat after the delete = %#x, want the missing-name answer", got)
+	if got := databaseCall(t, runtime, wipicFileStatByName, "save.dat", 0); got != wipicErrorNotFound {
+		t.Fatalf("stat after the delete = %#x, want M_E_NOENT", got)
 	}
 }

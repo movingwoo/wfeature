@@ -566,28 +566,39 @@ func TestTheLastCloseKeepsAnotherHandlesWrite(t *testing.T) {
 }
 
 // Rule 2. The ending is where what the store refused earlier is given to it
-// again: the removal list as well as a file, and a database's records.
+// again: the removal list as well as a file, and a database's records. The
+// list waits when a rename has already stored the file under its new name
+// and the store refuses the list that hides the old one; a removal the store
+// refuses outright does not happen, and leaves nothing to wait
+// (TestStorageContractCRemove).
 func TestTheEndingGivesTheStoreWhatItRefusedEarlier(t *testing.T) {
 	store := newFaultStore(t, map[string]string{"fs/save.dat": "stored"})
 	fixture := newJavaThreadFixture(t, store)
 	client := fixture.client
 	files := newGuestFiles(t, client)
 	database := openFixtureDatabase(t, client, "rank", 4)
+	client.saveStore = keyRefusingWrites{faultStore: store, key: fileRemovedKey}
+	if got := int32(callSlot(t, client, slotFsRename, files.name("save.dat"), files.name("moved.dat"), 1)); got != wipiSuccess {
+		t.Fatalf("a rename whose removal list the store refused answered %d", got)
+	}
+	if !client.removedUnsaved || files.exists("save.dat") {
+		t.Fatal("the refused removal list is not waiting, or the old name is still there")
+	}
+	client.saveStore = store
 	store.refuse = true
-	callSlot(t, client, slotFsRemove, files.name("save.dat"))
 	insertFixtureRecord(t, client, database, []byte{1, 2, 3, 4})
 	store.refuse = false
 	client.flushOpenFiles()
 	if !strings.Contains(store.held(fileRemovedKey), "save.dat") || client.removedUnsaved {
 		t.Fatalf("after the ending the removal list is %q", store.held(fileRemovedKey))
 	}
-	if held := client.javaRun.databases[database]; held.unsaved || store.held("fs/rank.db") != string(held.encode()) {
+	if held := client.javaRun.databases[database]; held.unsaved || store.held("jdb/rank.db") != string(held.encode()) {
 		t.Fatal("the ending did not store the record the store had refused")
 	}
 	next := fixtureClient(t)
 	next.saveStore = store
 	if newGuestFiles(t, next).exists("save.dat") {
-		t.Fatal("the next session finds the removed file")
+		t.Fatal("the next session finds the file under its old name")
 	}
 }
 
@@ -710,7 +721,7 @@ func TestDataBaseObjectsOnOneDatabaseAreOneSetOfRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := &databaseContent{}
-	if err := want.decode([]byte(store.held("fs/rank.db"))); err != nil {
+	if err := want.decode([]byte(store.held("jdb/rank.db"))); err != nil {
 		t.Fatal(err)
 	}
 	if len(want.records) != 2 || string(want.records[0]) != "AAAA" || string(want.records[1]) != "BBBB" {

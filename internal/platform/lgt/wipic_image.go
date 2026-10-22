@@ -205,6 +205,87 @@ func decodeImage(encoded []byte) (stdimage.Image, error) {
 	return decoded, err
 }
 
+// createSubImage serves `MC_GrpImage MC_grpCreateSubImage(MC_GrpImage
+// srcImage, M_Int32 startx, M_Int32 starty, M_Int32 width, M_Int32 height)`:
+// a new image of width×height holding the source's pixels from (startx,
+// starty), which becomes the new image's (0, 0). The answer is the image
+// itself, and NULL is the specification's whole account of a failure. The
+// height is the fifth argument, on the stack.
+//
+// **The rectangle has to lie inside the source, and be at least one pixel
+// each way**, or the answer is NULL. A sub image is the source's own pixels,
+// and past its edge the source has none: clipping would hand back an image of
+// a size the caller did not ask for, and a caller that walks the new image
+// through its framebuffer pointer with the width it asked for would walk past
+// the end of it; filling the rest would invent pixels. MC_grpEncodeImage
+// clips instead, and it can, because the size it settles on travels in the
+// header of the picture it answers.
+//
+// The source is read back first, because a Clet may have written it through
+// its framebuffer pointer, and **the source's transparency comes with the
+// pixels**: the specification says a source with a mask gives its sub image the
+// matching part of the mask. A source whose transparency is a colour key keeps
+// it, and the sub image's mask is read off the pixels it holds, since the key
+// is where a guest that moved pixels around has put them; a source with only a
+// mask hands over the part of the mask under the rectangle; a source with
+// neither gives an image with neither, in which drawImage skips the mask colour
+// as it does in the source.
+//
+// A surface region too full to hold the copy stops the run, as it does for
+// MC_grpCreateImage: that is this platform's shortfall, and a NULL would
+// report it as the title's.
+func (client *Client) createSubImage(thread *armcore.Thread) error {
+	var arguments [5]uint32
+	for index := range arguments {
+		value, err := client.wipicArgument(thread, index)
+		if err != nil {
+			return err
+		}
+		arguments[index] = value
+	}
+	refuse := func() error { return thread.SetRegister(0, 0) }
+	source := client.framebuffer(arguments[0])
+	if source == nil {
+		return refuse()
+	}
+	x, y := int64(int32(arguments[1])), int64(int32(arguments[2]))
+	width, height := int64(int32(arguments[3])), int64(int32(arguments[4]))
+	if width <= 0 || height <= 0 || x < 0 || y < 0 ||
+		x+width > int64(source.width) || y+height > int64(source.height) {
+		return refuse()
+	}
+	left, top, columns, rows := int(x), int(y), int(width), int(height)
+	if err := client.syncRowsFromGuest(source, rowsAt(top, rows)); err != nil {
+		return err
+	}
+	image, err := client.newFramebuffer(columns, rows, false)
+	if err != nil {
+		return err
+	}
+	for row := 0; row < rows; row++ {
+		from := (top+row)*source.width + left
+		copy(image.pixels[row*columns:(row+1)*columns], source.pixels[from:from+columns])
+	}
+	switch {
+	case source.colorKeyed:
+		image.opaque = make([]bool, len(image.pixels))
+		for index, pixel := range image.pixels {
+			image.opaque[index] = pixel != source.transparentKey
+		}
+		image.colorKeyed, image.transparentKey = true, source.transparentKey
+	case source.opaque != nil:
+		image.opaque = make([]bool, len(image.pixels))
+		for row := 0; row < rows; row++ {
+			from := (top+row)*source.width + left
+			copy(image.opaque[row*columns:(row+1)*columns], source.opaque[from:from+columns])
+		}
+	}
+	if err := client.syncToGuest(image); err != nil {
+		return err
+	}
+	return thread.SetRegister(0, image.handle)
+}
+
 // decodeNextImage serves MC_grpDecodeNextImage, which walks an animated
 // source a frame at a time. Nothing here decodes an animated encoding, so an
 // image is whole as soon as it is created and this reports that there is no
@@ -222,7 +303,10 @@ func (client *Client) decodeNextImage(thread *armcore.Thread) error {
 }
 
 // destroyImage serves MC_grpDestroyImage. An image is a framebuffer, so this
-// is MC_grpDestroyOffScreenFrameBuffer with the LCD guarded the same way.
+// is MC_grpDestroyOffScreenFrameBuffer with the LCD guarded the same way: the
+// pixels go back to the surface region and the record to the arena. A Clet has
+// no collector to give an image back for it (collectForAllocation runs for a
+// Java title only), so this call is the only way its images are ever freed.
 func (client *Client) destroyImage(thread *armcore.Thread) error {
 	handle, err := thread.Register(0)
 	if err != nil {

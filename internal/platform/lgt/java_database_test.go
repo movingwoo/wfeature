@@ -135,9 +135,11 @@ func TestJavaDatabaseSurvivesTheSession(t *testing.T) {
 	}
 }
 
-// A record longer than the size the database was created with is the one limit
-// the specification puts on a record, and a container that is not one is
-// refused rather than read as an empty database.
+// A record longer than the size the database was created with is stored whole:
+// the common contract does not enforce the record size, because a title that
+// has always written such records here would lose its save on the next write.
+// A container that is not one is refused rather than read as an empty
+// database.
 func TestJavaDatabaseRefusesWhatItCannotHold(t *testing.T) {
 	client := fixtureClient(t)
 	client.saveStore = newMemorySaveStore()
@@ -147,8 +149,12 @@ func TestJavaDatabaseRefusesWhatItCannotHold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := javaInsertRecord(client, nil, nil, []uint32{object, array}); err == nil {
-		t.Fatal("a record longer than the record size was stored")
+	identifier, err := javaInsertRecord(client, nil, nil, []uint32{object, array})
+	if err != nil {
+		t.Fatalf("a record longer than the record size was refused: %v", err)
+	}
+	if got := string(databaseRecord(t, client, object, identifier)); got != "far too long" {
+		t.Fatalf("the long record reads %q", got)
 	}
 
 	database := &databaseContent{}
@@ -157,11 +163,21 @@ func TestJavaDatabaseRefusesWhatItCannotHold(t *testing.T) {
 	}
 }
 
-// A name that is a path would put a title's save somewhere else in the store.
-func TestJavaDatabaseRefusesANameThatIsAPath(t *testing.T) {
-	for _, name := range []string{"", "a/b", "..\\escape"} {
-		if err := validDatabaseName(name); err == nil {
-			t.Fatalf("%q was accepted as a database name", name)
+// A database name is read as a file's name: the spellings of one path are one
+// database, and a name that would leave the title's own area, or names that
+// area itself, is refused.
+func TestJavaDatabaseNameIsAPath(t *testing.T) {
+	for name, want := range map[string]string{
+		"save": "save", "/save": "save", "./save": "save", "\\save": "save",
+		"a/b": "a/b", "a\\b": "a/b", "//a/./b/": "a/b", " save ": " save ",
+	} {
+		if got, err := databasePath(name); err != nil || got != want {
+			t.Errorf("databasePath(%q) = %q, %v; want %q", name, got, err, want)
+		}
+	}
+	for _, name := range []string{"", "/", ".", "..\\escape", "a/../b", "a\nb", "__databases__", "/.created/x"} {
+		if got, err := databasePath(name); err == nil {
+			t.Errorf("%q was accepted as the database %q", name, got)
 		}
 	}
 }

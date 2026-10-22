@@ -48,7 +48,7 @@ const (
 	// LGTJavaSaveDatabaseKey the save store's key for its container. The File
 	// surfaces use LGTSaveFileName and LGTSaveFileKey.
 	LGTJavaSaveDatabaseName = "save"
-	LGTJavaSaveDatabaseKey  = "fs/" + LGTJavaSaveDatabaseName + ".db"
+	LGTJavaSaveDatabaseKey  = "jdb/" + LGTJavaSaveDatabaseName + ".db"
 
 	// LGTJavaSaveOwner is the Java title's own save owner.
 	LGTJavaSaveOwner = "PF0000JS"
@@ -260,7 +260,8 @@ func lgtJavaClassRecord(data *lgtData, names func(string) uint32, name, super st
 //	          four bytes, close             write of four bytes, close     put, closeDataBase
 //	read      exists, File(read-only),      the same, read through         openDataBase in a try region,
 //	          sizeOf, read, close           openInputStream                both records selected, close
-//	delete    FileSystem.remove             FileSystem.remove              deleteDataBase in a try region
+//	delete    FileSystem.remove in a try    FileSystem.remove in a try     deleteDataBase in a try region
+//	          region                        region
 //	hold      File(read-write), write of    File(read-write), stream,      openDataBase(create), record 0
 //	          part A, and no close          write of part A, no flush      put, and no close
 //	truncate  File(truncate), no close      File(truncate), stream         nothing: a record store has
@@ -725,8 +726,13 @@ func LGTJavaSaveArchive() ([]byte, error) {
 
 	p.label("delete")
 	database("delete database")
+	// remove(name) throws IOException for a file that is not there, as the
+	// specification has it (docs/wipi-storage.md), so a title deletes in a try
+	// region as it deletes a database.
+	try("done")
 	p.call("file name")
 	static("FileSystem.remove")
+	leave()
 	p.branch(lgtAL, "done")
 	p.label("delete database")
 	try("done")

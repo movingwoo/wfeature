@@ -279,23 +279,53 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 		Words: 1, Implementat: javaFileOpenInputStream},
 	"org/kwis/msp/io/File.openDataInputStream()Ljava/io/DataInputStream;": {
 		Words: 1, Implementat: javaFileOpenDataInputStream},
+	"org/kwis/msp/io/File.openDataOutputStream()Ljava/io/DataOutputStream;": {
+		Words: 1, Implementat: javaFileOpenDataOutputStream},
+	"org/kwis/msp/io/File.seek(I)V": {Words: 2, Implementat: javaFileSeek},
+	// FileSystem's constructor is public and the class has nothing to build:
+	// every member is static. A title that constructs one takes delivery of
+	// the object the module allocated.
+	"org/kwis/msp/io/FileSystem.<init>()V":                   {Words: 1, Implementat: javaNoResult},
 	"org/kwis/msp/io/FileSystem.exists(Ljava/lang/String;)Z": {Words: 1, Implementat: javaFileExists},
 	// The form that names which directory to look in. A title here has one —
 	// its own — so the flag chooses nothing and the two forms answer the same
-	// way; the name is still the name.
+	// way; the name is still the name. The same holds for every two-argument
+	// form below.
 	"org/kwis/msp/io/FileSystem.exists(Ljava/lang/String;I)Z": {Words: 2, Implementat: javaFileExists},
 	// `isFile` asks the narrower question — a file rather than a file or a
-	// directory — and here the two are the same question. A title's save tree
-	// on this platform holds files and nothing else: no call creates a
-	// directory, so a name that exists is a file's name.
-	"org/kwis/msp/io/FileSystem.isFile(Ljava/lang/String;)Z":  {Words: 1, Implementat: javaFileExists},
-	"org/kwis/msp/io/FileSystem.isFile(Ljava/lang/String;I)Z": {Words: 2, Implementat: javaFileExists},
-	"org/kwis/msp/io/FileSystem.remove(Ljava/lang/String;)V":  {Words: 1, Implementat: javaFileRemove},
-	// How much room a title has left. Saves live in Host storage without a
-	// handset's quota behind them, so the answer is the same generous constant
-	// a database reports its own free space from — a title asks in order to
-	// decide whether it can save at all, and this platform can.
-	"org/kwis/msp/io/FileSystem.available()I": {Implementat: javaFileSystemAvailable},
+	// directory. It used to share `exists`'s answer, when nothing here
+	// answered for a directory.
+	"org/kwis/msp/io/FileSystem.isFile(Ljava/lang/String;)Z":       {Words: 1, Implementat: javaFileIsFile},
+	"org/kwis/msp/io/FileSystem.isFile(Ljava/lang/String;I)Z":      {Words: 2, Implementat: javaFileIsFile},
+	"org/kwis/msp/io/FileSystem.isDirectory(Ljava/lang/String;)Z":  {Words: 1, Implementat: javaFileIsDirectory},
+	"org/kwis/msp/io/FileSystem.isDirectory(Ljava/lang/String;I)Z": {Words: 2, Implementat: javaFileIsDirectory},
+	"org/kwis/msp/io/FileSystem.remove(Ljava/lang/String;)V":       {Words: 1, Implementat: javaFileRemove},
+	// The flag form says in as many words that a missing file is no exception;
+	// the one-argument form throws for one. See javaFileRemoveFlagged.
+	"org/kwis/msp/io/FileSystem.remove(Ljava/lang/String;I)V": {Words: 2, Implementat: javaFileRemoveFlagged},
+	"org/kwis/msp/io/FileSystem.rename(Ljava/lang/String;Ljava/lang/String;)V": {
+		Words: 2, Implementat: javaFileRename},
+	"org/kwis/msp/io/FileSystem.rename(Ljava/lang/String;Ljava/lang/String;I)V": {
+		Words: 3, Implementat: javaFileRename},
+	"org/kwis/msp/io/FileSystem.list(Ljava/lang/String;)Ljava/util/Vector;": {
+		Words: 1, Implementat: javaFileList},
+	"org/kwis/msp/io/FileSystem.list(Ljava/lang/String;I)Ljava/util/Vector;": {
+		Words: 2, Implementat: javaFileList},
+	"org/kwis/msp/io/FileSystem.mkdir(Ljava/lang/String;)V":  {Words: 1, Implementat: javaFileMakeDirectory},
+	"org/kwis/msp/io/FileSystem.mkdir(Ljava/lang/String;I)V": {Words: 2, Implementat: javaFileMakeDirectory},
+	"org/kwis/msp/io/FileSystem.rmdir(Ljava/lang/String;)V":  {Words: 1, Implementat: javaFileRemoveDirectory},
+	"org/kwis/msp/io/FileSystem.rmdir(Ljava/lang/String;I)V": {Words: 2, Implementat: javaFileRemoveDirectory},
+	"org/kwis/msp/io/FileSystem.getCreationTime(Ljava/lang/String;)I": {
+		Words: 1, Implementat: javaFileCreationTime},
+	"org/kwis/msp/io/FileSystem.getCreationTime(Ljava/lang/String;I)I": {
+		Words: 2, Implementat: javaFileCreationTime},
+	"org/kwis/msp/io/FileSystem.getMaxFilenameLength()I":         {Implementat: javaFileMaxNameLength},
+	"org/kwis/msp/io/FileSystem.toCString(Ljava/lang/String;)[B": {Words: 1, Implementat: javaFileCString},
+	// How much room a title has, and how much of it is left: what the C slots
+	// MC_fsTotalSpace and MC_fsAvailable answer, and what a database reports
+	// as left too. See storageAvailable.
+	"org/kwis/msp/io/FileSystem.available()I":  {Implementat: javaFileSystemAvailable},
+	"org/kwis/msp/io/FileSystem.totalSpace()I": {Implementat: javaFileSystemTotal},
 
 	// The clock a title reads. It is the same clock every other LGT call reads,
 	// which is what keeps a Java title's idea of time and a Clet's the same.
@@ -1010,13 +1040,6 @@ func javaRandomNext(
 		return 0, fmt.Errorf("the object at %#x is not a generator this platform built", arguments[0])
 	}
 	return uint32(source.Uint32()), nil
-}
-
-// javaFileSystemAvailable is the room left for a title's own files.
-func javaFileSystemAvailable(
-	_ *Client, _ context.Context, _ *armcore.Thread, _ []uint32,
-) (uint32, error) {
-	return databaseCapacity, nil
 }
 
 // javaRandomSetSeed reseeds a generator, which the language defines as putting

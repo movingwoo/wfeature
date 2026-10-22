@@ -1059,8 +1059,12 @@ func (saved *javaState) validate() error {
 	}
 	for index, database := range saved.Databases {
 		// The name is what a load reads the store with, so it has to be one
-		// openDataBase would have taken.
-		if index > 0 && saved.Databases[index-1].Object >= database.Object || validDatabaseName(string(database.Name)) != nil {
+		// openDataBase would have answered: a database's path, as it keeps
+		// it.
+		if index > 0 && saved.Databases[index-1].Object >= database.Object {
+			return invalid("an invalid database")
+		}
+		if path, err := databasePath(string(database.Name)); err != nil || path != string(database.Name) {
 			return invalid("an invalid database")
 		}
 	}
@@ -1324,12 +1328,20 @@ func (client *Client) restoreJavaState(saved *javaState) error {
 	}
 	for _, record := range saved.Databases {
 		// The records are read when the load commits, which also gives the
-		// objects on one database the one set of records they share.
+		// objects on one database the one set of records they share. A record
+		// an earlier build took may mark an object its title closed; a close
+		// releases nothing a title can see, so it is restored as any other
+		// object on the database is.
 		runtime.databases[record.Object] = &javaDatabase{
-			name: string(record.Name), closed: record.Closed,
+			name:            string(record.Name),
 			databaseContent: &databaseContent{recordSize: record.RecordSize, modified: record.Modified},
 		}
 		client.restoredStorage.recordSizes[record.Object] = record.RecordSize
+		if runtime.databaseModified == nil {
+			runtime.databaseModified = make(map[string]int64)
+		}
+		name := string(record.Name)
+		runtime.databaseModified[name] = max(runtime.databaseModified[name], record.Modified)
 	}
 	for _, record := range saved.Graphics {
 		runtime.graphics[record.Object] = &javaGraphics{

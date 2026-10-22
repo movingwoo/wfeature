@@ -109,7 +109,9 @@ returned.
 resolves, using actual dispatch resolution, including inherited baked slots.
 A method name alone does not count as an implemented body. Startup imports are
 a lower bound: later lazy imports and virtual calls can reach additional
-unsupported methods. The Java library remains partial.
+unsupported methods. The Java library remains partial. A C library slot counts
+as served when it has a name, and every slot the C library handler serves has
+one ([history](history/lgt.md#lgt-stdlib-names-2026-10-22)).
 
 Vector slot 26 implements `setElementAt(Object, int)`: it replaces one reference
 without resizing or shifting the list, permits null, and throws
@@ -172,6 +174,16 @@ refuses a picture of more than 16,777,216 pixels (`backend.MaxFramebufferPixels`
 the rule SKT already applied) before allocating, and the checksum repair for a
 picture with a wrong zlib trailer stops at the size its header implies.
 
+The image slots follow the v2.x order: `MC_grpCreateImage` `0xe9`,
+`MC_grpCreateSubImage` `0xea`, `MC_grpDestroyImage` `0xeb`,
+`MC_grpDecodeNextImage` `0xec` (which answers that no frame follows: nothing
+here decodes an animation) and `MC_grpEncodeImage` `0xed`. A destroy gives the image's pixels and record back,
+and is the only release a Clet's images get: the collector runs for Java titles
+only. A sub image is a copy of the source's pixels with its mask or colour key;
+a region outside the source or without pixels answers NULL, and a surface region
+too full for the copy stops the run as a create does. See the
+[slot correction](history/lgt.md#lgt-image-slots-2026-10-22).
+
 Keys use the platform's lifecycle and clock boundaries. Clet events are a press
 and a release: the platform generates no `MV_KEY_REPEAT_EVENT`, and a Host key
 repeat is dropped rather than sent as a second press, because two local titles
@@ -193,6 +205,25 @@ particular, Java mode 4 preserves existing contents. A save key keeps the case
 the title gave its path, and the save formats are unchanged except for the
 marker line described below. Of the WIPI-C database block, only
 `MC_dbListDataBases` is served, and it answers that the program has none.
+
+What the C file slots (`MC_fs*`, `0x190`–`0x1a0`), Java `File`, `FileSystem`
+and `org.kwis.msp.db.DataBase` answer is the common contract all three
+platforms keep, [WIPI storage](wipi-storage.md): names of at most 255 bytes,
+what a directory is and what each call answers about one, the 1 MiB of room
+and what counts against it, the 4 MiB bound on one file or one database's
+records, and the database rules. On this platform a file is a save key under
+`fs/`, and a database is a container of this runtime's format in a scope of
+its own, `jdb/<name>.db`, with the index of names at `jdb/.index`, so a
+title's file `save.db` and its database `save` are two things and no file
+call sees a database. Earlier builds kept each container among the files, as
+`fs/<name>.db` with the index at `fs/__databases__.db`; the first time a
+session over such a store reads its databases, the containers and the index
+move into the scope in one batch and the old paths go on the removal list,
+once. A store that refuses the move is read where the containers were, with
+the file calls not seeing them, until a session can move it. The space count
+takes a database once, as its records. The directories a title made are a
+list kept beside the saves, `fs/.directories`, as the removed and created
+paths are (see [the change](history/lgt.md#lgt-storage-contract-2026-10-22)).
 
 Every file surface (the C file table, Java `File`, a stream opened on a `File`,
 and `DataBase`) keeps the save rule the other platforms keep. A file's writes
@@ -258,11 +289,10 @@ hiding or losing them:
   name, and one onto a name with no save (below) answers -3, the
   specification's bad-name code, and keeps the old name. Closing a `File` that
   is already closed is nothing, as the specification says.
-- A write or seek that would take a file past 16 MiB fails like any bad file
-  call: `MC_fsWrite` and `MC_fsSeek` answer an error, `File.write` answers -1,
-  and a stream write past it stops the run. That is sixteen times the 1 MiB the
-  space slots report. A packaged file already larger is still read and written
-  within its own length.
+- A write that would take a file past 4 MiB fails as a write does:
+  `MC_fsWrite` answers `M_E_NOSPACE`, and `File.write` and a stream write throw
+  `IOException`. A seek past it fails as a bad seek does. A packaged file
+  already larger is still read and written within its own length.
 - **Removal.** A removal hides a file under every spelling that shares its save
   key (`save.dat`, `/save.dat`, `./save.dat`, `//save.dat`, and `.\save.dat`: a
   backslash separates a path as a slash does, as the archive lookup reads it, so
@@ -273,7 +303,13 @@ hiding or losing them:
   of that handle nor the ending brings it back; a write through the handle
   afterwards is a write of the path. A removal comes off the stored list only
   once the store has taken the write that brings the file back. Deleting a
-  database takes a write the store refused with it.
+  database takes a write the store refused with it. A removal the store
+  refuses does not happen: the list is given to the store before the session
+  lets the file go, and a refusal leaves the file, in this session and the
+  next, with `MC_fsRemove` answering `M_E_ERROR`, `FileSystem.remove` (either
+  form) throwing `IOException` and `deleteDataBase` throwing
+  `DataBaseException`. Only a rename, which has already stored the file under
+  its new name, leaves a refused list waiting for the ending and quick steps.
 - **Case.** Names that differ only by case are two files on every Host: the
   save key, the path lists, the buffers the handles share and a listing all
   keep the title's case. A packaged file is still found without regard to
@@ -293,16 +329,17 @@ hiding or losing them:
   the title names it in UTF-8 or in its raw EUC-KR bytes, which the archive
   lookup decodes. A save an earlier build wrote that way is listed once the
   title writes it again.
-- The file scope itself, the names `.removed` and `.created` at its root,
-  which hold the platform's own path lists, and `__databases__.db` there,
-  which holds the index of database names (any case, and anything beneath
-  them), are not guest files. A title can open and write them, but nothing
-  reaches the store, like a path with `..`. `openDataBase` refuses the one
-  name whose container would be the index, `__databases__` in any case, with
+- The file scope itself, the names `.removed`, `.created` and `.directories`
+  at its root, which hold the platform's own path lists, and
+  `__databases__.db` there, where earlier builds kept the index of database
+  names (any case, and anything beneath them), are not guest files. A file call refuses
+  them as a name no file can have (`M_E_BADFILENAME`, `IOException`), as it
+  refuses a path with `..`. `openDataBase` refuses the one name whose
+  container would be the index, `__databases__` in any case, with
   `DataBaseException`. The path lists record only paths that have a save: an
   entry of any other kind, which earlier builds wrote for such paths and for
   the index, is read as nothing and left out when the list is next stored.
-  The on-disk layout is unchanged.
+  The on-disk layout is unchanged except for the new list.
 - The index of database names is written whole at every create and delete. A
   write of it the store refuses waits in the session, which lists the names
   from it, and the next create or delete, the ending and a quick step write it
@@ -310,9 +347,10 @@ hiding or losing them:
 - `DataBase` objects opened on one database share one set of records, so a
   change one makes is what another reads, a change the store refused included.
   The records are read again when something else changed the container (a
-  deletion, a file written under its name); a deleted container reads as empty.
+  deletion); a deleted container reads as empty.
   Every change is stored when it is made, so `closeDataBase` stores only a
-  change the store refused, as the ending and quick steps do.
+  change the store refused, as the ending and quick steps do, and leaves the
+  object usable.
 - Nothing else writes a save: no background, timer or lifecycle store. A quick
   save and a quick load store the title's waiting writes first, below.
 - A session with no save store, or with only an authentication adapter and no
@@ -326,6 +364,12 @@ hiding or losing them:
 `File.openDataInputStream` returns a typed stream using the existing file
 binding and primitive readers. Closing a file input stream releases its binding
 and advances the file position once, allowing another stream to open there.
+`File.openDataOutputStream` is `openOutputStream` with `DataOutputStream`'s
+typed writes, and shares its one output stream per `File`. `File.seek` moves
+the position from the start of the file, as `MC_fsSeek` does, and throws
+IOException where that slot answers an error. `DataBase.sortRecord` calls the
+title's own `DataFilter` and `DataComparator` objects back the way a
+`Runnable`'s `run` is reached.
 
 Java Player distinguishes pause from stop, preserves repeat across pause/resume,
 and rejects duplicate play/resume. Resume continues from the paused position;
@@ -414,7 +458,7 @@ Three properties of this platform's storage shape how it gets there:
   array write already did. A restored cursor can stand past the end of a file
   that is shorter now, which is how the single-byte write came to be reached
   there. The record's cursor is still accepted up to 2^31-1, so older slots
-  load. A write that would take the file past the 16 MiB cap fails instead of
+  load. A write that would take the file past the 4 MiB cap fails instead of
   filling the gap.
 
 A guest thread is restored from wherever a title parks one: inside

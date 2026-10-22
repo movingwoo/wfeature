@@ -409,6 +409,29 @@ func (client *Client) newJavaByteArray(data []byte) (uint32, error) {
 	return object, nil
 }
 
+// newJavaIntArray builds an `int[]` holding the values, which is what
+// sortRecord answers its record ids in.
+func (client *Client) newJavaIntArray(values []uint32) (uint32, error) {
+	class, err := client.javaArrayClassByName("[I")
+	if err != nil {
+		return 0, err
+	}
+	object, err := client.allocateJavaArray(class.Object, uint32(len(values)))
+	if err != nil {
+		return 0, err
+	}
+	block, err := client.readWord(object + 8)
+	if err != nil {
+		return 0, err
+	}
+	for index, value := range values {
+		if err := client.writeWord(block+javaArrayLengthWords*4+uint32(index)*4, value); err != nil {
+			return 0, err
+		}
+	}
+	return object, nil
+}
+
 func (client *Client) newJavaStringArray(values []string) (uint32, error) {
 	class, err := client.javaArrayClassByName("[Ljava/lang/String;")
 	if err != nil {

@@ -132,6 +132,16 @@ func (store *subscriberReceiptStore) LoadSave(name string) ([]byte, bool) {
 	data, present, _ := store.ReadSave(name)
 	return data, present
 }
+
+// ListSaves is the store underneath's: this one changes what one read
+// answers, not which keys there are.
+func (store *subscriberReceiptStore) ListSaves(directory string) ([]string, error) {
+	keys, listed, err := backend.ListSaves(store.base, directory)
+	if err == nil && !listed {
+		err = backend.ErrSavesNotListed
+	}
+	return keys, err
+}
 func (store *subscriberReceiptStore) StoreSave(name string, data []byte) error {
 	return store.StoreSaves(map[string][]byte{name: data})
 }

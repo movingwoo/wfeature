@@ -588,6 +588,8 @@ func TestStorageFieldsAreAccountedFor(t *testing.T) {
 		"removedCDatabases":    rebound,
 		"madeDirectories":      rebound,
 		"removedDatabaseLists": rebound,
+		"madeGuestDirectories": rebound,
+		"databaseSizes":        rebound,
 		// What the store had nothing for, which is decided at the bind.
 		"detachedCFiles":          rebound,
 		"detachedRecordDatabases": rebound,

@@ -23,6 +23,7 @@ type checkpointHeap struct {
 	files     []*xFileData // restored handles; see rebuildCheckpointFiles
 	stores    []*recordStore
 	rmsCaches map[string]*recordStore
+	databases []*wipiDatabase // restored WIPI databases; see rebuildCheckpointDatabases
 	editors   []*textinput.State
 	players   []*playerData
 	audio     map[backend.AudioHandle]backend.AudioSoundState
@@ -217,6 +218,16 @@ type checkpointRMS struct {
 	Listeners int
 }
 
+// checkpointWIPIDatabase is a WIPI database as a quick save keeps it: what it
+// is called, the record size a write through a handle on a deleted one would
+// create it with again, and its getLastModified. Like a file's record, it
+// holds no records; a load reads them from the current saves.
+type checkpointWIPIDatabase struct {
+	Name       string
+	RecordSize int32
+	Modified   int64
+}
+
 func (heap *checkpointHeap) captureNative(native any) (jvm.HeapExternalPayload, error) {
 	switch n := native.(type) {
 	case *imageData:
@@ -302,6 +313,11 @@ func (heap *checkpointHeap) captureNative(native any) (jvm.HeapExternalPayload, 
 	case *recordStore:
 		heap.stores = append(heap.stores, n)
 		return nativeCheckpoint("rms", checkpointRMS{n.name, n.version, n.modified, n.open, len(n.listeners)}, n.listeners...)
+	case *wipiDatabase:
+		heap.runtime.wipiDatabaseMu.Lock()
+		saved := checkpointWIPIDatabase{n.name, n.recordSize, n.modified}
+		heap.runtime.wipiDatabaseMu.Unlock()
+		return nativeCheckpoint("wipi-database", saved)
 	case *string:
 		return nativeCheckpoint("ticker", *n)
 	default:

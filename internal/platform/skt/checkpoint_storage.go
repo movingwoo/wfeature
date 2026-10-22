@@ -3,6 +3,7 @@ package skt
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -149,6 +150,9 @@ func (heap *checkpointHeap) rebuildCheckpointSavesWithin(live backend.SaveStore,
 	if err := heap.rebuildCheckpointFiles(charge, &remaining, fail); err != nil {
 		return err
 	}
+	if err := heap.rebuildCheckpointDatabases(charge, fail); err != nil {
+		return err
+	}
 	if state := runtime.rmsState; state != nil {
 		if heap.rmsCaches == nil {
 			heap.rmsCaches = maps.Clone(state.stores)
@@ -220,7 +224,9 @@ func (heap *checkpointHeap) rebuildCheckpointFiles(charge func(int64) error, rem
 	runtime := heap.runtime
 	runtime.fileMu.Lock()
 	defer runtime.fileMu.Unlock()
-	runtime.files, runtime.removedFiles = nil, nil
+	// The directories FileSystem.mkdir made are read again from the current
+	// saves at first use, as the removal list is.
+	runtime.files, runtime.removedFiles, runtime.wipiDirectories = nil, nil, nil
 	archives := make(map[string]map[string][]byte)
 	for _, file := range heap.files {
 		file.node = nil
@@ -267,6 +273,33 @@ func (heap *checkpointHeap) rebuildCheckpointFiles(charge func(int64) error, rem
 		}
 		data, found := entries[file.archiveEntry]
 		file.node = &xFileNode{data: data, present: found}
+	}
+	return nil
+}
+
+// rebuildCheckpointDatabases makes the restored WIPI databases the session's
+// own and reads each from the current saves, through the same budget as the
+// files: the index, then the records, refused whole as an open refuses them.
+// A database deleted since the quick save is restored deleted, with the record
+// size its handles had. It runs again when the old session's writes changed
+// the saves, so it starts each time from nothing.
+func (heap *checkpointHeap) rebuildCheckpointDatabases(charge func(int64) error, fail func(error) error) error {
+	runtime := heap.runtime
+	runtime.wipiDatabaseMu.Lock()
+	defer runtime.wipiDatabaseMu.Unlock()
+	runtime.wipiDatabaseIndex, runtime.wipiDatabases = nil, nil
+	for _, db := range heap.databases {
+		db.loaded = false
+		if err := runtime.loadWIPIDatabaseLocked(db, charge); err != nil {
+			if errors.Is(err, backend.ErrCheckpointSaveRead) {
+				return err
+			}
+			return fail(err)
+		}
+		if runtime.wipiDatabases == nil {
+			runtime.wipiDatabases = make(map[string]*wipiDatabase, len(heap.databases))
+		}
+		runtime.wipiDatabases[db.name] = db
 	}
 	return nil
 }

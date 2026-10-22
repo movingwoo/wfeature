@@ -67,7 +67,10 @@ RMS records retain names, execution metadata and listener references. Both open
 and closed cached handles are rebuilt using current saves, including current RMS
 index/removal state and packaged defaults. A missing current file becomes empty;
 a load never reconstructs its older bytes from a slot. Later guest writes use the
-live store.
+live store. A WIPI `DataBase` object keeps its name, record size and
+modification time; its records are read from the current saves on a load, and
+one deleted since the quick save is restored deleted. The directories WIPI
+`FileSystem.mkdir` made are read from the current saves too.
 
 An unchanged RMS handle does not write on close. Close retries only writes
 already issued by the guest, so closing a handle restored over a later deletion

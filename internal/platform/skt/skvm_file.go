@@ -277,7 +277,21 @@ func splitRemovalList(data []byte) []string {
 // writes it again. Without a store there is nothing to write to, and the file
 // stays what the session holds. The caller holds fileMu.
 func (runtime *Runtime) storeXFileLocked(node *xFileNode) error {
-	if node == nil || !node.dirty || node.key == "" {
+	return runtime.storeXFilesLocked(node)
+}
+
+// storeXFilesLocked is storeXFileLocked for paths that must reach the store
+// together, which is what a rename is: the new path's bytes and the old path's
+// removal are one batch with one removal list, so no later session finds the
+// file under both names or under neither. The caller holds fileMu.
+func (runtime *Runtime) storeXFilesLocked(nodes ...*xFileNode) error {
+	pending := make([]*xFileNode, 0, len(nodes))
+	for _, node := range nodes {
+		if node != nil && node.dirty && node.key != "" {
+			pending = append(pending, node)
+		}
+	}
+	if len(pending) == 0 {
 		return nil
 	}
 	store := runtime.saveStoreBoundary()
@@ -288,19 +302,30 @@ func (runtime *Runtime) storeXFileLocked(node *xFileNode) error {
 	if err != nil {
 		return err
 	}
-	name := strings.TrimPrefix(node.key, xFileSaveScope)
-	entries := make(map[string][]byte, 2)
+	entries := make(map[string][]byte, len(pending)+1)
 	var staged map[string]bool
-	if node.present {
-		entries[node.key] = slices.Clone(node.data)
-		if removed[name] {
-			staged = maps.Clone(removed)
-			delete(staged, name)
+	for _, node := range pending {
+		name := strings.TrimPrefix(node.key, xFileSaveScope)
+		listed := removed[name]
+		if staged != nil {
+			listed = staged[name]
 		}
-	} else {
-		entries[node.key] = nil
-		if !removed[name] {
+		if node.present {
+			entries[node.key] = slices.Clone(node.data)
+		} else {
+			entries[node.key] = nil
+		}
+		// A write takes the name off the list and a removal puts it on; a
+		// list that already says so is not written.
+		if listed != node.present {
+			continue
+		}
+		if staged == nil {
 			staged = maps.Clone(removed)
+		}
+		if node.present {
+			delete(staged, name)
+		} else {
 			staged[name] = true
 		}
 	}
@@ -323,7 +348,9 @@ func (runtime *Runtime) storeXFileLocked(node *xFileNode) error {
 	if staged != nil {
 		runtime.removedFiles = staged
 	}
-	node.dirty, node.stored = false, true
+	for _, node := range pending {
+		node.dirty, node.stored = false, true
+	}
 	return nil
 }
 
@@ -412,6 +439,16 @@ func (runtime *Runtime) initXFileName(_ *jvm.VM, arguments []jvm.Value) (jvm.Val
 // handle as XFile once the mode is translated to its bits. The third argument
 // is a sharing level, and one title has nobody to share a file with.
 func (runtime *Runtime) initWIPIFileName(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	// A WIPI name is read by the WIPI storage contract's rule, which XFile's
+	// constructor below does not apply: its backslashes are slashes, and it
+	// is held to 255 bytes (docs/wipi-storage.md).
+	if _, _, err := wipiFileSystemPath(arguments, 1); err != nil {
+		return jvm.VoidValue(), err
+	}
+	name, err := stringArgument(arguments, 1)
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
 	mode, err := intArgument(arguments, 2)
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -428,6 +465,9 @@ func (runtime *Runtime) initWIPIFileName(vm *jvm.VM, arguments []jvm.Value) (jvm
 		return jvm.VoidValue(), newGuestException("java/io/IOException", fmt.Sprintf("invalid file mode %d", mode))
 	}
 	translated := append([]jvm.Value(nil), arguments[:3]...)
+	if read := wipiName(name); read != name {
+		translated[1] = jvm.ReferenceValue(vm.NewString(read))
+	}
 	translated[2] = jvm.IntValue(bits)
 	if _, err := runtime.initXFileName(vm, translated); err != nil {
 		return jvm.VoidValue(), err
@@ -601,22 +641,48 @@ func (runtime *Runtime) xFileRead(vm *jvm.VM, arguments []jvm.Value) (jvm.Value,
 }
 
 func (runtime *Runtime) xFileWrite(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	file, err := xFileArgument(arguments)
+	written, outcome, err := runtime.writeXFile(arguments, xFileMaxBytes)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	if outcome != xFileWritten {
+		return jvm.IntValue(-1), nil
+	}
+	return jvm.IntValue(written), nil
+}
+
+// xFileWriteOutcome is what a write through a handle came to: written, refused
+// because the handle cannot write, or refused because the file would grow past
+// the bound the caller set. XFile answers -1 for both refusals; a WIPI File
+// answers the second with IOException (wipiFileWriteWindow).
+type xFileWriteOutcome uint8
+
+const (
+	xFileWritten xFileWriteOutcome = iota
+	xFileNotWritable
+	xFileTooLarge
+)
+
+// writeXFile writes the window arguments 1 to 3 name, through the handle in
+// argument 0, into a file that may grow no further than limit; a file already
+// larger, a packaged resource, can still be written within its length.
+func (runtime *Runtime) writeXFile(arguments []jvm.Value, limit int) (int32, xFileWriteOutcome, error) {
+	file, err := xFileArgument(arguments)
+	if err != nil {
+		return 0, xFileNotWritable, err
+	}
 	data, err := recordBytesArgument(arguments, 1, 2, 3)
 	if err != nil {
-		return jvm.VoidValue(), err
+		return 0, xFileNotWritable, err
 	}
 	runtime.fileMu.Lock()
 	defer runtime.fileMu.Unlock()
 	node := file.node
 	if !file.open || !file.writable || node == nil || node.key == "" {
-		return jvm.IntValue(-1), nil
+		return 0, xFileNotWritable, nil
 	}
-	if end := file.cursor + len(data); end > len(node.data) && end > xFileMaxBytes {
-		return jvm.IntValue(-1), nil
+	if end := file.cursor + len(data); end > len(node.data) && end > limit {
+		return 0, xFileTooLarge, nil
 	}
 	node.own()
 	if file.cursor > len(node.data) {
@@ -631,7 +697,7 @@ func (runtime *Runtime) xFileWrite(_ *jvm.VM, arguments []jvm.Value) (jvm.Value,
 	// Writing a path makes it exist, a removed one included: the next store
 	// takes its name off the removal list.
 	node.present, node.dirty = true, true
-	return jvm.IntValue(int32(len(data))), nil
+	return int32(len(data)), xFileWritten, nil
 }
 
 func (runtime *Runtime) xFileSeek(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {

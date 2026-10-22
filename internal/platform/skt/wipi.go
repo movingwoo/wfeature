@@ -119,7 +119,7 @@ func (runtime *Runtime) wipiRegistrations() []nativeRegistration {
 		{wipi.FileClass, "read", "([B)I", runtime.wipiFileReadWhole},
 		{wipi.FileClass, "read", "([BII)I", runtime.xFileRead},
 		{wipi.FileClass, "write", "([B)I", runtime.wipiFileWriteWhole},
-		{wipi.FileClass, "write", "([BII)I", runtime.xFileWrite},
+		{wipi.FileClass, "write", "([BII)I", runtime.wipiFileWriteWindow},
 		{wipi.FileClass, "seek", "(I)V", runtime.wipiFileSeek},
 		{wipi.FileClass, "tell", "()I", runtime.wipiFileTell},
 		{wipi.FileClass, "sizeOf", "()I", runtime.wipiFileSizeOf},
@@ -129,12 +129,8 @@ func (runtime *Runtime) wipiRegistrations() []nativeRegistration {
 		{wipi.FileClass, "openOutputStream", "()Ljava/io/OutputStream;", runtime.wipiFileOutputStream},
 		{wipi.FileClass, "openDataOutputStream", "()Ljava/io/DataOutputStream;", runtime.wipiFileDataOutputStream},
 
-		{wipi.FileSystemClass, "exists", "(" + text + ")Z", runtime.xFileExists},
-		{wipi.FileSystemClass, "isFile", "(" + text + ")Z", runtime.xFileExists},
-		{wipi.FileSystemClass, "isDirectory", "(" + text + ")Z", answerFalse},
-		{wipi.FileSystemClass, "remove", "(" + text + ")V", runtime.wipiFileRemove},
-		{wipi.FileSystemClass, "mkdir", "(" + text + ")V", runtime.ignoreVoid},
-		{wipi.FileSystemClass, "sizeOf", "(" + text + ")I", runtime.xFileSize},
+		// FileSystem, every member that names a path twice, with and without
+		// its access flag, is in wipi_filesystem.go.
 
 		{wipi.ClipClass, "<init>", "(" + text + "[B)V", runtime.wipiClipInit},
 		{wipi.ClipClass, "<init>", "(" + text + text + ")V", runtime.wipiClipInitResource},
@@ -150,9 +146,6 @@ func (runtime *Runtime) wipiRegistrations() []nativeRegistration {
 		{wipi.PlayerClass, "resume", "(Lorg/kwis/msp/media/Clip;)Z", runtime.wipiPlayerResume},
 	}
 }
-
-// answerFalse is the body of a question this platform has one answer to.
-func answerFalse(*jvm.VM, []jvm.Value) (jvm.Value, error) { return jvm.IntValue(0), nil }
 
 func (runtime *Runtime) wipiActiveJlet(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 	return jvm.ReferenceValue(runtime.MIDlet), nil
@@ -682,7 +675,7 @@ func (runtime *Runtime) wipiFileWriteWhole(vm *jvm.VM, arguments []jvm.Value) (j
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	return runtime.xFileWrite(vm, append(arguments[:2:2], jvm.IntValue(0), jvm.IntValue(length)))
+	return runtime.wipiFileWriteWindow(vm, append(arguments[:2:2], jvm.IntValue(0), jvm.IntValue(length)))
 }
 
 func wipiArrayLength(arguments []jvm.Value, index int) (int32, error) {
@@ -735,24 +728,48 @@ func (runtime *Runtime) wipiFileSizeOf(_ *jvm.VM, arguments []jvm.Value) (jvm.Va
 }
 
 // wipiFileRemove is FileSystem.remove, XFile.unlink's removal answered
-// without a value. A name with no file, and one that cannot be removed, throw
-// the IOException the specification gives both. Every remove in the local SKT
-// corpus runs behind the title's own existence check and inside a handler
-// that catches the exception (docs/skvm.md).
-func (runtime *Runtime) wipiFileRemove(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	name, err := stringArgument(arguments, 0)
-	if err != nil {
-		return jvm.VoidValue(), err
+// without a value, in the two shapes docs/wipi-storage.md gives it:
+// remove(name) throws IOException for a name that is not a file — no file
+// there, a directory, the root — and remove(name, flag) returns either way, as
+// the specification words the flagged form. Both throw IOException for a file
+// whose removal cannot be recorded or stored, and both refuse a name the
+// contract refuses (wipiFileSystemPath). Every remove in the local SKT corpus
+// is the unflagged form, behind the title's own existence check and inside a
+// handler that catches the exception (docs/skvm.md).
+func (runtime *Runtime) wipiFileRemove(flagged bool) jvm.NativeMethod {
+	return func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		key, root, err := wipiFileSystemPath(arguments, 0)
+		if err != nil {
+			return jvm.VoidValue(), err
+		}
+		// The path as the store keeps it, which the XFile removal below reads
+		// back to the same key.
+		name := strings.TrimPrefix(key, xFileSaveScope)
+		notAFile := func() (jvm.Value, error) {
+			if flagged {
+				return jvm.VoidValue(), nil
+			}
+			return jvm.VoidValue(), newGuestException(jvm.IOExceptionClass, "no such file: "+name)
+		}
+		if root {
+			return notAFile()
+		}
+		switch runtime.removeXFile(name) {
+		case xFileRemovedUnstored:
+			return jvm.VoidValue(), newGuestException(jvm.IOExceptionClass, "removed, but the removal could not be stored: "+name)
+		case xFileAbsent:
+			return notAFile()
+		case xFileUnremovable:
+			// A name with a line break cannot go on the removal list, which
+			// removeXFile says before it looks for the file; with no file
+			// there, there is nothing to remove.
+			if present, _, err := runtime.xFileState(name); err == nil && !present {
+				return notAFile()
+			}
+			return jvm.VoidValue(), newGuestException(jvm.IOExceptionClass, "cannot remove: "+name)
+		}
+		return jvm.VoidValue(), nil
 	}
-	switch runtime.removeXFile(name) {
-	case xFileRemovedUnstored:
-		return jvm.VoidValue(), newGuestException("java/io/IOException", "removed, but the removal could not be stored: "+name)
-	case xFileAbsent:
-		return jvm.VoidValue(), newGuestException("java/io/IOException", "no such file: "+name)
-	case xFileUnremovable:
-		return jvm.VoidValue(), newGuestException("java/io/IOException", "cannot remove: "+name)
-	}
-	return jvm.VoidValue(), nil
 }
 
 func (runtime *Runtime) wipiFileInputStream(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -1150,10 +1167,19 @@ func (runtime *Runtime) registerWIPINatives() error {
 	if err := runtime.registerWIPIFileStreams(); err != nil {
 		return err
 	}
-	for _, registration := range runtime.wipiRegistrations() {
+	registrations := runtime.wipiRegistrations()
+	registrations = append(registrations, runtime.wipiFileSystemRegistrations()...)
+	registrations = append(registrations, runtime.wipiDatabaseRegistrations()...)
+	for _, registration := range registrations {
 		if err := runtime.registerNative(registration.class, registration.name, registration.descriptor, registration.method); err != nil {
 			return fmt.Errorf("register %s.%s%s: %w", registration.class, registration.name, registration.descriptor, err)
 		}
+	}
+	// sortRecord calls the title's filter and comparator, and a call into
+	// guest code stays on the execution that made it.
+	const sortRecord = "(Lorg/kwis/msp/db/DataFilter;Lorg/kwis/msp/db/DataComparator;)[I"
+	if err := runtime.registerContextNative(wipi.DataBaseClass, "sortRecord", sortRecord, runtime.wipiDataBaseSortRecord); err != nil {
+		return fmt.Errorf("register %s.sortRecord%s: %w", wipi.DataBaseClass, sortRecord, err)
 	}
 	return nil
 }

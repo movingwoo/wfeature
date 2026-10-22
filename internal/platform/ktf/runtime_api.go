@@ -211,36 +211,52 @@ func runtimeDataBaseSize(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Va
 	return jvm.IntValue(int32(total)), nil
 }
 
-// runtimeDataBaseRecordSize reports the fixed record size the database was
-// opened with, which the original runtime keeps per store.
-func runtimeDataBaseRecordSize(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	if len(arguments) < 1 {
-		return jvm.VoidValue(), fmt.Errorf("DataBase.getRecordSize expected receiver")
-	}
-	receiver, err := arguments[0].Reference()
+// runtimeDataBaseRecordSize reports the record size the database was created
+// with. It used to answer 0 for every database: the size was looked for on the
+// object, where nothing put it.
+func runtimeDataBaseRecordSize(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	store, err := runtimeDataBaseState(arguments)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if receiver == nil {
-		return jvm.VoidValue(), fmt.Errorf("DataBase.getRecordSize receiver is null")
+	if store.recordSize == 0 {
+		// A quick load brings a store back without it; the table has it.
+		store.recordSize = runtime.javaDatabaseSizes()[store.name]
 	}
-	if value, ok := receiver.Fields["recordSize:I"]; ok {
-		return value, nil
-	}
-	return jvm.IntValue(0), nil
+	return jvm.IntValue(store.recordSize), nil
 }
 
-// runtimeDataBaseSizeAvailable reports the room left for new records. Saves
-// live in Host storage without a device quota, so the answer is the same
-// generous constant the filesystem reports.
-func runtimeDataBaseSizeAvailable(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(maxGuestFileBytes), nil
+// runtimeDataBaseSizeAvailable reports the room left, which is the title's
+// whole storage: the figure FileSystem.available answers.
+func runtimeDataBaseSizeAvailable(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+	return jvm.IntValue(int32(runtime.storageAvailable())), nil
 }
 
-// runtimeDataBaseListNames answers every database this session has opened.
+// runtimeDataBaseListNames answers every database the title has: the ones
+// earlier sessions saved and the ones this session opened, less what was
+// deleted, in name order — and null when there is none, as the specification
+// gives it. It used to answer only what this session had opened, as an array
+// that was empty rather than null.
 func runtimeDataBaseListNames(runtime *initializationRuntime, vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	names := make([]string, 0, len(runtime.databases))
+	present := make(map[string]bool, len(runtime.databases))
 	for name := range runtime.databases {
+		present[name] = true
+	}
+	saved, err := runtime.listSaves(javaDatabaseScope)
+	if err != nil {
+		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+	}
+	removed := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)
+	for _, name := range saved {
+		if !removed[name] && !reservedStorageName(javaDatabaseScope, name) {
+			present[name] = true
+		}
+	}
+	if len(present) == 0 {
+		return jvm.ReferenceValue(nil), nil
+	}
+	names := make([]string, 0, len(present))
+	for name := range present {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -263,13 +279,9 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 	if len(arguments) < 1 {
 		return jvm.VoidValue(), fmt.Errorf("DataBase.deleteDataBase expected a name")
 	}
-	nameObject, err := arguments[0].Reference()
+	name, err := databaseName(arguments[0])
 	if err != nil {
 		return jvm.VoidValue(), err
-	}
-	name, ok := jvm.StringText(nameObject)
-	if !ok {
-		return jvm.VoidValue(), fmt.Errorf("DataBase.deleteDataBase name is not a string")
 	}
 	if !storableName(javaDatabaseScope, name) {
 		return jvm.VoidValue(), runtimeDataBaseException("database name cannot be stored: " + name)
@@ -312,6 +324,9 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
 	}
 	store.records = nil
+	if err := runtime.setJavaDatabaseSize(name, 0); err != nil {
+		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+	}
 	if runtime.databases[name] == store {
 		delete(runtime.databases, name)
 		// An object the title opened before the delete still holds this
@@ -329,20 +344,44 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 	return jvm.VoidValue(), nil
 }
 
-// runtimeDataBaseAccessMode reports read/write access. Every database the
-// emulator opens is writable, which is mode 1 in the WIPI access model.
-func runtimeDataBaseAccessMode(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+// runtimeDataBaseAccessMode reports the area a database lives in, which is
+// FileSystem.PRIVATE_ACCESS (1) for every database a title has here; one that
+// does not exist is the specification's DataBaseException.
+func runtimeDataBaseAccessMode(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	if len(arguments) < 1 {
+		return jvm.VoidValue(), fmt.Errorf("DataBase.getAccessMode expected a name")
+	}
+	name, err := databaseName(arguments[0])
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if !storableName(javaDatabaseScope, name) {
+		return jvm.VoidValue(), runtimeDataBaseException("no database named " + name)
+	}
+	if runtime.databases[name] == nil {
+		_, source, err := runtime.resolveJavaDatabase(name, 0)
+		if err != nil {
+			return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+		}
+		if source == storageAbsent {
+			return jvm.VoidValue(), runtimeDataBaseException("no database named " + name)
+		}
+	}
 	return jvm.IntValue(1), nil
 }
 
-// runtimeDataBaseLastModified reports the guest-visible modification time of
-// the store, which advances with the same virtual clock the rest of the
-// runtime uses.
+// runtimeDataBaseLastModified reports when the database was last written in
+// this session, or when the session first opened it, in the guest's clock. It
+// used to answer the time of the question.
 func runtimeDataBaseLastModified(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	if _, err := runtimeDataBaseState(arguments); err != nil {
+	store, err := runtimeDataBaseState(arguments)
+	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	return jvm.LongValue(runtime.guestMillis()), nil
+	if store.modified == 0 {
+		store.modified = runtime.guestMillis()
+	}
+	return jvm.LongValue(store.modified), nil
 }
 
 // runtimeDataBaseSelectInto copies one record into a caller-owned buffer and
@@ -376,9 +415,11 @@ func runtimeDataBaseSelectInto(_ *initializationRuntime, _ *jvm.VM, arguments []
 		return jvm.VoidValue(), fmt.Errorf("DataBase.selectRecord buffer is not an array")
 	}
 	if offset < 0 || int64(offset)+int64(len(record)) > int64(length) {
+		// The specification's IllegalArgumentException for a buffer the
+		// record does not fit.
 		message := fmt.Sprintf("record %d does not fit at offset %d", index, offset)
 		return jvm.VoidValue(), &jvm.GuestException{
-			Object:  &jvm.Object{ClassName: "java/lang/ArrayIndexOutOfBoundsException", Native: message},
+			Object:  &jvm.Object{ClassName: "java/lang/IllegalArgumentException", Native: message},
 			Message: message,
 		}
 	}
@@ -406,14 +447,11 @@ func runtimeDataBaseUpdateRange(runtime *initializationRuntime, _ *jvm.VM, argum
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	staged := *store
-	staged.records = append([][]byte(nil), store.records...)
+	staged := &runtimeDataBaseStore{name: store.name, records: append([][]byte(nil), store.records...)}
 	staged.records[index] = data
-	if err := staged.persist(runtime); err != nil {
-		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+	if err := runtime.storeDatabaseRecords(store, staged); err != nil {
+		return jvm.VoidValue(), err
 	}
-	store.records = staged.records
-	runtime.bindDetachedDatabase(store)
 	return jvm.VoidValue(), nil
 }
 
@@ -468,6 +506,10 @@ func runtimeDataBaseSortRecord(_ *initializationRuntime, vm *jvm.VM, arguments [
 		if err := sortRecordIdentifiers(vm, comparator, store, identifiers); err != nil {
 			return jvm.VoidValue(), err
 		}
+	}
+	if len(identifiers) == 0 {
+		// No record is null, as the specification gives it.
+		return jvm.ReferenceValue(nil), nil
 	}
 	array, err := vm.NewArray(jvm.Type{Kind: jvm.TypeInt}, int32(len(identifiers)))
 	if err != nil {

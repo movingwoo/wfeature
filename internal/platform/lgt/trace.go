@@ -155,7 +155,7 @@ func (client *Client) traceDetail(category, slot uint32, arguments [4]uint32) st
 	case slotFsOpen:
 		return fmt.Sprintf("%q, %s", client.traceString(arguments[0]), fileOpenFlagName(arguments[1]))
 	case slotFsIsExist, slotFsRemove, slotFsFileAttribute, slotFsMkDir, slotFsRmDir, slotFsList,
-		slotGetResourceID, slotGetResource, slotGetDefaultVolume:
+		slotFsSetMode, slotFsGetCounts, slotGetResourceID, slotGetResource, slotGetDefaultVolume:
 		return fmt.Sprintf("%q", client.traceString(arguments[0]))
 	case slotSprintk:
 		// The format is the second argument here and the first for printk;
@@ -382,6 +382,7 @@ var wipicSlotNames = map[uint32]string{
 	slotGetFontDescent:              "getFontDescent",
 	slotGetStringWidth:              "getStringWidth",
 	slotCreateImage:                 "createImage",
+	slotCreateSubImage:              "createSubImage",
 	slotDestroyImage:                "destroyImage",
 	slotDecodeNextImage:             "decodeNextImage",
 	slotEncodeImage:                 "encodeImage",
@@ -404,6 +405,8 @@ var wipicSlotNames = map[uint32]string{
 	slotFsList:                      "fsList",
 	slotFsTotalSpace:                "fsTotalSpace",
 	slotFsAvailable:                 "fsAvailable",
+	slotFsSetMode:                   "fsSetMode",
+	slotFsGetCounts:                 "fsGetCounts",
 	slotFsTell:                      "fsTell",
 	slotGetProgramName:              "getProgramName",
 	slotDbListDataBases:             "dbListDataBases",
@@ -445,10 +448,21 @@ var wipicSlotNames = map[uint32]string{
 	slotUicCreate:                   "uicCreate",
 }
 
-// stdlibSlotNames names the C library slots.
+// stdlibSlotNames names the C library slots. **It is also what says a slot is
+// served**: importImplemented reads a stdlib slot with no name here as one
+// handleStdlibSVC does not answer, so a slot the handler serves and this table
+// leaves out is reported as a gap by apiscan and printed `unnamed` in a trace
+// although every call to it is answered. Five were left out that way — setjmp,
+// vsprintf, rand, srand and malloc — and one title's 675 setjmp calls in 600
+// ticks, every one served, read as "gap 1 (stdlib 0x32)". A test holds the two
+// to the same set of slots.
 var stdlibSlotNames = map[uint32]string{
+	stdlibSetJump:   "setjmp",
 	stdlibSprintf:   "sprintf",
+	stdlibVsprintf:  "vsprintf",
 	stdlibAtoi:      "atoi",
+	stdlibRand:      "rand",
+	stdlibSrand:     "srand",
 	stdlibStrcpy:    "strcpy",
 	stdlibStrncpy:   "strncpy",
 	stdlibStrcat:    "strcat",
@@ -475,4 +489,5 @@ var stdlibSlotNames = map[uint32]string{
 	// stdlib.go. It is serviced like the rest, so leaving it out of this table
 	// made a trace call it `unnamed` and made an import scan count it as a gap.
 	stdlibRunFunction: "runFunction",
+	stdlibMalloc:      "malloc",
 }

@@ -161,7 +161,7 @@ func (client *Client) issuedWritesBlocked() error {
 		if !database.unsaved {
 			continue
 		}
-		behind := database.synced != client.fileEpoch(databaseFileName(database.name))
+		behind := database.synced != client.databaseEpoch(database.name)
 		if behind && !open[database.databaseContent] {
 			// Its last store was refused at the close, and the container has
 			// been written since. Nothing can store this one any more, and
@@ -171,12 +171,17 @@ func (client *Client) issuedWritesBlocked() error {
 		if behind {
 			return fmt.Errorf("the database %s has an unstored write and its container has changed since", strconv.Quote(database.name))
 		}
-		// A File holding the same container with its own unstored write would
-		// be stored over it or under it, and the host would be choosing which
-		// of the title's writes is lost.
-		key := fileListKey(databaseFileName(database.name))
-		if file, shared := dirty[key]; shared {
-			return fmt.Errorf("the open file %s and database %s share one save and both have unstored writes", strconv.Quote(file), strconv.Quote(database.name))
+		// Among the files, where a session whose store refused the move keeps
+		// its databases, a File holding the same container with its own
+		// unstored write would be stored over it or under it, and the host
+		// would be choosing which of the title's writes is lost. In their own
+		// scope no File holds one.
+		key := databaseSaveKey(database.name)
+		if client.databasesAmongFiles() {
+			key = fileListKey(databaseFileName(database.name))
+			if file, shared := dirty[key]; shared {
+				return fmt.Errorf("the open file %s and database %s share one save and both have unstored writes", strconv.Quote(file), strconv.Quote(database.name))
+			}
 		}
 		if unsaved[key] {
 			return fmt.Errorf("two objects of the database %s both have an unstored write", strconv.Quote(database.name))
@@ -204,9 +209,11 @@ func (client *Client) prepareIssuedWriteLists() error {
 			needsFile(file.name)
 		}
 	}
+	// A database is stored through the file lists only where a session whose
+	// store refused the move keeps it, among the files.
 	databases, open := client.databaseContents()
 	for _, database := range databases {
-		if !database.unsaved {
+		if !database.unsaved || !client.databasesAmongFiles() {
 			continue
 		}
 		name := databaseFileName(database.name)
@@ -267,10 +274,7 @@ func (client *Client) storeIssuedWrites() (int, error) {
 		return 0, nil
 	}
 	stored := 0
-	for _, key := range []string{fileRemovedKey, fileCreatedKey} {
-		if key == fileRemovedKey && !client.removedUnsaved || key == fileCreatedKey && !client.createdUnsaved {
-			continue
-		}
+	for _, key := range client.pathListsUnsaved() {
 		if err := client.storeFileList(key); err != nil {
 			return stored, refused(fmt.Errorf("%s: %v", key, err))
 		}
@@ -307,8 +311,8 @@ func (client *Client) storeIssuedWrites() (int, error) {
 	}
 	// A list the stores above changed and the store then refused is as
 	// unstored as a file.
-	if client.removedUnsaved || client.createdUnsaved {
-		return stored, refused(fmt.Errorf("the list of removed or created paths"))
+	if len(client.pathListsUnsaved()) != 0 {
+		return stored, refused(fmt.Errorf("the list of removed, created or made paths"))
 	}
 	return stored, nil
 }
@@ -320,15 +324,14 @@ func (client *Client) storeIssuedWrites() (int, error) {
 // them again: the write their close lost stays lost, as it does without a
 // quick step or an ending, and the records stop waiting.
 func (client *Client) storeRefusedDatabase(database *javaDatabase, open bool) (bool, error) {
-	name := databaseFileName(database.name)
-	if !open && database.synced != client.fileEpoch(name) {
+	if !open && database.synced != client.databaseEpoch(database.name) {
 		database.unsaved = false
 		return true, nil
 	}
-	if err := client.storeFile(name, database.encode()); err != nil {
+	if err := client.writeDatabase(database.name, database.encode()); err != nil {
 		return false, err
 	}
-	database.unsaved, database.synced = false, client.fileEpoch(name)
+	database.unsaved, database.synced = false, client.databaseEpoch(database.name)
 	return false, nil
 }
 
@@ -393,7 +396,12 @@ func (client *Client) rebuildRestoredStorage() error {
 	client.saveReadError = nil
 	client.removed, client.created, client.removedLegacy, client.createdLegacy = nil, nil, nil, nil
 	client.removedUnsaved, client.createdUnsaved, client.fileEpochs = false, false, nil
+	client.directories, client.directoriesUnsaved, client.storedSizes = nil, false, nil
 	client.databaseIndexWaiting, client.databaseIndexPending = false, nil
+	// Where the databases are kept is read again too: while the load is
+	// rebuilt it is read each time it is asked, and the session decides it at
+	// its first read over the live store (databasesAmongFiles).
+	client.databaseLayout, client.databaseEpochs = databasesUndecided, nil
 	for handle, cursor := range restored.fileCursors {
 		if file := client.files[handle]; file != nil {
 			file.cursor = cursor
@@ -407,11 +415,12 @@ func (client *Client) rebuildRestoredStorage() error {
 		kept += uint64(size)
 		return nil
 	}
-	// Both lists are read here, where a list that cannot be read refuses the
+	// The lists are read here, where a list that cannot be read refuses the
 	// load. Left to the title's first file call, the failure would hold back
 	// every write of a session that had already replaced the running one.
 	client.removedFiles()
 	client.createdFiles()
+	client.madeDirectories()
 	if client.saveReadError != nil {
 		return client.saveReadError
 	}
@@ -476,29 +485,27 @@ func (client *Client) rebuildRestoredStorage() error {
 		file.cursor += len(held)
 		file.dirty = true
 	}
-	// The open objects on one database share the records read for it; a
-	// closed object, which no call of the title's reads, is left empty.
+	// The objects on one database share the records read for it. A closed
+	// object is one of them: closing releases nothing a title can see.
 	contents := make(map[string]*databaseContent)
 	for _, object := range slices.Sorted(maps.Keys(runtime.databases)) {
 		database := runtime.databases[object]
 		modified := database.modified
-		if !database.closed {
-			if content, filled := contents[database.name]; filled {
-				content.modified = max(content.modified, modified)
-				database.databaseContent = content
-				continue
-			}
-		}
-		database.databaseContent = &databaseContent{recordSize: restored.recordSizes[object], modified: modified}
-		if database.closed {
+		if content, filled := contents[database.name]; filled {
+			content.modified = max(content.modified, modified)
+			database.databaseContent = content
 			continue
 		}
+		database.databaseContent = &databaseContent{recordSize: restored.recordSizes[object], modified: modified}
 		contents[database.name] = database.databaseContent
-		stored, exists := client.readFile(databaseFileName(database.name))
+		stored, exists := client.readDatabase(database.name)
 		if client.saveReadError != nil {
 			return client.saveReadError
 		}
 		if !exists {
+			// Deleted under its objects: a write through one makes it again,
+			// name and all (saveDatabase).
+			database.unlisted = true
 			continue
 		}
 		if err := keep(len(stored)); err != nil {

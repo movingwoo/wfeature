@@ -137,7 +137,9 @@ func (client *Client) handleResource(thread *armcore.Thread, slot uint32) error 
 			return err
 		}
 	}
-	data, ok := client.readFile(name)
+	// What the title saved is a resource too, but a database's container is
+	// no save of the title's (titleFile).
+	data, ok := client.titleFile(name)
 	if slot == slotGetResourceID {
 		// The size out parameter is written either way: a title that checks
 		// the size rather than the id has to see zero for a missing resource.
@@ -204,13 +206,29 @@ func (client *Client) handleResource(thread *armcore.Thread, slot uint32) error 
 	return answerCode(thread, wipiSuccess)
 }
 
-// handleFile services the filesystem slots.
+// handleFile services the filesystem slots. What each answers is the common
+// storage contract, docs/wipi-storage.md; this platform's part of it is how a
+// name becomes a save key and what the store can tell about one.
 func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 	answer := func(value int32) error { return thread.SetRegister(0, uint32(value)) }
+	// name reads the name argument at a register and the code its form earns
+	// (see fileNameCode); a code other than success is the whole answer.
+	name := func(index int) (string, bool, int32, error) {
+		pointer, err := thread.Register(index)
+		if err != nil {
+			return "", false, wipiSuccess, err
+		}
+		text, err := client.readCString(pointer)
+		if err != nil {
+			return "", false, wipiSuccess, err
+		}
+		root, code := fileNameCode(text)
+		return text, root, code, nil
+	}
 
 	switch slot {
 	case slotFsOpen:
-		pointer, err := thread.Register(0)
+		path, root, code, err := name(0)
 		if err != nil {
 			return err
 		}
@@ -218,28 +236,30 @@ func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 		if err != nil {
 			return err
 		}
-		name, err := client.readCString(pointer)
-		if err != nil {
-			return err
+		if code != wipiSuccess {
+			return answer(code)
 		}
-		return answer(client.openFile(name, mode))
+		if root {
+			// The title's own directory is no name a file can be kept under.
+			return answer(wipiBadFileName)
+		}
+		return answer(client.openFile(path, mode))
 
 	case slotFsIsExist:
-		pointer, err := thread.Register(0)
+		path, root, code, err := name(0)
 		if err != nil {
 			return err
 		}
-		name, err := client.readCString(pointer)
-		if err != nil {
-			return err
+		if code != wipiSuccess {
+			return answer(code)
 		}
-		if _, ok := client.readFile(name); ok {
+		if root || client.fileExists(path) || client.holdsDirectory(path) {
 			return answer(wipiSuccess)
 		}
 		return answer(wipiNoEntry)
 
 	case slotFsFileAttribute:
-		pointer, err := thread.Register(0)
+		path, root, code, err := name(0)
 		if err != nil {
 			return err
 		}
@@ -247,44 +267,53 @@ func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 		if err != nil {
 			return err
 		}
-		name, err := client.readCString(pointer)
-		if err != nil {
-			return err
+		if code != wipiSuccess {
+			return answer(code)
 		}
-		data, ok := client.readFile(name)
-		if !ok {
+		// MH_FileInfo is three words: the attributes, the creation time and
+		// the size, in that order, which a title's own wrappers agree with:
+		// one returns the word at offset 8 and one the word at offset 4, and
+		// the callers allocate a read buffer with the size. No creation time
+		// is kept, so that word is zero; a directory sets MH_FILE_IS_DIR,
+		// the v2.0 HAL's 0x01, and is no size.
+		attributes, size := uint32(0), uint32(0)
+		switch data, isFile := client.titleFile(path); {
+		case root:
+			attributes = fileAttributeDirectory
+		case isFile:
+			size = uint32(len(data))
+		case client.directoryExists(path):
+			attributes = fileAttributeDirectory
+		default:
 			return answer(wipiNoEntry)
 		}
-		// MH_FileInfo is three words, and which word is which comes from the
-		// caller rather than from a header: a title wraps this call twice,
-		// once returning the word at offset 8 and once the word at offset 4,
-		// and reserves twelve bytes for it. The one the callers act on is the
-		// size at offset 8 — they allocate a read buffer with it. Nothing
-		// backing a file here is a directory and no creation time is kept, so
-		// the other two are zero.
 		if info != 0 {
-			if err := client.writeWord(info, 0); err != nil {
-				return err
-			}
-			if err := client.writeWord(info+4, 0); err != nil {
-				return err
-			}
-			if err := client.writeWord(info+8, uint32(len(data))); err != nil {
-				return err
+			for index, word := range []uint32{attributes, 0, size} {
+				if err := client.writeWord(info+uint32(index)*4, word); err != nil {
+					return err
+				}
 			}
 		}
 		return answer(wipiSuccess)
 
 	case slotFsRemove:
-		pointer, err := thread.Register(0)
+		// MC_fsRemove removes a file. A name that is not one — nothing there,
+		// a directory, the title's own directory — is M_E_NOENT, and nothing
+		// changes; a removal the store refuses is M_E_ERROR, and nothing
+		// changes either (removeFile).
+		path, root, code, err := name(0)
 		if err != nil {
 			return err
 		}
-		name, err := client.readCString(pointer)
-		if err != nil {
-			return err
+		if code != wipiSuccess {
+			return answer(code)
 		}
-		client.removeFile(name)
+		if root || !client.fileExists(path) {
+			return answer(wipiNoEntry)
+		}
+		if client.removeFile(path) != nil {
+			return answer(wipiError)
+		}
 		return answer(wipiSuccess)
 
 	case slotFsRename:
@@ -293,21 +322,23 @@ func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 		// two documented refusals are what make it a rename rather than a
 		// copy — an absent source and an occupied destination both leave the
 		// store untouched, and the specification names a code for each.
-		oldPointer, err := thread.Register(0)
+		oldName, oldRoot, oldCode, err := name(0)
 		if err != nil {
 			return err
 		}
-		newPointer, err := thread.Register(1)
+		newName, newRoot, newCode, err := name(1)
 		if err != nil {
 			return err
 		}
-		oldName, err := client.readCString(oldPointer)
-		if err != nil {
-			return err
-		}
-		newName, err := client.readCString(newPointer)
-		if err != nil {
-			return err
+		switch {
+		case oldCode != wipiSuccess:
+			return answer(oldCode)
+		case newCode != wipiSuccess:
+			return answer(newCode)
+		case oldRoot:
+			return answer(wipiNoEntry)
+		case newRoot:
+			return answer(wipiBadFileName)
 		}
 		return answer(client.renameFile(oldName, newName))
 
@@ -362,22 +393,19 @@ func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 		}
 		return answer(int32(file.cursor))
 
-	case slotFsTotalSpace, slotFsAvailable:
-		// These two take no argument: they report the storage the program has,
-		// not the remainder of an open file. Reading the first register as a
-		// file handle answers an error to a title asking how much room it has,
-		// and a title that asks before writing a save reports that the handset
-		// is full and refuses to start a game.
-		//
-		// The number is this platform's own. A handset gave a program a small
-		// fixed quota and the titles here check it against a save of a few
-		// kilobytes, while the store behind it is a directory with no limit
-		// worth reporting, so what matters is that it is comfortably larger
-		// than any save and small enough to stay an ordinary integer.
+	case slotFsTotalSpace:
+		// This and MC_fsAvailable take no argument: they report the storage
+		// the program has, not the remainder of an open file. Reading the
+		// first register as a file handle answers an error to a title asking
+		// how much room it has, and a title that asks before writing a save
+		// reports that the handset is full and refuses to start a game.
 		return answer(storageQuotaBytes)
 
+	case slotFsAvailable:
+		return answer(client.storageAvailable())
+
 	case slotFsList:
-		pointer, err := thread.Register(0)
+		path, _, code, err := name(0)
 		if err != nil {
 			return err
 		}
@@ -389,21 +417,27 @@ func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 		if err != nil {
 			return err
 		}
-		name, err := client.readCString(pointer)
-		if err != nil {
-			return err
+		if code != wipiSuccess {
+			return answer(code)
 		}
 		// The names go back NUL-terminated one after another and the list ends
 		// with an empty one, which is the convention the caller reads: it takes
 		// the buffer's first byte as the whole answer's "is there anything",
-		// and walks name by name until it meets a zero-length one.
+		// and walks name by name until it meets a zero-length one. A directory
+		// with nothing in it, or none there, is the empty list's two NULs; the
+		// specification gives this call no code for a missing directory, and a
+		// local title walks the empty answer.
+		entries := client.listDirectory(path)
 		packed := make([]byte, 0, 64)
-		for _, entry := range client.listDirectory(name) {
+		for _, entry := range entries {
 			packed = append(packed, entry...)
 			packed = append(packed, 0)
 		}
 		packed = append(packed, 0)
-		if uint32(len(packed)) > size {
+		if len(entries) == 0 {
+			packed = append(packed, 0)
+		}
+		if buffer == 0 || uint32(len(packed)) > size {
 			return answerCode(thread, wipiShortBuffer)
 		}
 		if err := client.core.Memory().Write(buffer, packed); err != nil {
@@ -411,12 +445,45 @@ func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 		}
 		return answerCode(thread, wipiSuccess)
 
-	case slotFsMkDir, slotFsRmDir:
-		// The store has no directories — a path is a save key. A title that
-		// creates its save directory before writing into it is answered that
-		// the directory is there, because from its next call's point of view
-		// it is.
-		return answer(wipiSuccess)
+	case slotFsMkDir:
+		path, root, code, err := name(0)
+		if err != nil {
+			return err
+		}
+		return answer(client.makeDirectory(path, root, code))
+
+	case slotFsRmDir:
+		path, root, code, err := name(0)
+		if err != nil {
+			return err
+		}
+		return answer(client.removeDirectory(path, root, code))
+
+	case slotFsSetMode:
+		path, root, code, err := name(0)
+		if err != nil {
+			return err
+		}
+		mode, err := thread.Register(1)
+		if err != nil {
+			return err
+		}
+		if code != wipiSuccess {
+			return answer(code)
+		}
+		return answer(client.setFileMode(path, root, mode))
+
+	case slotFsGetCounts:
+		// How many entries a directory holds, sub-directories included, which
+		// is what MC_fsList names: the same listing, counted.
+		path, _, code, err := name(0)
+		if err != nil {
+			return err
+		}
+		if code != wipiSuccess {
+			return answer(code)
+		}
+		return answer(int32(len(client.listDirectory(path))))
 
 	}
 	return fmt.Errorf("unimplemented LGT file slot %#x%s, with %s; %s", slot,
@@ -426,13 +493,23 @@ func (client *Client) handleFile(thread *armcore.Thread, slot uint32) error {
 
 // openFile resolves a path and returns a handle.
 func (client *Client) openFile(name string, flag uint32) int32 {
-	data, ok := client.readFile(name)
 	// Read-only is the one flag that cannot create. Anything else is an open
 	// with write intent, and a file that is not there yet is created by it —
 	// which is how a title makes its save in the first place. Treating only one
 	// bit as "writable" refused the flag a title actually opens its save with,
 	// and the title then retried forever against a handset it read as full.
 	writable := flag != fileOpenReadOnly
+	// The container of a database is no file (titleFile), so an open to read
+	// finds nothing there. One that would create a file there is refused as
+	// a name no file can be kept under, as the platform's own lists are: the
+	// file would be the container, and its first store the database's end.
+	if client.databaseContainer(name) {
+		if !writable {
+			return wipiNoEntry
+		}
+		return wipiBadFileName
+	}
+	data, ok := client.readFile(name)
 	if !ok && !writable {
 		return wipiNoEntry
 	}
@@ -561,6 +638,89 @@ const (
 // is only legible as a whole, and it is the one a title opens its save with.
 var _ = fileOpenReadWrite
 
+// The MC_fsSetMode modes, MH_FILEMODE_RDONLY, _WRONLY and _RDWR. They are not
+// the MC_fsOpen flags: those are bits, these are the three values 1 to 3. The
+// specification also spells the same three 0x10, 0x20 and 0x30, and both
+// spellings are taken.
+const (
+	fileModeReadOnly  uint32 = 1
+	fileModeWriteOnly uint32 = 2
+	fileModeReadWrite uint32 = 3
+)
+
+var _ = fileModeWriteOnly
+
+// fileModeAccepted reports whether a value is one of the modes MC_fsSetMode
+// takes, in either spelling.
+func fileModeAccepted(mode uint32) bool {
+	switch mode {
+	case fileModeReadOnly, fileModeWriteOnly, fileModeReadWrite,
+		fileModeReadOnly << 4, fileModeWriteOnly << 4, fileModeReadWrite << 4:
+		return true
+	}
+	return false
+}
+
+// setFileMode is MC_fsSetMode(fileName, fmode, aMode), which marks a file or
+// a directory read-only, write-only or both. **The store keeps no
+// attributes**: a file is a save key and its bytes, so there is nowhere to
+// keep a mode, and nothing here refuses a read or a write by one. Accepting a
+// mode is therefore answering that the mode is good and the name is there,
+// and nothing more: every file stays readable and writable by its own
+// program. The name has been checked by the caller; the mode is asked before
+// the name's existence, so a missing name answers M_E_NOENT only for a good
+// mode.
+func (client *Client) setFileMode(name string, root bool, mode uint32) int32 {
+	if !fileModeAccepted(mode) {
+		return wipiInvalid
+	}
+	if root || client.fileExists(name) || client.holdsDirectory(name) {
+		return wipiSuccess
+	}
+	return wipiNoEntry
+}
+
+// makeDirectory is MC_fsMkDir and FileSystem.mkdir: a name that is already a
+// file or a directory — the title's own directory included — is M_E_EXIST,
+// and any other good name is written down in the directory list, which is
+// all a directory is to the store. A parent nobody made is not asked for:
+// saves have always been written below directories that were never made, so
+// the parent of a file or a directory is implied rather than required.
+func (client *Client) makeDirectory(name string, root bool, code int32) int32 {
+	switch {
+	case code != wipiSuccess:
+		return code
+	case root || client.fileExists(name) || client.holdsDirectory(name):
+		return wipiExists
+	}
+	client.markDirectoryMade(name, true)
+	return wipiSuccess
+}
+
+// removeDirectory is MC_fsRmDir and FileSystem.rmdir. The title's own
+// directory is not removed (M_E_BADFILENAME); a name that is not a directory,
+// a file's among them, is M_E_NOENT; one with anything below it, a file or a
+// directory, is M_E_NOTEMPTY; otherwise the name comes off the directory list.
+// The contents are asked before the list, so a directory that holds files
+// without ever having been made answers that it is not empty rather than that
+// it does not exist.
+func (client *Client) removeDirectory(name string, root bool, code int32) int32 {
+	switch {
+	case code != wipiSuccess:
+		return code
+	case root:
+		return wipiBadFileName
+	case client.fileExists(name):
+		return wipiNoEntry
+	case len(client.listDirectory(name)) > 0:
+		return wipiNotEmpty
+	case !client.directoryMade(name):
+		return wipiNoEntry
+	}
+	client.markDirectoryMade(name, false)
+	return wipiSuccess
+}
+
 // closeFileHandle flushes an open file and drops it, and reports whether it
 // closed. It is the body of MC_fsClose, and the collector reaches it too: a
 // File object nothing holds any more is one the language would have closed on
@@ -610,7 +770,7 @@ func (client *Client) transferFile(slot, handle, buffer, length uint32) int32 {
 	// The bound is checked before the length sizes anything.
 	end := file.cursor + int(length)
 	if end > len(file.data) && end > maxFileBytes {
-		return wipiError
+		return wipiNoSpace
 	}
 	chunk := make([]byte, length)
 	if err := client.core.Memory().Read(buffer, chunk); err != nil {
@@ -678,7 +838,10 @@ func (client *Client) readFile(name string) ([]byte, bool) {
 			return bytes.Clone(data), true
 		}
 	}
-	return client.archive.Resource(name)
+	// The archive is asked for the path every spelling of the name is, as
+	// the store is: its own lookup drops one leading slash and reads "." and
+	// a backslash, but takes "//data/a.txt" for a path outside it.
+	return client.archive.Resource(guestPath(name))
 }
 
 // renameFile is MC_fsRename. The store has no rename: a path is a save key, so
@@ -689,19 +852,20 @@ func (client *Client) readFile(name string) ([]byte, bool) {
 func (client *Client) renameFile(oldName, newName string) int32 {
 	// A name with no save key is one the store cannot hold — the index of
 	// the databases, the path lists — and moving a file there would leave it
-	// under neither name.
-	if !hasSaveKey(newName) {
+	// under neither name. A database's container is held, by the database:
+	// a file moved there would be written over it.
+	if !hasSaveKey(newName) || client.databaseContainer(newName) {
 		return wipiBadFileName
 	}
-	data, ok := client.readFile(oldName)
+	// A container is no file to move (titleFile).
+	data, ok := client.titleFile(oldName)
 	if !ok {
 		return wipiNoEntry
 	}
 	moved := fileListKey(oldName) != fileListKey(newName)
-	if moved {
-		if _, taken := client.readFile(newName); taken {
-			return wipiExists
-		}
+	if moved && (client.fileExists(newName) || client.holdsDirectory(newName)) {
+		// A name that is a file or a directory is taken either way.
+		return wipiExists
 	}
 	// A new name the store refuses leaves the old one where it is: removing
 	// it would leave the file under neither.
@@ -776,10 +940,7 @@ func (client *Client) flushOpenFiles() {
 	if client.saveStore == nil || client.saveReadError != nil {
 		return
 	}
-	for _, key := range []string{fileRemovedKey, fileCreatedKey} {
-		if key == fileRemovedKey && !client.removedUnsaved || key == fileCreatedKey && !client.createdUnsaved {
-			continue
-		}
+	for _, key := range client.pathListsUnsaved() {
 		if err := client.storeFileList(key); err != nil && client.logger != nil {
 			client.logger.Debug("LGT path list store failed at the ending", "list", key, "error", err)
 		}
@@ -902,18 +1063,64 @@ func (client *Client) forgetSessionFile(name string) {
 // there is nothing to delete them with — and the removal list is what makes
 // them unreachable until something writes the path again.
 //
+// **A removal the store refuses does not happen.** The list is given to the
+// store before the session lets the file go (storeRemoval), and a refusal is
+// answered with everything as it was: the file is there, to every read in the
+// session and to the next one. MC_fsRemove answers it M_E_ERROR,
+// FileSystem.remove in either form throws IOException, and deleteDataBase
+// throws DataBaseException, as the common contract has a refused removal
+// (docs/wipi-storage.md). Kept in the session and retried later, as a write is,
+// the removal was one the title had been told succeeded and the next session
+// could still undo.
+//
 // **What waits in a buffer open on the path goes with the file.** On a
 // handset those writes were in the file the removal deleted, so neither the
 // close of a handle that made them nor the ending may bring the file back
 // with them. The handles stay open on an empty buffer, and a write through
 // one of them is a write of the path, which brings it back.
-func (client *Client) removeFile(name string) {
-	client.markFileRemoved(name, true)
+func (client *Client) removeFile(name string) error {
+	if err := client.storeRemoval(name); err != nil {
+		return err
+	}
 	client.bumpFileEpoch(name)
 	client.forgetSessionFile(name)
 	if content := client.openContent(name); content != nil {
 		content.data, content.dirty, content.synced = nil, false, client.fileEpoch(name)
 	}
+	return nil
+}
+
+// storeRemoval puts a path on the removal list and gives the list to the
+// store, which is the removal as the store sees it. A store that refuses the
+// list has the path taken off it again, and the refusal is answered: the list
+// in the session is then what it was, which the store already holds unless an
+// earlier write of it is still waiting, and that one stays waiting. A path
+// with no save is not recorded, as markFileRemoved records none, and a session
+// with no store, or one whose reads failed, keeps the list in memory, as every
+// other write of such a session goes nowhere.
+func (client *Client) storeRemoval(name string) error {
+	if !hasSaveKey(name) {
+		return nil
+	}
+	set := client.removedFiles()
+	key := fileListKey(name)
+	if set[key] {
+		return nil
+	}
+	set[key] = true
+	if client.saveStore == nil || client.saveReadError != nil {
+		return nil
+	}
+	waiting := client.removedUnsaved
+	if err := client.storeFileList(fileRemovedKey); err != nil {
+		delete(set, key)
+		client.removedUnsaved = waiting
+		if client.logger != nil {
+			client.logger.Debug("LGT removal refused by the store", "name", name, "error", err)
+		}
+		return err
+	}
+	return nil
 }
 
 // fileListMarker separates, in a stored path list, the entries a build before
@@ -1069,25 +1276,49 @@ func (client *Client) packagedAs(name string) bool {
 	return false
 }
 
-// storeFileList writes one of the two path lists as this session holds it,
+// storeFileList writes one of the three path lists as this session holds it,
 // and keeps whether the store took it: a list the store refused is one memory
 // is ahead of, until a later write of it goes through.
 func (client *Client) storeFileList(key string) error {
 	exact, legacy, unsaved := client.created, client.createdLegacy, &client.createdUnsaved
-	if key == fileRemovedKey {
+	switch key {
+	case fileRemovedKey:
 		exact, legacy, unsaved = client.removed, client.removedLegacy, &client.removedUnsaved
+	case fileDirectoriesKey:
+		exact, legacy, unsaved = client.directories, nil, &client.directoriesUnsaved
 	}
 	err := client.saveStore.StoreSave(key, formatFileList(exact, legacy))
 	*unsaved = err != nil
 	return err
 }
 
-// listDirectory answers the immediate children of one directory: the entries
-// the archive packages under it and the paths a title has written under it,
-// minus anything removed. A child is one path segment, so a directory two
-// levels down contributes its own name once rather than each file inside it —
-// which is what a listing is, and what the title reading this one wants: it
-// lists a folder of song folders and reads each name as a number.
+// pathListsUnsaved names the path lists whose last write the store refused,
+// in the order the ending and a quick step write them again.
+func (client *Client) pathListsUnsaved() []string {
+	var keys []string
+	for _, list := range []struct {
+		key     string
+		unsaved bool
+	}{
+		{fileRemovedKey, client.removedUnsaved},
+		{fileCreatedKey, client.createdUnsaved},
+		{fileDirectoriesKey, client.directoriesUnsaved},
+	} {
+		if list.unsaved {
+			keys = append(keys, list.key)
+		}
+	}
+	return keys
+}
+
+// listDirectory answers the immediate children of one directory, in name
+// order: the entries the archive packages under it, the paths a title has
+// written under it, minus anything removed, and the directories it has made
+// under it. A child is one path segment, so a directory two levels down
+// contributes its own name once rather than each file inside it — which is
+// what a listing is, and what the title reading this one wants: it lists a
+// folder of song folders and reads each name as a number. A name that is a
+// file, or no directory at all, holds nothing and lists empty.
 //
 // A path the title wrote is listed as it spelled it, under the directory as it
 // spelled that: "Saves" and "saves" are two directories. What the archive
@@ -1097,7 +1328,7 @@ func (client *Client) storeFileList(key string) error {
 // removed the file under some case since, or a name already listed is that
 // one in another case.
 func (client *Client) listDirectory(name string) []string {
-	prefix := directoryPath(name)
+	prefix := guestPath(name)
 	if prefix != "" {
 		prefix += "/"
 	}
@@ -1126,12 +1357,32 @@ func (client *Client) listDirectory(name string) []string {
 		shown[child], folded[strings.ToLower(child)] = true, true
 		names = append(names, child)
 	}
+	// container reports whether a path is a database's container, which is
+	// neither an entry nor a reason its directory is one (databaseContainers).
+	// The index is read once, at the first path in a container's form. An
+	// entry an earlier build recorded is in lower case and stands for the
+	// path under any case, so it is matched without regard to case.
+	var containers, foldedContainers map[string]bool
+	read := false
+	container := func(path string, anyCase bool) bool {
+		key := fileListKey(path)
+		if len(key) < len(databaseSuffix) || !strings.EqualFold(key[len(key)-len(databaseSuffix):], databaseSuffix) {
+			return false
+		}
+		if !read {
+			read, containers, foldedContainers = true, client.databaseContainers(), make(map[string]bool)
+			for known := range containers {
+				foldedContainers[strings.ToLower(known)] = true
+			}
+		}
+		return containers[key] || anyCase && foldedContainers[strings.ToLower(key)]
+	}
 	if client.archive != nil {
 		packaged := make(map[string]string)
 		for _, files := range []map[string][]byte{client.archive.Resources, client.archive.Packaged, client.archive.supplemental} {
 			for path := range files {
 				child := childOf(path, true)
-				if child == "" || client.fileRemoved(path) {
+				if child == "" || client.fileRemoved(path) || container(path, false) {
 					continue
 				}
 				// One name per packaged file: of two spellings, the one that
@@ -1147,9 +1398,15 @@ func (client *Client) listDirectory(name string) []string {
 		}
 	}
 	for path := range client.createdFiles() {
-		if !client.fileRemoved(path) {
+		if !client.fileRemoved(path) && !container(path, false) {
 			add(childOf(path, false))
 		}
+	}
+	// A directory the title made is an entry of its parent whether or not
+	// anything has been written into it, and makes every directory above it
+	// one, as a file written below them does.
+	for path := range client.madeDirectories() {
+		add(childOf(path, false))
 	}
 	recorded := make(map[string]bool, len(client.created)+len(client.removed))
 	for _, set := range []map[string]bool{client.created, client.removed} {
@@ -1159,7 +1416,7 @@ func (client *Client) listDirectory(name string) []string {
 	}
 	for entry := range client.createdLegacy {
 		path := fileListKey(entry)
-		if recorded[path] || client.fileRemoved(entry) {
+		if recorded[path] || client.fileRemoved(entry) || container(path, true) {
 			continue
 		}
 		if child := childOf(path, true); !folded[strings.ToLower(child)] {
@@ -1170,9 +1427,22 @@ func (client *Client) listDirectory(name string) []string {
 	return names
 }
 
-// directoryPath is the directory MC_fsList is handed, in the form the path
-// lists hold a path: no empty or "." segments, and the case the title gave it.
-func directoryPath(name string) string {
+// guestPath is a name as every storage call reads it, file or database
+// (docs/wipi-storage.md): a backslash separates segments as a slash does, as
+// the archive lookup reads it, and leading separators, empty segments and "."
+// segments are dropped, so "/save.dat", "./save.dat", "//save.dat" and
+// "save.dat" are one path, and "data\save.dat" is "data/save.dat". It is the
+// form the path lists hold a path in, with the case the title gave it, and
+// what the 255-byte bound counts. "" is the title's own directory. A ".."
+// segment is kept, for fileSaveKey to refuse.
+//
+// Every save key is made through it, so a name that is a path already, as
+// nearly every name is, comes back as it is without being taken apart.
+func guestPath(name string) string {
+	if isGuestPath(name) {
+		return name
+	}
+	name = strings.ReplaceAll(name, "\\", "/")
 	parts := make([]string, 0, 4)
 	for _, part := range strings.Split(name, "/") {
 		if part != "" && part != "." {
@@ -1180,6 +1450,24 @@ func directoryPath(name string) string {
 		}
 	}
 	return strings.Join(parts, "/")
+}
+
+// isGuestPath reports whether a name is in guestPath's form already: not
+// empty, no backslash, and no empty or "." segment.
+func isGuestPath(name string) bool {
+	start := 0
+	for index := 0; index <= len(name); index++ {
+		if index < len(name) && name[index] == '\\' {
+			return false
+		}
+		if index == len(name) || name[index] == '/' {
+			if segment := name[start:index]; segment == "" || segment == "." {
+				return false
+			}
+			start = index + 1
+		}
+	}
+	return true
 }
 
 // canonicalFileName is the form the two path lists were keyed by in the
@@ -1268,24 +1556,26 @@ func (client *Client) markFileRemoved(name string, removed bool) {
 
 // fileSaveKey is the save key a guest path is stored under.
 //
-// **The scope itself, the two path lists and the database index are not guest
-// files.** The lists live under the same scope, at the keys a title's
-// "/.removed" and "/.created" would have, the index of database names at the
-// key "/__databases__.db" would have, and the scope is the directory every
-// other key sits in. A title that wrote one of those names would put its bytes
-// where the platform keeps its list, which the next session parses as paths,
-// or a file where the directory has to be. So those names, and anything
-// beneath them, have no save key, as a path with ".." has none: the title's
-// handle works and nothing reaches the store. Case is folded because a Host's
-// filesystem may fold it.
+// **The scope itself, the three path lists and the database index are not
+// guest files.** The lists live under the same scope, at the keys a title's
+// "/.removed", "/.created" and "/.directories" would have, the index of
+// database names at the key "/__databases__.db" would have, and the scope is
+// the directory every other key sits in. A title that wrote one of those names
+// would put its bytes where the platform keeps its list, which the next
+// session parses as paths, or a file where the directory has to be. So those
+// names, and anything beneath them, have no save key, as a path with ".." has
+// none, and the file calls refuse them as a name no file can have
+// (M_E_BADFILENAME). Case is folded because a Host's filesystem may fold it.
 //
 // A backslash separates directories as a slash does, as the archive lookup
 // reads it: a title's "data\save.dat" is "data/save.dat", so a write of it is
 // stored and a removal of it hides what a read finds. The store refuses a
-// backslash in a key, so no earlier build stored a save under one.
+// backslash in a key, so no earlier build stored a save under one. The key is
+// made from the name as guestPath reads it, which is the key the store would
+// have made of it, so that a spelling the store would find too long whole —
+// many leading separators, many "./" — is still the one file it names.
 func fileSaveKey(name string) (string, error) {
-	name = strings.ReplaceAll(name, "\\", "/")
-	key, err := backend.NormalizeSaveKey(fileSaveScope + strings.TrimPrefix(name, "/"))
+	key, err := backend.NormalizeSaveKey(fileSaveScope + guestPath(name))
 	if err != nil {
 		return "", err
 	}
@@ -1293,25 +1583,304 @@ func fileSaveKey(name string) (string, error) {
 	first, _, _ := strings.Cut(path, "/")
 	if !scoped || strings.EqualFold(first, strings.TrimPrefix(fileRemovedKey, fileSaveScope)) ||
 		strings.EqualFold(first, strings.TrimPrefix(fileCreatedKey, fileSaveScope)) ||
+		strings.EqualFold(first, strings.TrimPrefix(fileDirectoriesKey, fileSaveScope)) ||
 		strings.EqualFold(first, databaseIndexName) {
 		return "", fmt.Errorf("%q names a key the platform keeps for itself", name)
 	}
 	return key, nil
 }
 
-// storageQuotaBytes is what MC_fsTotalSpace and MC_fsAvailable report. See the
-// slots themselves for why it is a constant rather than the host's free space.
+// storageQuotaBytes is the room every title has: what MC_fsTotalSpace and
+// FileSystem.totalSpace answer, and what MC_fsAvailable, FileSystem.available
+// and DataBase.getSizeAvailable count down from (storageAvailable). It is this
+// platform's own number rather than the host's free space: a handset gave a
+// program a small fixed quota and the titles here check it against a save of
+// a few kilobytes, while the store behind it is a directory with no limit
+// worth reporting.
 const storageQuotaBytes int32 = 1 << 20
 
+// maxFileNameBytes is the longest name a file or a directory can have, which
+// FileSystem.getMaxFilenameLength answers. The specification leaves
+// MC_MAX_FILENAME_LENGTH to the handset, and the common contract
+// (docs/wipi-storage.md) fixes it at 255 for every platform here. A longer
+// name is M_E_LONGNAME to every C file call and an IOException to every Java
+// one.
+const maxFileNameBytes = 255
+
+// fileAttributeDirectory is MH_FILE_IS_DIR, the attribute bit the v2.0 HAL
+// gives a directory: what MC_fsFileAttribute sets for one.
+const fileAttributeDirectory uint32 = 0x01
+
+// fileNameCode is the check every file call makes on a name, C and Java, and
+// whether the name is the title's own directory. A name longer than
+// maxFileNameBytes is M_E_LONGNAME, counted on the path guestPath leaves: a
+// C name's own bytes, a Java String's UTF-8 bytes, without the separators and
+// "." segments it drops. The own directory is "", "/" or ".", and any
+// spelling the separators and "." segments reduce to nothing: a name for a
+// directory question, and no name a file can be kept under. Any other name the
+// store cannot keep a file under — a ".." segment, one of the names the
+// platform keeps for itself — is M_E_BADFILENAME, which is also what
+// MC_fsRename answers for a new name of that kind.
+func fileNameCode(name string) (root bool, code int32) {
+	path := guestPath(name)
+	if len(path) > maxFileNameBytes {
+		return false, wipiLongName
+	}
+	if path == "" {
+		return true, wipiSuccess
+	}
+	if !hasSaveKey(name) {
+		return false, wipiBadFileName
+	}
+	return false, wipiSuccess
+}
+
+// fileExists reports whether a name is a file: one stored there, written by
+// the title or shipped in its archive, and not removed, and not the container
+// of a database (titleFile). It is what FileSystem.isFile answers.
+func (client *Client) fileExists(name string) bool {
+	_, ok := client.titleFile(name)
+	return ok
+}
+
+// titleFile is readFile as the title's own file calls see a path: the
+// container of a database is the runtime's storage and no file of the
+// title's (databaseContainers), so under its name there is nothing, whatever
+// the store holds there. The database code reads containers with readFile.
+func (client *Client) titleFile(name string) ([]byte, bool) {
+	if client.databaseContainer(name) {
+		return nil, false
+	}
+	return client.readFile(name)
+}
+
+// directoryExists reports whether a name is a directory: the title's own
+// directory, a name MC_fsMkDir or FileSystem.mkdir wrote down, or a name
+// with anything beneath it — a file, or a directory made below it, which is
+// how the listing shows such a name among its parent's entries. **A name that
+// is a file is not a directory**, whatever was made or packaged under it.
+func (client *Client) directoryExists(name string) bool {
+	if root, _ := fileNameCode(name); root {
+		return true
+	}
+	return !client.fileExists(name) && client.holdsDirectory(name)
+}
+
+// holdsDirectory is directoryExists without the question whether the name is
+// a file, for a caller that has asked it already: the name was made, or
+// something lies beneath it.
+func (client *Client) holdsDirectory(name string) bool {
+	return client.directoryMade(name) || len(client.listDirectory(name)) > 0
+}
+
+// fileDirectoriesKey lists the directories a title has made. The store keeps
+// files under their full names and makes no directory entries, so a directory
+// the title made and has not written into is nowhere but here; without the
+// list it would be gone after a restart, and a title that makes its save
+// directory and asks whether it is there would be told no. It lives beside the
+// other two path lists and is the platform's, as they are: fileSaveKey gives
+// no title's path a key there. Its lines are paths in the form the other two
+// lists hold them (fileListKey), case kept.
+const fileDirectoriesKey = fileSaveScope + ".directories"
+
+// madeDirectories is the set of directories the title has made, read from the
+// store once per session and kept in memory after that.
+func (client *Client) madeDirectories() map[string]bool {
+	if client.directories == nil {
+		exact, legacy := client.loadFileList(fileDirectoriesKey)
+		// The list is newer than any build that folded paths to lower case,
+		// so whatever it holds is read as this build's entries.
+		for entry := range legacy {
+			exact[entry] = true
+		}
+		client.directories = exact
+	}
+	return client.directories
+}
+
+// directoryMade reports whether a name is on the directory list.
+func (client *Client) directoryMade(name string) bool {
+	return client.madeDirectories()[fileListKey(name)]
+}
+
+// markDirectoryMade records or forgets one directory and writes the list
+// back. A list the store refuses waits here, as the other two lists do, for
+// the next change, the ending and a quick step.
+func (client *Client) markDirectoryMade(name string, made bool) {
+	if !hasSaveKey(name) {
+		return
+	}
+	set := client.madeDirectories()
+	key := fileListKey(name)
+	if set[key] == made {
+		return
+	}
+	if made {
+		set[key] = true
+	} else {
+		delete(set, key)
+	}
+	if client.saveStore == nil || client.saveReadError != nil {
+		return
+	}
+	if err := client.storeFileList(fileDirectoriesKey); err != nil && client.logger != nil {
+		client.logger.Debug("LGT directory list store failed", "name", name, "error", err)
+	}
+}
+
+// storageAvailable is what MC_fsAvailable, FileSystem.available and
+// DataBase.getSizeAvailable answer: storageQuotaBytes less what the title has
+// stored, never below zero (storageUsed). **Nothing is refused for room**: the
+// figure is reported, and a save is never turned away to keep it true.
+func (client *Client) storageAvailable() int32 {
+	used := client.storageUsed()
+	if used >= int64(storageQuotaBytes) {
+		return 0
+	}
+	return storageQuotaBytes - int32(used)
+}
+
+// storageUsed is what the title has stored, as the common contract counts it:
+// for each file it has written, its size less the size of the file of the
+// same name its archive ships, and for each database the bytes of its records.
+// The platform's own lists and the database index are not counted, and a
+// database is counted once, as its records: in its own scope it is no file,
+// and among the files, where a session whose store refused the move keeps it,
+// its container is left out of the files. A file the title wrote shorter than
+// the one its archive ships adds nothing rather than taking the difference off
+// another file's.
+//
+// A file the title wrote is one on the created list, one of the archive's own
+// paths that has a save, or one waiting in an open buffer. The archive's paths
+// are asked about once and then only again after a write of theirs
+// (savedSize), because an archive holds hundreds of them and a title may ask
+// for the figure often.
+func (client *Client) storageUsed() int64 {
+	var used int64
+	containers := make(map[string]bool)
+	amongFiles := client.databasesAmongFiles()
+	for _, name := range client.databaseNames() {
+		if amongFiles {
+			containers[fileListKey(databaseFileName(name))] = true
+		}
+		used += client.databaseRecordBytes(name)
+	}
+	counted := make(map[string]bool)
+	count := func(path string) {
+		key := fileListKey(path)
+		if counted[key] || containers[key] || !hasSaveKey(path) {
+			return
+		}
+		counted[key] = true
+		size, saved := client.savedSize(path)
+		if !saved {
+			return
+		}
+		shipped := 0
+		if client.archive != nil {
+			if data, ok := client.archive.Resource(key); ok {
+				shipped = len(data)
+			}
+		}
+		if size > shipped {
+			used += int64(size - shipped)
+		}
+	}
+	for _, file := range client.openContents() {
+		count(file.name)
+	}
+	for path := range client.createdFiles() {
+		count(path)
+	}
+	// An entry an earlier build recorded is in lower case and stands for the
+	// file under any case, unless this build has recorded or removed the file
+	// under some case since, as the listing reads it.
+	recorded := make(map[string]bool, len(client.created)+len(client.removed))
+	for _, set := range []map[string]bool{client.created, client.removed} {
+		for path := range set {
+			recorded[strings.ToLower(path)] = true
+		}
+	}
+	for entry := range client.createdLegacy {
+		if !recorded[fileListKey(entry)] {
+			count(entry)
+		}
+	}
+	if client.archive != nil {
+		for _, files := range []map[string][]byte{client.archive.Resources, client.archive.Packaged, client.archive.supplemental} {
+			for _, path := range slices.Sorted(maps.Keys(files)) {
+				count(path)
+			}
+		}
+	}
+	return used
+}
+
+// storedSize is what the space count last read of one path's save, and the
+// path's epoch then: whether there was a save and how many bytes it held, and
+// for a database's container what its records hold. Each half is known only
+// once it has been read at that epoch.
+type storedSize struct {
+	epoch        uint64
+	sizeKnown    bool
+	size         int
+	saved        bool
+	recordsKnown bool
+	records      int
+}
+
+// savedSize answers how many bytes the title has saved under a path, and
+// whether it has saved anything there: a write waiting in an open buffer, or
+// what the store or a session with no store holds, and nothing for a removed
+// path. The archive's own copy is not a save. What the store answered is
+// kept with the path's epoch, which every store and removal of the path in
+// the session moves on.
+func (client *Client) savedSize(path string) (int, bool) {
+	if content := client.openContent(path); content != nil && content.dirty {
+		return len(content.data), true
+	}
+	if client.fileRemoved(path) {
+		return 0, false
+	}
+	key, err := fileSaveKey(path)
+	if err != nil {
+		return 0, false
+	}
+	epoch := client.fileEpoch(path)
+	known, ok := client.storedSizes[key]
+	if ok && known.epoch == epoch && known.sizeKnown {
+		return known.size, known.saved
+	}
+	var data []byte
+	saved := false
+	if client.saveStore != nil {
+		data, saved = client.loadSave(key)
+	}
+	if !saved {
+		data, saved = client.sessionFiles[key]
+	}
+	if !ok || known.epoch != epoch {
+		known = storedSize{epoch: epoch}
+	}
+	known.sizeKnown, known.size, known.saved = true, len(data), saved
+	if client.storedSizes == nil {
+		client.storedSizes = make(map[string]storedSize)
+	}
+	client.storedSizes[key] = known
+	return len(data), saved
+}
+
 // maxFileBytes is how far a write may grow a file and a seek may move a cursor
-// past what the file already holds. A title's offset and length are guest
-// words, and without a bound one stray seek and a one-byte write size a host
-// allocation of gigabytes. It is sixteen times the quota the two space slots
-// report, which the titles here check a save of a few kilobytes against, so
-// nothing a title saves comes near it; a packaged file already larger is still
-// read and written within its own length. Past it the call fails as a bad
-// file call does.
-const maxFileBytes = 16 << 20
+// past what the file already holds: the common contract's bound on untrusted
+// input, 4 MiB for one file (docs/wipi-storage.md). A title's offset and
+// length are guest words, and without a bound one stray seek and a one-byte
+// write size a host allocation of gigabytes. It is four times the room the
+// space slots report, which the titles here check a save of a few kilobytes
+// against, so nothing a title saves comes near it; a packaged file already
+// larger is still read and written within its own length. A write past it
+// fails as a write does — M_E_NOSPACE from MC_fsWrite, an IOException from a
+// File or a stream on one — and a seek past it as a bad seek does.
+const maxFileBytes = 4 << 20
 
 // extend grows a file's buffer with zeros so that it reaches end, and reports
 // false, leaving it as it was, for an end past maxFileBytes that the buffer

@@ -303,6 +303,7 @@ func (state restoredRuntimeStorage) adopt(runtime *initializationRuntime) {
 	runtime.guestFiles = nil
 	runtime.guestFileWrites = nil
 	runtime.removedFiles, runtime.removedCDatabases, runtime.madeDirectories, runtime.removedDatabaseLists = nil, nil, nil, nil
+	runtime.madeGuestDirectories, runtime.databaseSizes = nil, nil
 	runtime.detachedCFiles, runtime.detachedRecordDatabases, runtime.detachedDatabases = nil, nil, nil
 	runtime.restoredStorage = state.restored
 }

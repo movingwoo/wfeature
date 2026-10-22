@@ -28,14 +28,16 @@ const javaFileClass = "org/kwis/msp/io/File"
 //
 // **A file that will not open is an IOException**, which is what the
 // specification says the constructor throws, and what the call sites are
-// wrapped in a try region for.
+// wrapped in a try region for. The name is read as every file call reads one
+// (javaFileSystemName), and the title's own directory is no name a file can
+// be opened under.
 func javaFileOpen(
 	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	object, name, mode := arguments[0], arguments[1], arguments[2]
-	path, ok := client.javaText(name)
-	if !ok {
-		return 0, fmt.Errorf("the name at %#x is not a string this platform built", name)
+	path, root, err := client.javaFileSystemName(thread, name)
+	if err != nil {
+		return 0, err
 	}
 	var flag uint32
 	switch mode {
@@ -51,7 +53,10 @@ func javaFileOpen(
 		return 0, client.throwJavaPlatform(thread, "java/lang/IllegalArgumentException",
 			fmt.Sprintf(": invalid file mode %d", mode))
 	}
-	handle := client.openFile(path, flag)
+	handle := wipiBadFileName
+	if !root {
+		handle = client.openFile(path, flag)
+	}
 	if handle < 0 {
 		if client.logger != nil {
 			client.logger.Debug("LGT java file will not open", "name", path, "mode", mode)
@@ -68,31 +73,295 @@ func javaFileOpen(
 
 const javaIOExceptionClass = "java/io/IOException"
 
-// javaFileExists and javaFileRemove are `org/kwis/msp/io/FileSystem`, which
-// asks about a path rather than an open file. They read and write the same
-// store the constructor above opens from, so a Java title and a Clet agree
-// about what a title has saved.
-func javaFileExists(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
-) (uint32, error) {
-	path, ok := client.javaText(arguments[0])
+// `org/kwis/msp/io/FileSystem`, which asks about a path rather than an open
+// file. It reads and writes the same store the File constructor opens from,
+// so a Java title and a Clet agree about what a title has saved, and **each
+// member answers what the C file slot for the same question answers**, in the
+// language's form: a C failure code is the IOException the member declares.
+// The common contract (docs/wipi-storage.md) gives both. The access flag of
+// the two-argument forms chooses nothing: a title here has one directory, its
+// own, and nothing answers SecurityException.
+const javaFileSystemClass = "org/kwis/msp/io/FileSystem"
+
+// javaFileSystemName reads a name argument the way every file call reads one,
+// and reports whether it names the title's own directory: null is a
+// NullPointerException, and a name longer than getMaxFilenameLength, or one
+// no file can have here, is an IOException — the M_E_LONGNAME and
+// M_E_BADFILENAME the C slots answer (fileNameCode).
+func (client *Client) javaFileSystemName(thread *armcore.Thread, object uint32) (string, bool, error) {
+	if object == 0 {
+		return "", false, client.throwJavaPlatform(thread, javaThrowNullClass, ": a null file name")
+	}
+	name, ok := client.javaText(object)
 	if !ok {
-		return 0, fmt.Errorf("the name at %#x is not a string this platform built", arguments[0])
+		return "", false, fmt.Errorf("the name at %#x is not a string this platform built", object)
 	}
-	if _, found := client.readFile(path); found {
-		return 1, nil
+	root, code := fileNameCode(name)
+	switch code {
+	case wipiLongName:
+		return "", false, client.throwJavaPlatform(thread, javaIOExceptionClass,
+			fmt.Sprintf(": a name of %d bytes is longer than %d", len(name), maxFileNameBytes))
+	case wipiBadFileName:
+		return "", false, client.throwJavaPlatform(thread, javaIOExceptionClass, fmt.Sprintf(": %q is not a file name", name))
 	}
-	return 0, nil
+	return name, root, nil
 }
 
-func javaFileRemove(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
-) (uint32, error) {
-	path, ok := client.javaText(arguments[0])
-	if !ok {
-		return 0, fmt.Errorf("the name at %#x is not a string this platform built", arguments[0])
+// javaFileSystemCode throws the IOException a C file code stands for, and is
+// nothing for success.
+func (client *Client) javaFileSystemCode(thread *armcore.Thread, code int32, what string) error {
+	if code == wipiSuccess {
+		return nil
 	}
-	client.removeFile(path)
+	return client.throwJavaPlatform(thread, javaIOExceptionClass, fmt.Sprintf(": %s answered %d", what, code))
+}
+
+func javaBoolean(value bool) uint32 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+// javaFileExists is `exists`: a file or a directory, as MC_fsIsExist answers.
+func javaFileExists(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	name, root, err := client.javaFileSystemName(thread, arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return javaBoolean(root || client.fileExists(name) || client.holdsDirectory(name)), nil
+}
+
+// javaFileIsFile is `isFile`: a file of that name, and not a directory.
+func javaFileIsFile(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	name, root, err := client.javaFileSystemName(thread, arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return javaBoolean(!root && client.fileExists(name)), nil
+}
+
+// javaFileIsDirectory is `isDirectory`: what directoryExists answers.
+func javaFileIsDirectory(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	name, root, err := client.javaFileSystemName(thread, arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return javaBoolean(root || client.directoryExists(name)), nil
+}
+
+// javaFileRemove is `remove(String)`, which is MC_fsRemove: a name that is not
+// a file is the IOException the specification gives a file that does not
+// exist.
+func javaFileRemove(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	name, root, err := client.javaFileSystemName(thread, arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if root || !client.fileExists(name) {
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, fmt.Sprintf(": no file %s", name))
+	}
+	return 0, client.javaRemoveFile(thread, name)
+}
+
+// javaFileRemoveFlagged is `remove(String, int)`, which the specification's
+// v2.0 text says throws nothing for a missing file: it removes a file that is
+// there and returns for a name that is not one. A removal the store refuses
+// is still the IOException both forms declare.
+func javaFileRemoveFlagged(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	name, root, err := client.javaFileSystemName(thread, arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if root || !client.fileExists(name) {
+		return 0, nil
+	}
+	return 0, client.javaRemoveFile(thread, name)
+}
+
+// javaRemoveFile removes a file for either form of remove, and throws the
+// IOException a removal the store refuses is; the file is then still there
+// (see removeFile).
+func (client *Client) javaRemoveFile(thread *armcore.Thread, name string) error {
+	if err := client.removeFile(name); err != nil {
+		return client.throwJavaPlatform(thread, javaIOExceptionClass, fmt.Sprintf(": %s could not be removed: %v", name, err))
+	}
+	return nil
+}
+
+// javaFileList is `list`, which answers a Vector of the names a directory
+// holds, files and directories alike: MC_fsList's listing, each name a
+// String. A name that is not a directory is the IOException the specification
+// gives one that does not exist; MC_fsList answers the same name an empty
+// list, because the C call has no code for it.
+func javaFileList(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	name, root, err := client.javaFileSystemName(thread, arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if !root && !client.directoryExists(name) {
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, fmt.Sprintf(": no directory %s", name))
+	}
+	names := client.listDirectory(name)
+	class, err := client.preparePlatformJavaClass(javaVectorClass)
+	if err != nil {
+		return 0, err
+	}
+	vector, err := client.allocateJavaObject(class)
+	if err != nil {
+		return 0, err
+	}
+	// Everything a platform call allocates is a root until it returns (see
+	// javaPinMark), so a collection one of these allocations raises keeps the
+	// Vector and the Strings built so far.
+	held := make([]uint32, 0, len(names))
+	for _, entry := range names {
+		text, err := client.newJavaString(entry)
+		if err != nil {
+			return 0, err
+		}
+		held = append(held, text)
+	}
+	client.javaRuntimeState().vectors[vector] = held
+	return vector, nil
+}
+
+// javaFileMakeDirectory is `mkdir` and javaFileRemoveDirectory `rmdir`, which
+// are MC_fsMkDir and MC_fsRmDir (makeDirectory, removeDirectory): every code
+// the C call answers other than success is an IOException.
+func javaFileMakeDirectory(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	name, root, err := client.javaFileSystemName(thread, arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return 0, client.javaFileSystemCode(thread, client.makeDirectory(name, root, wipiSuccess), "mkdir "+name)
+}
+
+func javaFileRemoveDirectory(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	name, root, err := client.javaFileSystemName(thread, arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return 0, client.javaFileSystemCode(thread, client.removeDirectory(name, root, wipiSuccess), "rmdir "+name)
+}
+
+// javaFileRename is `rename`, which is MC_fsRename: the same refusals (an
+// absent file, a taken name, a name no file can have, a store that refuses),
+// each one the IOException the specification gives "an error while
+// renaming". The specification asks both names to be in one directory, and
+// the C slot does not ask it, so neither does this.
+func javaFileRename(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	oldName, oldRoot, err := client.javaFileSystemName(thread, arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	newName, newRoot, err := client.javaFileSystemName(thread, arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	code := wipiNoEntry
+	switch {
+	case oldRoot:
+	case newRoot:
+		code = wipiBadFileName
+	default:
+		code = client.renameFile(oldName, newName)
+	}
+	return 0, client.javaFileSystemCode(thread, code, "rename "+oldName+" to "+newName)
+}
+
+// javaFileCreationTime is `getCreationTime`, in seconds, with -1 for a
+// directory as the specification gives it. **No creation time is kept**: a
+// file is a save key and its bytes, and neither a save nor a packaged file
+// carries one, so a file answers 0 — the creation time MC_fsFileAttribute
+// writes for every file. A name that is neither is the IOException a C
+// stat's M_E_NOENT is.
+func javaFileCreationTime(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	name, root, err := client.javaFileSystemName(thread, arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	switch {
+	case root:
+		return ^uint32(0), nil
+	case client.fileExists(name):
+		return 0, nil
+	case client.directoryExists(name):
+		return ^uint32(0), nil
+	}
+	return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, fmt.Sprintf(": no file %s", name))
+}
+
+// javaFileMaxNameLength is `getMaxFilenameLength`: maxFileNameBytes.
+func javaFileMaxNameLength(*Client, context.Context, *armcore.Thread, []uint32) (uint32, error) {
+	return uint32(maxFileNameBytes), nil
+}
+
+// javaFileCString is `toCString`: the text in the handset's encoding (KSC5601
+// for Korean, which the specification names, and ISO 8859 for the rest) with
+// the terminating NUL a C string ends in, the encoding `String.getBytes`
+// answers in.
+func javaFileCString(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	if arguments[0] == 0 {
+		return 0, client.throwJavaPlatform(thread, javaThrowNullClass, ": toCString of null")
+	}
+	text, ok := client.javaText(arguments[0])
+	if !ok {
+		return 0, fmt.Errorf("the string at %#x is not one this platform built", arguments[0])
+	}
+	return client.newJavaByteArray(append(encodeEUCKR(text), 0))
+}
+
+// javaFileSystemTotal is `totalSpace`, MC_fsTotalSpace's storageQuotaBytes,
+// and javaFileSystemAvailable is `available`, MC_fsAvailable's
+// storageAvailable.
+func javaFileSystemTotal(*Client, context.Context, *armcore.Thread, []uint32) (uint32, error) {
+	return uint32(storageQuotaBytes), nil
+}
+
+func javaFileSystemAvailable(client *Client, _ context.Context, _ *armcore.Thread, _ []uint32) (uint32, error) {
+	return uint32(client.storageAvailable()), nil
+}
+
+// javaFileSeek is `File.seek(int)`, which is MC_fsSeek from the start of the
+// file: the position is absolute, as the specification says. A position the C
+// call refuses (before the start, or past the size a file may grow to) is the
+// IOException the specification gives an error while moving the pointer, and
+// so is a File that is not open. A position past the end is a seek a later
+// write fills up to with zeros, as it is for MC_fsSeek.
+func javaFileSeek(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	handle, _, err := client.javaFileHandle(arguments[0])
+	if err != nil {
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, ": the file is not open")
+	}
+	if position := client.seekFile(handle, int32(arguments[1]), 0); position < 0 {
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass,
+			fmt.Sprintf(": seek to %d", int32(arguments[1])))
+	}
 	return 0, nil
 }
 
@@ -147,8 +416,12 @@ func javaFileRead(
 }
 
 // javaFileWrite is `write([B)` and `write([BII)`.
+//
+// A write the file cannot take — past the size a file may grow to, or into a
+// File opened to read — is the IOException the specification gives a write
+// that cannot be made, where MC_fsWrite answers a code.
 func javaFileWrite(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	handle, _, err := client.javaFileHandle(arguments[0])
 	if err != nil {
@@ -158,7 +431,12 @@ func javaFileWrite(
 	if err != nil {
 		return 0, err
 	}
-	return uint32(client.transferFile(slotFsWrite, handle, block+offset, count)), nil
+	written := client.transferFile(slotFsWrite, handle, block+offset, count)
+	if written < 0 {
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass,
+			fmt.Sprintf(": a write of %d bytes answered %d", count, written))
+	}
+	return uint32(written), nil
 }
 
 // javaFileWindow resolves the array argument the read and write pair take, with
@@ -180,24 +458,23 @@ func (client *Client) javaFileWindow(arguments []uint32) (uint32, uint32, uint32
 
 // javaFileWriteByte is `write(int)`: one byte, the low eight bits of it.
 func javaFileWriteByte(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	handle, file, err := client.javaFileHandle(arguments[0])
+	_, file, err := client.javaFileHandle(arguments[0])
 	if err != nil {
 		return 0, err
 	}
-	_ = handle
 	if !file.writable {
-		return 0, fmt.Errorf("%s was opened read-only", file.name)
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, fmt.Sprintf(": %s was opened read-only", file.name))
 	}
 	value := byte(arguments[1])
 	// A cursor past the end fills the gap with zeros, as the array forms of
-	// this call do. Nothing a Java title does moves the cursor there; a file
-	// that is shorter after a quick load than it was before one does. A cursor
-	// past maxFileBytes is one only a record can hold, and the write answers
-	// -1 there, as the array forms do.
+	// this call do. A seek, or a file that is shorter after a quick load than
+	// it was before one, moves the cursor there. A byte past maxFileBytes is
+	// the IOException the array forms throw there.
 	if !file.extend(file.cursor + 1) {
-		return ^uint32(0), nil
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass,
+			fmt.Sprintf(": %s cannot grow past %d bytes", file.name, maxFileBytes))
 	}
 	file.data[file.cursor] = value
 	file.cursor++
@@ -225,7 +502,24 @@ func javaFileWriteByte(
 func javaFileOpenOutputStream(
 	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	file := arguments[0]
+	return client.openJavaFileOutputStream(thread, arguments[0], javaByteSinkClass)
+}
+
+// javaFileOpenDataOutputStream is `File.openDataOutputStream()`: the same
+// binding with DataOutputStream's vtable, so the object it answers also takes
+// the big-endian writes `writeInt` and the rest, each one reaching the file at
+// its cursor as a write through the File would. The specification counts it
+// with `openOutputStream` — one output stream on a File, a DataOutputStream
+// included — so a second of either kind is the IOException a second
+// `openOutputStream` is, as `openDataInputStream` shares its count with
+// `openInputStream`.
+func javaFileOpenDataOutputStream(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	return client.openJavaFileOutputStream(thread, arguments[0], javaDataOutputStreamClass)
+}
+
+func (client *Client) openJavaFileOutputStream(thread *armcore.Thread, file uint32, className string) (uint32, error) {
 	if _, _, err := client.javaFileHandle(file); err != nil {
 		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, ": the file is not open")
 	}
@@ -237,7 +531,7 @@ func javaFileOpenOutputStream(
 				": an output stream is already open on this file")
 		}
 	}
-	class, err := client.preparePlatformJavaClass(javaByteSinkClass)
+	class, err := client.preparePlatformJavaClass(className)
 	if err != nil {
 		return 0, err
 	}
@@ -248,7 +542,7 @@ func javaFileOpenOutputStream(
 	runtime.sinks[object] = []byte{}
 	runtime.sinkFiles[object] = file
 	if client.logger != nil {
-		client.logger.Debug("LGT java file output stream opened", "file", file, "stream", object)
+		client.logger.Debug("LGT java file output stream opened", "file", file, "stream", object, "class", className)
 	}
 	return object, nil
 }
@@ -358,16 +652,22 @@ func (client *Client) syncJavaStreamToFile(stream uint32) error {
 }
 
 // putJavaSink keeps what a sink holds after a write. A sink opened on a File
-// hands it to the File at once: see javaFileOpenOutputStream. A write the
-// File cannot take, past the size a file may grow to or into a File opened to
-// read, stops the run, as a write through such a File itself would fail.
-func (client *Client) putJavaSink(sink uint32, held []byte) error {
+// hands it to the File at once: see javaFileOpenOutputStream. A write the File
+// cannot take — past the size a file may grow to, or into a File opened to
+// read — fails as a write through the File does, with the IOException the
+// stream's write declares, and the sink keeps nothing of it.
+func (client *Client) putJavaSink(thread *armcore.Thread, sink uint32, held []byte) error {
 	runtime := client.javaRuntimeState()
+	before := runtime.sinks[sink]
 	runtime.sinks[sink] = held
 	if _, bound := runtime.sinkFiles[sink]; !bound {
 		return nil
 	}
-	return client.drainJavaSinkToFile(sink)
+	if err := client.drainJavaSinkToFile(sink); err != nil {
+		runtime.sinks[sink] = before
+		return client.throwJavaPlatform(thread, javaIOExceptionClass, ": "+err.Error())
+	}
+	return nil
 }
 
 // storeJavaSinkFile is a flush or a close of a stream opened on a File: the
