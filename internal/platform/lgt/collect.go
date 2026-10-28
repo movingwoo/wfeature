@@ -323,10 +323,20 @@ func (client *Client) collectJavaObjects(extraRoots []uint32) (CollectionStats, 
 	client.markJavaPlatformRoots(mark)
 
 	// Registers and thread-local words of every thread that can resume.
+	//
+	// **Every call in flight on a thread, not only the thread's own frame.** A
+	// call the platform makes into the title — a callback, a class
+	// initialiser, a key's hashCode — runs on a thread derived from the one it
+	// was made on, and its registers are its own: a collection the arena raises
+	// inside it, or one at a tick's end while a guest thread is parked inside
+	// one, would otherwise see that call's stack but not what its code holds in
+	// registers. Every derived call is stopped at a supervisor call or parked
+	// whenever this runs, so its saved context is its registers.
 	for _, thread := range client.collectionThreads() {
-		context := thread.Context()
-		for _, register := range context.Registers {
-			mark(register)
+		for _, context := range thread.LiveContexts() {
+			for _, register := range context.Registers {
+				mark(register)
+			}
 		}
 		for _, word := range client.core.ThreadLocalWords(thread) {
 			mark(word)

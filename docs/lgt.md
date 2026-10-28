@@ -53,8 +53,9 @@ archive as one no platform claims
 The platform executes native Clets and its supported AOT Java surface. Java
 metadata, objects, arrays, exceptions, monitors, workers, resource streams,
 and supported library methods belong to the LGT implementation. Collection
-traces guest references and platform roots, including shown/focused widgets,
-and releases unreachable resources. A wrapper over a title's own `InputStream`
+traces guest references and platform roots, including shown/focused widgets
+and the registers of every call in flight on a guest thread, and releases
+unreachable resources. A wrapper over a title's own `InputStream`
 holds that stream object and the buffer its `read([BII)` is handed. Byte sinks
 and Vectors stop with an error at `maxJavaArrayLength` (4 Mi bytes or
 references), the largest array the platform builds, and Java `putData` fills a

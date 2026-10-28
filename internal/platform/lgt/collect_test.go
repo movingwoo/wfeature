@@ -1,8 +1,10 @@
 package lgt
 
 import (
+	"context"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 )
 
@@ -382,6 +384,45 @@ func TestJavaCollectorKeepsWhatAPlatformCallIsStillBuilding(t *testing.T) {
 	collect(t, client)
 	if tracked(client, object) {
 		t.Fatal("an object was kept after the call that built it returned")
+	}
+}
+
+// A call the platform makes into the title — a callback, a class initialiser,
+// a key's hashCode — runs on a thread derived from the one it was made on, and
+// what the title's code holds in that call's registers is live. A collection
+// raised inside the call, the arena refusing a block, reads them as it reads
+// the root thread's: an object held there and nowhere else survives two
+// cycles in a row.
+func TestJavaCollectorKeepsWhatANestedCallHoldsInARegister(t *testing.T) {
+	client := fixtureClient(t)
+	object := newCollectableObject(t, client, "java/lang/Object")
+	// adds r4, r0, #0; movs r0, #0; svc #1; adds r0, r4, #0; bx lr
+	code := installThumbAt(t, client, 0, 0x1c04, 0x2000, 0xdf01, 0x1c20, 0x4770)
+	reached, kept := false, false
+	handler := func(context.Context, *armcore.Thread, armcore.SupervisorCall) error {
+		collect(t, client)
+		collect(t, client)
+		reached, kept = true, tracked(client, object)
+		return nil
+	}
+	summary, err := client.core.Call(context.Background(), client.thread, code, returnAddress, []uint32{object}, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reached {
+		t.Fatal("the nested call never reached its collection")
+	}
+	if !kept {
+		t.Fatal("an object a nested call holds only in a register was freed under it")
+	}
+	if answer := summary.Context.Registers[0]; answer != object {
+		t.Fatalf("the call answered %#x, want the object %#x it held", answer, object)
+	}
+	// Once the call has returned nothing holds it, and it goes.
+	collect(t, client)
+	collect(t, client)
+	if tracked(client, object) {
+		t.Fatal("an object was kept after the call that held it returned")
 	}
 }
 

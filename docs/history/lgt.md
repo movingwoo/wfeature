@@ -53,6 +53,7 @@ This consolidation adds no execution or acceptance evidence.
 - [Image slots, C library names and the storage contract — 2026-10-22](#lgt-slot-corrections-2026-10-22)
 - [Storage contract review — 2026-10-22](#lgt-storage-review-2026-10-22)
 - [The class library's core, placed by the specification — 2026-10-28](#lgt-class-library-2026-10-28)
+- [The collector reads every call in flight — 2026-10-28](#lgt-collector-nested-calls-2026-10-28)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -8133,6 +8134,7 @@ register is freed when two cycles in a row run while it is held there — rare,
 since the arena has to be that full, and a freed object the title still uses is
 corruption rather than a stop. Marking from every live context only retains
 more. It was found by reading the code; no local run has been seen to hit it.
+[The change after this one](#lgt-collector-nested-calls-2026-10-28) fixes it.
 
 **The first placement of the new tables broke every quick save a Java title
 had.** They went into the Java record beside the vectors, and the record codec
@@ -8166,3 +8168,38 @@ local LGT archives were run under the build before this pass and this one:
   module (21 titles and a fixture) at 1,500 ticks with fire again: every last
   frame, instruction count and exit the same as the build before this pass.
 
+<a id="lgt-collector-nested-calls-2026-10-28"></a>
+
+## The collector reads every call in flight — 2026-10-28
+
+`collectJavaObjects` marked registers from each root thread's own context: the
+platform's thread and every guest worker. A call the platform makes into the
+title — a callback, a class initialiser, and since the class library's core a
+key's hashCode, an element's toString or a constructor — runs on a thread
+`armcore` derives from the one it was made on, with registers of its own that
+only `LiveContexts()` reaches. A collection the arena raised inside such a call,
+or one at a tick's end while a guest thread was parked inside one, therefore
+read the guest's stacks, statics and heap but not what the code in flight held
+in registers. An object is never freed by the cycle that first finds it
+unreachable, so one held only there was freed when two cycles ran in a row
+while it was held — and an object the title still uses, freed, is corruption
+rather than a stop.
+
+The collector now marks every live context of every thread. Each derived call
+is stopped at a supervisor call (its context saved before the handler runs) or
+parked whenever a collection runs, so its saved context is its registers. The
+change only retains more.
+
+`TestJavaCollectorKeepsWhatANestedCallHoldsInARegister` makes the call: an
+object handed to a guest function that keeps it in `r4` alone and makes a
+supervisor call, inside which two cycles run. Before the change the object was
+freed under the call; now it survives, and goes once the call has returned.
+
+Validation: `gofmt`, `go vet` and `go test` on `./cmd/... ./internal/...
+./fonts/... ./mobile/... ./web/...`, `go test -tags debug` on lgt, session,
+webhost and cmd, and `go test -race` on this package. The collector runs only
+for Java titles, so the 22 local archives with a Java module were run under the
+build before this change and this one: 1,500 ticks with fire every 25 ticks
+from tick 100 end on the same frame, instruction count and exit in all 22, and
+a quick save after 500 ticks loaded for 300 more under each build ends on the
+same frame in all 22. No local run was seen to need it.
