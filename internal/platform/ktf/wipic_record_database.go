@@ -152,7 +152,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 	if err != nil {
 		return 0, err
 	}
-	name, err := runtime.readCString(nameAddress, 512)
+	name, err := runtime.readCString(nameAddress, maxFileNameRead)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF record database name: %w", err)
 	}
@@ -280,7 +280,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDelete(thread *armcore.
 	if err != nil {
 		return 0, err
 	}
-	name, err := runtime.readCString(nameAddress, 512)
+	name, err := runtime.readCString(nameAddress, maxFileNameRead)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF record database name: %w", err)
 	}

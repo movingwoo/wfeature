@@ -793,17 +793,32 @@ func runtimeFileSystemRename(runtime *initializationRuntime, _ *jvm.VM, argument
 	return jvm.VoidValue(), nil
 }
 
-// runtimeFileSystemCString encodes a name in the platform charset with the
-// terminator native code expects.
+// runtimeFileSystemCString encodes text in the platform charset with the
+// terminator native code expects. The text is converted as it is: toCString
+// names no file, so the file-name rules (a backslash read as a separator, the
+// 255-byte bound, refused names) are not applied, as LGT and SKT do not apply
+// them and earlier builds here did not. Only null is refused, as every
+// FileSystem call refuses it.
 func runtimeFileSystemCString(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if len(arguments) < 1 {
 		return jvm.VoidValue(), fmt.Errorf("FileSystem.toCString expected a name")
 	}
-	name, err := runtimeFileSystemName(arguments[0])
+	object, err := arguments[0].Reference()
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	return jvm.ReferenceValue(jvm.NewByteArray(append(encodeEUCKR(name), 0))), nil
+	if object == nil {
+		message := "toCString of null"
+		return jvm.VoidValue(), &jvm.GuestException{
+			Object:  &jvm.Object{ClassName: "java/lang/NullPointerException", Native: message},
+			Message: message,
+		}
+	}
+	text, ok := jvm.StringText(object)
+	if !ok {
+		return jvm.VoidValue(), fmt.Errorf("FileSystem.toCString argument is not a string")
+	}
+	return jvm.ReferenceValue(jvm.NewByteArray(append(encodeEUCKR(text), 0))), nil
 }
 
 func runtimeFileSystemName(value jvm.Value) (string, error) {

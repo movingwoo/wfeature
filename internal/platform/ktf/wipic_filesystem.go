@@ -166,8 +166,9 @@ func (runtime *initializationRuntime) handleWIPICFileCall(thread *armcore.Thread
 			return 0, nil
 		}
 		if !cFileNameKeyed(name) {
-			// Nothing can be stored under it, so nothing is there.
-			return wipicErrorNotFound, nil
+			// Nothing can be stored under it: a name the store cannot keep
+			// is M_E_BADFILENAME, as MC_fsFileAttribute answers it.
+			return wipicErrorBadFileName, nil
 		}
 		exists, err := runtime.cFileExists(name)
 		if err != nil {
@@ -222,12 +223,12 @@ func (runtime *initializationRuntime) wipicFileDelete(thread *armcore.Thread) (u
 		// own lists: the deletion list answers as a seed as soon as anything
 		// has been deleted, so the removal would go through and wipe it, and
 		// every database the title had deleted would be back on the next open.
-		return wipicErrorInvalid, nil
+		return wipicErrorBadFileName, nil
 	}
 	if !storableName(cFileScope, name) {
 		// The removal list could not carry it: "a\nb" would come back as the
 		// two names a and b, and hide both.
-		return wipicErrorInvalid, nil
+		return wipicErrorBadFileName, nil
 	}
 	_, live := runtime.cFiles[name]
 	_, seeded := runtime.databaseSeed(name)
@@ -326,7 +327,7 @@ func (runtime *initializationRuntime) wipicFileRename(thread *armcore.Thread) (u
 		// A name that is not a key of its own, or that the removal list could
 		// not carry. Refused before either name is looked up: a name that
 		// fails its key fails the read, and that read failure stays.
-		return wipicErrorInvalid, nil
+		return wipicErrorBadFileName, nil
 	}
 	if oldName == newName {
 		// The same file under the same name: there is nothing to move, and
@@ -557,7 +558,7 @@ func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uin
 		return wipicErrorLongName, nil
 	}
 	if reservedStorageName(cFileScope, name) || !cFileNameKeyed(name) {
-		return wipicErrorInvalid, nil
+		return wipicErrorBadFileName, nil
 	}
 	store, exists := runtime.cFiles[name]
 	seed, hasSeed := runtime.databaseSeed(name)

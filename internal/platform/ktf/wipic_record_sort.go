@@ -45,7 +45,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseAccessMode(thread *armc
 	if nameAddress == 0 {
 		return wipicErrorInvalid, nil
 	}
-	name, err := runtime.readCString(nameAddress, 512)
+	name, err := runtime.readCString(nameAddress, maxFileNameRead)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF record database name: %w", err)
 	}

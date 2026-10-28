@@ -9924,3 +9924,93 @@ makes a directory or a database, two titles' `db/.dirs` no longer records a
 directory their archive already has, and six LGT titles no longer write a
 removal list for a file that was never there. The title that stopped on its
 title screen still reaches its first scene with the same 21 snapshots.
+
+<a id="ktf-storage-review-2026-10-22"></a>
+
+## Storage contract review — 2026-10-22
+
+The validation of the contract above started every title from an empty save,
+so it never saw a title whose save had grown. The review ran the saves players
+already have: 358 local save trees written by earlier builds, continued for
+about 1,800 ticks with `fire` taps, and the v0.6.0-pre saves and quick saves
+of every local archive, each under the build before the contract and the build
+after it. Two defects showed only there, and both were fixed.
+
+- **Space charged a shipped file kept as a database.** A KTF Java title copies
+  a 1.4 MB file from its archive into a database of the same name. Its save,
+  which an earlier build wrote, answered 1,616,720 bytes used and none
+  available, and the title's "the handset's storage is full, so it cannot
+  start" message replaced its continue; the build before the contract loaded
+  the save. The packaged copy was looked for only in a database's own packaged
+  form (`packagedRecordDatabase` with no record size), which a plain file is
+  not. The archive's file of the same name is now the packaged copy, as
+  [the contract](../wipi-storage.md#space) words it, and the title is charged
+  125 KiB. The C record table had the same gap. One local save holds 1.7 MB
+  its title wrote itself rather than shipped, and would be told 0 if it asked;
+  no run of it asked.
+- **Writing a database's time down read the guest's clock.** The first open,
+  every write, and a `getLastModified` with no time recorded took the time
+  from `guestMillis`, which counts each call as the guest waiting on the clock
+  and moves the batch clock, so the step budget charged a title that opens and
+  writes a database at start-up differently. Two titles continued from their
+  saves to different scenes under the same keys. `recordedMillis` reads the
+  same clock without counting.
+
+Four smaller answers changed with them, each to what LGT or an earlier build
+already answered:
+
+- `FileSystem.toCString` converts the text as it is. The file-name rules had
+  turned a backslash into a slash and thrown `IOException`, which `toCString`
+  does not declare, for text over 255 bytes or a name the store keeps for
+  itself. No local title was seen to call it.
+- A refused write of `jdb/.sizes` no longer fails `openDataBase` or
+  `deleteDataBase`. The database is there; the object keeps the size, and the
+  next open writes it again. A store that refused the table hid the save.
+- The record table reads a name to 4,096 bytes, as the file table does; it
+  stopped the run past 512.
+- A name the store cannot keep is `M_E_BADFILENAME` from `MC_fsOpen`,
+  `MC_fsRemove`, `MC_fsRename` and `MC_fsIsExist`, as `MC_fsFileAttribute`,
+  `MC_fsMkDir` and LGT answer it. It was `M_E_INVALID`, and `M_E_NOENT` from
+  `MC_fsIsExist`.
+
+`storage_review_test.go` holds the first five and the two tests that already
+held the refusals now expect `M_E_BADFILENAME`; each test in that file fails
+against the build the review started from.
+
+<a id="ktf-storage-review-2026-10-22-left"></a>
+
+### What the review found and left
+
+These answer differently from [the contract](../wipi-storage.md) and were
+left, because changing them risks more than the case they cover: no local
+save or run reached any of them.
+
+- A v0.6.0-pre quick save that holds a Java database under a spelling the
+  contract now reads as another (`/scores` for `scores`) restores it under that
+  spelling, and a later open makes a second store whose writes the first one
+  overwrites. The probe runs saw 144 database names from 83 titles, none of
+  them spelled so; the quick-load path is not changed for a case no title has.
+- The C table keeps `./save.dat` and `save.dat` apart in memory, and its
+  removal list by spelling. Reading them as one name would change the keys
+  saves are already under, which needs a migration.
+- A C record database has no 4 MiB bound, an insert past it is `M_E_INVALID`
+  rather than `M_E_NOSPACE`, and `MC_dbSortRecords` over more than 4 MiB of
+  records stops the run. No save comes near it, and a bound added now would
+  trap a save that had grown past it.
+- `exists`, `MC_fsIsExist` of a missing name and every space figure walk the
+  save tree on each call: about 1 to 4 ms, and 40 ms for the space, with 80
+  saves. Titles asked for space one to three times a run. A cache would trade
+  that for answers that can go stale.
+- Changes the contract made that no local title was seen to depend on:
+  `DataBaseRecordException` reached a handler nine times in the probe runs,
+  each a handler for itself or for `Exception`, never one for
+  `DataBaseException` alone; no open asked to create with a size of 0 or less.
+
+Validation: `go vet`, `go test` with and without the debug tag and
+`go test -race` on this package. Under the build with these fixes, 208 of the
+211 KTF save trees end every checkpoint on the same frame as the build before
+the contract; of the other three, one is the title slot 11 freed (above) and
+two vary between runs of every build, this one and the one before the contract
+alike. The v0.6.0-pre saves of 146 KTF archives continued for 500 ticks, their
+quick saves of 281 loaded for 300, and all 281 runnable KTF archives started
+from an empty save for 500 ticks all match it exactly.

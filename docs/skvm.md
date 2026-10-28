@@ -197,7 +197,10 @@ answers 0. `XFile`'s own modes never truncate. An `XFile` write that would
 grow a file past 16 MiB (`xFileMaxBytes`) fails with -1, so a seek far past the
 end cannot make the process allocate gigabytes, and `fsavail` still reports
 512 KiB; a WIPI `File` holds at most the contract's 4 MiB, and its write past
-that, through the `File` or its stream, is `IOException`.
+that, through the `File` or its stream, is `IOException`. One write of more
+than 1 MiB is refused before that, with `RecordStoreFullException`, by the
+array bound the RMS path shares
+([review](history/skt.md#skt-storage-review-2026-10-22)).
 
 **A removed file is gone, not empty.** `XFile.unlink` and `FileSystem.remove`
 make the path absent to every later read: `exists` and `isFile` answer false,

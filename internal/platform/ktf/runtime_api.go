@@ -324,8 +324,10 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
 	}
 	store.records = nil
+	// The database is gone by now; a size the table could not forget is
+	// written over by the next creating open, so it does not fail the delete.
 	if err := runtime.setJavaDatabaseSize(name, 0); err != nil {
-		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+		runtime.countDiagnostic(fmt.Sprintf("jdb size %s: %v", name, err))
 	}
 	if runtime.databases[name] == store {
 		delete(runtime.databases, name)
@@ -379,7 +381,7 @@ func runtimeDataBaseLastModified(runtime *initializationRuntime, _ *jvm.VM, argu
 		return jvm.VoidValue(), err
 	}
 	if store.modified == 0 {
-		store.modified = runtime.guestMillis()
+		store.modified = runtime.recordedMillis()
 	}
 	return jvm.LongValue(store.modified), nil
 }

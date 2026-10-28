@@ -37,6 +37,7 @@ This consolidation adds no execution or acceptance evidence.
 - [SKT retained-session resume (2026-09-30)](#skt-resume-2026-09-30)
 - [Text input offered when no strict route names a field (2026-10-20)](#skt-text-input-2026-10-20)
 - [WIPI FileSystem and DataBase (2026-10-22)](#skt-wipi-storage-2026-10-22)
+- [Storage contract review (2026-10-22)](#skt-storage-review-2026-10-22)
 
 <a id="implementation-skvm-and-the-skt-platform"></a>
 
@@ -3336,3 +3337,37 @@ database name is a path. `TestWIPIFileSystem*`, `TestWIPIStorageBackslash*`,
 `TestWIPIFileWritesAreBoundedAt4MiB` and
 `TestWIPIDataBase*` in `internal/platform/skt` cover every rule, and twelve
 deliberate breakages, one per new rule, each made one of them fail.
+
+<a id="skt-storage-review-2026-10-22"></a>
+
+## Storage contract review (2026-10-22)
+
+A review of the contract ran saves earlier builds wrote through the build
+before it and the build after it ([the KTF record](ktf.md#ktf-storage-review-2026-10-22)
+has the method). The 54 local SKT save trees differ between the two builds
+only as two runs of one build do, since SKT runs at wall-clock pace: each title
+that differed differed between two runs of the earlier build too, or matched it
+on a rerun. No SKT title that ran before the contract can newly be told it has
+no room: `FileSystem.available` and `DataBase` did not exist here before it,
+and `XFile.fsavail` and the RMS figures are unchanged. Nothing on this platform
+was changed by the review.
+
+What it found and left, because no local save or title reaches it:
+
+- A database name over 255 bytes is accepted, where KTF and LGT refuse it. The
+  check would belong in `wipiDatabaseKeyName`, which also reads the index and
+  quick saves back, so placed there it would refuse a whole index that held
+  one such name; it has to go on the open alone.
+- One `File` or stream write of more than 1 MiB throws
+  `RecordStoreFullException`, which a title's `IOException` handler does not
+  take, from the array bound the RMS path shares; the 4 MiB bound is reached
+  only by smaller writes. This is older than the contract.
+- The 512-byte bound on a save key is checked on the spelling before it is read
+  as a path, so `./` repeated 300 times before `save` is refused although the
+  path is four bytes.
+- `exists` of a missing name reads the made-directory list, walks the save tree
+  and the archive's entries twice: about 1.5 ms with 200 RMS saves, against
+  0.25 ms for `isFile`.
+- No test throws from a title's filter or comparator through `sortRecord` into
+  a handler in the title's bytecode; the native's part of that path is held,
+  the interpreter's catch is not.
