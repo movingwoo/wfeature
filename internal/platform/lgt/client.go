@@ -314,6 +314,9 @@ type Client struct {
 	javaTry        []javaTryFrame
 	javaTryBuffers []uint32
 	javaCallDepth  int
+	// javaVirtualNesting is how many of the platform's own calls through a
+	// receiver's slot are answering inside one another; see javaCallVirtual.
+	javaVirtualNesting int
 
 	// activeJavaWorker is the guest thread whose slice is running, when one is.
 	// A `sleep` reaches for it to know whether there is anything to park: the

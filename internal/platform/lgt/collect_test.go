@@ -548,3 +548,38 @@ func TestJavaDataPressureKeepsDecodedCacheHandles(t *testing.T) {
 		t.Fatal("data pressure evicted a pending cache handle")
 	}
 }
+
+// A hashtable holds its keys and values on this side, and an enumeration what
+// it walks: the collector follows both, and drops what they held with them.
+func TestJavaCollectorFollowsAHashtableAndAnEnumeration(t *testing.T) {
+	client := fixtureClient(t)
+	runtime := client.javaRuntimeState()
+	table := newCollectableObject(t, client, javaHashtableClass)
+	key := newCollectableObject(t, client, "java/lang/Object")
+	value := newCollectableObject(t, client, "java/lang/Object")
+	runtime.hashtables[table] = &javaHashtable{buckets: [][]javaHashEntry{{{hash: 1, key: key, value: value}}}, count: 1}
+	walk := newCollectableObject(t, client, javaHashtableEnumeratorClass)
+	item := newCollectableObject(t, client, "java/lang/Object")
+	runtime.enumerations[walk] = &javaEnumeration{items: []uint32{item}}
+	holder := newCollectableObject(t, client, javaVectorClass)
+	runtime.vectors[holder] = []uint32{table, walk}
+	runtime.jlet = holder
+
+	collect(t, client)
+	collect(t, client)
+	for _, object := range []uint32{table, key, value, walk, item} {
+		if !tracked(client, object) {
+			t.Fatalf("%#x, which only a hashtable or an enumeration names, was freed", object)
+		}
+	}
+
+	runtime.jlet = 0
+	collect(t, client)
+	collect(t, client)
+	if tracked(client, key) || tracked(client, item) {
+		t.Fatal("what a dead hashtable and enumeration held was kept")
+	}
+	if runtime.hashtables[table] != nil || runtime.enumerations[walk] != nil {
+		t.Fatal("a table's or an enumeration's contents outlived the object")
+	}
+}

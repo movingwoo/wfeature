@@ -1146,6 +1146,21 @@ func javaReaderRead(
 	if err != nil {
 		return 0, err
 	}
+	// `read(char[], int, int)`, slot 12, is the same read into part of the
+	// array. A range outside it is the IndexOutOfBoundsException the class
+	// library throws, and an empty one reads nothing.
+	offset := uint32(0)
+	if len(arguments) == 4 {
+		from, count := int64(int32(arguments[2])), int64(int32(arguments[3]))
+		if from < 0 || count < 0 || from+count > int64(length) {
+			return 0, client.throwJavaPlatform(thread, javaIndexClass,
+				fmt.Sprintf(": %d characters at %d of an array of %d", count, from, length))
+		}
+		if count == 0 {
+			return 0, nil
+		}
+		offset, length = uint32(from), uint32(count)
+	}
 	// One character is at most two bytes here, so a full array is at most
 	// twice its length: a reader over a title's own stream pulls that much
 	// before it decodes, rather than a block per character.
@@ -1166,7 +1181,7 @@ func javaReaderRead(
 			break
 		}
 		for _, symbol := range symbols {
-			at := block + javaArrayLengthWords*4 + written*2
+			at := block + javaArrayLengthWords*4 + (offset+written)*2
 			if err := client.writeHalfword(at, uint16(symbol)); err != nil {
 				return 0, err
 			}
@@ -1175,6 +1190,116 @@ func javaReaderRead(
 		stream.Read += step
 	}
 	return written, nil
+}
+
+// javaReaderStep decodes the one character at the front of the bytes a reader
+// has left, the way javaReaderRead takes them: two bytes when the first is a
+// lead byte with a second to go with it, one otherwise. A pair that is not one
+// character — a lead byte before a byte that cannot follow it — is its first
+// byte alone, so the second is read as the character it is.
+func javaReaderStep(data []byte) (uint16, int) {
+	step := 1
+	if data[0] >= 0x81 && len(data) > 1 {
+		step = 2
+	}
+	symbols := []rune(decodeEUCKR(data[:step]))
+	if len(symbols) != 1 && step == 2 {
+		step = 1
+		symbols = []rune(decodeEUCKR(data[:1]))
+	}
+	if len(symbols) == 0 {
+		return 0xfffd, step
+	}
+	return uint16(symbols[0]), step
+}
+
+// javaReaderReadChar is `InputStreamReader.read()`, slot 10: one character,
+// or -1 at the end.
+func javaReaderReadChar(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	stream, err := client.javaStreamNeeding(ctx, thread, arguments[0], 2)
+	if err != nil {
+		return 0, err
+	}
+	if stream.Read >= len(stream.Data) {
+		return ^uint32(0), nil
+	}
+	symbol, step := javaReaderStep(stream.Data[stream.Read:])
+	stream.Read += step
+	return uint32(symbol), nil
+}
+
+// javaReaderSkip is `skip(long)`, slot 13: up to that many characters passed
+// over, answering how many. A negative count is the IllegalArgumentException
+// the class library throws.
+func javaReaderSkip(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	wanted := int64(uint64(arguments[1]) | uint64(arguments[2])<<32)
+	if wanted < 0 {
+		return 0, client.throwJavaPlatform(thread, javaIllegalArgumentClass, fmt.Sprintf(": skip(%d)", wanted))
+	}
+	stream, err := client.javaStreamOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	skipped := int64(0)
+	for skipped < wanted {
+		if _, err := client.needJavaStream(ctx, thread, stream, 2); err != nil {
+			return 0, err
+		}
+		if stream.Read >= len(stream.Data) {
+			break
+		}
+		_, step := javaReaderStep(stream.Data[stream.Read:])
+		stream.Read += step
+		skipped++
+	}
+	if err := thread.SetRegister(1, uint32(uint64(skipped)>>32)); err != nil {
+		return 0, err
+	}
+	return uint32(skipped), nil
+}
+
+// javaReaderReady is `ready()`, slot 14: whether the stream underneath has a
+// byte to give without waiting, which is what its available() says.
+func javaReaderReady(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	available, err := javaStreamAvailable(client, ctx, thread, arguments)
+	if err != nil {
+		return 0, err
+	}
+	return javaBoolean(int32(available) > 0), nil
+}
+
+// javaReaderMark is `mark(int)`, slot 16: the stream's own mark, which is what
+// the class library's reader asks for. A stream that cannot mark is the
+// IOException a reader throws for it.
+func javaReaderMark(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	supported, err := javaStreamMarkSupported(client, ctx, thread, arguments[:1])
+	if err != nil {
+		return 0, err
+	}
+	if supported == 0 {
+		return 0, client.throwJavaPlatform(thread, javaIOExceptionClass, ": mark() not supported")
+	}
+	return javaStreamMark(client, ctx, thread, arguments)
+}
+
+// javaStreamReadUnsignedShort is `DataInputStream.readUnsignedShort()`, slot
+// 26: the two bytes readShort takes, as 0 to 65535.
+func javaStreamReadUnsignedShort(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	value, err := javaStreamReadShort(client, ctx, thread, arguments)
+	if err != nil {
+		return 0, err
+	}
+	return value & 0xffff, nil
 }
 
 // javaStreamReadChar is `DataInputStream.readChar()`, slot 27: the same two

@@ -482,9 +482,26 @@ func (client *Client) walkJavaPayload(object uint32, mark func(uint32)) {
 	if clip := client.clips[object]; clip != nil && clip.java {
 		mark(clip.listener)
 	}
-	// A vector holds its elements here rather than in a guest array.
+	// A vector holds its elements here rather than in a guest array, and a
+	// hashtable its keys and values.
 	for _, element := range runtime.vectors[object] {
 		mark(element)
+	}
+	if table := runtime.hashtables[object]; table != nil {
+		for _, chain := range table.buckets {
+			for _, entry := range chain {
+				mark(entry.key)
+				mark(entry.value)
+			}
+		}
+	}
+	// An enumeration holds the vector it walks, or what the table it came
+	// from held.
+	if enumeration := runtime.enumerations[object]; enumeration != nil {
+		mark(enumeration.vector)
+		for _, item := range enumeration.items {
+			mark(item)
+		}
 	}
 	// A container holds its children, a child holds its parent, and a text
 	// component holds its input-method handler. The handler in turn holds the
@@ -622,6 +639,12 @@ func (client *Client) releaseJavaPayloads(dead []uint32, stats *CollectionStats)
 		delete(runtime.threads, object)
 		delete(runtime.monitors, object)
 		delete(runtime.vectors, object)
+		delete(runtime.vectorShapes, object)
+		delete(runtime.bufferCapacities, object)
+		delete(runtime.numbers, object)
+		delete(runtime.hashtables, object)
+		delete(runtime.enumerations, object)
+		delete(runtime.messages, object)
 		delete(runtime.calendars, object)
 		delete(runtime.sinks, object)
 		delete(runtime.wrapped, object)

@@ -164,9 +164,9 @@ func TestJavaVirtualImportCoverageMatchesDispatch(t *testing.T) {
 		},
 		{
 			name:        "unsupported baked slot",
-			slot:        javaVirtualSlot(javaDataInputStreamClass, 26),
+			slot:        javaVirtualSlot(javaDataInputStreamClass, 30),
 			implemented: false,
-			called:      javaDataInputStreamClass + ".slot26",
+			called:      javaDataInputStreamClass + ".slot30",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

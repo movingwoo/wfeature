@@ -3,6 +3,7 @@ package lgt
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -46,7 +47,12 @@ func (client *Client) setJavaText(object uint32, text string) {
 	if !utf8.ValidString(text) {
 		text = javaTextOfUnits(utf16Units(text))
 	}
-	client.javaRuntimeState().strings[object] = text
+	runtime := client.javaRuntimeState()
+	runtime.strings[object] = text
+	// A buffer's capacity grows with what it holds; see javaBufferGrown.
+	if capacity, ok := runtime.bufferCapacities[object]; ok {
+		runtime.bufferCapacities[object] = javaBufferGrown(capacity, javaUnitCount(text))
+	}
 }
 
 // newJavaString builds a String object holding text, which is what a call that
@@ -228,20 +234,16 @@ func javaStringValueOf(
 
 // javaStringValueOfObject is `String.valueOf(Object)`, static entry 88. The
 // language defines it as `"null"` for null and `obj.toString()` otherwise, and
-// what this answers is the same text `StringBuffer.append(Object)` already
-// appends — see javaObjectText.
-//
-// **A class that overrides `toString` is answered with `Object`'s form
-// anyway.** Getting the override right means calling back into the guest's own
-// method from inside a platform call, which is a nested guest call rather than
-// a lookup; nothing here needs it yet, and a title that puts the answer on the
-// screen would show `Class@1f0c` where it meant a name. That is a wrong label
-// rather than a stopped title, and it is written down here so the next reader
-// of a screen with one on it knows where it came from.
+// that is what this answers: the object's own toString, a title's override
+// included, asked through its slot (javaToStringOf).
 func javaStringValueOfObject(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	return client.newJavaString(client.javaObjectText(arguments[0]))
+	text, err := client.javaToStringOf(ctx, thread, arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return client.newJavaString(text)
 }
 
 // javaStringEmpty is `String()`, which the language defines as no characters at
@@ -326,10 +328,21 @@ func (client *Client) newJavaCharArray(symbols []uint16) (uint32, error) {
 // javaBufferConstructor is `StringBuffer()` and `StringBuffer(String)`: an
 // empty buffer, or one that starts as a copy of what it is given.
 // javaBufferEmpty builds a buffer whose argument is a capacity rather than
-// text. The capacity is a hint about storage this platform grows on demand.
+// text. The capacity is storage this platform grows on demand; it is kept as
+// the number `capacity()` answers (javaBufferGrown), and a negative one is the
+// NegativeArraySizeException the class library's array would throw.
 func javaBufferEmpty(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
+	capacity := int32(javaBufferDefaultCapacity)
+	if len(arguments) > 1 {
+		capacity = int32(arguments[1])
+	}
+	if capacity < 0 {
+		return 0, client.throwJavaPlatform(thread, javaNegativeArraySizeClass,
+			fmt.Sprintf(": StringBuffer(%d)", capacity))
+	}
+	client.javaRuntimeState().bufferCapacities[arguments[0]] = capacity
 	client.setJavaText(arguments[0], "")
 	return 0, nil
 }
@@ -345,6 +358,11 @@ func javaBufferConstructor(
 			return 0, fmt.Errorf("the object at %#x holds no text", arguments[1])
 		}
 	}
+	capacity := int64(javaBufferDefaultCapacity)
+	if len(arguments) > 1 {
+		capacity += int64(javaUnitCount(text))
+	}
+	client.javaRuntimeState().bufferCapacities[arguments[0]] = int32(min(capacity, math.MaxInt32))
 	client.setJavaText(arguments[0], text)
 	return 0, nil
 }
@@ -696,25 +714,32 @@ func javaBufferDelete(
 
 // javaBufferAppendObject is `StringBuffer.append(Object)`, slot 17. The
 // language defines it as appending `String.valueOf(obj)`, which is the
-// object's own toString — and this platform has no toString to call on a guest
-// object. What it does have is the object's class, and the one shape this
-// reaches for locally is a caught exception being written into a message,
-// where the class name is the whole of what the line is for. An object of a
-// class this platform does not know is named by its address, which is at least
-// something a reader of the log can follow.
+// object's own toString, asked through its slot (javaToStringOf). The one
+// shape this reaches for locally is a caught exception being written into a
+// message, which is Throwable's toString: the class name and the message.
 func javaBufferAppendObject(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
+	if _, ok := client.javaText(arguments[0]); !ok {
+		return 0, fmt.Errorf("the object at %#x is not a buffer this platform built", arguments[0])
+	}
+	// The object's text first and the buffer after, as `append(String.valueOf(
+	// obj))` reads them: a toString of the title's may itself add to this
+	// buffer, and what it added comes before the answer.
+	text, err := client.javaToStringOf(ctx, thread, arguments[1])
+	if err != nil {
+		return 0, err
+	}
 	held, ok := client.javaText(arguments[0])
 	if !ok {
 		return 0, fmt.Errorf("the object at %#x is not a buffer this platform built", arguments[0])
 	}
-	client.setJavaText(arguments[0], held+client.javaObjectText(arguments[1]))
+	client.setJavaText(arguments[0], held+text)
 	return arguments[0], nil
 }
 
-// javaObjectText is `String.valueOf(Object)` for an object this platform did
-// not build the text of.
+// javaObjectText is how an object is named in a log line when the question is
+// not the object's own toString: its text, or its class and address.
 func (client *Client) javaObjectText(object uint32) string {
 	if object == 0 {
 		return "null"
