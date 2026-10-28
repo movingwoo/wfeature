@@ -52,6 +52,9 @@ const LGTWideExclusiveClip = "lgt.wide_exclusive_clip"
 // LGTWideGraphicsContext selects the evidenced 56-byte native context ABI.
 const LGTWideGraphicsContext = "lgt.wide_graphics_context"
 
+// LGTRecordTableTerminator ends a recognized record table its search runs off.
+const LGTRecordTableTerminator = "lgt.record_table_terminator"
+
 type target struct {
 	Platform string
 	Kind     string
@@ -128,7 +131,7 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		seen := make(map[string]bool)
 		for _, fix := range entry.Fixes {
 			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache || fix == SKTResumeWithoutStart) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
-				(fix == LGTCertificateMessage || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule
+				(fix == LGTCertificateMessage || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule
 			if !supported {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)
 			}

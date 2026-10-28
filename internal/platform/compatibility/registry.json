@@ -182,6 +182,18 @@
         "lgt.certificate_message"
       ],
       "evidence": "docs/history/lgt.md#lgt-new-archives-2026-10-19-certificate-message"
+    },
+    {
+      "id": "lgt-record-table-terminator-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "c8844a435035d9f663c4e5f9995d8687539be23912b0e04ee6a7c09535a4ed58"
+      },
+      "fixes": [
+        "lgt.record_table_terminator"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-qa-2026-10-28-unterminated-record-table"
     }
   ]
 }

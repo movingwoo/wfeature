@@ -841,7 +841,7 @@ func (client *Client) readFile(name string) ([]byte, bool) {
 	// The archive is asked for the path every spelling of the name is, as
 	// the store is: its own lookup drops one leading slash and reads "." and
 	// a backslash, but takes "//data/a.txt" for a path outside it.
-	return client.archive.Resource(guestPath(name))
+	return client.packagedResource(guestPath(name))
 }
 
 // renameFile is MC_fsRename. The store has no rename: a path is a save key, so

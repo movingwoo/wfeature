@@ -118,8 +118,9 @@ type CletFunctions struct {
 
 // Client is one loaded LGT game.
 type Client struct {
-	wideGraphicsContexts bool
-	wideExclusiveClip    bool
+	wideGraphicsContexts  bool
+	wideExclusiveClip     bool
+	recordTableTerminator bool
 
 	core                *armcore.Core
 	thread              *armcore.Thread
@@ -496,6 +497,7 @@ func Load(archive *Archive, options Options) (*Client, error) {
 	client.audio.SetLogger(options.Logger)
 	client.wideGraphicsContexts = hasWideGraphicsContexts(client.archive.Module)
 	client.wideExclusiveClip = hasWideExclusiveClip(client.archive.Module)
+	client.recordTableTerminator = hasRecordTableTerminator(client.archive.Module)
 	if err := client.applyOriginCompatibility(); err != nil {
 		return nil, err
 	}

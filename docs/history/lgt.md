@@ -8038,3 +8038,111 @@ and no local save reaches it:
 - `sortRecord` finds the filter's and comparator's methods by name alone
   (`javaCallbackBody`), so an overload of `compare` or `filter` would be called
   with the wrong arguments. Not seen in a title.
+
+<a id="lgt-qa-2026-10-28-unterminated-record-table"></a>
+
+## A record table the title's own search runs off — 2026-10-28
+
+A QA report: right after a boss fight and its dialog near the end of an LGT
+title (native module SHA-256
+`c8844a435035d9f663c4e5f9995d8687539be23912b0e04ee6a7c09535a4ed58`), the session
+ends with
+
+```text
+run LGT timer callback at 0x12ad: Thumb instruction 7813 at 0xb324: read guest memory at 0x22000000 (1 bytes): guest memory is not mapped
+```
+
+The reporter's quicksave reproduces it in the CLI whether the dialog is skipped
+or advanced one key at a time.
+
+### Cause
+
+- The dialog's script ends by moving to map 124. Loading a map, the title gives
+  each door its destination by searching the packaged table `scp_port.scp` for
+  the map's record (the search at `0xb2f4`, reached from the map loader through
+  `0xb3a8`).
+- The search reads the table two bytes at a time from its start. A pair
+  `23 <map>` is the record. A pair whose first byte is anything else and whose
+  second is `0x24` makes it read a third byte, and `0x8a` there ends the search
+  with nothing found. Nothing bounds it by the table's length.
+- Before searching, the title allocates the door's four-byte destination
+  zeroed; only a found record whose byte at the offset the door's own data
+  selects is `0x1c` is copied into it.
+- The table (1335 bytes, records `23 <map> … 24 <map>`) holds 100 records and
+  none for map 124, or for map 126, whose map file is byte-identical and also
+  carries a door. The end sequence occurs nowhere the search reads: searched
+  over the table alone, 155 of the 156 byte values without a record run off its
+  end, and the other meets a false match.
+- Entering map 124 therefore sends the search past the buffer, through stale
+  heap and then the zeroed, never-used rest of the 32 MiB heap, to the unmapped
+  address after it.
+
+What a handset did is not in the archive: past the buffer it read whatever its
+memory held, and stopped at the first chance match of either sequence, or
+faulted if its readable memory ended first.
+
+### No general platform fix
+
+The platform sees one byte load past the heap; the records, the search and its
+exits exist only in the title's code. Answering reads past the heap with zeros
+does not stop this search, which had already read tens of megabytes of them.
+Answering with the end sequence would be this title's table format presented as
+platform behavior. Either would also turn every title's out-of-range read from
+a fault at the point of the defect into silent continuation. Abandoning the
+faulting callback would leave the map loader stopped inside its door pass.
+
+### Tests
+
+- A diagnostic build made every search whose record the table lacks take the
+  search's own exit for a missing record, at `0xb386`. From the reporter's
+  quicksave the title ran 1721 ticks into the final fight in map 124, the door
+  keeping its zeroed destination, map 0.
+- A second diagnostic build appended `24 24 8a 24 8a` to the table as the title
+  read it (1340 bytes) and changed nothing else. On a local server over a copy
+  of the reporter's saves, the user played from the quicksave to the end:
+  stepping on the final room's door during the fight does not move the player,
+  and after the boss the ending runs and the title moves the player to another
+  map. The archive was unchanged, so the existing quicksave loaded.
+
+### Decision
+
+Until more evidence supports a general rule — another title with the same kind
+of unbounded read, or a run on a handset — this revision gets a registry
+exception, `lgt.record_table_terminator` (`record_table_compatibility.go`): when
+the selected module reads `scp_port.scp` from its archive, the same five bytes
+are appended.
+
+- The search can arrive at the table's end on either parity, because a pair
+  whose second byte is `0x24` costs it a third byte. From every position it can
+  reach after the table's last record, the five bytes complete the end
+  sequence, and none of them is `0x23`, which would be read as a record.
+- The size the resource calls report includes them, so the title's buffer holds
+  them. A search for a record the table holds ends where it did.
+- A file the title wrote under the same name is its own and is read unchanged.
+
+### Validation
+
+- Unit tests: the five bytes end a model of the search from every position of
+  two tables in the same layout, one odd and one even in length; only the
+  selected module's archive copy changes, under every spelling of the name, and
+  a written file of the same name does not. `TestLocalRecordTableArchive`
+  (`WFEATURE_LGT_RECORD_TABLE_ARCHIVE`) checks the revision itself: its module
+  is selected, and the search for maps 124 and 126 runs past the table as
+  packaged and leaves by the missing-record exit once corrected.
+- From the reporter's quicksave, a build without the fix ends at tick 5 with the
+  error above. With the fix, 30 presses of `#` reach tick 691 in the final
+  fight, and the debug log shows the fix applied at each of the four table
+  reads.
+- The 118 distinct local LGT archives, run 500 ticks from an empty save by
+  builds with and without the call site, end on the same frame, tick count and
+  exit. The fix applied in none of these runs, the recognized title included,
+  since it reads the table only when it loads a map.
+- Gates: gofmt, `go test` with and without `-tags debug` over every package
+  outside `build/` and `var/`, the web tests, `go test -race ./internal/...`
+  and `go vet`.
+
+### Limits
+
+- That a handset survived this read is inferred, not observed.
+- The exception covers this exact module; another revision needs its own
+  evidence and entry.
