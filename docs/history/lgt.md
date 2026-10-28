@@ -52,6 +52,7 @@ This consolidation adds no execution or acceptance evidence.
 - [Text input review follow-ups — 2026-10-20](#lgt-text-input-review-2026-10-20)
 - [Image slots, C library names and the storage contract — 2026-10-22](#lgt-slot-corrections-2026-10-22)
 - [Storage contract review — 2026-10-22](#lgt-storage-review-2026-10-22)
+- [The graphics block's three gaps and the rest of the net block — 2026-10-28](#lgt-graphics-net-gaps-2026-10-28)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -8038,3 +8039,61 @@ and no local save reaches it:
 - `sortRecord` finds the filter's and comparator's methods by name alone
   (`javaCallbackBody`), so an overload of `compare` or `filter` would be called
   with the wrong arguments. Not seen in a title.
+
+<a id="lgt-graphics-net-gaps-2026-10-28"></a>
+
+## The graphics block's three gaps and the rest of the net block — 2026-10-28
+
+The graphics block runs in the v2.x specification's order from
+`MC_grpGetImageProperty` at 0xc8 with no gaps, and every slot titles call sits
+on that order. Its three one-slot gaps are therefore the entries the order puts
+there: `MC_grpDrawImageRegion` at 0xd6, between drawImage and copyArea, and
+the UTF-16 forms of the two string calls, `MC_grpDrawUnicodeString` at 0xdb and
+`MC_grpGetUnicodeStringWidth` at 0xe8, each the entry after its EUC-KR twin.
+The net block follows the same order from `MC_netConnect` at 0x258: the six
+socket calls the specification puts between socket close and the read
+callback — bind, packet length, send-to, receive-from, host lookup, accept —
+fill the six slots 0x25f to 0x264 exactly, and the fifteen HTTP calls follow
+the write callback from 0x267 to 0x275. No local title calls any of the 24.
+
+- **The string calls are drawString and getStringWidth over UTF-16.** The text
+  is placed where drawString places it, and measured the same way. The page
+  draws nothing for a length of zero or less, so unlike drawString there is no
+  terminated form; the width call keeps the terminated `-1`, read to 4,096
+  units.
+- **`MC_grpDrawImageRegion` turns and mirrors the rectangle it copies.** The
+  width by height rectangle of the source at (srcX, srcY) is mirrored first
+  when the transform says so, turned clockwise, and drawn with its top left at
+  (destX, destY), so a quarter turn draws it height wide. Each pixel is drawn
+  or not by drawImage's rule, now one function (`blitPixel`). Where drawImage
+  clips, this draws nothing, as the page says: an empty rectangle, or one that
+  reaches outside the source.
+- **The transform values are not on the C pages.** They name the seven
+  transforms without numbers. The WIPI 2.x Java `Image` class, the same
+  operation on the same platform, gives each one — 90, 180 and 270 for the
+  turns, -99 for the mirror, -90, -180 and -270 for the mirror and a turn — and
+  those are taken, with 0 as no transform. Any other value stops the title by
+  name, so a handset whose numbers differ shows as that value rather than as a
+  picture drawn the wrong way round.
+- **The 21 network calls answer `M_E_ERROR`**, which each of them may return
+  and which is how the KTF runtime answers the same table, instead of stopping
+  the session. A call that returns an error runs no callback it was handed
+  (the host lookup's page says so), so nothing is owed later.
+
+Found and left: the `M_E_BADFORMAT` this runtime answers is -20 (`createImage`
+on data it does not decode, `decodeNextImage` on a handle that is no image),
+from the first commit. The error table on the specification's page gives -6,
+and -20 is `M_E_TIMEOUT`. Changing it changes what `createImage` fails with, so
+it waits for a title seen to look at the value.
+
+Validation: unit tests for each call (`wipic_region_test.go`), the gates on
+`./cmd/... ./internal/... ./fonts/... ./mobile/... ./web/...`, `-tags debug`
+and `-race`. Against the build before this change, the 118 distinct local LGT
+archives end on the same frame at 500 ticks from an empty save, and on the same
+frame, instruction count and exit at 1,500 ticks with fire every 25 ticks from
+tick 100. Started and read back the way `apiscan` reads them, none of the 96
+Clets resolves any of the 24 slots, and a Java title resolves no WIPI C slot;
+a call to one used to stop the session, so no local title can have reached
+them. The two helpers this change split out of existing code — the blit's
+pixel rule here and the line plot on KTF — are the code they were, and both
+inline.

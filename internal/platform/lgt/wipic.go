@@ -130,11 +130,21 @@ const (
 	slotDecodeNextImage uint32 = 0xec
 	slotEncodeImage     uint32 = 0xed
 	slotPostEvent       uint32 = 0xee
+
+	// The three gaps the block's order fills (see the note on the polygon
+	// slots below): `MC_grpDrawImageRegion`, the v2.x blit with a transform,
+	// between drawImage and copyArea, and the UTF-16 forms of the two string
+	// calls, each the entry after its EUC-KR twin. No local title calls any
+	// of them.
+	slotDrawImageRegion       uint32 = 0xd6
+	slotDrawUnicodeString     uint32 = 0xdb
+	slotGetUnicodeStringWidth uint32 = 0xe8
+
 	// The graphics block ends with the two polygon calls, which is where the
 	// v2.x specification's function order puts them: the block runs in that
 	// order from `MC_grpGetImageProperty` at 0xc8 with no gaps. The two slots
 	// once read as unnamed gaps are the v2.x additions the v1.2.1 list lacks,
-	// `MC_grpDrawImageRegion` at 0xd6 (not served) and `MC_grpCreateSubImage`
+	// `MC_grpDrawImageRegion` at 0xd6 and `MC_grpCreateSubImage`
 	// at 0xea. A title's tutorial confirms the reading: it calls `0xf0` with a
 	// surface, two stack addresses, a point count of four and a context, which
 	// is `MC_grpFillPolygon(dst, xPoints, yPoints, nPoints, pgc)` and nothing
@@ -192,6 +202,34 @@ const (
 	slotNetSocketRead     uint32 = 0x25d
 	slotNetSocketClose    uint32 = 0x25e
 	slotNetSetReadCB      uint32 = 0x265
+	// The rest of the block, in the same order: the six socket calls between
+	// socket close and the read callback, which is exactly the gap the
+	// specification leaves there, and the HTTP calls after the write
+	// callback. No local title calls one. There is no network, so each answers
+	// M_E_ERROR, which every one of them may return and which is how the KTF
+	// runtime answers the same table; a call that returns an error never runs
+	// the callback it was handed, so nothing is owed to one later.
+	slotNetSocketBind             uint32 = 0x25f
+	slotNetGetMaxPacketLength     uint32 = 0x260
+	slotNetSocketSendTo           uint32 = 0x261
+	slotNetSocketRcvFrom          uint32 = 0x262
+	slotNetGetHostAddr            uint32 = 0x263
+	slotNetSocketAccept           uint32 = 0x264
+	slotNetHttpOpen               uint32 = 0x267
+	slotNetHttpConnect            uint32 = 0x268
+	slotNetHttpSetRequestMethod   uint32 = 0x269
+	slotNetHttpGetRequestMethod   uint32 = 0x26a
+	slotNetHttpSetRequestProperty uint32 = 0x26b
+	slotNetHttpGetRequestProperty uint32 = 0x26c
+	slotNetHttpSetProxy           uint32 = 0x26d
+	slotNetHttpGetProxy           uint32 = 0x26e
+	slotNetHttpGetResponseCode    uint32 = 0x26f
+	slotNetHttpGetResponseMessage uint32 = 0x270
+	slotNetHttpGetHeaderField     uint32 = 0x271
+	slotNetHttpGetLength          uint32 = 0x272
+	slotNetHttpGetType            uint32 = 0x273
+	slotNetHttpGetEncoding        uint32 = 0x274
+	slotNetHttpClose              uint32 = 0x275
 	// Both socket-creation slots are observed. One interface puts it outside
 	// the network block at 0x7d0; another uses the standard-order 0x25a.
 	// Both callers pass MC_AF_INET (2), MC_SOCKET_STREAM (1), test a negative
@@ -280,12 +318,12 @@ func knownWIPICSlot(slot uint32) bool {
 		slotGetImageFramebuffer, slotGetScreenFramebuffer, slotDestroyOffscreen,
 		slotCreateOffscreen, slotInitContext, slotSetContext, slotGetContext,
 		slotPutPixel, slotDrawLine, slotDrawRect, slotFillRect,
-		slotCopyFramebuffer, slotDrawImage, slotCopyArea, slotDrawString,
-		slotDrawArc, slotFillArc,
+		slotCopyFramebuffer, slotDrawImage, slotDrawImageRegion, slotCopyArea, slotDrawString,
+		slotDrawUnicodeString, slotDrawArc, slotFillArc,
 		slotGetRGBPixels, slotSetRGBPixels, slotFlushLcd, slotGetPixelFromRGB,
 		slotGetRGBFromPixel, slotGetDisplayInfo, slotRepaint, slotGetFont,
 		slotGetFontHeight, slotGetFontAscent, slotGetFontDescent,
-		slotGetStringWidth, slotCreateImage, slotCreateSubImage, slotDestroyImage,
+		slotGetStringWidth, slotGetUnicodeStringWidth, slotCreateImage, slotCreateSubImage, slotDestroyImage,
 		slotDecodeNextImage, slotEncodeImage, slotPostEvent, slotDrawPolygon, slotFillPolygon,
 		slotIMGetSupportedModeCount, slotIMGetSupportedModes,
 		slotIMSetCurrentMode, slotIMGetCurrentMode, slotIMHandleInput,
@@ -296,6 +334,12 @@ func knownWIPICSlot(slot uint32) bool {
 		slotNetConnect, slotNetClose, slotNetSocket, slotNetSocketStandard, slotNetSocketConnect,
 		slotNetSocketWrite,
 		slotNetSocketRead, slotNetSocketClose, slotNetSetReadCB, slotNetSetWriteCB,
+		slotNetSocketBind, slotNetGetMaxPacketLength, slotNetSocketSendTo, slotNetSocketRcvFrom,
+		slotNetGetHostAddr, slotNetSocketAccept, slotNetHttpOpen, slotNetHttpConnect,
+		slotNetHttpSetRequestMethod, slotNetHttpGetRequestMethod, slotNetHttpSetRequestProperty,
+		slotNetHttpGetRequestProperty, slotNetHttpSetProxy, slotNetHttpGetProxy,
+		slotNetHttpGetResponseCode, slotNetHttpGetResponseMessage, slotNetHttpGetHeaderField,
+		slotNetHttpGetLength, slotNetHttpGetType, slotNetHttpGetEncoding, slotNetHttpClose,
 		slotDbListDataBases,
 		slotUtilHtonl, slotUtilHtons, slotUtilNtohl, slotUtilNtohs,
 		slotUtilInetAddrInt, slotUtilInetAddrStr,
@@ -599,9 +643,9 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		return answerInt(client.transferContextField(thread, slot))
 
 	case slotPutPixel, slotDrawLine, slotDrawRect, slotFillRect, slotDrawString,
-		slotCopyArea, slotCopyFramebuffer, slotDrawImage, slotGetRGBPixels,
-		slotSetRGBPixels, slotDrawPolygon, slotFillPolygon,
-		slotDrawArc, slotFillArc:
+		slotDrawUnicodeString, slotCopyArea, slotCopyFramebuffer, slotDrawImage,
+		slotDrawImageRegion, slotGetRGBPixels, slotSetRGBPixels, slotDrawPolygon,
+		slotFillPolygon, slotDrawArc, slotFillArc:
 		return client.handleDraw(ctx, thread, slot)
 
 	case slotFlushLcd:
@@ -747,6 +791,24 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		}
 		return answer(uint32(textWidth(text)))
 
+	case slotGetUnicodeStringWidth:
+		// `MC_grpGetUnicodeStringWidth(font, str, len)`: the same measure of
+		// the UTF-16 text drawUnicodeString draws, `-1` again meaning a
+		// terminated string.
+		pointer, err := argument(1)
+		if err != nil {
+			return err
+		}
+		length, err := argument(2)
+		if err != nil {
+			return err
+		}
+		text, err := client.readUnicodeString(pointer, int32(length))
+		if err != nil {
+			return err
+		}
+		return answer(uint32(textWidth(text)))
+
 	case slotCreateImage:
 		return client.createImage(thread)
 
@@ -819,6 +881,15 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		// end the dials that have not reported yet.
 		client.cancelNetConnects()
 		return answerInt(wipiSuccess)
+
+	case slotNetSocketBind, slotNetGetMaxPacketLength, slotNetSocketSendTo, slotNetSocketRcvFrom,
+		slotNetGetHostAddr, slotNetSocketAccept, slotNetHttpOpen, slotNetHttpConnect,
+		slotNetHttpSetRequestMethod, slotNetHttpGetRequestMethod, slotNetHttpSetRequestProperty,
+		slotNetHttpGetRequestProperty, slotNetHttpSetProxy, slotNetHttpGetProxy,
+		slotNetHttpGetResponseCode, slotNetHttpGetResponseMessage, slotNetHttpGetHeaderField,
+		slotNetHttpGetLength, slotNetHttpGetType, slotNetHttpGetEncoding, slotNetHttpClose:
+		// No network: see the note on these slots.
+		return answerInt(wipiError)
 
 	case slotUtilHtonl, slotUtilNtohl:
 		// The guest is little-endian, so both directions are the same swap.

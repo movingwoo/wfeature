@@ -1,6 +1,9 @@
 package curve
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // raster collects emitted spans into a grid, which is the only thing worth
 // asserting about geometry that does not draw.
@@ -215,3 +218,57 @@ func TestEmitErrorAbandonsTheShape(t *testing.T) {
 type errStub struct{}
 
 func (errStub) Error() string { return "emit failed" }
+
+// A polygon's fill is the scanline the platforms draw: a right triangle
+// covers x 0 to 3-y on rows 0 to 2, and the row of its bottom vertex has no
+// crossings.
+func TestFillPolygonWithinIsTheScanline(t *testing.T) {
+	covered := map[[2]int32]bool{}
+	err := FillPolygonWithin(Bounds{Left: -10, Top: -10, Right: 10, Bottom: 10},
+		[]int32{0, 3, 0}, []int32{0, 0, 3}, func(span Span) error {
+			for x := span.X; x < span.X+span.Width; x++ {
+				covered[[2]int32{x, span.Y}] = true
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for y := int32(-1); y <= 4; y++ {
+		for x := int32(-1); x <= 4; x++ {
+			want := y >= 0 && y < 3 && x >= 0 && x <= 3-y
+			if covered[[2]int32{x, y}] != want {
+				t.Fatalf("pixel (%d, %d) covered = %v, want %v", x, y, !want, want)
+			}
+		}
+	}
+}
+
+// Vertices at the ends of int32 walk only the rows inside the bounds, hand
+// out spans inside them, and get the crossing right where the product of the
+// differences passes int64.
+func TestFillPolygonWithinTakesVerticesAnywhere(t *testing.T) {
+	bounds := Bounds{Left: 0, Top: 0, Right: 8, Bottom: 8}
+	spans := 0
+	err := FillPolygonWithin(bounds,
+		[]int32{math.MinInt32, math.MaxInt32, 0}, []int32{math.MinInt32, math.MinInt32, math.MaxInt32},
+		func(span Span) error {
+			spans++
+			if span.X < 0 || span.X+span.Width > 8 || span.Y < 0 || span.Y >= 8 {
+				t.Fatalf("span %+v is outside the bounds", span)
+			}
+			if span.X != 0 || span.Width != 8 {
+				t.Fatalf("span %+v does not cover the row the triangle covers whole", span)
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spans != 8 {
+		t.Fatalf("%d spans, want one for each of the 8 rows", spans)
+	}
+	if got := crossing(math.MinInt32, math.MinInt32, 0, math.MaxInt32, 0); got != -1<<30 {
+		t.Fatalf("crossing at row 0 = %d, want %d", got, -1<<30)
+	}
+}
