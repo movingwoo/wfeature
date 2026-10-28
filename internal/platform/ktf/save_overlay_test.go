@@ -45,9 +45,10 @@ func TestSavedFileDoesNotBlockPackagedDescendant(t *testing.T) {
 }
 
 // A title that keeps its saves in a folder and asks whether the folder exists
-// is told the same thing on every run. On the first run the folder is not a
-// save; on the next the store holds files below it, and reading its name used
-// to end the session with a read error.
+// is told what a handset tells it: no before anything is in it, and yes once
+// a file is (docs/wipi-storage.md). On the runs after the first the store
+// holds files below the folder's name, and reading that name used to end the
+// session with a read error.
 func TestAFolderOfSavesAnswersAsOnTheFirstRun(t *testing.T) {
 	store := NewDirectorySaveStore(t.TempDir())
 	for _, run := range []string{"first", "second", "third"} {
@@ -63,8 +64,12 @@ func TestAFolderOfSavesAnswersAsOnTheFirstRun(t *testing.T) {
 				got, _ := value.Int32()
 				return got
 			}
-			if got := exists("/saves"); got != 0 || runtime.saveReadError != nil {
-				t.Fatalf("exists(/saves) = %d, save error = %v", got, runtime.saveReadError)
+			want := int32(1)
+			if run == "first" {
+				want = 0
+			}
+			if got := exists("/saves"); got != want || runtime.saveReadError != nil {
+				t.Fatalf("exists(/saves) = %d, want %d, save error = %v", got, want, runtime.saveReadError)
 			}
 			if run == "first" {
 				if err := runtime.storeGuestFile("saves/slot", []byte("progress")); err != nil {

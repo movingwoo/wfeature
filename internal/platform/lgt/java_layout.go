@@ -78,7 +78,9 @@ var javaPlatformSupers = map[string]string{
 	// what the catch test walks. A `catch (Exception e)` around a call that
 	// throws `IOException` is one of the commonest shapes there is, and with
 	// every class rooted directly at Object it does not match — the module
-	// rethrows, and the title stops on an exception it had handling for.
+	// rethrows, and the title stops on an exception it had handling for. The
+	// two database exceptions both extend Exception, as the specification has
+	// them, so a handler for one never takes the other.
 	"java/lang/Throwable":                               "java/lang/Object",
 	"java/lang/Exception":                               "java/lang/Throwable",
 	"java/lang/Error":                                   "java/lang/Throwable",
@@ -107,7 +109,7 @@ var javaPlatformSupers = map[string]string{
 	"java/io/UTFDataFormatException":                    "java/io/IOException",
 	"org/kwis/msp/io/FileSystemException":               "java/io/IOException",
 	"org/kwis/msp/db/DataBaseException":                 "java/lang/Exception",
-	"org/kwis/msp/db/DataBaseRecordException":           "org/kwis/msp/db/DataBaseException",
+	"org/kwis/msp/db/DataBaseRecordException":           "java/lang/Exception",
 	"org/kwis/msf/io/SchemeNotFoundException":           "java/io/IOException",
 	"javax/microedition/io/ConnectionNotFoundException": "java/io/IOException",
 }

@@ -2,7 +2,6 @@ package ktf
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
@@ -199,31 +198,27 @@ func runtimeFileSystemClassDefinition() runtimeJavaClass {
 			{class: class, name: "<init>", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeComponentNoop},
 			{class: class, name: "exists", descriptor: "(Ljava/lang/String;)Z", accessFlags: 0x0009, implementation: runtimeFileSystemExists},
 			{class: class, name: "exists", descriptor: "(Ljava/lang/String;I)Z", accessFlags: 0x0009, implementation: runtimeFileSystemExists},
-			{class: class, name: "isFile", descriptor: "(Ljava/lang/String;)Z", accessFlags: 0x0009, implementation: runtimeFileSystemExists},
-			{class: class, name: "isDirectory", descriptor: "(Ljava/lang/String;I)Z", accessFlags: 0x0009, implementation: runtimeComponentZero},
-			{class: class, name: "mkdir", descriptor: "(Ljava/lang/String;I)V", accessFlags: 0x0009, implementation: runtimeComponentNoop},
+			{class: class, name: "isFile", descriptor: "(Ljava/lang/String;)Z", accessFlags: 0x0009, implementation: runtimeFileSystemIsFile},
+			{class: class, name: "isFile", descriptor: "(Ljava/lang/String;I)Z", accessFlags: 0x0009, implementation: runtimeFileSystemIsFile},
+			{class: class, name: "isDirectory", descriptor: "(Ljava/lang/String;)Z", accessFlags: 0x0009, implementation: runtimeFileSystemIsDirectory},
+			{class: class, name: "isDirectory", descriptor: "(Ljava/lang/String;I)Z", accessFlags: 0x0009, implementation: runtimeFileSystemIsDirectory},
+			{class: class, name: "mkdir", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0009, implementation: runtimeFileSystemMakeDirectory},
+			{class: class, name: "mkdir", descriptor: "(Ljava/lang/String;I)V", accessFlags: 0x0009, implementation: runtimeFileSystemMakeDirectory},
+			{class: class, name: "rmdir", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0009, implementation: runtimeFileSystemRemoveDirectory},
+			{class: class, name: "rmdir", descriptor: "(Ljava/lang/String;I)V", accessFlags: 0x0009, implementation: runtimeFileSystemRemoveDirectory},
 			{class: class, name: "available", descriptor: "()I", accessFlags: 0x0009, implementation: runtimeFileSystemAvailable},
+			{class: class, name: "totalSpace", descriptor: "()I", accessFlags: 0x0009, implementation: runtimeFileSystemTotalSpace},
 			{class: class, name: "getMaxFilenameLength", descriptor: "()I", accessFlags: 0x0009, implementation: runtimeFileSystemNameLength},
 			{class: class, name: "unlink", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0009, implementation: runtimeFileSystemUnlink},
-			{class: class, name: "isFile", descriptor: "(Ljava/lang/String;I)Z", accessFlags: 0x0009, implementation: runtimeFileSystemExists},
-			// The guest filesystem is a flat name table, so nothing in it is a
-			// directory and creating or removing one is accepted and ignored.
-			{class: class, name: "isDirectory", descriptor: "(Ljava/lang/String;)Z", accessFlags: 0x0009, implementation: runtimeComponentZero},
-			{class: class, name: "mkdir", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0009, implementation: runtimeComponentNoop},
-			{class: class, name: "rmdir", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0009, implementation: runtimeComponentNoop},
-			{class: class, name: "rmdir", descriptor: "(Ljava/lang/String;I)V", accessFlags: 0x0009, implementation: runtimeComponentNoop},
-			{class: class, name: "remove", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0009, implementation: runtimeFileSystemUnlink},
-			{class: class, name: "remove", descriptor: "(Ljava/lang/String;I)V", accessFlags: 0x0009, implementation: runtimeFileSystemUnlink},
+			{class: class, name: "remove", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0009, implementation: runtimeFileSystemRemove},
+			{class: class, name: "remove", descriptor: "(Ljava/lang/String;I)V", accessFlags: 0x0009, implementation: runtimeFileSystemRemoveAny},
 			{class: class, name: "rename", descriptor: "(Ljava/lang/String;Ljava/lang/String;)V", accessFlags: 0x0009, implementation: runtimeFileSystemRename},
 			{class: class, name: "rename", descriptor: "(Ljava/lang/String;Ljava/lang/String;I)V", accessFlags: 0x0009, implementation: runtimeFileSystemRename},
 			{class: class, name: "list", descriptor: "(Ljava/lang/String;)Ljava/util/Vector;", accessFlags: 0x0009, implementation: runtimeFileSystemList},
 			{class: class, name: "list", descriptor: "(Ljava/lang/String;I)Ljava/util/Vector;", accessFlags: 0x0009, implementation: runtimeFileSystemList},
 			{class: class, name: "toCString", descriptor: "(Ljava/lang/String;)[B", accessFlags: 0x0009, implementation: runtimeFileSystemCString},
-			// Creation times are not kept: the guest filesystem is composed
-			// from archive entries and in-memory writes, neither of which
-			// carries one.
-			{class: class, name: "getCreationTime", descriptor: "(Ljava/lang/String;)I", accessFlags: 0x0009, implementation: runtimeComponentZero},
-			{class: class, name: "getCreationTime", descriptor: "(Ljava/lang/String;I)I", accessFlags: 0x0009, implementation: runtimeComponentZero},
+			{class: class, name: "getCreationTime", descriptor: "(Ljava/lang/String;)I", accessFlags: 0x0009, implementation: runtimeFileSystemCreationTime},
+			{class: class, name: "getCreationTime", descriptor: "(Ljava/lang/String;I)I", accessFlags: 0x0009, implementation: runtimeFileSystemCreationTime},
 		},
 	}
 }
@@ -305,59 +300,26 @@ func (runtime *initializationRuntime) storeGuestFile(name string, data []byte) e
 	return runtime.saveChanges(map[string][]byte{"fs/" + trimmed: data}, guestFileRemovedKey, runtime.removedGuestFiles(), map[string]bool{trimmed: false})
 }
 
-func runtimeFileSystemExists(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	if len(arguments) < 1 {
-		return jvm.VoidValue(), fmt.Errorf("FileSystem.exists expected name")
-	}
-	nameObject, err := arguments[0].Reference()
-	if err != nil {
-		return jvm.VoidValue(), err
-	}
-	name, ok := jvm.StringText(nameObject)
-	if !ok {
-		return jvm.IntValue(0), nil
-	}
-	_, exists := runtime.guestFile(name)
-	// The name and the answer both belong in the trace. A start-up gate is
-	// often a file test, and a test that appears in the trace without its
-	// path says only that the title asked something.
-	runtime.countDiagnostic(fmt.Sprintf("exists %s found=%t", name, exists))
-	if exists {
-		return jvm.IntValue(1), nil
-	}
-	return jvm.IntValue(0), nil
-}
-
-func runtimeFileSystemAvailable(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(maxGuestFileBytes), nil
-}
-
-func runtimeFileSystemNameLength(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(255), nil
-}
-
 func runtimeFileSystemUnlink(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if len(arguments) < 1 {
 		return jvm.VoidValue(), fmt.Errorf("FileSystem.unlink expected name")
 	}
-	nameObject, err := arguments[0].Reference()
+	name, err := fileSystemName(arguments[0])
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if name, ok := jvm.StringText(nameObject); ok {
-		if reservedStorageName(guestFileScope, strings.TrimPrefix(name, "/")) {
-			// The last guest-filesystem entry point that takes a name.
-			// Unlinking this one writes the list's own name into the list, and
-			// the claim that every way a name reaches a key is covered has to
-			// be true rather than nearly true.
-			return jvm.VoidValue(), newGuestIOException("cannot unlink a reserved name: " + name)
-		}
-		if err := runtime.markGuestFileRemoved(name, true); err != nil {
-			return jvm.VoidValue(), newGuestIOException(err.Error())
-		}
-		delete(runtime.guestFiles, name)
-		delete(runtime.guestFiles, strings.TrimPrefix(name, "/"))
+	if reservedStorageName(guestFileScope, strings.TrimPrefix(name, "/")) {
+		// The last guest-filesystem entry point that takes a name. Unlinking
+		// this one writes the list's own name into the list, and the claim
+		// that every way a name reaches a key is covered has to be true rather
+		// than nearly true.
+		return jvm.VoidValue(), newGuestIOException("cannot unlink a reserved name: " + name)
 	}
+	if err := runtime.markGuestFileRemoved(name, true); err != nil {
+		return jvm.VoidValue(), newGuestIOException(err.Error())
+	}
+	delete(runtime.guestFiles, name)
+	delete(runtime.guestFiles, strings.TrimPrefix(name, "/"))
 	return jvm.VoidValue(), nil
 }
 
@@ -443,13 +405,11 @@ func runtimeFileConstructor(runtime *initializationRuntime, _ *jvm.VM, arguments
 	if receiver == nil {
 		return jvm.VoidValue(), fmt.Errorf("File constructor receiver is null")
 	}
-	nameObject, err := arguments[1].Reference()
+	// A null name and one longer than FileSystem.getMaxFilenameLength are the
+	// specification's NullPointerException and IOException here as well.
+	name, err := fileSystemName(arguments[1])
 	if err != nil {
 		return jvm.VoidValue(), err
-	}
-	name, ok := jvm.StringText(nameObject)
-	if !ok {
-		return jvm.VoidValue(), fmt.Errorf("File name is not a string")
 	}
 	mode, err := arguments[2].Int32()
 	if err != nil {
@@ -593,7 +553,9 @@ func runtimeFileWrite(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm
 	}
 	end := state.position + len(data)
 	if end > maxGuestFileBytes {
-		return jvm.VoidValue(), fmt.Errorf("File %q exceeds size limit", state.name)
+		// The bound every platform puts on one file (docs/wipi-storage.md)
+		// fails the write as a full disk does, which the title can catch.
+		return jvm.VoidValue(), newGuestIOException(fmt.Sprintf("File %q would pass %d bytes", state.name, maxGuestFileBytes))
 	}
 	staged := make([]byte, max(end, len(state.data)))
 	copy(staged, state.data)
@@ -831,47 +793,6 @@ func runtimeFileSystemRename(runtime *initializationRuntime, _ *jvm.VM, argument
 	return jvm.VoidValue(), nil
 }
 
-// runtimeFileSystemList answers the files under a directory prefix as a
-// Vector of names, which is the container the original API returns.
-func runtimeFileSystemList(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	if len(arguments) < 1 {
-		return jvm.VoidValue(), fmt.Errorf("FileSystem.list expected a directory name")
-	}
-	prefix, err := runtimeFileSystemName(arguments[0])
-	if err != nil {
-		return jvm.VoidValue(), err
-	}
-	prefix = strings.TrimPrefix(prefix, "/")
-	if prefix != "" && !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
-	}
-	names := make(map[string]bool)
-	removed := runtime.removedGuestFiles()
-	for _, table := range []map[string][]byte{runtime.client.files, runtime.guestFiles} {
-		for name := range table {
-			if !strings.HasPrefix(name, prefix) || removed[strings.TrimPrefix(name, "/")] {
-				continue
-			}
-			names[name] = true
-		}
-	}
-	sorted := make([]string, 0, len(names))
-	for name := range names {
-		sorted = append(sorted, name)
-	}
-	sort.Strings(sorted)
-	vector, err := vm.NewObject("java/util/Vector", "()V")
-	if err != nil {
-		return jvm.VoidValue(), err
-	}
-	for _, name := range sorted {
-		if _, err := vm.InvokeVirtual(vector, "addElement", "(Ljava/lang/Object;)V", jvm.ReferenceValue(vm.NewString(name))); err != nil {
-			return jvm.VoidValue(), err
-		}
-	}
-	return jvm.ReferenceValue(vector), nil
-}
-
 // runtimeFileSystemCString encodes a name in the platform charset with the
 // terminator native code expects.
 func runtimeFileSystemCString(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -886,13 +807,5 @@ func runtimeFileSystemCString(_ *initializationRuntime, _ *jvm.VM, arguments []j
 }
 
 func runtimeFileSystemName(value jvm.Value) (string, error) {
-	object, err := value.Reference()
-	if err != nil {
-		return "", err
-	}
-	name, ok := jvm.StringText(object)
-	if !ok {
-		return "", fmt.Errorf("FileSystem name is not a string")
-	}
-	return name, nil
+	return fileSystemName(value)
 }

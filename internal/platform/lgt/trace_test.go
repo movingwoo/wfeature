@@ -196,3 +196,52 @@ func TestLiveTraceStreamsMatchingCallsAsTheyHappen(t *testing.T) {
 		t.Errorf("a call the filter excludes was streamed:\n%s", written)
 	}
 }
+
+// The stdlib name table is also the record of what the C library slots serve:
+// importImplemented reads an unnamed stdlib slot as one nothing answers. So the
+// table and handleStdlibSVC have to cover the same slots, and the only way to
+// know what the handler serves is to ask it. Five served slots were missing,
+// which made apiscan report a gap at setjmp for a title whose every setjmp call
+// was answered, and a trace print each of the five as `unnamed`.
+func TestEveryServedStdlibSlotIsNamed(t *testing.T) {
+	client := fixtureClient(t)
+	served := 0
+	for slot := uint32(0); slot < 0x800; slot++ {
+		thread := armcore.NewThread(armcore.NewContext())
+		err := client.handleStdlibSVC(context.Background(), thread, slot)
+		answered := err == nil || !strings.HasPrefix(err.Error(), "unimplemented LGT stdlib slot")
+		if answered {
+			served++
+		}
+		if named := stdlibSlotNames[slot] != ""; named != answered {
+			t.Errorf("stdlib slot %#x: served %v, named %q", slot, answered, stdlibSlotNames[slot])
+		}
+		if implemented := client.importImplemented(svcCategoryStdlib, slot); implemented != answered {
+			t.Errorf("stdlib slot %#x: served %v, import record says implemented %v", slot, answered, implemented)
+		}
+	}
+	if served != len(stdlibSlotNames) {
+		t.Errorf("%d stdlib slots are served and %d are named", served, len(stdlibSlotNames))
+	}
+	for slot, want := range map[uint32]string{
+		stdlibSetJump: "setjmp", stdlibVsprintf: "vsprintf", stdlibRand: "rand",
+		stdlibSrand: "srand", stdlibMalloc: "malloc",
+	} {
+		if got := svcSlotName(svcCategoryStdlib, slot); got != want {
+			t.Errorf("stdlib slot %#x is named %q, want %q", slot, got, want)
+		}
+	}
+}
+
+// What the missing names looked like from the outside: a served call printed
+// as `unnamed`, which is the mark this trace keeps for a slot it is guessing at.
+func TestSVCTraceNamesTheCLibraryRandomCall(t *testing.T) {
+	client := tracingClient(t, 4)
+	if err := driveSVC(t, client, svcCategoryStdlib, stdlibRand); err != nil {
+		t.Fatal(err)
+	}
+	dump := FormatSVCTrace(client.SVCTrace())
+	if !strings.Contains(dump, "stdlib 0x403 rand(") || strings.Contains(dump, "unnamed") {
+		t.Fatalf("the trace of rand reads:\n%s", dump)
+	}
+}

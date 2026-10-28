@@ -26,7 +26,9 @@ type lgtJavaSaveSurface struct {
 	name    string
 	surface uint32
 	// key is the save store's entry, and removed what the removal list calls
-	// the path once the title has deleted it.
+	// the path once the title has deleted it; empty for a database, whose
+	// container is written empty instead, since databases are kept apart from
+	// the files and their removal list.
 	key, removed string
 	// content is the save's parts as one run of bytes: the file as it is, or
 	// the record store's records one after another.
@@ -39,7 +41,7 @@ var lgtJavaSaveSurfaces = []lgtJavaSaveSurface{
 	{"stream", testfixture.LGTJavaSaveSurfaceStream, testfixture.LGTSaveFileKey, testfixture.LGTSaveFileName,
 		func(_ *testing.T, data []byte) []byte { return data }},
 	{"database", testfixture.LGTJavaSaveSurfaceDatabase, testfixture.LGTJavaSaveDatabaseKey,
-		testfixture.LGTJavaSaveDatabaseName + ".db", lgtJavaSaveRecords},
+		"", lgtJavaSaveRecords},
 }
 
 // lgtJavaSaveRecords joins the records of the container the platform keeps a
@@ -149,7 +151,7 @@ func TestLGTJavaSaveKeysWriteAndReadTheSave(t *testing.T) {
 			if _, found := surface.stored(t, store); found {
 				t.Fatal("a read created the save")
 			}
-			// Deleting a save that is not there is not an error either.
+			// Deleting a save that is not there throws, and the title catches it.
 			lgtSavePress(t, s, testfixture.LGTSaveKeyDelete)
 
 			lgtSaveAct(t, s, 0x11110001, testfixture.LGTSaveKeySave)
@@ -169,7 +171,11 @@ func TestLGTJavaSaveKeysWriteAndReadTheSave(t *testing.T) {
 			if seen := lgtSaveRead(t, s); seen != lgtSaveMissing {
 				t.Fatalf("after a delete a read answered %+v", seen)
 			}
-			if removed, _ := lgtSaveStored(t, store, "fs/.removed"); !strings.Contains(string(removed), surface.removed) {
+			if surface.removed == "" {
+				if data, found := lgtSaveStored(t, store, surface.key); !found || len(data) != 0 {
+					t.Fatalf("after a delete the container is %x (found %t), want it written empty", data, found)
+				}
+			} else if removed, _ := lgtSaveStored(t, store, "fs/.removed"); !strings.Contains(string(removed), surface.removed) {
 				t.Fatalf("the removal list holds %q", removed)
 			}
 

@@ -3,6 +3,8 @@ package ktf
 import (
 	"bytes"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -107,6 +109,31 @@ func (store *certificateSaveStore) ReadSave(name string) ([]byte, bool, error) {
 		return bytes.Clone(store.removed), true, store.readError
 	}
 	return backend.ReadSave(store.base, key)
+}
+
+// ListSaves lists the store underneath and the two keys this one answers
+// itself, because a read of either is answered here whatever the store holds.
+func (store *certificateSaveStore) ListSaves(directory string) ([]string, error) {
+	prefix, err := backend.SaveListPrefix(directory)
+	if err != nil {
+		return nil, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	keys, listed, err := backend.ListSaves(store.base, directory)
+	if err != nil {
+		return nil, err
+	}
+	if !listed {
+		return nil, backend.ErrSavesNotListed
+	}
+	for _, own := range []string{certificateSaveKey, databaseRemovedKey} {
+		if strings.HasPrefix(own, prefix) && !slices.Contains(keys, own) {
+			keys = append(keys, own)
+		}
+	}
+	slices.Sort(keys)
+	return keys, nil
 }
 
 func (store *certificateSaveStore) StoreSave(name string, data []byte) error {

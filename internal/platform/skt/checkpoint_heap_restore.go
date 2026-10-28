@@ -471,6 +471,26 @@ func (heap *checkpointHeap) restoreNative(p jvm.HeapExternalPayload) (any, error
 		n := &recordStore{name: s.Name, version: s.Version, modified: s.Modified, open: s.Open, listeners: slices.Clone(refs)}
 		heap.stores = append(heap.stores, n)
 		return n, nil
+	case "skt.wipi-database":
+		var s checkpointWIPIDatabase
+		if err := decodeNativeCheckpoint(p, &s, 0); err != nil {
+			return nil, err
+		}
+		// The name is one the store keeps, as an open made it; and the
+		// objects on one name share one database, so a name comes once. Every
+		// object a title holds was made by an open that found or made the
+		// database, so its record size is known.
+		if kept, valid := wipiDatabaseKeyName(s.Name); !valid || kept != s.Name || s.Modified < 0 {
+			return invalid()
+		}
+		for _, restored := range heap.databases {
+			if restored.name == s.Name {
+				return invalid()
+			}
+		}
+		n := &wipiDatabase{name: s.Name, recordSize: s.RecordSize, sized: true, modified: s.Modified}
+		heap.databases = append(heap.databases, n)
+		return n, nil
 	case "skt.ticker":
 		var s string
 		if err := decodeNativeCheckpoint(p, &s, 0); err != nil {

@@ -18,11 +18,12 @@ import (
 // startApp, so being without it is a title that does not start rather than a
 // title that loses its progress.
 //
-// **It is stored as one file per database in the same store a Clet writes
-// into.** That is the platform's own arrangement — the specification says the
-// records live in the platform's persistent area and that deleting the Jlet
-// deletes them — and putting it beside the files means one save directory per
-// game rather than two stores that can disagree.
+// **It is stored as one container per database in the store the files are
+// in, in a scope of its own** (java_database_store.go). The specification says
+// the records live in the platform's persistent area and that deleting the
+// Jlet deletes them, so they are in the game's one save directory; and they
+// are apart from its files, as on the other platforms, so a file and a
+// database of the same name are two things.
 //
 // The container is this runtime's own, because nothing here has to read a
 // handset's: a header naming the record size and the record count, then one
@@ -34,6 +35,11 @@ const (
 	javaDataBaseClass          = "org/kwis/msp/db/DataBase"
 	javaDataBaseExceptionClass = "org/kwis/msp/db/DataBaseException"
 	javaDataBaseRecordClass    = "org/kwis/msp/db/DataBaseRecordException"
+	// The two interfaces sortRecord calls back into, both implemented by the
+	// title: one method each.
+	javaDataFilterInterface     = "org/kwis/msp/db/DataFilter"
+	javaDataComparatorInterface = "org/kwis/msp/db/DataComparator"
+	javaIllegalArgumentClass    = "java/lang/IllegalArgumentException"
 	// databaseMagic and databaseVersion head every container, so a file that is
 	// not one is refused rather than read as an empty database.
 	databaseMagic   = "WFDB"
@@ -41,24 +47,28 @@ const (
 	// databaseDeleted is the length that marks a slot whose record was
 	// deleted. A real length can never reach it.
 	databaseDeleted = ^uint32(0)
-	// databaseSuffix is what a database's name becomes in the file store. It
-	// keeps a database and a file of the same name apart.
+	// databaseSuffix ends a container's key: in the database scope
+	// (databaseSaveKey), and among the files where earlier builds kept it
+	// (databaseFileName).
 	databaseSuffix = ".db"
-	// databaseCapacity is what getSizeAvailable answers from. Nothing here runs
-	// out of room; the number exists because a title divides by it.
-	databaseCapacity = 1 << 20
-	maxDatabaseName  = 128
+	// maxDatabaseBytes bounds one database's records together: the common
+	// contract's bound on untrusted input (docs/wipi-storage.md). A write that
+	// would pass it is a DataBaseException; no title's save comes near it.
+	maxDatabaseBytes = 4 << 20
+	// javaPrivateAccess is FileSystem.PRIVATE_ACCESS, the one area a title has
+	// and what getAccessMode answers for a database that exists.
+	javaPrivateAccess = 1
 )
 
-// javaDatabase is one DataBase object: the database it stands for and whether
-// the title has closed it. What the database holds is the databaseContent it
-// shares with every other object open on the database.
+// javaDatabase is one DataBase object: the database it stands for. What the
+// database holds is the databaseContent it shares with every other object on
+// the database.
 type javaDatabase struct {
 	name string
-	// closed marks a database the title has closed. The entry is kept rather
-	// than dropped, because closing one twice is defined and the second close
-	// has to be able to tell a database it already wrote from an object that
-	// was never a database at all. See javaCloseDataBase.
+	// closed marks the records of an object the collector reclaimed, which
+	// wait only for the store (see keepCollectedDatabases). A title's own
+	// close releases nothing it can see and leaves this unset: the object
+	// stays usable. See javaCloseDataBase.
 	closed bool
 	*databaseContent
 }
@@ -87,6 +97,23 @@ type databaseContent struct {
 	// it: at the open, at each store the store took, and at each read of it
 	// again. See fileContent.synced and javaDatabaseOf.
 	synced uint64
+	// unlisted says the title deleted the database while objects on it were
+	// still held: a write through one of them makes the database again, and
+	// puts its name back on the index. See javaDeleteDataBase.
+	unlisted bool
+}
+
+// recordBytes is what the records hold together: getDataBaseSize's answer,
+// what the space count takes for the database, and what maxDatabaseBytes
+// bounds.
+func (database *databaseContent) recordBytes() int {
+	total := 0
+	for index, record := range database.records {
+		if !database.deleted[index] {
+			total += len(record)
+		}
+	}
+	return total
 }
 
 // javaDatabaseMethods is this class's whole surface. It joins the platform
@@ -113,40 +140,39 @@ var javaDatabaseMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/db/DataBase.selectRecord(I)[B":     {Words: 2, Implementat: javaSelectRecord},
 	"org/kwis/msp/db/DataBase.selectRecord(I[BI)V":   {Words: 4, Implementat: javaSelectRecordInto},
 	"org/kwis/msp/db/DataBase.deleteRecord(I)V":      {Words: 2, Implementat: javaDeleteRecord},
+	"org/kwis/msp/db/DataBase.sortRecord(Lorg/kwis/msp/db/DataFilter;Lorg/kwis/msp/db/DataComparator;)[I": {
+		Words: 3, Implementat: javaSortRecord},
 	"org/kwis/msp/db/DataBase.listDataBases()[Ljava/lang/String;": {
 		Implementat: javaListDataBases},
 	"org/kwis/msp/db/DataBase.deleteDataBase(Ljava/lang/String;)V": {
 		Words: 1, Implementat: javaDeleteDataBase},
 	"org/kwis/msp/db/DataBase.deleteDataBase(Ljava/lang/String;I)V": {
 		Words: 2, Implementat: javaDeleteDataBase},
-	// The access mode of a database this application owns. There is one
-	// application, so what it can do to its own database is everything.
+	// The area a database is in, which is the title's own for every database
+	// here. See javaDataBaseAccessMode.
 	"org/kwis/msp/db/DataBase.getAccessMode(Ljava/lang/String;)I": {
 		Words: 1, Implementat: javaDataBaseAccessMode},
 }
 
 // javaOpenDataBase is `openDataBase(name, recordSize, create)`. It answers a
-// DataBase object, and the specification says it throws when the database is
-// not there and the caller did not ask for it to be created.
+// DataBase object. As the specification and the common contract
+// (docs/wipi-storage.md) give it: a name no database can have is
+// DataBaseException; create with a record size of 0 or less is
+// IllegalArgumentException; a database that is not there is DataBaseException
+// without create, and is made at once with it, empty and listed.
 func javaOpenDataBase(
 	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	name, ok := client.javaText(arguments[0])
-	if !ok {
-		return 0, fmt.Errorf("the name at %#x is not a string this platform built", arguments[0])
+	name, err := client.javaDatabaseName(thread, arguments[0])
+	if err != nil {
+		return 0, err
 	}
-	if err := validDatabaseName(name); err != nil {
-		return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass, ": "+err.Error())
+	recordSize, create := int32(arguments[1]), arguments[2] != 0
+	if create && recordSize <= 0 {
+		return 0, client.throwJavaPlatform(thread, javaIllegalArgumentClass,
+			fmt.Sprintf(": a record size of %d", recordSize))
 	}
-	// The container of a database by this name would be the index of names,
-	// which no title's database may take; see fileSaveKey. Restoring a record
-	// does not ask, so an object an earlier build opened under it still loads.
-	if strings.EqualFold(databaseFileName(name), databaseIndexName) {
-		return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass,
-			fmt.Sprintf(": %q is the name of the platform's own index", name))
-	}
-	recordSize, create := arguments[1], arguments[2] != 0
-	stored, exists := client.readFile(databaseFileName(name))
+	stored, exists := client.readDatabase(name)
 	// An object the title already has on the database is the database. Its
 	// records are the newest there are when they hold a write the store
 	// refused, and then they are the database whatever the store says.
@@ -160,7 +186,7 @@ func javaOpenDataBase(
 	}
 	content := shared
 	if content == nil || !content.unsaved {
-		fresh := &databaseContent{recordSize: recordSize, synced: client.fileEpoch(databaseFileName(name))}
+		fresh := &databaseContent{recordSize: uint32(recordSize), synced: client.databaseEpoch(name)}
 		if exists {
 			if err := fresh.decode(stored); err != nil {
 				return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass,
@@ -172,9 +198,15 @@ func javaOpenDataBase(
 		} else {
 			// The records as the container has them now, for every object on
 			// the database at once.
-			fresh.modified = content.modified
+			fresh.modified, fresh.unlisted = content.modified, content.unlisted
 			*content = *fresh
 		}
+	}
+	// A container an earlier build made without a record size takes the size
+	// of the open that finds it, and keeps it: it is stored with it at once.
+	adopted := exists && content.recordSize == 0 && recordSize > 0
+	if adopted {
+		content.recordSize = uint32(recordSize)
 	}
 	database := &javaDatabase{name: name, databaseContent: content}
 	class, err := client.preparePlatformJavaClass(javaDataBaseClass)
@@ -186,25 +218,70 @@ func javaOpenDataBase(
 		return 0, err
 	}
 	client.javaRuntimeState().databases[object] = database
-	if !exists {
-		client.storeDatabase(database)
+	client.noteDatabaseTime(database, false)
+	switch {
+	case !exists:
+		client.saveDatabase(database)
 		client.recordDatabaseName(name, true)
+	case adopted:
+		client.saveDatabase(database)
 	}
 	if client.logger != nil {
 		client.logger.Debug("LGT java database opened",
-			"name", name, "records", len(database.records), "record_size", recordSize, "created", !exists)
+			"name", name, "records", len(database.records), "record_size", content.recordSize, "created", !exists)
 	}
 	return object, nil
 }
 
-func validDatabaseName(name string) error {
-	if name == "" || len(name) > maxDatabaseName {
-		return fmt.Errorf("%q is not a database name", name)
+// javaDatabaseName reads the name a database call is handed, and answers the
+// database's name from then on (databasePath). Null, and a name no database
+// can have, are the DataBaseException every DataBase call declares, as the
+// common contract gives them (docs/wipi-storage.md).
+func (client *Client) javaDatabaseName(thread *armcore.Thread, object uint32) (string, error) {
+	if object == 0 {
+		return "", client.throwJavaPlatform(thread, javaDataBaseExceptionClass, ": a null database name")
 	}
-	if strings.ContainsAny(name, "/\\") {
-		return fmt.Errorf("%q names a path rather than a database", name)
+	name, ok := client.javaText(object)
+	if !ok {
+		return "", fmt.Errorf("the name at %#x is not a string this platform built", object)
 	}
-	return nil
+	path, err := databasePath(name)
+	if err != nil {
+		return "", client.throwJavaPlatform(thread, javaDataBaseExceptionClass, ": "+err.Error())
+	}
+	return path, nil
+}
+
+// databasePath is a database's name as the store keeps it. **A database name
+// is read as a file's name is** (guestPath): a backslash separates segments
+// as a slash does, and leading separators, empty and "." segments are
+// dropped, so every spelling of one path is one database, and a "/" inside
+// the name puts the database in a directory, as it would put a file. The
+// path is the name getDataBaseName and listDataBases answer.
+//
+// It refuses what no database can be kept under: the title's own directory,
+// a path longer than the longest file name, one no file could have (a ".."
+// segment, a name the platform keeps for itself), one whose container would
+// be an index of names — among the files, where earlier builds kept it
+// (databaseFileName), or below the one in the database scope
+// (databaseIndexSegment) — and a line break, which an index, one name to a
+// line, cannot hold. The container is asked about as well as the path because
+// the suffix joins the last segment: ".." alone would otherwise be the
+// container "...db".
+func databasePath(name string) (string, error) {
+	path := guestPath(name)
+	first, _, nested := strings.Cut(path, "/")
+	switch {
+	case path == "":
+		return "", fmt.Errorf("%q names the title's own directory, not a database", name)
+	case len(path) > maxFileNameBytes:
+		return "", fmt.Errorf("a name of %d bytes is longer than %d", len(path), maxFileNameBytes)
+	case strings.ContainsAny(path, "\n\r"):
+		return "", fmt.Errorf("%q is not one line of the index of names", name)
+	case !hasSaveKey(path) || !hasSaveKey(databaseFileName(path)) || nested && first == databaseIndexSegment:
+		return "", fmt.Errorf("%q is not a name the store can keep", name)
+	}
+	return path, nil
 }
 
 func databaseFileName(name string) string {
@@ -314,8 +391,9 @@ func (client *Client) dropStoredCollectedDatabases() {
 		func(database *javaDatabase) bool { return !database.unsaved })
 }
 
-// javaDatabaseOf answers the database behind an object, and refuses one that is
-// closed or was never opened here.
+// javaDatabaseOf answers the database behind an object, and refuses one that
+// was never opened here. A closed one is still the database: closing releases
+// nothing a title can see.
 //
 // **The records are read again when the container moved on.** The objects on
 // a database share one set of records (see databaseContent), and every change
@@ -328,12 +406,9 @@ func (client *Client) dropStoredCollectedDatabases() {
 func (client *Client) javaDatabaseOf(object uint32) (*javaDatabase, error) {
 	database, ok := client.javaRuntimeState().databases[object]
 	if !ok {
-		return nil, fmt.Errorf("the object at %#x is not an open database", object)
+		return nil, fmt.Errorf("the object at %#x is not a database this platform opened", object)
 	}
-	if database.closed {
-		return nil, fmt.Errorf("the database %q is closed", database.name)
-	}
-	if !database.unsaved && database.synced != client.fileEpoch(databaseFileName(database.name)) {
+	if !database.unsaved && database.synced != client.databaseEpoch(database.name) {
 		client.reloadDatabase(database)
 	}
 	return database, nil
@@ -343,9 +418,8 @@ func (client *Client) javaDatabaseOf(object uint32) (*javaDatabase, error) {
 // empty database, as it is to an object a quick load fills. A container that
 // cannot be read or decoded leaves the object as it was.
 func (client *Client) reloadDatabase(database *javaDatabase) {
-	name := databaseFileName(database.name)
-	epoch := client.fileEpoch(name)
-	stored, exists := client.readFile(name)
+	epoch := client.databaseEpoch(database.name)
+	stored, exists := client.readDatabase(database.name)
 	if client.saveReadError != nil {
 		return
 	}
@@ -361,15 +435,45 @@ func (client *Client) reloadDatabase(database *javaDatabase) {
 	database.records, database.deleted, database.recordSize, database.synced = fresh.records, fresh.deleted, fresh.recordSize, epoch
 }
 
-// storeDatabase writes a database back. Every change goes through it, because a
-// title that is killed between a write and a close should still have what it
-// stored — which is what the specification promises of a record already saved.
+// storeDatabase writes a database back after a change the title made. Every
+// change goes through it, because a title that is killed between a write and a
+// close should still have what it stored — which is what the specification
+// promises of a record already saved.
 func (client *Client) storeDatabase(database *javaDatabase) {
-	database.modified = client.clock.unixMillis()
-	database.unsaved = client.storeFile(databaseFileName(database.name), database.encode()) != nil
+	client.noteDatabaseTime(database, true)
+	client.saveDatabase(database)
+}
+
+// saveDatabase gives the store a database's records, with nothing the title
+// did to account for: storeDatabase's half that a close, the create and a
+// retry share. A database the title deleted while this object was held is
+// made again by it, name and all.
+func (client *Client) saveDatabase(database *javaDatabase) {
+	database.unsaved = client.writeDatabase(database.name, database.encode()) != nil
 	if !database.unsaved {
-		database.synced = client.fileEpoch(databaseFileName(database.name))
+		database.synced = client.databaseEpoch(database.name)
 	}
+	if database.unlisted {
+		database.unlisted = false
+		client.recordDatabaseName(database.name, true)
+	}
+}
+
+// noteDatabaseTime keeps what getLastModified answers: the guest time of the
+// last write to a database in this session, or of the session's first open of
+// it when nothing has been written since. A write moves it; an open sets it
+// only when the session has none for the name yet.
+func (client *Client) noteDatabaseTime(database *javaDatabase, wrote bool) {
+	runtime := client.javaRuntimeState()
+	if runtime.databaseModified == nil {
+		runtime.databaseModified = make(map[string]int64)
+	}
+	when, seen := runtime.databaseModified[database.name]
+	if wrote || !seen {
+		when = client.clock.unixMillis()
+		runtime.databaseModified[database.name] = when
+	}
+	database.modified = when
 }
 
 // encode lays the container out: the magic and version, the record size, the
@@ -435,21 +539,18 @@ func (database *databaseContent) decode(data []byte) error {
 	return nil
 }
 
-// javaCloseDataBase is `closeDataBase()`: the object stops being usable.
+// javaCloseDataBase is `closeDataBase()`, which releases nothing a title can
+// see: the object stays usable, and closing it again is nothing, as the
+// common contract gives it. One local title closes its database at the end of
+// a save and again on the way out of the routine that called the save.
 //
 // **A close stores only a write the store refused.** Every change was stored
 // when it was made, so what the object holds otherwise is what the container
 // holds, or older: another object may have saved since, or the title deleted
 // the database. Writing the object's copy back would undo the one and bring
-// the other into being again.
-//
-// **Closing one that is already closed is ignored**, which the specification
-// says in as many words, and one local title depends on it: it closes its
-// database at the end of a save and again on the way out of the routine that
-// called the save. The object stays in the table marked closed rather than
-// being dropped, so the second close is told apart from a call on something
-// that was never opened here — which is still a stop, because it means the
-// title is holding an object this platform did not issue.
+// the other into being again. A call on something that was never opened here
+// is still a stop, because it means the title is holding an object this
+// platform did not issue.
 func javaCloseDataBase(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -457,13 +558,9 @@ func javaCloseDataBase(
 	if !ok {
 		return 0, fmt.Errorf("the object at %#x is not a database this platform opened", arguments[0])
 	}
-	if database.closed {
-		return 0, nil
-	}
 	if database.unsaved {
-		client.storeDatabase(database)
+		client.saveDatabase(database)
 	}
-	database.closed = true
 	return 0, nil
 }
 
@@ -477,6 +574,7 @@ func javaDataBaseName(
 	return client.newJavaString(database.name)
 }
 
+// javaDataBaseRecordCount is `getNumberOfRecords`: the records held.
 func javaDataBaseRecordCount(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -503,6 +601,8 @@ func javaDataBaseRecordSize(
 	return database.recordSize, nil
 }
 
+// javaDataBaseSize is `getDataBaseSize`: the bytes the records hold, not what
+// their container takes in the store.
 func javaDataBaseSize(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -510,26 +610,26 @@ func javaDataBaseSize(
 	if err != nil {
 		return 0, err
 	}
-	return uint32(len(database.encode())), nil
+	return uint32(database.recordBytes()), nil
 }
 
-// javaDataBaseAvailable answers what is left of a size this platform does not
-// enforce. A title divides by it or compares it against a record it is about to
-// write, so answering zero would stop a save that has nothing wrong with it.
+// javaDataBaseAvailable is `getSizeAvailable`: the room the title has left
+// across everything it has stored, which is the figure MC_fsAvailable and
+// FileSystem.available answer too (storageAvailable). Nothing is refused for
+// room, so a title that compares it with a record it is about to write is
+// told the truth and still saves.
 func javaDataBaseAvailable(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	database, err := client.javaDatabaseOf(arguments[0])
-	if err != nil {
+	if _, err := client.javaDatabaseOf(arguments[0]); err != nil {
 		return 0, err
 	}
-	used := uint32(len(database.encode()))
-	if used >= databaseCapacity {
-		return 0, nil
-	}
-	return databaseCapacity - used, nil
+	return uint32(client.storageAvailable()), nil
 }
 
+// javaDataBaseModified is `getLastModified`: the guest time of the last
+// write to the database in this session, or of the session's first open of it
+// when nothing has been written since (noteDatabaseTime).
 func javaDataBaseModified(
 	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -537,7 +637,11 @@ func javaDataBaseModified(
 	if err != nil {
 		return 0, err
 	}
-	milliseconds := uint64(database.modified)
+	when := database.modified
+	if recorded, ok := client.javaRuntimeState().databaseModified[database.name]; ok {
+		when = recorded
+	}
+	milliseconds := uint64(when)
 	if err := thread.SetRegister(1, uint32(milliseconds>>32)); err != nil {
 		return 0, err
 	}
@@ -571,8 +675,12 @@ func javaInsertRecord(
 	if err != nil {
 		return 0, err
 	}
-	if err := database.fits(record); err != nil {
-		return 0, client.throwJavaPlatform(thread, javaDataBaseRecordClass, ": "+err.Error())
+	// The record size is not enforced: a longer record is stored whole. The
+	// specification refuses it, and a title that has always written such
+	// records here would lose its save on the next write. What is refused is
+	// a database past the bound on untrusted input.
+	if err := database.room(0, len(record)); err != nil {
+		return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass, ": "+err.Error())
 	}
 	stored := make([]byte, len(record))
 	copy(stored, record)
@@ -596,13 +704,13 @@ func javaInsertRecord(
 	return uint32(identifier), nil
 }
 
-// fits refuses a record longer than the size the database was created with,
-// which is the one limit the specification puts on a record.
-func (database *databaseContent) fits(record []byte) error {
-	if database.recordSize == 0 || uint64(len(record)) <= uint64(database.recordSize) {
-		return nil
+// room refuses a write that would take the records past maxDatabaseBytes:
+// one that replaces `replaced` bytes with `adding`.
+func (database *databaseContent) room(replaced, adding int) error {
+	if total := database.recordBytes() - replaced + adding; total > maxDatabaseBytes {
+		return fmt.Errorf("%d bytes of records is more than the %d one database holds", total, maxDatabaseBytes)
 	}
-	return fmt.Errorf("a %d-byte record does not fit a %d-byte record size", len(record), database.recordSize)
+	return nil
 }
 
 func argumentAt(arguments []uint32, index int) uint32 {
@@ -627,8 +735,8 @@ func javaUpdateRecord(
 	if err := database.holds(identifier); err != nil {
 		return 0, client.throwJavaPlatform(thread, javaDataBaseRecordClass, ": "+err.Error())
 	}
-	if err := database.fits(record); err != nil {
-		return 0, client.throwJavaPlatform(thread, javaDataBaseRecordClass, ": "+err.Error())
+	if err := database.room(len(database.records[identifier]), len(record)); err != nil {
+		return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass, ": "+err.Error())
 	}
 	stored := make([]byte, len(record))
 	copy(stored, record)
@@ -657,7 +765,9 @@ func javaSelectRecord(
 	return client.newJavaByteArray(database.records[arguments[1]])
 }
 
-// javaSelectRecordInto is the form that fills the caller's array.
+// javaSelectRecordInto is the form that fills the caller's array: the bytes
+// stored, copied at the offset. A buffer they do not fit, from that offset,
+// is an IllegalArgumentException.
 func javaSelectRecordInto(
 	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -668,21 +778,20 @@ func javaSelectRecordInto(
 	if err := database.holds(arguments[1]); err != nil {
 		return 0, client.throwJavaPlatform(thread, javaDataBaseRecordClass, ": "+err.Error())
 	}
+	if arguments[2] == 0 {
+		return 0, client.throwJavaPlatform(thread, javaThrowNullClass, ": selectRecord into a null buffer")
+	}
 	record := database.records[arguments[1]]
-	block, err := client.readWord(arguments[2] + 8)
+	block, length, err := client.javaArrayBlock(arguments[2])
 	if err != nil {
 		return 0, err
 	}
-	length, err := client.readWord(block)
-	if err != nil {
-		return 0, err
-	}
-	offset := arguments[3]
-	if uint64(offset)+uint64(len(record)) > uint64(length) {
-		return 0, client.throwJavaPlatform(thread, javaDataBaseRecordClass,
+	offset := int32(arguments[3])
+	if offset < 0 || int64(offset)+int64(len(record)) > int64(length) {
+		return 0, client.throwJavaPlatform(thread, javaIllegalArgumentClass,
 			fmt.Sprintf(": a %d-byte record at %d does not fit a %d-byte buffer", len(record), offset, length))
 	}
-	return 0, client.core.Memory().Write(block+javaArrayLengthWords*4+offset, record)
+	return 0, client.core.Memory().Write(block+javaArrayLengthWords*4+uint32(offset), record)
 }
 
 func javaDeleteRecord(
@@ -701,41 +810,105 @@ func javaDeleteRecord(
 	return 0, nil
 }
 
-// javaListDataBases answers the names this application has created.
+// javaListDataBases answers the names of the databases the title has, saved
+// in any session or opened in this one, in name order, and null when there is
+// none.
 //
 // **The store the containers live in cannot be listed**: it is a key-value
 // store a browser Host also implements, and asking it for its keys is not part
 // of that contract. So the names are kept in one more entry beside them, which
-// every create and every delete rewrites.
+// every create and every delete rewrites. A name whose container a file call
+// removed is not a database the title has any more, and is left out, and so
+// is a name an earlier build wrote that is no database name now ("." or
+// ".."), which no open could reach.
 func javaListDataBases(
 	client *Client, _ context.Context, _ *armcore.Thread, _ []uint32,
 ) (uint32, error) {
-	return client.newJavaStringArray(client.databaseNames())
+	var names []string
+	for _, name := range client.databaseNames() {
+		if path, err := databasePath(name); err == nil && path == name && client.databaseExists(name) {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return 0, nil
+	}
+	return client.newJavaStringArray(names)
 }
 
-// databaseIndexName is the entry the names are kept in, at the root of the
-// file scope. It carries the suffix so that it reads as a database's
-// container, and **it is the platform's, not a guest file**: fileSaveKey gives
-// no title's path a key there, and openDataBase refuses the one database name
-// whose container it would be. The builds before this one read and wrote it
-// as a guest path, so a title's file of that name was the index, a database of
-// that name wrote its records over it, and the created list named it as a
-// file. Its key and layout are unchanged.
+// databaseExists reports whether the title has a database: its container is
+// there, or an object holds its records with a write the store refused.
+func (client *Client) databaseExists(name string) bool {
+	if _, stored := client.readDatabase(name); stored {
+		return true
+	}
+	content := client.openDatabaseContent(name)
+	return content != nil && content.unsaved
+}
+
+// databaseRecordBytes is what one database's records hold, for the space
+// count: what an object on it holds, or what its container holds, read once
+// per change of it.
+func (client *Client) databaseRecordBytes(name string) int64 {
+	if client.javaRun != nil {
+		for _, database := range client.javaRun.databases {
+			if database != nil && database.name == name && database.databaseContent != nil {
+				return int64(database.recordBytes())
+			}
+		}
+		if content := client.openDatabaseContent(name); content != nil {
+			return int64(content.recordBytes())
+		}
+	}
+	key, epoch, keyed := client.databaseRecordKey(name)
+	if !keyed {
+		return 0
+	}
+	known, ok := client.storedSizes[key]
+	if ok && known.epoch == epoch && known.recordsKnown {
+		return int64(known.records)
+	}
+	records := 0
+	if data, stored := client.readDatabase(name); stored {
+		decoded := &databaseContent{}
+		if decoded.decode(data) == nil {
+			records = decoded.recordBytes()
+		}
+	}
+	if !ok || known.epoch != epoch {
+		known = storedSize{epoch: epoch}
+	}
+	known.recordsKnown, known.records = true, records
+	if client.storedSizes == nil {
+		client.storedSizes = make(map[string]storedSize)
+	}
+	client.storedSizes[key] = known
+	return int64(records)
+}
+
+// databaseIndexName is the entry earlier builds kept the names in, at the
+// root of the file scope (fileDatabaseIndexKey), and a session whose store
+// has refused the move still does. It carries the suffix so that it reads as
+// a database's container, and **it is the platform's, not a guest file**:
+// fileSaveKey gives no title's path a key there, and openDataBase refuses the
+// one database name whose container it would be. Builds before those read and
+// wrote it as a guest path, so a title's file of that name was the index, a
+// database of that name wrote its records over it, and the created list named
+// it as a file.
 const databaseIndexName = "__databases__" + databaseSuffix
 
-// databaseIndexKey is the save key of the index.
-const databaseIndexKey = fileSaveScope + databaseIndexName
-
 // loadDatabaseIndex reads the index from the store, or from what a session
-// with no store keeps. Neither an open file, the removal list nor the archive
-// answers for it, because it is no guest path.
+// with no store keeps, in the session's layout (databaseIndexSaveKey).
+// Neither an open file, the removal list nor the archive answers for it,
+// because it is no guest path.
 func (client *Client) loadDatabaseIndex() ([]byte, bool) {
+	key := client.databaseIndexSaveKey()
 	if client.saveStore != nil {
-		if data, ok := client.loadSave(databaseIndexKey); ok {
+		if data, ok := client.loadSave(key); ok {
 			return data, true
 		}
 	}
-	data, kept := client.sessionFiles[databaseIndexKey]
+	data, kept := client.sessionFiles[key]
 	return bytes.Clone(data), kept
 }
 
@@ -748,7 +921,7 @@ func (client *Client) storeDatabaseIndex(data []byte) {
 	if client.saveReadError != nil {
 		return
 	}
-	if err := client.storeSessionSave(databaseIndexKey, data); err != nil {
+	if err := client.storeSessionSave(client.databaseIndexSaveKey(), data); err != nil {
 		if client.logger != nil {
 			client.logger.Debug("LGT database index store failed", "error", err)
 		}
@@ -775,14 +948,54 @@ func (client *Client) databaseNames() []string {
 	if !ok {
 		return nil
 	}
+	// A line is a name exactly as it was written: a name may begin or end
+	// with a space, as a file's may, and trimming the line made such a
+	// database one listDataBases left out.
 	names := make([]string, 0, 8)
 	for _, name := range strings.Split(string(data), "\n") {
-		if name = strings.TrimSpace(name); name != "" {
+		if name != "" {
 			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
 	return names
+}
+
+// databaseContainers answers the paths, in fileListKey's form, of the
+// containers of the databases the index names, in a session whose databases
+// are still kept among the files because its store refused the move
+// (java_database_store.go); in their own scope no file path is a container,
+// and it answers none.
+//
+// **A container is the runtime's own storage, not a file of the title's**
+// (docs/wipi-storage.md). So no file call, C or Java, sees one while it is
+// among the files: not a listing, an existence or kind question, an open, a
+// removal or a rename, and not the directory a container in one would
+// otherwise make. The space count still takes it once, as the database it is.
+// These paths are a filter on what the file calls see. A listing, and a
+// question about a name in a container's form, read the index once, as
+// listDataBases does.
+func (client *Client) databaseContainers() map[string]bool {
+	if !client.databasesAmongFiles() {
+		return nil
+	}
+	names := client.databaseNames()
+	if len(names) == 0 {
+		return nil
+	}
+	containers := make(map[string]bool, len(names))
+	for _, name := range names {
+		containers[fileListKey(databaseFileName(name))] = true
+	}
+	return containers
+}
+
+// databaseContainer reports whether a path is the container of a database the
+// index names (databaseContainers). Only a name ending as a container does is
+// looked up, so no other name costs a read of the index.
+func (client *Client) databaseContainer(name string) bool {
+	key := fileListKey(name)
+	return strings.HasSuffix(key, databaseSuffix) && client.databaseContainers()[key]
 }
 
 func (client *Client) recordDatabaseName(name string, present bool) {
@@ -800,40 +1013,53 @@ func (client *Client) recordDatabaseName(name string, present bool) {
 	client.storeDatabaseIndex([]byte(strings.Join(kept, "\n")))
 }
 
+// javaDeleteDataBase is `deleteDataBase`, with or without the access flag. A
+// database that is not there is a DataBaseException.
 func javaDeleteDataBase(
 	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	name, ok := client.javaText(arguments[0])
-	if !ok {
-		return 0, fmt.Errorf("the name at %#x is not a string this platform built", arguments[0])
+	name, err := client.javaDatabaseName(thread, arguments[0])
+	if err != nil {
+		return 0, err
 	}
-	_, exists := client.readFile(databaseFileName(name))
-	shared := client.openDatabaseContent(name)
-	if !exists && (shared == nil || !shared.unsaved) {
+	if !client.databaseExists(name) {
 		return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass,
 			fmt.Sprintf(": %q does not exist", name))
 	}
-	client.removeFile(databaseFileName(name))
+	shared := client.openDatabaseContent(name)
+	// A removal the store refuses leaves the database as it was, as it leaves
+	// a file (removeFile), and is the DataBaseException the call declares.
+	if err := client.deleteDatabase(name); err != nil {
+		return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass,
+			fmt.Sprintf(": %q could not be deleted: %v", name, err))
+	}
 	// A write the store refused goes with the database, as a write waiting on
 	// a removed file goes with the file: neither a close nor the ending may
-	// bring the database back with it. The objects still open on it read it
-	// empty, as they would once they read the deleted container again.
+	// bring the database back with it. The objects still on it read it empty,
+	// as they would once they read the deleted container again, and a write
+	// through one of them makes the database again (saveDatabase).
 	if shared != nil {
 		shared.records, shared.deleted = nil, nil
-		shared.unsaved, shared.synced = false, client.fileEpoch(databaseFileName(name))
+		shared.unsaved, shared.synced = false, client.databaseEpoch(name)
+		shared.unlisted = true
 	}
 	client.recordDatabaseName(name, false)
 	return 0, nil
 }
 
-// javaDataBaseAccessMode answers what this application may do to a database it
-// owns, which is everything. The specification's modes are read, write and the
-// two together; there is one application here and one store.
+// javaDataBaseAccessMode is `getAccessMode`: the area a database is in, which
+// is FileSystem.PRIVATE_ACCESS for every database a title has here, and a
+// DataBaseException for one it does not have.
 func javaDataBaseAccessMode(
-	_ *Client, _ context.Context, _ *armcore.Thread, _ []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	return javaDataBaseReadWrite, nil
+	name, err := client.javaDatabaseName(thread, arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if !client.databaseExists(name) {
+		return 0, client.throwJavaPlatform(thread, javaDataBaseExceptionClass,
+			fmt.Sprintf(": %q does not exist", name))
+	}
+	return javaPrivateAccess, nil
 }
-
-// javaDataBaseReadWrite is the specification's READ_WRITE access mode.
-const javaDataBaseReadWrite = 3

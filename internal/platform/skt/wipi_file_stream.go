@@ -272,7 +272,7 @@ func (runtime *Runtime) wipiStreamWrite(vm *jvm.VM, arguments []jvm.Value) (jvm.
 		_, err := recordBytesArgument(arguments, 1, 2, 3)
 		return jvm.VoidValue(), err
 	}
-	value, err := runtime.xFileWrite(vm, wipiStreamFileArguments(arguments, stream.file))
+	value, err := runtime.wipiFileWriteWindow(vm, wipiStreamFileArguments(arguments, stream.file))
 	if count, _ := value.Int32(); err == nil && count < 0 {
 		err = newGuestException(jvm.IOExceptionClass, "file stream is not writable")
 	}

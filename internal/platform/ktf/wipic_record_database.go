@@ -61,6 +61,8 @@ const (
 	wipicRecordDatabaseUpdate     = 5
 	wipicRecordDatabaseDeleteRec  = 6
 	wipicRecordDatabaseList       = 7
+	wipicRecordDatabaseSort       = 8
+	wipicRecordDatabaseAccessMode = 9
 	wipicRecordDatabaseNumRecords = 10
 	wipicRecordDatabaseRecordSize = 11
 	wipicRecordDatabaseListNames  = 12
@@ -103,6 +105,10 @@ func (runtime *initializationRuntime) handleWIPICRecordDatabaseCall(thread *armc
 		return runtime.wipicRecordDatabaseDelete(thread)
 	case wipicRecordDatabaseList:
 		return runtime.wipicRecordDatabaseList(thread)
+	case wipicRecordDatabaseSort:
+		return runtime.wipicRecordDatabaseSort(thread)
+	case wipicRecordDatabaseAccessMode:
+		return runtime.wipicRecordDatabaseAccessMode(thread)
 	case wipicRecordDatabaseNumRecords:
 		state, ok := runtime.recordDatabaseHandle(thread)
 		if !ok {
@@ -124,21 +130,9 @@ func (runtime *initializationRuntime) handleWIPICRecordDatabaseCall(thread *armc
 	case wipicRecordDatabaseListNames:
 		// Titles read this slot's return value as the storage still available
 		// rather than as a list, and refuse to save below a threshold of their
-		// own. The budget is the stream database's, because it is the same
-		// per-game storage.
-		used := 0
-		for _, store := range runtime.cFiles {
-			used += len(store.data)
-		}
-		for _, store := range runtime.recordDatabases {
-			for _, record := range store.records {
-				used += len(record)
-			}
-		}
-		if used >= wipicFileStorageLimit {
-			return 0, nil
-		}
-		return uint32(wipicFileStorageLimit - used), nil
+		// own. It is the same per-game storage MC_fsAvailable reports, so it
+		// is the same figure.
+		return runtime.storageAvailable(), nil
 	default:
 		runtime.countDiagnostic(fmt.Sprintf("wipic record database function %d", function))
 		return wipicErrorInvalid, nil
@@ -297,21 +291,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDelete(thread *armcore.
 	if !storableName(recordDatabaseScope, name) || len(name) > maxRecordDatabaseName {
 		return wipicErrorInvalid, nil
 	}
-	_, exists := runtime.recordDatabases[name]
-	deleted := runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
-	_, hasSaved := runtime.loadSave("rdb/" + name)
-	hasPackaged := false
-	if !runtime.databaseDeleted(name) {
-		// The archive is what the two tables share, so the same answer the
-		// open gives: a packaged copy hidden by either list is not there for
-		// this call either, or a delete would succeed on a name the open next
-		// to it reports as missing.
-		_, hasPackaged = runtime.packagedRecordDatabase(name, 0)
-	}
-	if deleted {
-		hasSaved = false
-	}
-	if !exists && !hasPackaged && !hasSaved {
+	if !runtime.recordDatabaseExists(name) {
 		return wipicErrorNotFound, nil
 	}
 	if err := runtime.saveChanges(map[string][]byte{"rdb/" + name: encodeSaveRecords(nil)}, recordDatabaseRemovedKey, runtime.recordDatabaseRemovals(recordDatabaseRemovedKey), map[string]bool{name: true}); err != nil {
@@ -752,6 +732,11 @@ func (runtime *initializationRuntime) recordDatabaseRemovals(key string) map[str
 	names := make(map[string]bool)
 	if data, exists := runtime.loadSave(key); exists {
 		for _, line := range splitRemovalList(data) {
+			if key == javaDatabaseRemovedKey {
+				// A Java database's name is read as a path, so one an earlier
+				// build listed as "/save" is the database "save" now.
+				line = listingPath(strings.ReplaceAll(line, "\\", "/"))
+			}
 			names[line] = true
 		}
 	}
@@ -785,10 +770,10 @@ func (runtime *initializationRuntime) markRecordDatabaseRemoved(key, name string
 // table keeps a removal list. A guest file called ".dirs" collides with
 // nothing under "fs/" and is left alone there.
 var reservedStorageNames = map[string]map[string]bool{
-	guestFileScope:      {".removed": true},
+	guestFileScope:      {".removed": true, ".dirs": true},
 	cFileScope:          {".removed": true, ".dirs": true},
 	recordDatabaseScope: {".removed": true},
-	javaDatabaseScope:   {".removed": true},
+	javaDatabaseScope:   {".removed": true, ".sizes": true},
 }
 
 const (

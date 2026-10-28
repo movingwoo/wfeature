@@ -129,6 +129,7 @@ func (runtime *initializationRuntime) rebindRestoredStorage() error {
 	}
 	runtime.saveReadError = nil
 	runtime.removedFiles, runtime.removedCDatabases, runtime.madeDirectories, runtime.removedDatabaseLists = nil, nil, nil, nil
+	runtime.madeGuestDirectories, runtime.databaseSizes = nil, nil
 	runtime.guestFiles = nil
 	runtime.guestFileWrites = nil
 	runtime.cFiles, runtime.detachedCFiles = make(map[string]*runtimeCFile), nil

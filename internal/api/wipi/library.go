@@ -45,6 +45,12 @@ const (
 	FileClass       = "org/kwis/msp/io/File"
 	FileSystemClass = "org/kwis/msp/io/FileSystem"
 
+	DataBaseClass                = "org/kwis/msp/db/DataBase"
+	DataBaseExceptionClass       = "org/kwis/msp/db/DataBaseException"
+	DataBaseRecordExceptionClass = "org/kwis/msp/db/DataBaseRecordException"
+	DataComparatorClass          = "org/kwis/msp/db/DataComparator"
+	DataFilterClass              = "org/kwis/msp/db/DataFilter"
+
 	ClipClass         = "org/kwis/msp/media/Clip"
 	PlayerClass       = "org/kwis/msp/media/Player"
 	PlayListenerClass = "org/kwis/msp/media/PlayListener"
@@ -143,13 +149,16 @@ func answerBool(value bool) jvm.ContextMethod {
 	}
 }
 
+// superInit is a constructor that only hands its arguments to the one of its
+// superclass with the same descriptor: an exception's message is kept there,
+// which is where a catch block reads it.
 func superInit(className, descriptor string) jvm.ContextMethod {
 	return func(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
 		object, err := receiver(arguments)
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
-		_, err = call.InvokeSpecial(object, className, "<init>", descriptor)
+		_, err = call.InvokeSpecial(object, className, "<init>", descriptor, arguments[1:]...)
 		return jvm.VoidValue(), err
 	}
 }

@@ -12,9 +12,11 @@ import (
 // **This file is WIPI C table 7, which is the filesystem.** Every slot in it
 // sits where the specification's `MC_fs*` section prints one — open, read,
 // write, close and seek at 0 to 4, the file attributes at 5, remove at 6,
-// mkdir at 8, the free space at 12, `MC_fsTell` at 15 and `MC_fsIsExist` at 16
-// — and a title's own log names the call it makes here as `MC_fsOpen`. See
-// docs/history/ktf.md, "The two storage tables".
+// rename at 7, mkdir and rmdir at 8 and 9, the listing at 10, the total and
+// the free space at 11 and 12, the mode at 13, the entry count at 14,
+// `MC_fsTell` at 15 and `MC_fsIsExist` at 16 — and a title's own log names the
+// call it makes here as `MC_fsOpen`. The directory slots are in
+// wipic_directory.go. See docs/history/ktf.md, "The two storage tables".
 //
 // **Two things deliberately kept the older name.** The save keys begin `db/`
 // and are a player's own files, so renaming them would orphan every save
@@ -85,12 +87,21 @@ const (
 	// holds a directory**: a name is a key in one flat store, so making one is
 	// the whole of what a directory is, and a name that has been made is what
 	// says it exists.
-	wipicFileMakeDirectory = 8
-	wipicFileNumRecords    = 10
-	wipicFileRecordSize    = 11
-	wipicFileList          = 12
-	wipicFileTouchStream   = 15
-	wipicFileExists        = 16
+	wipicFileMakeDirectory   = 8
+	wipicFileRemoveDirectory = 9
+	// Slots 10 and 11 were the record count and the record size of an
+	// earlier reading of this table, which took the first register for a
+	// handle. They are `MC_fsList` and `MC_fsTotalSpace`: the specification's
+	// order says so, and a title that asks 11 for the total space with no
+	// argument at all was told M_E_INVALID, reported that the handset had no
+	// room to save, and never left its title screen.
+	wipicFileList       = 10
+	wipicFileTotalSpace = 11
+	wipicFileAvailable  = 12
+	wipicFileSetMode    = 13
+	wipicFileGetCounts  = 14
+	wipicFileTell       = 15
+	wipicFileExists     = 16
 
 	// wipicFileStorageLimit mirrors the reference KTF per-game storage budget;
 	// MC_fsAvailable reports the space still available.
@@ -120,34 +131,19 @@ func (runtime *initializationRuntime) handleWIPICFileCall(thread *armcore.Thread
 		return runtime.wipicFileRename(thread)
 	case wipicFileStatByName:
 		return runtime.wipicFileStatByName(thread)
-	case wipicFileNumRecords:
-		state, err := runtime.wipicFileHandle(thread)
-		if err != nil {
-			return wipicErrorInvalid, nil
-		}
-		if len(state.store.data) == 0 {
-			return 0, nil
-		}
-		return 1, nil
-	case wipicFileRecordSize:
-		state, err := runtime.wipicFileHandle(thread)
-		if err != nil {
-			return wipicErrorInvalid, nil
-		}
-		return uint32(len(state.store.data)), nil
+	case wipicFileRemoveDirectory:
+		return runtime.wipicRemoveDirectory(thread)
 	case wipicFileList:
-		// MC_fsAvailable reports remaining storage: the budget minus every
-		// open store's bytes, floored at zero like the reference repository usage.
-		used := 0
-		for _, store := range runtime.cFiles {
-			if grown := len(store.data) - store.packaged; grown > 0 {
-				used += grown
-			}
-		}
-		if used >= wipicFileStorageLimit {
-			return 0, nil
-		}
-		return uint32(wipicFileStorageLimit - used), nil
+		return runtime.wipicFileList(thread)
+	case wipicFileTotalSpace:
+		// MC_fsTotalSpace takes no argument and answers the size of the whole
+		// file system, which here is the per-game budget MC_fsAvailable
+		// counts down from, so the free space is never more than the total.
+		return wipicFileStorageLimit, nil
+	case wipicFileAvailable:
+		// MC_fsAvailable reports remaining storage: the budget less what the
+		// title has stored, as every platform counts it (storageAvailable).
+		return runtime.storageAvailable(), nil
 	case wipicFileExists:
 		// MC_fsIsExist answers 0 on success and M_E_NOENT when missing;
 		// titles branch to their fresh-init path on the error code. A
@@ -162,22 +158,35 @@ func (runtime *initializationRuntime) handleWIPICFileCall(thread *armcore.Thread
 		if err != nil {
 			return 0, fmt.Errorf("read KTF file name: %w", err)
 		}
+		if nameTooLong(name) {
+			return wipicErrorLongName, nil
+		}
+		if listingPath(name) == "" {
+			// The program's own directory is always there.
+			return 0, nil
+		}
 		if !cFileNameKeyed(name) {
 			// Nothing can be stored under it, so nothing is there.
 			return wipicErrorNotFound, nil
 		}
-		_, exists := runtime.cFiles[name]
-		_, seeded := runtime.databaseSeed(name)
-		made := runtime.createdDirectories()[name]
-		runtime.countDiagnostic(fmt.Sprintf("cdb exists %s -> %t", name, exists || seeded || made))
-		if exists || seeded || made {
+		exists, err := runtime.cFileExists(name)
+		if err != nil {
+			runtime.countDiagnostic(fmt.Sprintf("cdb exists error: %v", err))
+			return wipicErrorGeneric, nil
+		}
+		runtime.countDiagnostic(fmt.Sprintf("cdb exists %s -> %t", name, exists))
+		if exists {
 			return 0, nil
 		}
 		return wipicErrorNotFound, nil
 	case wipicFileMakeDirectory:
 		return runtime.wipicMakeDirectory(thread)
-	case wipicFileTouchStream:
-		return runtime.wipicFileTouch(thread)
+	case wipicFileSetMode:
+		return runtime.wipicFileSetMode(thread)
+	case wipicFileGetCounts:
+		return runtime.wipicFileCount(thread)
+	case wipicFileTell:
+		return runtime.wipicFileTell(thread)
 	default:
 		// The call site is named for the same reason the unimplemented-table
 		// error names one: the function number is an index into an array of
@@ -204,6 +213,9 @@ func (runtime *initializationRuntime) wipicFileDelete(thread *armcore.Thread) (u
 	name, err := runtime.readFileName(nameAddress)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF database name: %w", err)
+	}
+	if nameTooLong(name) {
+		return wipicErrorLongName, nil
 	}
 	if reservedStorageName(cFileScope, name) {
 		// Removing writes nil over the key, and these keys are this table's
@@ -252,16 +264,21 @@ func (runtime *initializationRuntime) wipicFileDelete(thread *armcore.Thread) (u
 //
 // Only the leading separators go. What follows one is part of the name, because
 // a title that keeps its files under a directory of its own is naming different
-// files with it.
+// files with it. A backslash is a separator like a slash, as every platform
+// reads one (docs/wipi-storage.md); the store refuses one in a key, so no save
+// was ever written under a name that had one.
 func wipicFileKey(name string) string {
-	return strings.TrimLeft(name, "/")
+	return strings.TrimLeft(strings.ReplaceAll(name, "\\", "/"), "/")
 }
 
 // readFileName reads a name argument of this table and answers the key it
 // stands for. Every slot that takes a name goes through it, because two slots
 // that disagree about which file a name means are worse than either rule.
 func (runtime *initializationRuntime) readFileName(address uint32) (string, error) {
-	name, err := runtime.readCString(address, 512)
+	// Read further than any name may be, so a long one is the
+	// specification's M_E_LONGNAME rather than a string that never ended:
+	// the same bound every platform reads a name to.
+	name, err := runtime.readCString(address, maxFileNameRead)
 	if err != nil {
 		return "", err
 	}
@@ -298,6 +315,9 @@ func (runtime *initializationRuntime) wipicFileRename(thread *armcore.Thread) (u
 	newName, err := runtime.readFileName(newAddress)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF file name: %w", err)
+	}
+	if nameTooLong(oldName) || nameTooLong(newName) {
+		return wipicErrorLongName, nil
 	}
 	if oldName == "" || newName == "" {
 		return wipicErrorGeneric, nil
@@ -429,12 +449,25 @@ func (runtime *initializationRuntime) wipicMakeDirectory(thread *armcore.Thread)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF directory name: %w", err)
 	}
-	if name == "" || !storableName(cFileScope, name) {
-		// The list of made names is read back a line at a time, and a name
-		// that normalizes to the scope itself is no name at all.
-		return wipicErrorBadParam, nil
+	if nameTooLong(name) {
+		return wipicErrorLongName, nil
 	}
-	if runtime.createdDirectories()[name] {
+	if listingPath(name) == "" {
+		// The program's own directory is there already.
+		return wipicErrorExists, nil
+	}
+	if !storableName(cFileScope, name) {
+		// The list of made names is read back a line at a time.
+		return wipicErrorBadFileName, nil
+	}
+	// A name that is a file, or a directory by what lies below it, is taken
+	// as much as one this call made.
+	exists, err := runtime.cFileExists(name)
+	if err != nil {
+		runtime.countDiagnostic(fmt.Sprintf("fs mkdir error: %v", err))
+		return wipicErrorGeneric, nil
+	}
+	if exists || runtime.createdDirectories()[name] {
 		runtime.countDiagnostic(fmt.Sprintf("fs mkdir %s -> exists", name))
 		return wipicErrorExists, nil
 	}
@@ -520,6 +553,9 @@ func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uin
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
 	runtime.countDiagnostic(fmt.Sprintf("cdb open %s mode %d", name, int32(mode)))
+	if nameTooLong(name) {
+		return wipicErrorLongName, nil
+	}
 	if reservedStorageName(cFileScope, name) || !cFileNameKeyed(name) {
 		return wipicErrorInvalid, nil
 	}
@@ -650,7 +686,13 @@ func (runtime *initializationRuntime) wipicFileStream(thread *armcore.Thread, wr
 	if err != nil {
 		return 0, err
 	}
-	if int32(length) < 0 || length > maxCFileBytes {
+	if int32(length) < 0 {
+		return wipicErrorInvalid, nil
+	}
+	if length > maxCFileBytes {
+		if write {
+			return wipicErrorNoSpace, nil
+		}
 		return wipicErrorInvalid, nil
 	}
 	if write {
@@ -660,7 +702,9 @@ func (runtime *initializationRuntime) wipicFileStream(thread *armcore.Thread, wr
 		}
 		end := state.position + int(length)
 		if end > maxCFileBytes {
-			return wipicErrorInvalid, nil
+			// Past the bound one file may hold, which a write fails as a
+			// file system out of room does.
+			return wipicErrorNoSpace, nil
 		}
 		staged := make([]byte, max(end, len(state.store.data)))
 		copy(staged, state.store.data)
@@ -687,28 +731,27 @@ func (runtime *initializationRuntime) wipicFileStream(thread *armcore.Thread, wr
 	return uint32(count), nil
 }
 
-// wipicFileStatByName serves MC_fsGetFileStat(name, MH_FileInfo* out, mode),
+// wipicFileStatByName serves MC_fsFileAttribute(name, MH_FileInfo* out, mode),
 // the file attributes at slot 5: `{ attrib, creationTime, size }`, twelve
 // bytes with the length at offset 8. Titles treat a zero result with out[2]
-// above a size threshold as a valid save. A name nothing has answers
-// M_E_BADRECID, which is what a missing database has always answered here.
+// above a size threshold as a valid save.
 //
-// **A directory this platform was asked to make is a name it has.** Nothing
-// here holds a directory — the store is one flat map from a name to its bytes
-// — so `MC_fsMkDir` writes the name down and that list is the whole of what a
-// directory is. `MC_fsIsExist` already reads it, and a stat that did not was
-// the same question answered two ways: one title makes its shared directory,
-// stats the name it just made, is told there is no such thing, and calls
-// `MC_knlExit` inside `startApp`. The list is what both calls consult now.
+// **A directory is a name it has**, as it is to MC_fsIsExist: the root, a name
+// `MC_fsMkDir` wrote down, or one a file lies below. One title makes its
+// shared directory, stats the name it just made, and calls `MC_knlExit` inside
+// `startApp` if it is told there is no such thing. A directory answers with
+// `MC_FILE_IS_DIR` in the attribute word: the value is `MH_FILE_IS_DIR`, which
+// the specification's HAL page gives as `0x01`. The word was zero while that
+// value was unknown here; the one title that reads it tests bits 3 and 1 and
+// files the entry the same way whatever it finds, so the bit changes nothing
+// it does. A file's word stays zero, since the store keeps no attributes, and
+// no creation time is kept for either.
 //
-// The attribute word stays zero, and that is a decision rather than an
-// omission. The specification defines `MC_FILE_IS_DIR` through the HAL rather
-// than giving its value, and the one title that asks reads out[0] as a
-// bitfield — it tests bit 3, then bit 1, and files the entry under a different
-// kind for each — without branching on the kind it gets: the same run, frame
-// for frame, with the word set to 0, 2 or 8. A bit nothing here established is
-// worse than a zero, and there is nothing local left for it to settle.
+// A name nothing has answers `M_E_NOENT`, as every platform's does
+// (docs/wipi-storage.md); it used to be `M_E_BADRECID`, which was what a
+// missing database answered here.
 func (runtime *initializationRuntime) wipicFileStatByName(thread *armcore.Thread) (uint32, error) {
+	const isDirectory = 0x01 // MC_FILE_IS_DIR
 	nameAddress, err := thread.Register(0)
 	if err != nil {
 		return 0, err
@@ -721,39 +764,46 @@ func (runtime *initializationRuntime) wipicFileStatByName(thread *armcore.Thread
 	if err != nil {
 		return 0, fmt.Errorf("read KTF database name: %w", err)
 	}
-	if !cFileNameKeyed(name) {
-		runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> missing", name))
-		return wipicErrorBadParam, nil
+	if nameTooLong(name) {
+		return wipicErrorLongName, nil
 	}
-	size := uint32(0)
+	if listingPath(name) != "" && !cFileNameKeyed(name) {
+		runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> bad name", name))
+		return wipicErrorBadFileName, nil
+	}
 	if store, ok := runtime.cFiles[name]; ok {
-		size = uint32(len(store.data))
-	} else if seed, ok := runtime.databaseSeed(name); ok {
+		runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> %d", name, len(store.data)))
+		return runtime.writeFileStat(outAddress, uint32(len(store.data)), 0)
+	}
+	if seed, ok := runtime.databaseSeed(name); ok {
 		// The save, then the packaged copy, as before — through the removal
 		// list, which MC_fsIsExist and an open consult as well. A removed
 		// name leaves an empty entry under its key, because the store cannot
 		// delete, and read directly that was a file of zero bytes.
-		size = uint32(len(seed))
-	} else if runtime.createdDirectories()[name] {
-		// A made directory holds no bytes, so the length it reports is zero;
-		// what matters to the caller is that the call succeeded at all.
-		runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> directory", name))
-		return runtime.writeFileStat(outAddress, 0)
-	} else {
-		runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> missing", name))
-		return wipicErrorBadParam, nil
+		runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> %d", name, len(seed)))
+		return runtime.writeFileStat(outAddress, uint32(len(seed)), 0)
 	}
-	runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> %d", name, size))
-	return runtime.writeFileStat(outAddress, size)
+	directory, err := runtime.cFileIsDirectory(name)
+	if err != nil {
+		runtime.countDiagnostic(fmt.Sprintf("cdb stat error: %v", err))
+		return wipicErrorGeneric, nil
+	}
+	if directory {
+		runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> directory", name))
+		return runtime.writeFileStat(outAddress, 0, isDirectory)
+	}
+	runtime.countDiagnostic(fmt.Sprintf("cdb stat %s -> missing", name))
+	return wipicErrorNotFound, nil
 }
 
 // writeFileStat fills the MH_FileInfo the stat was handed and answers success.
 // A caller that passed no record still gets the answer.
-func (runtime *initializationRuntime) writeFileStat(outAddress, size uint32) (uint32, error) {
+func (runtime *initializationRuntime) writeFileStat(outAddress, size, attributes uint32) (uint32, error) {
 	if outAddress == 0 {
 		return 0, nil
 	}
 	record := make([]byte, 12)
+	binary.LittleEndian.PutUint32(record[0:], attributes)
 	binary.LittleEndian.PutUint32(record[8:], size)
 	if err := runtime.client.core.Memory().Write(outAddress, record); err != nil {
 		return 0, fmt.Errorf("write KTF database stat: %w", err)
@@ -761,30 +811,26 @@ func (runtime *initializationRuntime) writeFileStat(outAddress, size uint32) (ui
 	return 0, nil
 }
 
-// wipicFileTouch implements the KTF custom slot 15, which the original
-// runtime's own emulator never named either. One local title calls it, from
-// its save loader:
+// wipicFileTell serves MC_fsTell(fd): the handle's cursor. Slot 15 is where
+// the specification's order puts it, and the one local title that calls it
+// does so from its save loader in exactly the shape a program without a size
+// call uses to ask for one:
 //
 //	handle = open(name, read, 1)
 //	size   = seek(handle, 0, SEEK_END)
 //	if size > 0 { slot15(handle); seek(handle, 0, SEEK_SET) }
 //
 // The call takes the handle alone — the disassembly reaches it through the
-// `bx r2` trampoline with only r0 set — and the caller drops the result into a
-// scratch local that the following seek overwrites before anything reads it.
-// The cursor is reset immediately afterwards too, so any positioning this
-// performs is unobservable. That leaves an open stream to validate and nothing
-// to do, which is what this answers; an unknown handle is rejected the way the
-// other handle-taking slots reject one.
-func (runtime *initializationRuntime) wipicFileTouch(thread *armcore.Thread) (uint32, error) {
+// `bx r2` trampoline with only r0 set. That title drops the answer, which is
+// why answering zero had passed; a title that keeps it is asking where the
+// cursor is. An unknown handle answers M_E_BADFD, the specification's code for
+// it.
+func (runtime *initializationRuntime) wipicFileTell(thread *armcore.Thread) (uint32, error) {
 	state, err := runtime.wipicFileHandle(thread)
 	if err != nil {
-		return wipicErrorInvalid, nil
+		return wipicErrorBadFD, nil
 	}
-	// A second title calling this with a different shape would need the real
-	// semantics, so record that it happened rather than passing silently.
-	runtime.countDiagnostic(fmt.Sprintf("cdb slot15 %s", state.store.name))
-	return 0, nil
+	return uint32(state.position), nil
 }
 
 // wipicFileSeek implements the KTF select-record extension, a seek over

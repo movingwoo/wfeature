@@ -142,12 +142,17 @@ const (
 	// refusal still happens where it always did, at the call.
 	wipicAccessLevel uint32 = 0xff
 
-	wipicErrorNotFound uint32 = 0xfffffff4 // M_E_NOENT (-12)
-	wipicErrorInvalid  uint32 = 0xfffffff7 // M_E_INVALID (-9)
-	wipicErrorShortBuf uint32 = 0xffffffee // M_E_SHORTBUF (-18)
-	wipicErrorExists   uint32 = 0xfffffffb // M_E_EXIST (-5)
-	wipicErrorBadParam uint32 = 0xffffffea // M_E_BADRECID (-22)
-	wipicErrorGeneric  uint32 = 0xffffffff // -1
+	wipicErrorNotFound    uint32 = 0xfffffff4 // M_E_NOENT (-12)
+	wipicErrorInvalid     uint32 = 0xfffffff7 // M_E_INVALID (-9)
+	wipicErrorShortBuf    uint32 = 0xffffffee // M_E_SHORTBUF (-18)
+	wipicErrorExists      uint32 = 0xfffffffb // M_E_EXIST (-5)
+	wipicErrorBadParam    uint32 = 0xffffffea // M_E_BADRECID (-22)
+	wipicErrorGeneric     uint32 = 0xffffffff // -1
+	wipicErrorBadFD       uint32 = 0xfffffffe // M_E_BADFD (-2)
+	wipicErrorBadFileName uint32 = 0xfffffffd // M_E_BADFILENAME (-3)
+	wipicErrorNotEmpty    uint32 = 0xfffffff1 // M_E_NOTEMPTY (-15)
+	wipicErrorLongName    uint32 = 0xfffffff5 // M_E_LONGNAME (-11)
+	wipicErrorNoSpace     uint32 = 0xfffffff3 // M_E_NOSPACE (-13)
 )
 
 // InitializationCallbacks summarizes the platform callbacks reached while a
@@ -417,6 +422,11 @@ type initializationRuntime struct {
 	// madeDirectories is the set of names MC_fsMkDir has made, loaded from the
 	// store on first use. See directoryListKey.
 	madeDirectories map[string]bool
+	// madeGuestDirectories is the same for FileSystem.mkdir, and
+	// databaseSizes the record size each Java database was created with. See
+	// storage_contract.go.
+	madeGuestDirectories map[string]bool
+	databaseSizes        map[string]int32
 	// clips holds each org.kwis.msp.media.Clip's sound bytes and, once played,
 	// its loaded handle. See runtime_media.go for why they are not guest fields.
 	clips         map[weak.Pointer[jvm.Object]]*clipState

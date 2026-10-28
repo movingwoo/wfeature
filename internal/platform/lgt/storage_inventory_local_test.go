@@ -188,7 +188,7 @@ func inventoryStorage(client *Client, note func(column int, name string)) storag
 			note(column, name)
 		}
 	}
-	view := &Client{archive: client.archive, saveStore: client.saveStore}
+	view := &Client{archive: client.archive, saveStore: client.saveStore, databaseLayout: client.databaseLayout}
 	// A lookup the store refused says nothing about the handle it was for, so
 	// it is counted as that and the comparison is left out.
 	refused := func(name string) bool {
@@ -270,7 +270,7 @@ func inventoryStorage(client *Client, note func(column int, name string)) storag
 			}
 			counts[storageDatabases]++
 			names[database.name]++
-			stored, exists := view.readFile(databaseFileName(database.name))
+			stored, exists := view.readDatabase(database.name)
 			if refused(database.name) {
 				continue
 			}

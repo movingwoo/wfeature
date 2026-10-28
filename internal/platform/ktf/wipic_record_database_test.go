@@ -410,13 +410,15 @@ func TestTheNamesTheTablesKeepTheirOwnListsUnderAreReserved(t *testing.T) {
 			t.Fatalf("%q reaches a key a table keeps its own list under", name)
 		}
 	}
-	if !reservedStorageName(cFileScope, ".dirs") {
-		t.Fatal("the file table's directory list is not reserved on its own scope")
+	for _, reserved := range []struct{ scope, name string }{
+		{cFileScope, ".dirs"}, {guestFileScope, ".dirs"}, {javaDatabaseScope, ".sizes"},
+	} {
+		if !reservedStorageName(reserved.scope, reserved.name) {
+			t.Fatalf("%s/%s, a list a table keeps, is not reserved", reserved.scope, reserved.name)
+		}
 	}
-	// A name is reserved only on the scope that keeps a list of it: the guest
-	// filesystem has no directory list, so a guest file called ".dirs"
-	// collides with nothing.
-	for _, name := range []string{".dirs", ".index", "sub/.removed", "removed", ".removedx", "scores"} {
+	// A name is reserved only on the scope that keeps a list of it.
+	for _, name := range []string{".index", ".sizes", "sub/.removed", "removed", ".removedx", "scores"} {
 		if reservedStorageName(guestFileScope, name) {
 			t.Fatalf("%q collides with nothing under fs/ and was refused", name)
 		}

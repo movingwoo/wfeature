@@ -228,12 +228,30 @@ type Client struct {
 	// and a quick save or a quick load asks the store again before it goes
 	// on. See storeIssuedWrites.
 	removedUnsaved, createdUnsaved bool
+	// directories is the set of directories the title has made, loaded from
+	// the store on first use, and directoriesUnsaved says the store refused
+	// its last write, as the two bits above say of theirs. See
+	// fileDirectoriesKey.
+	directories        map[string]bool
+	directoriesUnsaved bool
+	// storedSizes remembers, for each path whose save the space count has
+	// read, how many bytes the save held and the path's epoch then, so the
+	// count asks the store again only about paths written since. See
+	// storageAvailable.
+	storedSizes map[string]storedSize
 	// databaseIndexWaiting says the store refused the last write of the
 	// database index, which databaseIndexPending holds: memory is ahead of
 	// the store, as with the path lists, and the next create or delete, the
 	// ending and a quick step write it again.
 	databaseIndexWaiting bool
 	databaseIndexPending []byte
+	// databaseLayout is where this session's databases are kept, decided the
+	// first time a running session reads them: in their own scope, or, while
+	// the store has refused the move, among the files where earlier builds
+	// kept them. databaseEpochs counts each database's changes in its own
+	// scope as fileEpochs counts a path's. See java_database_store.go.
+	databaseLayout databaseLayout
+	databaseEpochs map[string]uint64
 	// fileEpochs counts, for each path, how often its save has changed under
 	// the session: a write the store took, or a removal. An open buffer
 	// remembers the count it was last level with, which is how a quick step

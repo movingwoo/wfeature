@@ -158,14 +158,20 @@ type javaRuntime struct {
 	paintedText       []uint32
 	paintedTextCard   uint32
 	// dates is the instant each java/util/Date stands for.
-	dates          map[uint32]int64
-	databases      map[uint32]*javaDatabase
-	workers        []*javaWorker
-	threadStacks   int
-	graphics       map[uint32]*javaGraphics
-	card           uint32
-	cardDirty      bool
-	screenGraphics uint32
+	dates     map[uint32]int64
+	databases map[uint32]*javaDatabase
+	// databaseModified is, for each database name, the guest time of the
+	// last write to it in this session, or of the session's first open of it
+	// when nothing has been written since: what getLastModified answers. It
+	// outlives the objects on a database, because the first open it keeps can
+	// be an object the collector has since reclaimed. See javaDataBaseModified.
+	databaseModified map[string]int64
+	workers          []*javaWorker
+	threadStacks     int
+	graphics         map[uint32]*javaGraphics
+	card             uint32
+	cardDirty        bool
+	screenGraphics   uint32
 	// named is every distinct string constant the title has built. A constant
 	// is built by the code that holds it, so the set answers "has the title
 	// reached the code that names this" — and the set, rather than a line per

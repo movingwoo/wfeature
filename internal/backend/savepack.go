@@ -353,8 +353,27 @@ func ReadSaveTree(root string) ([]SaveEntry, error) {
 	if names.naming == namingConverting {
 		return nil, refuseSaveNamesListing(root, names)
 	}
+	choice, err := collectSaveTree(root, names)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]SaveEntry, 0, len(choice))
+	for _, key := range choice.keys() {
+		data, err := os.ReadFile(choice[key].path)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, SaveEntry{Key: key, Data: data})
+	}
+	return entries, nil
+}
+
+// collectSaveTree finds every save an owner directory holds, by key, and the
+// file each one is read from. The caller holds the tree's lock and has settled
+// its names; a backup reads the files it chose, and a listing only their keys.
+func collectSaveTree(root string, names saveNames) (saveEntryChoice, error) {
 	choice := saveEntryChoice{}
-	err = walkSaveTree(root, func(name string, entry fs.DirEntry, err error) error {
+	err := walkSaveTree(root, func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			// The root not being there is the first run, and it is the only
 			// missing path that is not a problem: anything below the root was
@@ -396,15 +415,7 @@ func ReadSaveTree(root string) ([]SaveEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries := make([]SaveEntry, 0, len(choice))
-	for _, key := range choice.keys() {
-		data, err := os.ReadFile(choice[key].path)
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, SaveEntry{Key: key, Data: data})
-	}
-	return entries, nil
+	return choice, nil
 }
 
 // walkSaveTree is filepath.WalkDir for an owner directory that may be a link.
