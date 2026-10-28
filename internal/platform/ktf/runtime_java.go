@@ -2815,19 +2815,24 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 		// The record size is the creating open's. A database an earlier
 		// build created has none on record, and takes the size of the open
 		// that finds it from here on.
-		if source == storageAbsent {
+		//
+		// **Writing the size down never fails the open.** The database is
+		// there either way, and a store that refuses the table — read-only,
+		// or failing — would otherwise hide a player's save behind a
+		// DataBaseException over a number getRecordSize alone answers. The
+		// object keeps the size, and a later open writes it again.
+		if source == storageAbsent || runtime.javaDatabaseSizes()[name] == 0 && recordSize > 0 {
 			if err := runtime.setJavaDatabaseSize(name, recordSize); err != nil {
-				return jvm.VoidValue(), runtimeDataBaseException(err.Error())
-			}
-		} else if runtime.javaDatabaseSizes()[name] == 0 && recordSize > 0 {
-			if err := runtime.setJavaDatabaseSize(name, recordSize); err != nil {
-				return jvm.VoidValue(), runtimeDataBaseException(err.Error())
+				runtime.countDiagnostic(fmt.Sprintf("jdb size %s: %v", name, err))
 			}
 		}
 		store.recordSize = runtime.javaDatabaseSizes()[name]
+		if store.recordSize == 0 && recordSize > 0 {
+			store.recordSize = recordSize
+		}
 	}
 	if store.modified == 0 {
-		store.modified = runtime.guestMillis()
+		store.modified = runtime.recordedMillis()
 	}
 	database := &jvm.Object{
 		ClassName: "org/kwis/msp/db/DataBase",
@@ -3019,7 +3024,7 @@ func (runtime *initializationRuntime) storeDatabaseRecords(store, staged *runtim
 		return runtimeDataBaseException(err.Error())
 	}
 	store.records = staged.records
-	store.modified = runtime.guestMillis()
+	store.modified = runtime.recordedMillis()
 	runtime.bindDetachedDatabase(store)
 	return nil
 }

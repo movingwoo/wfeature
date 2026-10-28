@@ -585,8 +585,8 @@ func TestRemovingAReservedNameCannotWipeTheListItNames(t *testing.T) {
 	if err := thread.SetRegister(0, nameAddress); err != nil {
 		t.Fatal(err)
 	}
-	if result, err := runtime.handleWIPICFileCall(thread, wipicFileDelete); err != nil || result != wipicErrorInvalid {
-		t.Fatalf("removing the list = %#x, err = %v, want it refused", result, err)
+	if result, err := runtime.handleWIPICFileCall(thread, wipicFileDelete); err != nil || result != wipicErrorBadFileName {
+		t.Fatalf("removing the list = %#x, err = %v, want it refused with M_E_BADFILENAME", result, err)
 	}
 	after, ok := runtime.loadSave(databaseRemovedKey)
 	if !ok || string(after) != string(before) {
@@ -605,8 +605,8 @@ func TestRemovingAReservedNameCannotWipeTheListItNames(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if result, err := runtime.handleWIPICFileCall(thread, wipicFileRename); err != nil || result != wipicErrorInvalid {
-		t.Fatalf("renaming the list away = %#x, err = %v, want it refused", result, err)
+	if result, err := runtime.handleWIPICFileCall(thread, wipicFileRename); err != nil || result != wipicErrorBadFileName {
+		t.Fatalf("renaming the list away = %#x, err = %v, want it refused with M_E_BADFILENAME", result, err)
 	}
 	moved, ok := runtime.loadSave(databaseRemovedKey)
 	if !ok || string(moved) != string(before) {

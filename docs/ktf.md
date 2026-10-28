@@ -278,7 +278,9 @@ See [save integrity](session.md#save-integrity) for failure recovery and limits.
 
 A record database the archive carries, as one `qtcdb` file or as a `qtpdb`
 index beside its data file, is readable through both the WIPI C record table
-and Java `DataBase`; opening it writes no save. A deleted name is listed in
+and Java `DataBase`; opening it writes no save but Java's note of its record
+size in `jdb/.sizes`, and a store that refuses that note does not fail the open
+([review](history/ktf.md#ktf-storage-review-2026-10-22)). A deleted name is listed in
 `rdb/.removed` or `jdb/.removed`, so neither the emptied save nor the packaged
 copy returns ([history](history/ktf.md#implementation-a-packaged-database-is-packaged-in-two-shapes-and-the-commoner-one-was-unreadable)).
 

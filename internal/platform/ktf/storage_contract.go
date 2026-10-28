@@ -96,9 +96,17 @@ func (runtime *initializationRuntime) storageUsed() (int, error) {
 		}
 		return total
 	}
+	// A database the archive ships in a database's own form counts what its
+	// records hold. Otherwise the archive's file of the same name is the
+	// packaged copy, as the contract words it: a title that keeps a shipped
+	// file as a database record — one keeps 1.4 MB of its own data so — had
+	// that whole file counted, was told it had no room left, and refused to
+	// start (docs/history/ktf.md#ktf-storage-review-2026-10-22).
 	packagedBytes := func(name string) int {
-		records, _ := runtime.packagedRecordDatabase(name, 0)
-		return recordBytes(records)
+		if records, ok := runtime.packagedRecordDatabase(name, 0); ok {
+			return recordBytes(records)
+		}
+		return len(runtime.client.files[strings.TrimPrefix(name, "/")])
 	}
 	seen = make(map[string]bool)
 	for name, store := range runtime.recordDatabases {

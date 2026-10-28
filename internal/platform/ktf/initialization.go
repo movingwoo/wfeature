@@ -649,6 +649,19 @@ func (runtime *initializationRuntime) guestMillis() int64 {
 	return runtime.virtualBaseMillis + int64(time.Duration(scaled)/time.Millisecond)
 }
 
+// recordedMillis is guestMillis for a time the Host writes down for itself,
+// such as when a database was last written, rather than one the guest asked
+// for. It counts no read and moves no clock: guestMillis counts every call as
+// the guest waiting on the time, which changes how the step budget charges the
+// call it came from, so reading it for bookkeeping moved a title's timing
+// (docs/history/ktf.md#ktf-storage-review-2026-10-22).
+func (runtime *initializationRuntime) recordedMillis() int64 {
+	if runtime == nil {
+		return time.Now().UnixMilli()
+	}
+	return runtime.virtualBaseMillis + int64(runtime.guestElapsed()/time.Millisecond)
+}
+
 // guestElapsed is how much guest time has passed since the runtime was built,
 // which is the timeline audio playback runs on. guestMillis answers the same
 // clock as a wall-clock date, which is what the guest's own time APIs want.

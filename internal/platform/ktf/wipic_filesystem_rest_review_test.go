@@ -28,15 +28,17 @@ func closeDatabaseHandle(t *testing.T, runtime *initializationRuntime, handle ui
 // on the first read and left the session unable to save anything; a name with
 // a line break wrote a removal list that hid two unrelated files. The root is
 // a directory to every question about one (docs/wipi-storage.md) and still no
-// file to open.
+// file to open. Every refusal of a name the store cannot keep is
+// M_E_BADFILENAME, as LGT answers it; these were M_E_INVALID and, for
+// MC_fsIsExist, M_E_NOENT.
 func TestFileNamesThatAreNotKeysOfTheirOwnAreRefused(t *testing.T) {
 	root := t.TempDir()
 	_, runtime := newTestRuntime(t)
 	runtime.client.saveStore = NewDirectorySaveStore(root)
 
 	for _, name := range []string{"/", ".", "./"} {
-		if got := databaseCall(t, runtime, wipicFileOpen, name, 4); got != wipicErrorInvalid {
-			t.Errorf("open(%q) = %#x, want M_E_INVALID", name, got)
+		if got := databaseCall(t, runtime, wipicFileOpen, name, 4); got != wipicErrorBadFileName {
+			t.Errorf("open(%q) = %#x, want M_E_BADFILENAME", name, got)
 		}
 		if got := databaseCall(t, runtime, wipicFileExists, name); got != 0 {
 			t.Errorf("exists(%q) = %#x, want 0 for the root", name, got)
@@ -49,11 +51,11 @@ func TestFileNamesThatAreNotKeysOfTheirOwnAreRefused(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"a/../b", ".."} {
-		if got := databaseCall(t, runtime, wipicFileOpen, name, 4); got != wipicErrorInvalid {
-			t.Errorf("open(%q) = %#x, want M_E_INVALID", name, got)
+		if got := databaseCall(t, runtime, wipicFileOpen, name, 4); got != wipicErrorBadFileName {
+			t.Errorf("open(%q) = %#x, want M_E_BADFILENAME", name, got)
 		}
-		if got := databaseCall(t, runtime, wipicFileExists, name); got != wipicErrorNotFound {
-			t.Errorf("exists(%q) = %#x, want M_E_NOENT", name, got)
+		if got := databaseCall(t, runtime, wipicFileExists, name); got != wipicErrorBadFileName {
+			t.Errorf("exists(%q) = %#x, want M_E_BADFILENAME", name, got)
 		}
 		if got := databaseCall(t, runtime, wipicFileStatByName, name, 0); got != wipicErrorBadFileName {
 			t.Errorf("stat(%q) = %#x, want M_E_BADFILENAME", name, got)
@@ -85,14 +87,14 @@ func TestFileNamesThatAreNotKeysOfTheirOwnAreRefused(t *testing.T) {
 	// Deleting or renaming a name the removal list cannot carry is refused
 	// rather than written into the list.
 	runtime.cFiles["a\nsave.dat"] = &runtimeCFile{name: "a\nsave.dat", data: []byte("x")}
-	if got := databaseCall(t, runtime, wipicFileDelete, "a\nsave.dat", 1); got != wipicErrorInvalid {
-		t.Errorf("delete(a\\nsave.dat) = %#x, want M_E_INVALID", got)
+	if got := databaseCall(t, runtime, wipicFileDelete, "a\nsave.dat", 1); got != wipicErrorBadFileName {
+		t.Errorf("delete(a\\nsave.dat) = %#x, want M_E_BADFILENAME", got)
 	}
-	if got := renameCall(t, runtime, "a\nsave.dat", "other.dat"); uint32(got) != wipicErrorInvalid {
-		t.Errorf("rename(a\\nsave.dat) = %d, want M_E_INVALID", got)
+	if got := renameCall(t, runtime, "a\nsave.dat", "other.dat"); uint32(got) != wipicErrorBadFileName {
+		t.Errorf("rename(a\\nsave.dat) = %d, want M_E_BADFILENAME", got)
 	}
-	if got := renameCall(t, runtime, "save.dat", "."); uint32(got) != wipicErrorInvalid {
-		t.Errorf("rename(save.dat, .) = %d, want M_E_INVALID", got)
+	if got := renameCall(t, runtime, "save.dat", "."); uint32(got) != wipicErrorBadFileName {
+		t.Errorf("rename(save.dat, .) = %d, want M_E_BADFILENAME", got)
 	}
 	if runtime.removedDatabases()["save.dat"] || runtime.removedDatabases()["a"] {
 		t.Fatal("a refused delete or rename reached the removal list")

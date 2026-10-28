@@ -51,6 +51,7 @@ This consolidation adds no execution or acceptance evidence.
 - [A name field the key rule refused — 2026-10-20](#lgt-text-input-2026-10-20)
 - [Text input review follow-ups — 2026-10-20](#lgt-text-input-review-2026-10-20)
 - [Image slots, C library names and the storage contract — 2026-10-22](#lgt-slot-corrections-2026-10-22)
+- [Storage contract review — 2026-10-22](#lgt-storage-review-2026-10-22)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -8001,3 +8002,39 @@ answers otherwise has a defect. What changed here, and why:
   `sortRecord` throws it again at the depth of the title's own call, where the
   title's try region takes it, as on KTF and SKT
   (`TestStorageContractDatabaseSortRecordThrowsToTheTitle`).
+
+<a id="lgt-storage-review-2026-10-22"></a>
+
+## Storage contract review — 2026-10-22
+
+A review of the contract ran saves earlier builds wrote through the build
+before it and the build after it ([the KTF record](ktf.md#ktf-storage-review-2026-10-22)
+has the method). Of 93 local LGT save trees, 92 end every checkpoint on the
+same frame under both builds, and the other differs for a few checkpoints at
+its start and then matches: its calls are the same but for slot 0xeb, which
+now frees the image it is given. The seven titles that keep databases moved
+fourteen of them into `jdb/`, each byte for byte what the build before wrote
+under `fs/` in the same run, including a record written during it. Nothing on
+this platform was changed by the review.
+
+What it found and left, because changing it risks more than the case it covers
+and no local save reaches it:
+
+- A container with no index of the earlier layout beside it is not moved, and
+  the database is lost to the title. The index came in with the databases
+  themselves, so only an index write that failed after its container's leaves
+  one; a fix would have to read the created list without the index, a path
+  only a test can exercise.
+- A removal list the store refuses after the move, followed by a crash before
+  the session ends, leaves the old containers visible as files. Writing the
+  removals again in every later session would hide a file of the same name the
+  title made after the move.
+- Names earlier builds kept and the contract refuses — a database named `.`,
+  `.removed` or carrying a carriage return, a file named `.directories`, a name
+  of 256 to about 509 bytes — are no longer reached. None is a name a title
+  uses.
+- The 4 MiB bounds refuse every write to a database or file already past them,
+  including one that would shrink it. No local LGT save is over 250 KB.
+- `sortRecord` finds the filter's and comparator's methods by name alone
+  (`javaCallbackBody`), so an overload of `compare` or `filter` would be called
+  with the wrong arguments. Not seen in a title.
