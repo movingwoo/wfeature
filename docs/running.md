@@ -454,9 +454,10 @@ to stdout and the log to stderr, so `wfeature-server -version | …` reads only
 the answer, which the smoke job and version reports depend on.
 
 **A pushed tag publishes them.** `.github/workflows/release.yml` runs on a tag
-matching `v*`. It first calls `checks.yml`, the gate every push runs (see
+matching `v*`. It calls `checks.yml`, the gate every pull request and every
+push to `main` runs (see
 [What was verified, and where](#what-was-verified-and-where)), and at the same
-time builds on three machines and starts both apps on two more:
+time builds on three machines and starts both apps on three more:
 
 | job | machine | what it does |
 |---|---|---|
@@ -626,11 +627,11 @@ source and build trees.
 
 Only macOS was executed by hand: the repository is developed on one machine,
 and cross-compiling proves a build, not a run. The CI rows are
-`.github/workflows/checks.yml`: its `test` job on Ubuntu, and its `smoke` job on
+`.github/workflows/checks.yml`: its `suite` job's three suites on Ubuntu, gathered into one `test` check, and its `smoke` job on
 Ubuntu, Windows and macOS runners, which builds only `./cmd/server` there, also
 cross-compiles the Android server on Linux and compiles the iOS library and app
 on macOS. The rest of the tree is compiled for Windows only by cross-compiling. `verify.yml` calls
-`checks.yml` on every push and pull request, and `release.yml` calls it before
+`checks.yml` on every pull request and every push to `main`, and `release.yml` calls it before
 it publishes, so no tag can ship a binary that was never started. What the table
 shows is that nothing in the Go tree is platform-specific enough to fail to
 compile or to trip `vet`, and that the paths and process handling the server

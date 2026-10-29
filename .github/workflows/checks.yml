@@ -31,12 +31,21 @@ defaults:
     shell: bash
 
 jobs:
-  test:
+  # Three suites on three runners rather than one after another: the race run
+  # alone is most of the wait, and the other two finish inside it. The
+  # suite's name is the cache's name too, because each one compiles the tree
+  # differently — the debug tag and the race detector are separate builds.
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [release, debug, race]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - id: go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # The newest released Go rather than the one go.mod names. go.mod's
           # directive is the floor a checkout has to clear; what CI builds
@@ -46,9 +55,32 @@ jobs:
           # is what govulncheck reported, correctly, about binaries users
           # would have downloaded.
           go-version: stable
-          cache: true
+          # The action's own cache is keyed by go.sum alone, so it was
+          # written once by whichever job got there first — the smoke build
+          # of one binary — and never again while the code under it grew.
+          # The steps below key it by suite and commit instead.
+          cache: false
+
+      - name: Find the Go caches
+        id: paths
+        run: |
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+
+      # A run starts from the newest cache main saved for its suite and Go
+      # version, and recompiles only what changed since that commit. Only a
+      # push to main writes one (the last step), so a pull request reads
+      # main's and a release tag reads it too, and neither adds a copy.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.paths.outputs.build }}
+            ${{ steps.paths.outputs.modules }}
+          key: go-${{ matrix.suite }}-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.sha }}
+          restore-keys: go-${{ matrix.suite }}-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: matrix.suite == 'release'
         with:
           node-version: "22"
           # This repository has no npm dependencies — the Node tests import
@@ -60,13 +92,15 @@ jobs:
           package-manager-cache: false
 
       - name: Check gofmt
+        if: matrix.suite == 'release'
         run: |
           unformatted=$(gofmt -l cmd internal mobile)
           if [ -n "$unformatted" ]; then
             echo "gofmt would change:"; echo "$unformatted"; exit 1
           fi
 
-      - run: go vet ./...
+      - if: matrix.suite == 'release'
+        run: go vet ./...
 
       # A game archive is untrusted input and the decoders it reaches are
       # third-party, so a known vulnerability in one of them is this project's
@@ -74,14 +108,55 @@ jobs:
       # session in it down. govulncheck reports only what is actually reachable
       # from this code, so a finding here is one this build can be made to hit.
       - name: Check for known vulnerabilities
+        if: matrix.suite == 'release'
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
       # Both profiles, because the debug build tag changes real behaviour.
-      - run: make test
-      - run: make test-debug
-      - run: go test -race ./internal/...
+      # -count=1 because the restored cache carries main's test results too,
+      # and a test that passed there is run again here rather than reported
+      # from memory; the cache is for the compiling.
+      - if: matrix.suite == 'release'
+        env:
+          GOFLAGS: -count=1
+        run: make test
+      - if: matrix.suite == 'debug'
+        env:
+          GOFLAGS: -count=1
+        run: make test-debug
+      - if: matrix.suite == 'race'
+        env:
+          GOFLAGS: -count=1
+        run: go test -race ./internal/...
+
+      # Go marks an entry it reads by its modification time, once it is an
+      # hour old, so an entry nothing in this run touched is older than the
+      # run. Dropping those before saving keeps the cache the size of one
+      # build instead of every build since the first one.
+      - name: Drop the cache entries this run did not read
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: find "${{ steps.paths.outputs.build }}" -type f -mmin +90 -delete
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.paths.outputs.build }}
+            ${{ steps.paths.outputs.modules }}
+          key: go-${{ matrix.suite }}-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.sha }}
+
+  # The repository's ruleset requires one check, `checks / test`, so the
+  # suites report through it rather than under names of their own: splitting
+  # them further changes nothing outside this file. It runs when a suite
+  # failed too and fails with it, because a required check that was skipped
+  # counts as passed.
+  test:
+    needs: suite
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every suite passed
+        run: test "${{ needs.suite.result }}" = success
 
   # A release is "the server binary for an OS, a folder to drop games into, and
   # a browser", so what has to be verified per OS is that the binary starts,
