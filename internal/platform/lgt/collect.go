@@ -323,10 +323,20 @@ func (client *Client) collectJavaObjects(extraRoots []uint32) (CollectionStats, 
 	client.markJavaPlatformRoots(mark)
 
 	// Registers and thread-local words of every thread that can resume.
+	//
+	// **Every call in flight on a thread, not only the thread's own frame.** A
+	// call the platform makes into the title — a callback, a class
+	// initialiser, a key's hashCode — runs on a thread derived from the one it
+	// was made on, and its registers are its own: a collection the arena raises
+	// inside it, or one at a tick's end while a guest thread is parked inside
+	// one, would otherwise see that call's stack but not what its code holds in
+	// registers. Every derived call is stopped at a supervisor call or parked
+	// whenever this runs, so its saved context is its registers.
 	for _, thread := range client.collectionThreads() {
-		context := thread.Context()
-		for _, register := range context.Registers {
-			mark(register)
+		for _, context := range thread.LiveContexts() {
+			for _, register := range context.Registers {
+				mark(register)
+			}
 		}
 		for _, word := range client.core.ThreadLocalWords(thread) {
 			mark(word)
@@ -482,9 +492,26 @@ func (client *Client) walkJavaPayload(object uint32, mark func(uint32)) {
 	if clip := client.clips[object]; clip != nil && clip.java {
 		mark(clip.listener)
 	}
-	// A vector holds its elements here rather than in a guest array.
+	// A vector holds its elements here rather than in a guest array, and a
+	// hashtable its keys and values.
 	for _, element := range runtime.vectors[object] {
 		mark(element)
+	}
+	if table := runtime.hashtables[object]; table != nil {
+		for _, chain := range table.buckets {
+			for _, entry := range chain {
+				mark(entry.key)
+				mark(entry.value)
+			}
+		}
+	}
+	// An enumeration holds the vector it walks, or what the table it came
+	// from held.
+	if enumeration := runtime.enumerations[object]; enumeration != nil {
+		mark(enumeration.vector)
+		for _, item := range enumeration.items {
+			mark(item)
+		}
 	}
 	// A container holds its children, a child holds its parent, and a text
 	// component holds its input-method handler. The handler in turn holds the
@@ -622,6 +649,12 @@ func (client *Client) releaseJavaPayloads(dead []uint32, stats *CollectionStats)
 		delete(runtime.threads, object)
 		delete(runtime.monitors, object)
 		delete(runtime.vectors, object)
+		delete(runtime.vectorShapes, object)
+		delete(runtime.bufferCapacities, object)
+		delete(runtime.numbers, object)
+		delete(runtime.hashtables, object)
+		delete(runtime.enumerations, object)
+		delete(runtime.messages, object)
 		delete(runtime.calendars, object)
 		delete(runtime.sinks, object)
 		delete(runtime.wrapped, object)

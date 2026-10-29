@@ -253,8 +253,8 @@ func (fixture *javaThreadFixture) replay(checkpoint backend.Checkpoint, moments 
 
 func decodeRuntime(t *testing.T, checkpoint backend.Checkpoint) sessionCheckpointState {
 	t.Helper()
-	var saved sessionCheckpointState
-	if err := backend.DecodeCheckpointRecord(checkpoint.Runtime, &saved); err != nil {
+	saved, _, _, err := decodeLGTSessionRecord(checkpoint.Runtime)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return saved
@@ -266,6 +266,7 @@ func remainders(saved sessionCheckpointState) []string {
 	names := map[javaRemainder]string{
 		javaRemainderNone: "budget", javaRemainderResult: "result", javaRemainderWait: "wait",
 		javaRemainderMonitor: "monitor", javaRemainderInitializer: "initializer", javaRemainderFunction: "function",
+		javaRemainderJoin: "join",
 	}
 	var chains []string
 	for _, worker := range saved.Client.Java.Workers {

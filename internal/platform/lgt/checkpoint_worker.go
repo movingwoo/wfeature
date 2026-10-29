@@ -49,6 +49,9 @@ const (
 	javaRemainderInitializer
 	// The C library's "run this function" call, which is the same shape.
 	javaRemainderFunction
+	// `Thread.join`, which parks until the thread it waits for has ended and
+	// looks again each time its turn comes: what it has left is all of it.
+	javaRemainderJoin
 )
 
 // javaCallState is one ARM call a parked thread is inside, outermost first.
@@ -241,7 +244,7 @@ func (client *Client) captureJavaWorker(worker *javaWorker) (javaWorkerState, er
 				return javaWorkerState{}, fmt.Errorf("LGT guest thread is in a wait this platform did not record")
 			}
 			record.Object, record.Depth = worker.waiting.object, worker.waiting.depth
-		case javaRemainderMonitor:
+		case javaRemainderMonitor, javaRemainderJoin:
 			record.Object = frame.Context.Registers[0]
 		}
 		saved.Calls = append(saved.Calls, record)
@@ -329,6 +332,10 @@ func (client *Client) validateJavaWorker(saved javaWorkerState, stacks int) erro
 		case javaRemainderMonitor:
 			if record.Object != frame.Context.Registers[0] || record.Depth != 0 {
 				return invalid("a monitor its call does not name")
+			}
+		case javaRemainderJoin:
+			if record.Object != frame.Context.Registers[0] || record.Depth != 0 {
+				return invalid("a join on a thread its call does not name")
 			}
 		default:
 			if record.Object != 0 || record.Depth != 0 {
@@ -482,6 +489,11 @@ func (client *Client) completeJavaRemainder(
 	case javaRemainderMonitor:
 		if err := client.javaMonitorEnter(ctx, record.Object); err != nil {
 			return unsupported("taking a lock", err)
+		}
+		return thread.SetRegister(0, 0)
+	case javaRemainderJoin:
+		if err := client.joinJavaThread(ctx, worker, record.Object); err != nil {
+			return failed(fmt.Errorf("java/lang/Thread.join: %w", err))
 		}
 		return thread.SetRegister(0, 0)
 	case javaRemainderInitializer:

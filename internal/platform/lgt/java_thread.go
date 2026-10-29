@@ -587,7 +587,9 @@ func (client *Client) javaInterfaceTable(receiver, namePointer uint32) (uint32, 
 		return 0, fmt.Errorf("the interface at %#x has no name", namePointer)
 	}
 	for owner := class; owner != nil; owner = owner.Super {
-		for _, implemented := range owner.Record.Interfaces {
+		// A platform class's table is the one this platform gives it
+		// (javaPlatformInterfaces): it has no record to carry one.
+		for _, implemented := range javaInterfacesOf(owner) {
 			if implemented.Name != name {
 				continue
 			}
@@ -931,6 +933,66 @@ func javaThreadIsAlive(
 		return javaFalse, nil
 	}
 	return javaTrue, nil
+}
+
+// javaThreadJoin is `Thread.join()`, vtable slot 17: wait until the thread has
+// ended. The slot is the declaration rule's — Thread's own run from 10 is
+// start, run, interrupt, isAlive, setPriority, getPriority, getName, join, the
+// order of the specification's class page, which the anchors at 10, 13 and 14
+// already sit on.
+//
+// **A guest thread that joins hands its turn over until the other is done**, a
+// slice at a time, the way a wait does: nothing here queues a thread to be
+// woken, so it looks again each time its turn comes, and a thread that joins
+// itself waits for ever, as the language says it does. The platform's own
+// thread has no slice to end, so it gives the other threads their slices
+// itself until the one it waits for is done — bounded, because a thread that
+// never ends would otherwise hold the session's own call for good.
+func javaThreadJoin(
+	client *Client, ctx context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	return 0, client.joinJavaThread(ctx, client.activeJavaWorker, arguments[0])
+}
+
+// maxJavaJoinRounds is how many rounds of every guest thread the platform's
+// own thread gives one it joins before the join is reported. A round can be a
+// whole slice of every thread (javaThreadSliceSteps), and the session's tick
+// is held for all of them, so the bound is what a thread that never ends
+// costs: about four billion steps, where a thread told to stop ends in one
+// or two rounds and one loading a level in tens.
+const maxJavaJoinRounds = 1 << 10
+
+// joinJavaThread is the waiting itself. It is separate because a restored
+// thread runs it again from the top: what a join had left when the checkpoint
+// was taken is all of it. See checkpoint_worker.go.
+func (client *Client) joinJavaThread(ctx context.Context, worker *javaWorker, object uint32) error {
+	alive := func() bool {
+		target, known := client.javaRuntimeState().threads[object]
+		return known && target.worker != nil && !target.worker.done
+	}
+	if worker != nil {
+		for alive() {
+			worker.wakeAt, worker.yields = 0, 0
+			if err := worker.park(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for rounds := 0; alive(); rounds++ {
+		if rounds >= maxJavaJoinRounds {
+			return fmt.Errorf("join on a thread that has not ended after %d rounds of every thread", rounds)
+		}
+		// A thread asleep is charged its sleep, the way a wait the platform's
+		// thread cannot park against is charged to the guest clock.
+		if wait := client.javaRuntimeState().threads[object].worker.wakeAt - client.clock.now(); wait > 0 {
+			_ = client.clock.advance(wait)
+		}
+		if err := client.runOtherJavaWorkers(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // javaThreadSetPriority is `Thread.setPriority(int)`. The specification gives
