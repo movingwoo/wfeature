@@ -469,6 +469,12 @@ uninstall right after boot can leave that directory owned by the old copy's
 uid; the new install then can neither read its game list nor write a save, and
 the drain checks fail with nothing wrong in the app.
 
+The release workflow runs it before publishing (`android-lifecycle`, see
+[the release archives](running.md#the-release-archives)) on an x86_64 Google
+APIs emulator, with an APK built by `ANDROID_ABI=x86_64 sh
+mobile/android/build.sh`; that build needs an NDK (`ANDROID_NDK_HOME`) for its
+linker.
+
 It needs Node 22 for its WebSocket and does not use Playwright.
 `connectOverCDP` attaches to every page and turns on focus emulation in each,
 which makes the hidden page of a destroyed activity's web view visible again,
@@ -641,6 +647,11 @@ starts only with the scene life cycle; without it the script stops with that
 message, and with it the script passed there too. One manual build without
 `takeControllers` showed no controller to the page at all. A simulator does
 not cover a physical controller's pairing.
+
+The release workflow runs this script and `ios-lifecycle.mjs` before
+publishing (`ios-simulator`, see
+[the release archives](running.md#the-release-archives)), on the newest runtime
+of the runner's Xcode.
 
 `ios-lifecycle.mjs` checks [what the app does when it leaves the
 screen](mobile.md#when-the-app-leaves-the-screen) the same way, with its own

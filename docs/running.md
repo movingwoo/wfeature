@@ -455,21 +455,34 @@ the answer, which the smoke job and version reports depend on.
 
 **A pushed tag publishes them.** `.github/workflows/release.yml` runs on a tag
 matching `v*`. It first calls `checks.yml`, the gate every push runs (see
-[What was verified, and where](#what-was-verified-and-where)), then builds on
-three machines at once:
+[What was verified, and where](#what-was-verified-and-where)), and at the same
+time builds on three machines and starts both apps on two more:
 
-| job | machine | what it builds |
+| job | machine | what it does |
 |---|---|---|
 | `desktop` | Ubuntu | the five archives, `make dist` with `CGO_ENABLED=0` |
 | `android` | Ubuntu | the APK, `make mobile-android` |
 | `ios` | macOS | the IPA, `make mobile-ios` |
+| `android-lifecycle` | Ubuntu | an x86_64 build of the app on an Android 16 emulator, [`android-lifecycle.mjs`](testing.md#the-android-apps-lifecycle-on-an-emulator) |
+| `ios-simulator` | macOS | the app in the newest simulator runtime, [`ios-gamepad.mjs` and `ios-lifecycle.mjs`](testing.md#the-ios-app-on-a-simulator) |
 
 The split follows the runners: the Android SDK is on the Linux runner and Xcode
-is on the macOS one, and no runner has both. A `publish` job gathers the seven
-files, runs `make checksums` over all of them, runs
-`make dist-check DISTCHECK_FLAGS=-phones`, and creates the GitHub release.
-**A failure in any of the three build jobs publishes nothing**; a release
-missing its APK is the failure this shape prevents. The first releases built
+is on the macOS one, and no runner has both. A `publish` job waits for all of
+them and the checks, gathers the seven files, runs `make checksums` over all of
+them, runs `make dist-check DISTCHECK_FLAGS=-phones`, and creates the GitHub
+release. **A failure in any build, check or app run publishes nothing**; a
+release missing its APK is the failure this shape prevents. The builds do not
+wait for the checks, because only the publish job needs both. The two app runs
+keep what their scripts wrote under `var/acceptance/` as the run's
+`android-lifecycle` and `ios-simulator` artifacts for a week.
+
+The Android run cannot use the APK that ships. A hosted runner accelerates only
+an x86_64 emulator, on Linux with KVM, and the release APK carries an arm64
+server, so the job builds its own with `ANDROID_ABI=x86_64` and a throwaway key.
+Go links `android/amd64` only through the platform's C linker, so that build
+borrows the NDK's clang; no C is compiled. Everything but the server binary's
+architecture is the release's. The arm64 server that ships is cross-compiled
+and never started in CI. The first releases built
 the five archives in CI and uploaded the phone builds by hand afterwards, a step
 that was forgotten once; `-phones` is the check that now refuses a set without
 them.

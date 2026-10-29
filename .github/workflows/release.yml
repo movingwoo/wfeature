@@ -236,7 +236,9 @@ jobs:
       - name: Start the emulator
         run: |
           tools="$ANDROID_HOME/cmdline-tools/latest/bin"
-          yes | "$tools/sdkmanager" --licenses > /dev/null
+          # yes ends on a broken pipe once the licences are taken, which
+          # pipefail would report as the step failing.
+          (yes || true) | "$tools/sdkmanager" --licenses > /dev/null
           "$tools/sdkmanager" emulator platform-tools "$SYSTEM_IMAGE" > /dev/null
           echo no | "$tools/avdmanager" create avd -n ci -k "$SYSTEM_IMAGE" -d pixel_7
           "$ANDROID_HOME/emulator/emulator" -avd ci -no-window -no-audio \
