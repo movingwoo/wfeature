@@ -481,7 +481,12 @@ them.
 - **The notes are that version's section of [`CHANGELOG.md`](../CHANGELOG.md)**,
   found by the tag's number with any suffix removed, so `v0.4.0-pre` and
   `v0.4.0` read the same section. A version with no section fails the release
-  instead of publishing empty notes.
+  instead of publishing empty notes. Each group inside a version is a
+  `<details>` block whose `<summary>` is the group name, so the file and the
+  release page open folded; keep a blank line after `<summary>` and before
+  `</details>`, or the list inside shows as raw Markdown. The `## <version>`
+  line stays outside every block, because that line is what the notes step
+  looks for.
 - **The title is `W-Feature <tag>`**, because a release page shows the title
   above the notes and the tag alone does not say what it is a version of.
 - **The `android` job needs the signing key**, `ANDROID_KEYSTORE_BASE64`, a
