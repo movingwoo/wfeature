@@ -135,9 +135,9 @@ jobs:
       # run. Dropping those before saving keeps the cache the size of one
       # build instead of every build since the first one.
       - name: Drop the cache entries this run did not read
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'pull_request'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: find "${{ steps.paths.outputs.build }}" -type f -mmin +90 -delete
-      - if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'pull_request'
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
