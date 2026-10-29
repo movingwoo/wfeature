@@ -54,11 +54,23 @@ remains. If the sandbox blocks the default Go cache, point `GOCACHE` and
 
 ### Continuous integration
 
-`.github/workflows/verify.yml` calls `checks.yml` on every push and pull
-request, and `release.yml` calls the same file before it builds anything. The
-`test` job (Ubuntu, newest stable Go, Node 22) runs the `gofmt` check above,
-`go vet ./...`, `govulncheck ./...`, `make test`, `make test-debug` and
-`go test -race ./internal/...`. The `smoke` job builds the release server with
+`.github/workflows/verify.yml` calls `checks.yml` on every pull request and
+every push to `main`, and `release.yml` calls the same file before it builds
+anything. A push to another branch runs nothing on its own: its pull request
+runs the same commit merged with `main`, and running both doubled the wait for
+nothing. The `test` job (Ubuntu, newest stable Go) is three suites on three
+runners at once: `release` runs the `gofmt` check above, `go vet ./...`,
+`govulncheck ./...` and `make test` (with Node 22); `debug` runs
+`make test-debug`; `race` runs `go test -race ./internal/...`.
+
+Each suite restores the Go build and module caches that the newest `main` push
+saved for it, keyed by suite, Go version and commit, so a run recompiles only
+what changed since then. Only a push to `main` saves one, after dropping the
+entries that run did not read, which keeps a cache the size of one build.
+Tests run with `-count=1`, so a result `main` cached is run again rather than
+reused. The setup-go action's own cache stays off in these jobs: it is keyed by
+`go.sum` alone, and whichever job wrote it first — the one-binary smoke build —
+kept it that way while the tree grew. The `smoke` job builds the release server with
 `CGO_ENABLED=0` on Ubuntu, Windows and macOS, stages it as an archive does, and
 checks `-version`, `/api/status`, the embedded page, the data root it logs,
 `status` and `stop`. The Ubuntu runner also cross-compiles the server for
