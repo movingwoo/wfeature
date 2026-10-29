@@ -272,7 +272,7 @@ try {
   const steps = [];
   let consumed = 0, pending = "";
   child = spawn("xcrun", ["simctl", "launch", "--console-pty", "--terminate-running-process", device, bundle], {
-    env: { ...process.env, SIMCTL_CHILD_LIFECHECK_PLAN: JSON.stringify(cycles.map(({ name, before, probe }) => ({ name, before, probe }))) },
+    env: { ...process.env, SIMCTL_CHILD_LIFECHECK_PLAN: JSON.stringify(cycles.map(({ name, before, probe, kept }) => ({ name, before, probe, kept }))) },
   });
   const take = data => {
     consoleText += data;

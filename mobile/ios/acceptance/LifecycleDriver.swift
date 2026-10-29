@@ -41,6 +41,7 @@ private struct Cycle: Decodable {
     let name: String
     let before: [String]
     let probe: String?
+    let kept: String?
 }
 
 @MainActor
@@ -305,6 +306,16 @@ private final class LifecycleDriver {
             await pause(600)
         }
         await pause(500)
+        // On a slow machine the keys' picture can still be on its way after
+        // the pauses above; the marker waits for it, so the page's state
+        // before leaving is the game's picture rather than the one before it.
+        // Within the script's own tolerance of 24 per channel.
+        if let kept = cycle.kept, let rgb = Int(kept, radix: 16) {
+            _ = await until(30, """
+            (p => /^[0-9a-f]{6}$/.test(p) && [16, 8, 0].every(s =>
+              Math.abs(((parseInt(p, 16) >> s) & 255) - ((\(rgb) >> s) & 255)) <= 24))(window.lifecheck.picture())
+            """)
+        }
         let marker = UUID().uuidString
         _ = await js("window.lifecheck.marker = \(literal(marker)); window.lifecheck.markedAt = performance.now(); true")
         let seen = activations

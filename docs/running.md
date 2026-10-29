@@ -464,7 +464,7 @@ time builds on three machines and starts both apps on two more:
 | `android` | Ubuntu | the APK, `make mobile-android` |
 | `ios` | macOS | the IPA, `make mobile-ios` |
 | `android-lifecycle` | Ubuntu | an x86_64 build of the app on an Android 16 emulator, [`android-lifecycle.mjs`](testing.md#the-android-apps-lifecycle-on-an-emulator) |
-| `ios-simulator` | macOS | the app in the newest simulator runtime, [`ios-gamepad.mjs` and `ios-lifecycle.mjs`](testing.md#the-ios-app-on-a-simulator) |
+| `ios-simulator` | macOS, twice | the app in the newest simulator runtime, [`ios-gamepad.mjs` and `ios-lifecycle.mjs`](testing.md#the-ios-app-on-a-simulator), one per runner |
 
 The split follows the runners: the Android SDK is on the Linux runner and Xcode
 is on the macOS one, and no runner has both. A `publish` job waits for all of
@@ -474,7 +474,7 @@ release. **A failure in any build, check or app run publishes nothing**; a
 release missing its APK is the failure this shape prevents. The builds do not
 wait for the checks, because only the publish job needs both. The two app runs
 keep what their scripts wrote under `var/acceptance/` as the run's
-`android-lifecycle` and `ios-simulator` artifacts for a week.
+`android-lifecycle`, `ios-gamepad` and `ios-lifecycle` artifacts for a week.
 
 The Android run cannot use the APK that ships. A hosted runner accelerates only
 an x86_64 emulator, on Linux with KVM, and the release APK carries an arm64

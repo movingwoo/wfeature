@@ -236,6 +236,12 @@ jobs:
       - name: Start the emulator
         run: |
           tools="$ANDROID_HOME/cmdline-tools/latest/bin"
+          adb="$ANDROID_HOME/platform-tools/adb"
+          # avdmanager and the emulator look for AVDs in different default
+          # places on this runner; naming one directory for both is the fix.
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
           # yes ends on a broken pipe once the licences are taken, which
           # pipefail would report as the step failing.
           (yes || true) | "$tools/sdkmanager" --licenses > /dev/null
@@ -244,9 +250,18 @@ jobs:
           "$ANDROID_HOME/emulator/emulator" -avd ci -no-window -no-audio \
             -no-snapshot -no-boot-anim -gpu swiftshader_indirect -port 5554 \
             > emulator.log 2>&1 &
-          adb="$ANDROID_HOME/platform-tools/adb"
-          timeout 600 "$adb" wait-for-device
-          timeout 600 sh -c "until [ \"\$($adb shell getprop sys.boot_completed | tr -d '\r')\" = 1 ]; do sleep 2; done"
+          emulator=$!
+          # Booted, or the emulator gone, whichever is first: an emulator that
+          # exits says why in its log, and waiting out the timeout says nothing.
+          for attempt in $(seq 1 300); do
+            if ! kill -0 "$emulator" 2> /dev/null; then
+              cat emulator.log; echo "the emulator exited before it booted"; exit 1
+            fi
+            booted=$("$adb" -s emulator-5554 shell getprop sys.boot_completed 2> /dev/null | tr -d '\r' || true)
+            [ "$booted" = 1 ] && break
+            sleep 2
+          done
+          [ "$booted" = 1 ] || { tail -50 emulator.log; echo "the emulator did not boot in 10 minutes"; exit 1; }
           "$adb" shell getprop ro.build.version.release
           "$adb" install -r mobile/android/build/wfeature.apk
 
@@ -266,8 +281,14 @@ jobs:
   # The iOS app in the simulator, through web/acceptance/ios-gamepad.mjs and
   # ios-lifecycle.mjs: each builds the app for the simulator with its driver
   # beside the unchanged App.swift, on a temporary device it deletes after.
-  # The runtime is the newest the runner's Xcode carries.
+  # The runtime is the newest the runner's Xcode carries. The two scripts run
+  # on two runners: each spends minutes making and booting a fresh device, and
+  # one after the other they were the longest job in the release.
   ios-simulator:
+    strategy:
+      fail-fast: false
+      matrix:
+        script: [ios-gamepad, ios-lifecycle]
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -283,16 +304,12 @@ jobs:
           node-version: "22"
           package-manager-cache: false
 
-      - name: The app with a game controller
-        run: node web/acceptance/ios-gamepad.mjs
-
-      - name: The app when it leaves the screen
-        run: node web/acceptance/ios-lifecycle.mjs
+      - run: node web/acceptance/${{ matrix.script }}.mjs
 
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ios-simulator
+          name: ${{ matrix.script }}
           if-no-files-found: ignore
           retention-days: 7
           path: var/acceptance/
