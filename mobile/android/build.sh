@@ -13,6 +13,10 @@
 #
 #   ANDROID_HOME   the SDK root (build-tools/ and platforms/ live under it)
 #   JAVA_HOME      a JDK 17 or newer
+#   ANDROID_ABI    arm64-v8a, the default and the only one a release ships, or
+#                  x86_64, for the emulator a Linux CI runner can accelerate;
+#                  the server binary is the only part of the APK that differs
+#   ANDROID_NDK_HOME  x86_64 only: the NDK whose clang links that binary
 #
 # The one input that is not in this directory is the server: it is built from
 # the Go source above and bundled as a native library, because the extracted
@@ -51,21 +55,39 @@ apksigner=$build_tools/apksigner
 # tree, which is what a tester's phone needs it to be.
 version_code=${VERSION_CODE:-$(git -C "$root" rev-list --count HEAD 2>/dev/null || echo 1)}
 
+# Go links android/arm64 itself, but android/amd64 only through the platform's
+# C linker, so the x86_64 build borrows the NDK's clang for that one step. No
+# C is compiled: the server is the same pure Go either way.
+abi=${ANDROID_ABI:-arm64-v8a}
+cgo=0
+cc=
+case $abi in
+    arm64-v8a) goarch=arm64 ;;
+    x86_64)
+        goarch=amd64
+        cgo=1
+        ndk=${ANDROID_NDK_HOME:-$(ls -1d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)}
+        cc=$(ls -1 "$ndk"/toolchains/llvm/prebuilt/*/bin/x86_64-linux-android26-clang 2>/dev/null | head -1)
+        [ -x "$cc" ] || { echo "no NDK clang for x86_64 under ${ndk:-$ANDROID_HOME/ndk}" >&2; exit 1; }
+        ;;
+    *) echo "ANDROID_ABI is arm64-v8a or x86_64, not $abi" >&2; exit 1 ;;
+esac
+
 echo "build-tools $build_tools"
 echo "platform    $platform"
 echo "version     ${VERSION:-dev} (code $version_code)"
 
 rm -rf "$out"
-mkdir -p "$out/compiled" "$out/gen" "$out/classes" "$out/dex" "$out/apk/lib/arm64-v8a"
+mkdir -p "$out/compiled" "$out/gen" "$out/classes" "$out/dex" "$out/apk/lib/$abi"
 
 # 1. The server. The same source a desktop release is built from, for the
 #    phone's own architecture, named as a library so that the installer
 #    extracts it into the one directory an app may execute from.
-echo "==> building the server for android/arm64"
-( cd "$root" && CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -trimpath \
+echo "==> building the server for android/$goarch"
+( cd "$root" && CGO_ENABLED=$cgo CC=$cc GOOS=android GOARCH=$goarch go build -trimpath \
     -ldflags="-s -w -X main.version=${VERSION:-dev}" \
-    -o "$here/jniLibs/arm64-v8a/libwfeature.so" ./cmd/server )
-cp "$here/jniLibs/arm64-v8a/libwfeature.so" "$out/apk/lib/arm64-v8a/libwfeature.so"
+    -o "$here/jniLibs/$abi/libwfeature.so" ./cmd/server )
+cp "$here/jniLibs/$abi/libwfeature.so" "$out/apk/lib/$abi/libwfeature.so"
 
 # 2. Resources.
 echo "==> resources"
