@@ -144,6 +144,8 @@ const (
 
 	wipicErrorNotFound    uint32 = 0xfffffff4 // M_E_NOENT (-12)
 	wipicErrorInvalid     uint32 = 0xfffffff7 // M_E_INVALID (-9)
+	wipicErrorBadFormat   uint32 = 0xfffffffa // M_E_BADFORMAT (-6)
+	wipicImageDone        uint32 = 1          // MC_GRP_IMAGE_DONE
 	wipicErrorShortBuf    uint32 = 0xffffffee // M_E_SHORTBUF (-18)
 	wipicErrorExists      uint32 = 0xfffffffb // M_E_EXIST (-5)
 	wipicErrorBadParam    uint32 = 0xffffffea // M_E_BADRECID (-22)
@@ -1732,14 +1734,37 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 			return 0, err
 		}
 		return uint32(runtime.graphicsTextWidth(text)), nil
+	case table == wipicTableGraphics && function == 31:
+		// MC_grpGetUnicodeStringWidth(font, str, len) measures the UTF-16
+		// text entry 18 draws, the entry after its EUC-KR twin in the
+		// specification's order. No local title calls it.
+		pointer, err := thread.Register(1)
+		if err != nil {
+			return 0, err
+		}
+		length, err := thread.Register(2)
+		if err != nil {
+			return 0, err
+		}
+		text, err := runtime.wipicReadString(pointer, int32(length), true)
+		if err != nil {
+			return 0, err
+		}
+		return uint32(runtime.graphicsTextWidth(text)), nil
 	case table == wipicTableGraphics && function == 32:
 		return runtime.wipicCreateImage(thread)
 	case table == wipicTableGraphics && function == 33:
 		return runtime.wipicDestroyImage(thread)
+	case table == wipicTableGraphics && function == 34:
+		return runtime.wipicDecodeNextImage(thread)
 	case table == wipicTableGraphics && function == 35:
 		return runtime.wipicEncodeImage(thread)
 	case table == wipicTableGraphics && function == 36:
 		return runtime.wipicPostEvent(thread)
+	case table == wipicTableGraphics && function == 37:
+		return runtime.wipicPolygon(thread, false)
+	case table == wipicTableGraphics && function == 38:
+		return runtime.wipicPolygon(thread, true)
 	case table == wipicTableRecordDatabase:
 		return runtime.handleWIPICRecordDatabaseCall(thread, function)
 	case table == wipicTableFilesystem:

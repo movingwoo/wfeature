@@ -10014,3 +10014,43 @@ two vary between runs of every build, this one and the one before the contract
 alike. The v0.6.0-pre saves of 146 KTF archives continued for 500 ticks, their
 quick saves of 281 loaded for 300, and all 281 runnable KTF archives started
 from an empty save for 500 ticks all match it exactly.
+
+<a id="ktf-graphics-table-gaps-2026-10-28"></a>
+
+## Graphics table entries 31, 34, 37 and 38 — 2026-10-28
+
+The graphics table follows the WIPI 1.2.1 function order, and these four were
+its unanswered entries between and after the ones it serves:
+`MC_grpGetUnicodeStringWidth` (31), `MC_grpDecodeNextImage` (34),
+`MC_grpDrawPolygon` (37) and `MC_grpFillPolygon` (38). An unanswered entry
+stops the session; no local title calls any of the four.
+
+- **31** measures UTF-16 text the way entry 30 measures EUC-KR, through the
+  same reader entry 18 draws with (`wipicReadString`, `-1` for a terminated
+  string).
+- **34** answers `MC_GRP_IMAGE_DONE` (1) for a surface, because every image
+  here is decoded whole when it is created and has no next frame — the LGT
+  runtime's answer — and `M_E_BADFORMAT` for a handle that is no surface. The
+  value is -6, the specification's error table's; the LGT runtime's -20 is
+  recorded in `TODO.md` as its own finding.
+- **37 and 38** take two coordinate arrays, a count and the context, read to
+  1,024 points. The outline draws each edge, the last back to the first, as
+  drawLine does (`clippedLine`, through the same plot); the fill is the
+  scanline the LGT runtime's C polygon and this runtime's Java `Graphics` fill
+  with, moved into the shared `curve` package as `FillPolygonWithin`, which
+  walks only the rows inside the surface and the clip and works the crossing
+  in 64 bits, or in a `big.Int` when vertices at the ends of int32 make the
+  product pass that. Fewer than two vertices draw nothing.
+
+Validation: unit tests for each entry (`wipic_polygon_test.go`) and for the
+fill (`internal/curve`), the gates on `./cmd/... ./internal/... ./fonts/...
+./mobile/... ./web/...`, `-tags debug` and `-race`. The 293 distinct local KTF
+archives at 500 ticks from an empty save end on the same frame, exit and code
+under the build before this change and this one; the logs differ only in their
+timestamps. At 1,500 ticks with fire every 25 ticks from tick 100 (`runktf`),
+all 293 exit the same, with the same kinds of warning and error, and none
+stops on entry 31, 34, 37 or 38, which before this change any call to them
+did. The last frames of 170 and the tick counts of 7 differ, and they are the
+wall-clock pacing this runner is known for: run twice more under the build
+before, the five such titles taken end on a third frame each time, and the
+seven tick counts move as far between two runs of that build.

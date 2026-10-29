@@ -232,7 +232,8 @@ Line, polygon and rectangle-copy calls walk only the part of their range that
 lands on the target surface, so guest coordinates or sizes at the integer
 extremes draw what lands and return. A framebuffer record whose width does not
 fit its bytes per line is refused.
-Arc and rounded-rectangle calls, Java and WIPI-C, walk the same way. Image
+Arc and rounded-rectangle calls, Java and WIPI-C, walk the same way, and so
+does the WIPI-C polygon fill (`curve.FillPolygonWithin`). Image
 decoding reads the header first and refuses a picture of more than 16,777,216
 pixels (`backend.MaxFramebufferPixels`, the rule SKT already applied) before
 allocating, and the checksum repair for a picture with a wrong zlib trailer

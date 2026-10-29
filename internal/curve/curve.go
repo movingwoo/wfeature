@@ -1,5 +1,5 @@
-// Package curve draws the two shapes a feature-phone platform cannot express
-// as rectangles: arcs and rounded rectangles.
+// Package curve draws the shapes a feature-phone platform cannot express as
+// rectangles: arcs, rounded rectangles and polygons.
 //
 // It exists because four separate drawing surfaces need exactly this geometry
 // and they have nothing else in common — the WIPI-C graphics tables of both
@@ -20,7 +20,11 @@
 // transparency rules in force rather than reimplemented here three times.
 package curve
 
-import "math"
+import (
+	"math"
+	"math/big"
+	"slices"
+)
 
 // Span is one horizontal run of pixels to fill.
 type Span struct {
@@ -367,4 +371,63 @@ func DrawArcWithin(bounds Bounds, x, y, width, height, start, extent int32, emit
 		return nil
 	}
 	return walk(0, steps)
+}
+
+// FillPolygonWithin fills the polygon whose vertices are xs and ys, in order
+// and closed, by the scanline the platforms' polygon fills draw: a row y
+// crosses an edge when it lies in the half-open range of the edge's ends, so a
+// horizontal edge crosses no row and a shared vertex is counted once, and each
+// pair of crossings in order is filled end to end, both ends included. A
+// polygon of fewer than two vertices fills nothing.
+//
+// Only rows within the bounds are walked and each span is trimmed to them, so
+// vertices anywhere in int32 cost what can be drawn; see crossing for why the
+// arithmetic holds there too.
+func FillPolygonWithin(bounds Bounds, xs, ys []int32, emit Emit) error {
+	count := min(len(xs), len(ys))
+	if count < 2 || bounds.empty() {
+		return nil
+	}
+	top, bottom := int64(ys[0]), int64(ys[0])
+	for _, y := range ys[:count] {
+		top, bottom = min(top, int64(y)), max(bottom, int64(y))
+	}
+	top, bottom = max(top, bounds.Top), min(bottom, bounds.Bottom-1)
+	crossings := make([]int64, 0, count)
+	for y := top; y <= bottom; y++ {
+		crossings = crossings[:0]
+		for index := 0; index < count; index++ {
+			next := (index + 1) % count
+			y0, y1 := int64(ys[index]), int64(ys[next])
+			if y0 == y1 || y < min(y0, y1) || y >= max(y0, y1) {
+				continue
+			}
+			crossings = append(crossings, crossing(int64(xs[index]), y0, int64(xs[next]), y1, y))
+		}
+		slices.Sort(crossings)
+		for index := 0; index+1 < len(crossings); index += 2 {
+			left, right := max(crossings[index], bounds.Left), min(crossings[index+1], bounds.Right-1)
+			if right < left {
+				continue
+			}
+			if err := emit(Span{X: int32(left), Y: int32(y), Width: int32(right - left + 1)}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// crossing is where the edge from (x0, y0) to (x1, y1) meets row y,
+// x0 + (y-y0)(x1-x0)/(y1-y0) truncated toward zero as integer division in Go
+// and Java truncates. Both differences can reach 2^32 when a guest puts
+// vertices at the ends of int32, and their product then passes int64, so that
+// case is worked out in a big.Int; the answer itself lies between x0 and x1.
+func crossing(x0, y0, x1, y1, y int64) int64 {
+	rise, run, across := y-y0, y1-y0, x1-x0
+	if rise > -1<<31 && rise < 1<<31 && across > -1<<31 && across < 1<<31 {
+		return x0 + rise*across/run
+	}
+	product := new(big.Int).Mul(big.NewInt(rise), big.NewInt(across))
+	return x0 + product.Quo(product, big.NewInt(run)).Int64()
 }
