@@ -84,6 +84,19 @@ func (client *Client) handleDraw(ctx context.Context, thread *armcore.Thread, sl
 		}
 		drawContext.text(int(values[1]), int(values[2]), text, drawContext.foreground)
 
+	case slotDrawUnicodeString:
+		// `MC_grpDrawUnicodeString(dst, x, y, str, len, pgc)`: drawString's
+		// shape over UTF-16 text, placed the way drawString places it. The
+		// specification draws nothing for a length of zero or less, so unlike
+		// drawString there is no terminated form.
+		if values[4] > 0 {
+			text, err := client.readUnicodeString(uint32(values[3]), values[4])
+			if err != nil {
+				return err
+			}
+			drawContext.text(int(values[1]), int(values[2]), text, drawContext.foreground)
+		}
+
 	case slotCopyArea:
 		client.copyArea(drawContext, values[1:7])
 
@@ -94,6 +107,11 @@ func (client *Client) handleDraw(ctx context.Context, thread *armcore.Thread, sl
 
 	case slotDrawImage:
 		if err := client.drawImage(drawContext, values[1:8]); err != nil {
+			return err
+		}
+
+	case slotDrawImageRegion:
+		if err := client.drawImageRegion(drawContext, values[1:9]); err != nil {
 			return err
 		}
 
@@ -183,12 +201,14 @@ func drawArgumentCount(slot uint32) int {
 	switch slot {
 	case slotPutPixel:
 		return 4
-	case slotDrawLine, slotDrawRect, slotFillRect, slotDrawString:
+	case slotDrawLine, slotDrawRect, slotFillRect, slotDrawString, slotDrawUnicodeString:
 		return 6
 	case slotCopyArea, slotDrawArc, slotFillArc:
 		return 8
 	case slotCopyFramebuffer, slotDrawImage:
 		return 9
+	case slotDrawImageRegion:
+		return 10
 	case slotGetRGBPixels:
 		return 7
 	case slotSetRGBPixels:
@@ -263,6 +283,46 @@ func (client *Client) readString(pointer uint32, length int32) (string, error) {
 // codepoint-marked box on the screen for every half of every syllable. One
 // title's whole notice screen read that way. See decodeEUCKR for why the plain
 // reader does not do this.
+// maxUnicodeTextUnits bounds a terminated UTF-16 string, the same 4,096 a
+// terminated C string is read to (readCString).
+const maxUnicodeTextUnits = 4096
+
+// readUnicodeString reads the UTF-16 text a unicode string call names: count
+// units, or up to the terminating zero when the count is -1. Any other count
+// below one is no text.
+func (client *Client) readUnicodeString(pointer uint32, length int32) (string, error) {
+	if pointer == 0 || length == 0 || length < -1 {
+		return "", nil
+	}
+	memory := client.core.Memory()
+	if length == -1 {
+		units := make([]uint16, 0, 32)
+		var unit [2]byte
+		for len(units) < maxUnicodeTextUnits {
+			if err := memory.Read(pointer+uint32(len(units))*2, unit[:]); err != nil {
+				return "", err
+			}
+			if unit[0] == 0 && unit[1] == 0 {
+				return javaTextOfUnits(units), nil
+			}
+			units = append(units, uint16(unit[0])|uint16(unit[1])<<8)
+		}
+		return "", fmt.Errorf("LGT unicode string at %#x has no end within %d units", pointer, maxUnicodeTextUnits)
+	}
+	if uint32(length) > maxCStringLength/2 {
+		return "", fmt.Errorf("LGT unicode string of %d units at %#x exceeds the limit", length, pointer)
+	}
+	data := make([]byte, int(length)*2)
+	if err := memory.Read(pointer, data); err != nil {
+		return "", err
+	}
+	units := make([]uint16, length)
+	for index := range units {
+		units[index] = uint16(data[2*index]) | uint16(data[2*index+1])<<8
+	}
+	return javaTextOfUnits(units), nil
+}
+
 func (client *Client) readCText(address uint32) (string, error) {
 	text, err := client.readCString(address)
 	if err != nil {

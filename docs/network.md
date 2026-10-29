@@ -50,6 +50,7 @@ something the game handles.
 | LGT | `MC_netConnect` | accepted within a 64-request bound, then fails through its callback; recognized local notification dials report local readiness |
 | LGT | `MC_netClose` | success, because the call returns void; drops unreported dials |
 | LGT | the rest of the net block — socket create (`0x25a` and `0x7d0`), connect/write/read/close, both callback setters | error, except the recognized local notification/empty-save socket |
+| LGT | the net block's other 21 calls — bind, packet length, send-to, receive-from, host lookup, accept (`0x25f`–`0x264`) and the HTTP calls (`0x267`–`0x275`) | `M_E_ERROR`, as KTF's table answers them; an error return runs no callback |
 | LGT | `org.kwis.msf.io.Network.connect` | `-1`; one title disagrees, see below |
 | LGT | `org.kwis.msf.io.URL.find` | `SchemeNotFoundException`, the failure the specification names |
 | SKT | `SMS.send`, `Call.call` | `false` |

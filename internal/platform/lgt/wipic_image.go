@@ -1,6 +1,7 @@
 package lgt
 
 import (
+	"fmt"
 	stdimage "image"
 	"image/color"
 	_ "image/gif"
@@ -372,33 +373,108 @@ func (client *Client) drawImage(context *graphicsContext, values []int32) error 
 			if sx < 0 || sy < 0 || sx >= source.width || sy >= source.height {
 				continue
 			}
-			index := sy*source.width + sx
-			if source.colorKeyed {
-				pixel := source.pixels[index]
-				if pixel != source.transparentKey {
-					context.put(destinationX+column, destinationY+row, pixel)
-				}
+			if pixel, drawn := source.blitPixel(sy*source.width + sx); drawn {
+				context.put(destinationX+column, destinationY+row, pixel)
+			}
+		}
+	}
+	return nil
+}
+
+// blitPixel answers the pixel at index of a surface being drawn from, and
+// whether it is drawn at all: the rule every blit of a picture shares.
+func (source *framebuffer) blitPixel(index int) (uint16, bool) {
+	pixel := source.pixels[index]
+	if source.colorKeyed {
+		return pixel, pixel != source.transparentKey
+	}
+	if source.opaque != nil {
+		// The encoding said which pixels are transparent, and that is the
+		// answer: a picture that carries a mask of its own is allowed to draw
+		// in the mask colour, and keying it here would punch holes in art the
+		// artist chose.
+		return pixel, source.opaque[index]
+	}
+	// With no declared transparency the mask colour is the only transparency
+	// the surface has. This is the case for the surfaces a title builds
+	// itself, which is where it matters.
+	return pixel, pixel != maskPixel
+}
+
+// The transforms MC_grpDrawImageRegion takes. The C pages name them without
+// giving their values; the WIPI 2.x Java Image class, which is the same
+// operation on the same platform, gives each one, and those are taken here.
+// Zero is no transform.
+const (
+	imageTransformNone      int32 = 0
+	imageTransformRot90     int32 = 90
+	imageTransformRot180    int32 = 180
+	imageTransformRot270    int32 = 270
+	imageTransformMirror    int32 = -99
+	imageTransformMirRot90  int32 = -90
+	imageTransformMirRot180 int32 = -180
+	imageTransformMirRot270 int32 = -270
+)
+
+// imageRegionPlacement answers where a transform puts the pixel at column and
+// row of a width by height region: mirrored left to right first when the
+// transform says so, then turned clockwise. It answers false for a transform
+// the specification does not name.
+func imageRegionPlacement(transform int32, width, height int) (func(column, row int) (int, int), bool) {
+	switch transform {
+	case imageTransformNone:
+		return func(column, row int) (int, int) { return column, row }, true
+	case imageTransformRot90:
+		return func(column, row int) (int, int) { return height - 1 - row, column }, true
+	case imageTransformRot180:
+		return func(column, row int) (int, int) { return width - 1 - column, height - 1 - row }, true
+	case imageTransformRot270:
+		return func(column, row int) (int, int) { return row, width - 1 - column }, true
+	case imageTransformMirror:
+		return func(column, row int) (int, int) { return width - 1 - column, row }, true
+	case imageTransformMirRot90:
+		return func(column, row int) (int, int) { return height - 1 - row, width - 1 - column }, true
+	case imageTransformMirRot180:
+		return func(column, row int) (int, int) { return column, height - 1 - row }, true
+	case imageTransformMirRot270:
+		return func(column, row int) (int, int) { return row, column }, true
+	}
+	return nil, false
+}
+
+// drawImageRegion serves `MC_grpDrawImageRegion(dst, destX, destY, width,
+// height, src, srcX, srcY, transform, pgc)`: the width by height rectangle of
+// src at (srcX, srcY), transformed, drawn with its top left at (destX,
+// destY). A quarter or three-quarter turn draws it height wide and width tall.
+// Each pixel is drawn or not by drawImage's rule (blitPixel).
+//
+// **Where drawImage clips, this draws nothing**, as the specification has it:
+// an empty rectangle, or one that reaches outside the source. A transform it
+// does not name is refused by name rather than drawn some way.
+func (client *Client) drawImageRegion(context *graphicsContext, values []int32) error {
+	destinationX, destinationY := int(values[0]), int(values[1])
+	width, height := int(values[2]), int(values[3])
+	source := client.framebuffer(uint32(values[4]))
+	sourceX, sourceY := int(values[5]), int(values[6])
+	place, ok := imageRegionPlacement(values[7], width, height)
+	if !ok {
+		return fmt.Errorf("MC_grpDrawImageRegion transform %d is not one the specification names", values[7])
+	}
+	if source == nil || width <= 0 || height <= 0 || sourceX < 0 || sourceY < 0 ||
+		sourceX+width > source.width || sourceY+height > source.height {
+		return nil
+	}
+	if err := client.syncRowsFromGuest(source, rowsAt(sourceY, height)); err != nil {
+		return err
+	}
+	for row := 0; row < height; row++ {
+		for column := 0; column < width; column++ {
+			pixel, drawn := source.blitPixel((sourceY+row)*source.width + sourceX + column)
+			if !drawn {
 				continue
 			}
-			if source.opaque != nil {
-				// The encoding said which pixels are transparent, and that is
-				// the answer: a picture that carries a mask of its own is
-				// allowed to draw in the mask colour, and keying it here would
-				// punch holes in art the artist chose.
-				if !source.opaque[index] {
-					continue
-				}
-				context.put(destinationX+column, destinationY+row, source.pixels[index])
-				continue
-			}
-			// With no declared transparency the mask colour is the only
-			// transparency the surface has. This is the case for the surfaces
-			// a title builds itself, which is where it matters.
-			pixel := source.pixels[index]
-			if pixel == maskPixel {
-				continue
-			}
-			context.put(destinationX+column, destinationY+row, pixel)
+			x, y := place(column, row)
+			context.put(destinationX+x, destinationY+y, pixel)
 		}
 	}
 	return nil

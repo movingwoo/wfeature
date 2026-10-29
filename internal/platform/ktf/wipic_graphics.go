@@ -659,7 +659,14 @@ func (runtime *initializationRuntime) wipicDrawLine(thread *armcore.Thread) (uin
 	if err != nil {
 		return 0, err
 	}
-	plot := func(x, y int32) error {
+	return 0, clippedLine(int32(registers[1]), int32(registers[2]), int32(registers[3]), int32(registers[4]),
+		0, 0, int64(framebuffer.width), int64(framebuffer.height), runtime.framebufferPlot(framebuffer, clip, op, pixel))
+}
+
+// framebufferPlot answers the one-pixel draw a line walks with: inside the
+// surface and the context's clip, through the context's pixel operation.
+func (runtime *initializationRuntime) framebufferPlot(framebuffer wipicFramebuffer, clip wipicClip, op wipicPixelOp, pixel uint32) func(x, y int32) error {
+	return func(x, y int32) error {
 		if x < 0 || y < 0 || uint32(x) >= framebuffer.width || uint32(y) >= framebuffer.height {
 			return nil
 		}
@@ -669,8 +676,92 @@ func (runtime *initializationRuntime) wipicDrawLine(thread *armcore.Thread) (uin
 		address := framebuffer.pixels + uint32(y)*framebuffer.bpl + uint32(x)*2
 		return runtime.blendPixel(op, address, uint16(pixel))
 	}
-	return 0, clippedLine(int32(registers[1]), int32(registers[2]), int32(registers[3]), int32(registers[4]),
-		0, 0, int64(framebuffer.width), int64(framebuffer.height), plot)
+}
+
+// maxWIPICPolygonPoints bounds the vertices a polygon call reads. The arrays
+// and the count are the guest's; the LGT runtime reads to the same bound.
+const maxWIPICPolygonPoints = 1024
+
+// wipicPolygon implements MC_grpDrawPolygon and MC_grpFillPolygon, graphics
+// entries 37 and 38, after postEvent in the specification's order:
+//
+//	void MC_grpDrawPolygon(MC_GrpFrameBuffer dst, M_Int32 *xPoints,
+//	                       M_Int32 *yPoints, M_Int32 nPoints, MC_GrpContext *pgc)
+//
+// The outline is each edge, the last back to the first, drawn as drawLine
+// draws one; the fill is the scanline the LGT runtime and this runtime's Java
+// Graphics fill with (curve.FillPolygonWithin). Fewer than two vertices draw
+// nothing. No local title calls either.
+func (runtime *initializationRuntime) wipicPolygon(thread *armcore.Thread, fill bool) (uint32, error) {
+	call := "draw polygon"
+	if fill {
+		call = "fill polygon"
+	}
+	registers := make([]uint32, 5)
+	for index := range registers {
+		value, err := runtime.wipicArgument(thread, index)
+		if err != nil {
+			return 0, err
+		}
+		registers[index] = value
+	}
+	framebuffer, ok, err := runtime.readWIPICDrawSurface(registers[0], call)
+	if err != nil || !ok {
+		return 0, err
+	}
+	count := int32(registers[3])
+	if count < 2 {
+		return 0, nil
+	}
+	if count > maxWIPICPolygonPoints {
+		return 0, fmt.Errorf("KTF %s of %d points: %d is the most read", call, count, maxWIPICPolygonPoints)
+	}
+	xs, err := runtime.wipicReadInt32s(registers[1], count, call)
+	if err != nil {
+		return 0, err
+	}
+	ys, err := runtime.wipicReadInt32s(registers[2], count, call)
+	if err != nil {
+		return 0, err
+	}
+	pixel, err := runtime.wipicReadContextForeground(registers[4])
+	if err != nil {
+		return 0, err
+	}
+	clip, err := runtime.wipicReadContextClip(registers[4])
+	if err != nil {
+		return 0, err
+	}
+	op, err := runtime.wipicReadContextPixelOp(registers[4])
+	if err != nil {
+		return 0, err
+	}
+	if fill {
+		return 0, curve.FillPolygonWithin(framebuffer.curveBounds(clip), xs, ys,
+			runtime.framebufferCurveEmit(framebuffer, clip, op, pixel))
+	}
+	plot := runtime.framebufferPlot(framebuffer, clip, op, pixel)
+	for index := range xs {
+		next := (index + 1) % len(xs)
+		if err := clippedLine(xs[index], ys[index], xs[next], ys[next],
+			0, 0, int64(framebuffer.width), int64(framebuffer.height), plot); err != nil {
+			return 0, err
+		}
+	}
+	return 0, nil
+}
+
+// wipicReadInt32s reads count M_Int32 values from guest memory.
+func (runtime *initializationRuntime) wipicReadInt32s(pointer uint32, count int32, call string) ([]int32, error) {
+	data := make([]byte, int(count)*4)
+	if err := runtime.client.core.Memory().Read(pointer, data); err != nil {
+		return nil, fmt.Errorf("read KTF %s points: %w", call, err)
+	}
+	values := make([]int32, count)
+	for index := range values {
+		values[index] = int32(binary.LittleEndian.Uint32(data[index*4:]))
+	}
+	return values, nil
 }
 
 // clippedLine walks the Bresenham line MC_grpDrawLine and Graphics.drawLine
@@ -1023,6 +1114,24 @@ func (runtime *initializationRuntime) wipicDestroyImage(thread *armcore.Thread) 
 	runtime.releaseImageSourceBuffer(handle)
 	runtime.destroyWIPICFramebufferRecord(handle)
 	return 0, nil
+}
+
+// wipicDecodeNextImage implements MC_grpDecodeNextImage(dst), graphics entry
+// 34. Every image here is decoded whole when it is created, so a surface has
+// no next frame: MC_GRP_IMAGE_DONE, as the LGT runtime answers it. A handle
+// that is no surface is M_E_BADFORMAT. No local title calls it.
+func (runtime *initializationRuntime) wipicDecodeNextImage(thread *armcore.Thread) (uint32, error) {
+	handle, err := thread.Register(0)
+	if err != nil {
+		return 0, err
+	}
+	if handle == 0 {
+		return wipicErrorBadFormat, nil
+	}
+	if _, err := runtime.readWIPICFramebuffer(handle); err != nil {
+		return wipicErrorBadFormat, nil
+	}
+	return wipicImageDone, nil
 }
 
 // releaseImageSourceBuffer releases only the source allocation the image still

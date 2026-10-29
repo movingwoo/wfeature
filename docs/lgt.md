@@ -422,7 +422,8 @@ sound formats, timeline ownership, and callbacks.
 
 Network access is refused except for narrowly recognized local compatibility
 services. Both observed socket-creation slots (`0x7d0` and `0x25a`) preserve that
-policy. [Authentication](authentication.md) and [network](network.md) describe
+policy, and the net block's other 21 calls answer `M_E_ERROR` rather than
+stopping the session. [Authentication](authentication.md) and [network](network.md) describe
 the selected adapters and unsupported service-dependent paths.
 
 A recognized native revision's save reader accepts a saved subscriber identity
