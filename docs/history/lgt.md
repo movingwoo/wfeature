@@ -52,6 +52,9 @@ This consolidation adds no execution or acceptance evidence.
 - [Text input review follow-ups — 2026-10-20](#lgt-text-input-review-2026-10-20)
 - [Image slots, C library names and the storage contract — 2026-10-22](#lgt-slot-corrections-2026-10-22)
 - [Storage contract review — 2026-10-22](#lgt-storage-review-2026-10-22)
+- [The class library's core, placed by the specification — 2026-10-28](#lgt-class-library-2026-10-28)
+- [The collector reads every call in flight — 2026-10-28](#lgt-collector-nested-calls-2026-10-28)
+- [A record table the title's own search runs off — 2026-10-28](#lgt-qa-2026-10-28-unterminated-record-table)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -8038,6 +8041,169 @@ and no local save reaches it:
 - `sortRecord` finds the filter's and comparator's methods by name alone
   (`javaCallbackBody`), so an overload of `compare` or `filter` would be called
   with the wrong arguments. Not seen in a title.
+
+<a id="lgt-class-library-2026-10-28"></a>
+
+## The class library's core, placed by the specification — 2026-10-28
+
+The 2026-10-21 comparison against the specification left LGT Java answering 28%
+of WIPI 1.2.1's members, against 61% on KTF, and an unanswered member stops a
+title with no exception it could catch. This pass fills the categories titles
+use — Object, text, the integral numbers, collections, readers, threads, Class
+and Throwable — from the specification, rather than one watched call at a time
+(`java_class_library.go`).
+
+**Where a slot is, is the rule's.** The specification gives what a method
+answers but not where a baked slot puts it. The rule the watched slots spell
+(own methods from 10 in declaration order, an override at the slot above,
+Object's own at 1 to 9) does, given the order, and the wiki's CLDC class pages
+print each class's detail section in declaration order. Every anchor call
+sites settled sits on that order — String at 3, 10, 11, 14, 16, 19, 21, 22,
+26 to 29, 33 and 34, Vector from 10 to 31, Thread at 10, 13 and 14 (which
+needs `interrupt` at 12, so the library is CLDC 1.1's), Class at 16 — so the
+slots between and after them are arithmetic. Thread's run puts `join` at 17,
+past `getPriority` and `getName`. `TestJavaBakedSlotsFollowTheDeclarationOrder`
+now holds every served slot of these classes to the pages' order.
+
+What changed beside the new members:
+
+- **The platform asks hashCode, equals and toString through the receiver's
+  slot** (`javaCallVirtual`): a slot the title filled runs the title's code
+  below the platform call, an exception it throws reaching the title's own
+  handler (`rethrowFromCallback`); a slot still holding a stub is answered by
+  the method the stub reaches. A Hashtable key, a Vector search,
+  `append(Object)` and `String.valueOf(Object)` all go this way. The last two
+  appended `Class@address` for any object that was not text, which for the one
+  local shape — a caught exception written into a message — is now
+  `java.io.IOException: <message>`.
+- **Object's own forms refuse a class the library gives its own.** The
+  specification's pages list which classes declare equals, hashCode or
+  toString (`javaLibraryOverrides`); a Date, a Thread or a TimeZone reaching
+  Object's form stops by name rather than answering with an identity. The
+  label `append(Object)` and `String.valueOf(Object)` build is the exception:
+  for such an object it stays the `Class@address` those two built before, so a
+  title's own Thread subclass printing itself runs as it did.
+- **`Vector.indexOf` asks the argument's `equals`**, as the class library does,
+  where it compared references: a String built again finds the one put in.
+- **A Hashtable is the class library's own table**, so it enumerates in a
+  handset's order: the CLDC implementation's 11 buckets, 75% load (the
+  specification's page states it), `2n + 1` on rehash walking the old buckets
+  from the last, a new entry at the head of its chain, and an enumerator that
+  visits the buckets from the last. String and number hashCodes are the
+  language's, so the order is the same for the keys titles use. A Hashtable's
+  enumeration is a copy taken when it is asked for, which differs from the
+  library only for a title that changes the table while it walks it; a
+  Vector's is live, as the library's is.
+- **An enumeration is reached through an interface table this platform gives
+  its class** (`javaPlatformInterfaces`): a title only ever calls one through
+  `Enumeration`, an interface call reads the receiver's class's table, and a
+  platform class has no record to carry one.
+- **Vector and StringBuffer keep the capacity `capacity()` answers**, by the
+  class library's growth rules (10 doubling or by the step for a Vector; 16,
+  the text plus 16, then `(n + 1) * 2` for a buffer). A negative capacity is
+  the IllegalArgumentException or NegativeArraySizeException the library
+  throws.
+- **An exception the platform throws keeps its text as the message**, which
+  `getMessage` answers, as on KTF and SKT.
+- **`Thread.join` has a checkpoint remainder of its own**: a guest thread
+  parked in one looks again on every turn, so a restored one runs the whole
+  join again, which is all it had left. The platform's own thread cannot park,
+  so it runs the other threads itself, for at most 1,024 rounds: a round can be
+  a whole slice of every thread, and the tick is held for all of them.
+- **The platform's answers through a receiver's slot are counted**, at most
+  256 inside one another. A vector that holds itself asks its own toString for
+  ever, all of it Go frames rather than guest stack, and without the count it
+  ran the Go stack out under every session in the process; the class library
+  would throw StackOverflowError, and here the title stops.
+
+Left out: floating point (`floatValue`, `append(double)`, `readFloat` and the
+rest), `Boolean` and `Character`, the exception classes' own constructors,
+`Class` queries such as `isArray`, Thread's `getPriority`, `activeCount` and
+`toString`, and Reader's constructors with the concrete methods a title's own
+`Reader` subclass would inherit.
+
+**Found and left for a change of its own: the collector does not read a nested
+call's registers.** `collectJavaObjects` marks from each root thread's
+`Context()`, and a call the platform makes into the title — a callback, a
+class initialiser, and now a key's hashCode or an element's toString — runs on
+a thread derived from it, whose registers only `LiveContexts()` reaches. A
+collection raised by a refused allocation inside such a call, or one at a
+tick's end while a guest thread is parked inside one, sees the guest's stacks
+and heap but not the registers of the calls in flight. An object is never
+freed by the cycle that first finds it unreachable, so one held only in such a
+register is freed when two cycles in a row run while it is held there — rare,
+since the arena has to be that full, and a freed object the title still uses is
+corruption rather than a stop. Marking from every live context only retains
+more. It was found by reading the code; no local run has been seen to hit it.
+[The change after this one](#lgt-collector-nested-calls-2026-10-28) fixes it.
+
+**The first placement of the new tables broke every quick save a Java title
+had.** They went into the Java record beside the vectors, and the record codec
+reads a strict schema — every field present, none unknown — so the slots of 22
+local Java titles an earlier build had saved failed to load, as damaged. The
+tables moved into a record of their own, version 4, wrapping the session and
+media records the way version 3 wrapped the session record
+(`checkpoint_java_library.go`); a session holding none of them is still written
+in the earlier shape (`TestJavaClassLibraryRecordLeavesEarlierRecordsReadable`).
+A pass that only compares fresh runs does not see this, which is why the
+quick saves were run below.
+
+Validation: `go vet`, `go test` with and without the debug tag and
+`go test -race` on this package, and the packages that load it. The 118 distinct
+local LGT archives were run under the build before this pass and this one:
+
+- 500 ticks from an empty save: every final frame digest the same, no errors.
+- 1,500 ticks from an empty save with fire every 25 ticks from tick 100: every
+  last frame, guest instruction count and exit the same; the logs differ only
+  in their timestamps. No local run reaches a member this pass added, which is
+  what filling ahead of the titles looks like, and the semantic changes
+  (`indexOf` by equals, `append(Object)` by toString) moved nothing either.
+- Quick save after 500 ticks under the build before, load under both builds,
+  300 ticks more: 118 of 118 load under this build and end on the same frame as
+  under the build that saved them.
+- Quick save and load under this build, which writes the version-4 record for 9
+  of the 118 (StringBuffer capacities in 6, Vector shapes in 3, an exception
+  message in 1): all 118 end on the frame the build before ends on with its own
+  save.
+- After the label, nesting and join changes above, the 22 archives with a Java
+  module (21 titles and a fixture) at 1,500 ticks with fire again: every last
+  frame, instruction count and exit the same as the build before this pass.
+
+<a id="lgt-collector-nested-calls-2026-10-28"></a>
+
+## The collector reads every call in flight — 2026-10-28
+
+`collectJavaObjects` marked registers from each root thread's own context: the
+platform's thread and every guest worker. A call the platform makes into the
+title — a callback, a class initialiser, and since the class library's core a
+key's hashCode, an element's toString or a constructor — runs on a thread
+`armcore` derives from the one it was made on, with registers of its own that
+only `LiveContexts()` reaches. A collection the arena raised inside such a call,
+or one at a tick's end while a guest thread was parked inside one, therefore
+read the guest's stacks, statics and heap but not what the code in flight held
+in registers. An object is never freed by the cycle that first finds it
+unreachable, so one held only there was freed when two cycles ran in a row
+while it was held — and an object the title still uses, freed, is corruption
+rather than a stop.
+
+The collector now marks every live context of every thread. Each derived call
+is stopped at a supervisor call (its context saved before the handler runs) or
+parked whenever a collection runs, so its saved context is its registers. The
+change only retains more.
+
+`TestJavaCollectorKeepsWhatANestedCallHoldsInARegister` makes the call: an
+object handed to a guest function that keeps it in `r4` alone and makes a
+supervisor call, inside which two cycles run. Before the change the object was
+freed under the call; now it survives, and goes once the call has returned.
+
+Validation: `gofmt`, `go vet` and `go test` on `./cmd/... ./internal/...
+./fonts/... ./mobile/... ./web/...`, `go test -tags debug` on lgt, session,
+webhost and cmd, and `go test -race` on this package. The collector runs only
+for Java titles, so the 22 local archives with a Java module were run under the
+build before this change and this one: 1,500 ticks with fire every 25 ticks
+from tick 100 end on the same frame, instruction count and exit in all 22, and
+a quick save after 500 ticks loaded for 300 more under each build ends on the
+same frame in all 22. No local run was seen to need it.
 
 <a id="lgt-qa-2026-10-28-unterminated-record-table"></a>
 

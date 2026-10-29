@@ -561,6 +561,11 @@ func TestCheckpointIsRefusedAwayFromABoundary(t *testing.T) {
 		t.Fatalf("inside a guest call: %v", err)
 	}
 	client.javaCallDepth = 0
+	client.javaVirtualNesting = 1
+	if _, err := session.CaptureCheckpoint(ctx); !errors.Is(err, ErrCheckpointBusy) {
+		t.Fatalf("inside a platform answer through a slot: %v", err)
+	}
+	client.javaVirtualNesting = 0
 
 	client.saveReadError = errors.New("the disk went away")
 	if _, err := session.CaptureCheckpoint(ctx); err == nil || errors.Is(err, ErrCheckpointBusy) {
@@ -862,7 +867,7 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"inputMode": recorded, "inputModeTableAddress": recorded, "cTextInput": recorded,
 			"javaApplication": recorded, "javaClasses": diagnostic, "javaLink": recorded, "javaRun": recorded,
 			"javaMediaEvents": recorded,
-			"javaTry":         boundary, "javaTryBuffers": recorded, "javaCallDepth": boundary,
+			"javaTry":         boundary, "javaTryBuffers": recorded, "javaCallDepth": boundary, "javaVirtualNesting": boundary,
 			"activeJavaWorker": boundary, "javaThreadsStopped": boundary, "collecting": boundary,
 			"collectNanos": diagnostic, "collectorOff": host, "applicationIDAddress": recorded,
 			"resourceIDs": recorded, "resourceNames": recorded, "trace": host, "imports": recorded,
@@ -871,7 +876,9 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"byHandle": recorded, "byObject": recorded, "byName": recorded, "strings": recorded, "singletons": recorded,
 			"random": recorded, "streams": recorded, "images": recorded, "files": recorded, "threads": recorded,
 			"monitors": recorded, "mainThread": recorded, "keyCallback": boundary, "keyChecks": recorded,
-			"vectors": recorded, "calendars": recorded, "sinks": recorded, "wrapped": recorded,
+			"vectors": recorded, "vectorShapes": recorded, "bufferCapacities": recorded, "numbers": recorded,
+			"hashtables": recorded, "enumerations": recorded, "messages": recorded,
+			"calendars": recorded, "sinks": recorded, "wrapped": recorded,
 			"sinkFiles": recorded, "streamFiles": recorded, "decodedImages": recorded, "widgets": recorded,
 			"focusedWidget": recorded, "widgetGeneration": recorded, "dates": recorded, "databases": recorded,
 			"workers": recorded, "threadStacks": recorded, "graphics": recorded, "card": recorded, "cardDirty": recorded,

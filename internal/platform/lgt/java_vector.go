@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"strings"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 )
@@ -18,14 +19,76 @@ import (
 
 const javaVectorClass = "java/util/Vector"
 
-// javaVectorConstructor is `Vector()` and `Vector(int)`. The capacity is a hint
-// about allocation and nothing a caller can observe, so both build the same
-// empty list.
+// javaVectorConstructor is `Vector()`, `Vector(int)` and `Vector(int, int)`.
+// All three build the same empty list; what the arguments choose is the
+// capacity `capacity()` answers and how it grows (javaVectorShape), and a
+// negative capacity is the IllegalArgumentException the class library throws.
 func javaVectorConstructor(
-	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	client.javaRuntimeState().vectors[arguments[0]] = []uint32{}
+	shape := javaVectorShape{capacity: javaVectorDefaultCapacity}
+	if len(arguments) > 1 {
+		shape.capacity = int32(arguments[1])
+	}
+	if len(arguments) > 2 {
+		shape.increment = int32(arguments[2])
+	}
+	if shape.capacity < 0 {
+		return 0, client.throwJavaPlatform(thread, javaIllegalArgumentClass,
+			fmt.Sprintf(": Vector(%d)", shape.capacity))
+	}
+	runtime := client.javaRuntimeState()
+	runtime.vectors[arguments[0]] = []uint32{}
+	runtime.vectorShapes[arguments[0]] = shape
 	return 0, nil
+}
+
+// javaVectorShape is the capacity of the array the class library would hold a
+// vector's elements in, and the step it grows by: nothing here holds the
+// array, but `capacity()` answers its length, and the length follows the
+// library's own rules — 10 to start with, the step on growing when one was
+// given, and otherwise double, or what is needed if that is more.
+type javaVectorShape struct {
+	capacity, increment int32
+}
+
+const javaVectorDefaultCapacity = 10
+
+// javaVectorShapeOf answers a vector's shape. A vector built before shapes
+// were kept — restored from an earlier build's checkpoint, or answered by a
+// platform call rather than constructed — is given the one an empty vector
+// would have grown to holding what it holds.
+func (client *Client) javaVectorShapeOf(object uint32) javaVectorShape {
+	runtime := client.javaRuntimeState()
+	shape, ok := runtime.vectorShapes[object]
+	if !ok {
+		shape = javaVectorShape{capacity: javaVectorDefaultCapacity}
+		shape.grow(len(runtime.vectors[object]))
+		runtime.vectorShapes[object] = shape
+	}
+	return shape
+}
+
+// grow is the class library's ensureCapacityHelper.
+func (shape *javaVectorShape) grow(minimum int) {
+	if int64(minimum) <= int64(shape.capacity) {
+		return
+	}
+	grown := int64(shape.capacity) * 2
+	if shape.increment > 0 {
+		grown = int64(shape.capacity) + int64(shape.increment)
+	}
+	if grown < int64(minimum) {
+		grown = int64(minimum)
+	}
+	shape.capacity = int32(min(grown, maxJavaArrayLength))
+}
+
+// javaVectorGrow makes room for `minimum` elements, the way an add does.
+func (client *Client) javaVectorGrow(object uint32, minimum int) {
+	shape := client.javaVectorShapeOf(object)
+	shape.grow(minimum)
+	client.javaRuntimeState().vectorShapes[object] = shape
 }
 
 // javaVectorOf answers the list behind a vector object.
@@ -62,28 +125,216 @@ func javaVectorAdd(
 	if err := javaVectorRoom(held); err != nil {
 		return 0, err
 	}
+	client.javaVectorGrow(arguments[0], len(held)+1)
 	client.javaRuntimeState().vectors[arguments[0]] = append(held, arguments[1])
 	return 0, nil
 }
 
-// javaVectorIndexOf is `indexOf(Object)`: where the first reference equal to
-// the argument sits, or -1. Equality here is the reference itself, because a
-// vector holds handles and this platform has no `equals` to call on one — the
-// local caller passes back a String it put in the vector itself, so the two are
-// the same handle.
+// javaVectorIndexOf is `indexOf(Object)`, slot 19, and `indexOf(Object, int)`,
+// slot 20: where the first element equal to the argument sits, from an index,
+// or -1. **Equal is the argument's own equals**, as the class library asks
+// it — `elem.equals(elementData[i])` — so a String the title built again
+// finds the one it put in; null finds a null element. A negative start is the
+// array index failure the library's loop runs into.
 func javaVectorIndexOf(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	from := int64(0)
+	if len(arguments) > 2 {
+		from = int64(int32(arguments[2]))
+	}
+	if from < 0 {
+		return 0, client.throwJavaPlatform(thread, javaThrowArrayClass,
+			fmt.Sprintf(": indexOf from %d", from))
+	}
+	for index := from; index < int64(len(held)); index++ {
+		equal, err := client.javaVectorMatches(ctx, thread, arguments[1], held[index])
+		if err != nil {
+			return 0, err
+		}
+		if equal {
+			return uint32(index), nil
+		}
+	}
+	return ^uint32(0), nil
+}
+
+// javaVectorMatches is the test every search of a vector makes: null against
+// null, and otherwise the object being looked for asked whether it equals the
+// element.
+func (client *Client) javaVectorMatches(
+	ctx context.Context, thread *armcore.Thread, wanted, element uint32,
+) (bool, error) {
+	if wanted == 0 {
+		return element == 0, nil
+	}
+	return client.javaEqualsOf(ctx, thread, wanted, element)
+}
+
+// javaVectorLastIndexOf is `lastIndexOf(Object)`, slot 21, and
+// `lastIndexOf(Object, int)`, slot 22: the same search from the end, or from an
+// index backwards. An index at or past the size is the IndexOutOfBoundsException
+// the class library throws; a negative one finds nothing.
+func javaVectorLastIndexOf(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	from := int64(len(held)) - 1
+	if len(arguments) > 2 {
+		from = int64(int32(arguments[2]))
+		if from >= int64(len(held)) {
+			return 0, client.throwJavaPlatform(thread, javaIndexClass,
+				fmt.Sprintf(": %d >= %d", from, len(held)))
+		}
+	}
+	for index := from; index >= 0; index-- {
+		equal, err := client.javaVectorMatches(ctx, thread, arguments[1], held[index])
+		if err != nil {
+			return 0, err
+		}
+		if equal {
+			return uint32(index), nil
+		}
+	}
+	return ^uint32(0), nil
+}
+
+// javaVectorContains is `contains(Object)`, slot 18: whether indexOf finds it.
+func javaVectorContains(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	index, err := javaVectorIndexOf(client, ctx, thread, arguments[:2])
+	if err != nil {
+		return 0, err
+	}
+	return javaBoolean(int32(index) >= 0), nil
+}
+
+// javaVectorRemoveElement is `removeElement(Object)`, slot 30: the first
+// element indexOf finds goes, and the answer says whether there was one.
+func javaVectorRemoveElement(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	index, err := javaVectorIndexOf(client, ctx, thread, arguments[:2])
+	if err != nil {
+		return 0, err
+	}
+	if int32(index) < 0 {
+		return javaFalse, nil
+	}
+	if _, err := javaVectorRemoveAt(client, ctx, thread, []uint32{arguments[0], index}); err != nil {
+		return 0, err
+	}
+	return javaTrue, nil
+}
+
+// javaVectorLast is `lastElement()`, slot 25. An empty vector is the
+// NoSuchElementException the class library throws.
+func javaVectorLast(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if len(held) == 0 {
+		return 0, client.throwJavaPlatform(thread, javaNoSuchElementClass, ": the last element of an empty vector")
+	}
+	return held[len(held)-1], nil
+}
+
+// javaVectorCapacity is `capacity()`, slot 14.
+func javaVectorCapacity(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	if _, err := client.javaVectorOf(arguments[0]); err != nil {
+		return 0, err
+	}
+	return uint32(client.javaVectorShapeOf(arguments[0]).capacity), nil
+}
+
+// javaVectorEnsureCapacity is `ensureCapacity(int)`, slot 12.
+func javaVectorEnsureCapacity(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	if _, err := client.javaVectorOf(arguments[0]); err != nil {
+		return 0, err
+	}
+	if minimum := int32(arguments[1]); minimum > 0 {
+		client.javaVectorGrow(arguments[0], int(min(minimum, maxJavaArrayLength)))
+	}
+	return 0, nil
+}
+
+// javaVectorTrimToSize is `trimToSize()`, slot 11: the capacity becomes the
+// size.
+func javaVectorTrimToSize(
 	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	held, err := client.javaVectorOf(arguments[0])
 	if err != nil {
 		return 0, err
 	}
-	for index, element := range held {
-		if element == arguments[1] {
-			return uint32(index), nil
-		}
+	shape := client.javaVectorShapeOf(arguments[0])
+	if int64(len(held)) < int64(shape.capacity) {
+		shape.capacity = int32(len(held))
 	}
-	return ^uint32(0), nil
+	client.javaRuntimeState().vectorShapes[arguments[0]] = shape
+	return 0, nil
+}
+
+// javaVectorSetSize is `setSize(int)`, slot 13: nulls on the end up to the
+// size, or the elements past it gone. A negative size is the array index
+// failure the class library's loop runs into.
+func javaVectorSetSize(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	size := int64(int32(arguments[1]))
+	if size < 0 {
+		return 0, client.throwJavaPlatform(thread, javaThrowArrayClass, fmt.Sprintf(": setSize(%d)", size))
+	}
+	if size > maxJavaArrayLength {
+		return 0, fmt.Errorf("a vector of %d elements: %d is the most one holds", size, maxJavaArrayLength)
+	}
+	if size > int64(len(held)) {
+		client.javaVectorGrow(arguments[0], int(size))
+		held = append(held, make([]uint32, size-int64(len(held)))...)
+	} else {
+		held = held[:size:size]
+	}
+	client.javaRuntimeState().vectors[arguments[0]] = held
+	return 0, nil
+}
+
+// javaVectorToString is `toString()`, slot 4: every element's own toString,
+// between brackets and after commas, as the class library writes it.
+func javaVectorToString(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	parts := make([]string, 0, len(held))
+	for _, element := range append([]uint32(nil), held...) {
+		text, err := client.javaToStringOf(ctx, thread, element)
+		if err != nil {
+			return 0, err
+		}
+		parts = append(parts, text)
+	}
+	return client.newJavaString("[" + strings.Join(parts, ", ") + "]")
 }
 
 // javaVectorSize is `size()`.
@@ -228,6 +479,7 @@ func javaVectorInsertAt(
 	if err := javaVectorRoom(held); err != nil {
 		return 0, err
 	}
+	client.javaVectorGrow(arguments[0], len(held)+1)
 	grown := make([]uint32, 0, len(held)+1)
 	grown = append(grown, held[:index]...)
 	grown = append(grown, arguments[1])
@@ -283,3 +535,43 @@ func javaStackPop(
 	client.javaRuntimeState().vectors[arguments[0]] = held[:len(held)-1]
 	return top, nil
 }
+
+// javaStackPeek is `Stack.peek()`, slot 34: the top without taking it off. An
+// empty stack is the EmptyStackException the class library throws.
+func javaStackPeek(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if len(held) == 0 {
+		return 0, client.throwJavaPlatform(thread, javaEmptyStackClass, ": peek at an empty stack")
+	}
+	return held[len(held)-1], nil
+}
+
+// javaStackSearch is `Stack.search(Object)`, slot 36: how far from the top the
+// object is, counting the top as 1, by lastIndexOf's test; -1 when it is not
+// there.
+func javaStackSearch(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, err := client.javaVectorOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	index, err := javaVectorLastIndexOf(client, ctx, thread, arguments[:2])
+	if err != nil {
+		return 0, err
+	}
+	if int32(index) < 0 {
+		return ^uint32(0), nil
+	}
+	return uint32(len(held) - int(int32(index))), nil
+}
+
+const (
+	javaNoSuchElementClass = "java/util/NoSuchElementException"
+	javaEmptyStackClass    = "java/util/EmptyStackException"
+)

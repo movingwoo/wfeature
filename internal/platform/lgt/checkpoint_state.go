@@ -402,7 +402,8 @@ func (client *Client) checkpointIdle() error {
 		return fmt.Errorf("LGT checkpoint cannot capture after a failed save read: %w", client.saveReadError)
 	}
 	busy := client.javaThreadsStopped || client.activeJavaWorker != nil || client.javaCallDepth != 0 ||
-		len(client.javaTry) != 0 || client.collecting || len(client.thread.LiveContexts()) != 1
+		client.javaVirtualNesting != 0 || len(client.javaTry) != 0 || client.collecting ||
+		len(client.thread.LiveContexts()) != 1
 	if run := client.javaRun; run != nil {
 		busy = busy || run.keyCallback || len(run.pins) != 0
 	}
