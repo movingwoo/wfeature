@@ -609,7 +609,7 @@ source and build trees.
 
 Only macOS was executed by hand: the repository is developed on one machine,
 and cross-compiling proves a build, not a run. The CI rows are
-`.github/workflows/checks.yml`: its `test` job's three suites on Ubuntu, and its `smoke` job on
+`.github/workflows/checks.yml`: its `suite` job's three suites on Ubuntu, gathered into one `test` check, and its `smoke` job on
 Ubuntu, Windows and macOS runners, which builds only `./cmd/server` there, also
 cross-compiles the Android server on Linux and compiles the iOS library and app
 on macOS. The rest of the tree is compiled for Windows only by cross-compiling. `verify.yml` calls

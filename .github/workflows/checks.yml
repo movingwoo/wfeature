@@ -35,7 +35,7 @@ jobs:
   # alone is most of the wait, and the other two finish inside it. The
   # suite's name is the cache's name too, because each one compiles the tree
   # differently — the debug tag and the race detector are separate builds.
-  test:
+  suite:
     strategy:
       fail-fast: false
       matrix:
@@ -144,6 +144,19 @@ jobs:
             ${{ steps.paths.outputs.build }}
             ${{ steps.paths.outputs.modules }}
           key: go-${{ matrix.suite }}-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.sha }}
+
+  # The repository's ruleset requires one check, `checks / test`, so the
+  # suites report through it rather than under names of their own: splitting
+  # them further changes nothing outside this file. It runs when a suite
+  # failed too and fails with it, because a required check that was skipped
+  # counts as passed.
+  test:
+    needs: suite
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every suite passed
+        run: test "${{ needs.suite.result }}" = success
 
   # A release is "the server binary for an OS, a folder to drop games into, and
   # a browser", so what has to be verified per OS is that the binary starts,

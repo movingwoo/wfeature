@@ -58,10 +58,12 @@ remains. If the sandbox blocks the default Go cache, point `GOCACHE` and
 every push to `main`, and `release.yml` calls the same file before it builds
 anything. A push to another branch runs nothing on its own: its pull request
 runs the same commit merged with `main`, and running both doubled the wait for
-nothing. The `test` job (Ubuntu, newest stable Go) is three suites on three
+nothing. The `suite` job (Ubuntu, newest stable Go) is three suites on three
 runners at once: `release` runs the `gofmt` check above, `go vet ./...`,
 `govulncheck ./...` and `make test` (with Node 22); `debug` runs
-`make test-debug`; `race` runs `go test -race ./internal/...`.
+`make test-debug`; `race` runs `go test -race ./internal/...`. The `test` job
+passes only when all three did; it is the one check the repository's ruleset
+requires, so the suites can be split differently without touching the ruleset.
 
 Each suite restores the Go build and module caches that the newest `main` push
 saved for it, keyed by suite, Go version and commit, so a run recompiles only
