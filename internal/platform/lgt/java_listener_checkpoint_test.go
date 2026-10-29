@@ -201,7 +201,7 @@ func TestLGTWIPIListenerCheckpointReadersKeepStrictShapes(t *testing.T) {
 			"duplicate field": bytes.Replace(record, []byte(`"Version":`), []byte(`"Version":2,"Version":`), 1),
 			"missing field":   bytes.Replace(record, []byte(`"Version":`), []byte(`"OtherVersion":`), 1),
 		} {
-			if _, _, err := decodeLGTSessionRecord(damaged); err == nil {
+			if _, _, _, err := decodeLGTSessionRecord(damaged); err == nil {
 				t.Fatalf("strict reader accepted %s", name)
 			}
 		}

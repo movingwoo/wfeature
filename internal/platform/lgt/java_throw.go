@@ -231,6 +231,11 @@ func (client *Client) throwJavaPlatform(thread *armcore.Thread, name, what strin
 	if err != nil {
 		return fmt.Errorf("%w (%s: %w)", ErrJavaAppUnsupported, name, err)
 	}
+	// What the throw says went wrong is the exception's message, which a
+	// title's handler reads with getMessage (java_throwable.go).
+	if message := javaThrowMessage(what); message != "" {
+		client.javaRuntimeState().messages[object] = message
+	}
 	return client.throwJava(thread, name, object, what)
 }
 

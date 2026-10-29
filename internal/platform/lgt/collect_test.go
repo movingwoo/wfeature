@@ -1,8 +1,10 @@
 package lgt
 
 import (
+	"context"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 )
 
@@ -385,6 +387,45 @@ func TestJavaCollectorKeepsWhatAPlatformCallIsStillBuilding(t *testing.T) {
 	}
 }
 
+// A call the platform makes into the title — a callback, a class initialiser,
+// a key's hashCode — runs on a thread derived from the one it was made on, and
+// what the title's code holds in that call's registers is live. A collection
+// raised inside the call, the arena refusing a block, reads them as it reads
+// the root thread's: an object held there and nowhere else survives two
+// cycles in a row.
+func TestJavaCollectorKeepsWhatANestedCallHoldsInARegister(t *testing.T) {
+	client := fixtureClient(t)
+	object := newCollectableObject(t, client, "java/lang/Object")
+	// adds r4, r0, #0; movs r0, #0; svc #1; adds r0, r4, #0; bx lr
+	code := installThumbAt(t, client, 0, 0x1c04, 0x2000, 0xdf01, 0x1c20, 0x4770)
+	reached, kept := false, false
+	handler := func(context.Context, *armcore.Thread, armcore.SupervisorCall) error {
+		collect(t, client)
+		collect(t, client)
+		reached, kept = true, tracked(client, object)
+		return nil
+	}
+	summary, err := client.core.Call(context.Background(), client.thread, code, returnAddress, []uint32{object}, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reached {
+		t.Fatal("the nested call never reached its collection")
+	}
+	if !kept {
+		t.Fatal("an object a nested call holds only in a register was freed under it")
+	}
+	if answer := summary.Context.Registers[0]; answer != object {
+		t.Fatalf("the call answered %#x, want the object %#x it held", answer, object)
+	}
+	// Once the call has returned nothing holds it, and it goes.
+	collect(t, client)
+	collect(t, client)
+	if tracked(client, object) {
+		t.Fatal("an object was kept after the call that held it returned")
+	}
+}
+
 // The platform's own handles are roots. A card the display is showing is not
 // named by any guest word between frames, and freeing it ends the title.
 func TestJavaCollectorKeepsThePlatformsOwnHandles(t *testing.T) {
@@ -546,5 +587,40 @@ func TestJavaDataPressureKeepsDecodedCacheHandles(t *testing.T) {
 	client.collectForAllocation()
 	if client.framebuffer(surface.handle) != surface {
 		t.Fatal("data pressure evicted a pending cache handle")
+	}
+}
+
+// A hashtable holds its keys and values on this side, and an enumeration what
+// it walks: the collector follows both, and drops what they held with them.
+func TestJavaCollectorFollowsAHashtableAndAnEnumeration(t *testing.T) {
+	client := fixtureClient(t)
+	runtime := client.javaRuntimeState()
+	table := newCollectableObject(t, client, javaHashtableClass)
+	key := newCollectableObject(t, client, "java/lang/Object")
+	value := newCollectableObject(t, client, "java/lang/Object")
+	runtime.hashtables[table] = &javaHashtable{buckets: [][]javaHashEntry{{{hash: 1, key: key, value: value}}}, count: 1}
+	walk := newCollectableObject(t, client, javaHashtableEnumeratorClass)
+	item := newCollectableObject(t, client, "java/lang/Object")
+	runtime.enumerations[walk] = &javaEnumeration{items: []uint32{item}}
+	holder := newCollectableObject(t, client, javaVectorClass)
+	runtime.vectors[holder] = []uint32{table, walk}
+	runtime.jlet = holder
+
+	collect(t, client)
+	collect(t, client)
+	for _, object := range []uint32{table, key, value, walk, item} {
+		if !tracked(client, object) {
+			t.Fatalf("%#x, which only a hashtable or an enumeration names, was freed", object)
+		}
+	}
+
+	runtime.jlet = 0
+	collect(t, client)
+	collect(t, client)
+	if tracked(client, key) || tracked(client, item) {
+		t.Fatal("what a dead hashtable and enumeration held was kept")
+	}
+	if runtime.hashtables[table] != nil || runtime.enumerations[walk] != nil {
+		t.Fatal("a table's or an enumeration's contents outlived the object")
 	}
 }

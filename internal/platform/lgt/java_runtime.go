@@ -109,6 +109,20 @@ type javaRuntime struct {
 	// vectors is what each java/util/Vector holds; see java_vector.go, and
 	// databases the record stores a title has open; see java_database.go.
 	vectors map[uint32][]uint32
+	// vectorShapes is each vector's capacity and growth step, and
+	// bufferCapacities each StringBuffer's capacity: the numbers `capacity()`
+	// answers. See javaVectorShape and javaBufferGrown.
+	vectorShapes     map[uint32]javaVectorShape
+	bufferCapacities map[uint32]int32
+	// numbers is the value each Integer, Long, Short and Byte holds;
+	// hashtables what each java/util/Hashtable holds; enumerations what each
+	// Enumeration walks; messages each exception's message. See
+	// java_number.go, java_hashtable.go, java_enumeration.go and
+	// java_throwable.go.
+	numbers      map[uint32]int64
+	hashtables   map[uint32]*javaHashtable
+	enumerations map[uint32]*javaEnumeration
+	messages     map[uint32]string
 	// calendars is the instant each java/util/Calendar stands for, and sinks
 	// what each java/io/ByteArrayOutputStream has been written; see
 	// java_calendar.go and java_stream.go.
@@ -228,6 +242,13 @@ func newJavaRuntime() *javaRuntime {
 		dates:       map[uint32]int64{},
 		databases:   map[uint32]*javaDatabase{},
 		objects:     map[uint32]javaObjectRecord{},
+
+		vectorShapes:     map[uint32]javaVectorShape{},
+		bufferCapacities: map[uint32]int32{},
+		numbers:          map[uint32]int64{},
+		hashtables:       map[uint32]*javaHashtable{},
+		enumerations:     map[uint32]*javaEnumeration{},
+		messages:         map[uint32]string{},
 	}
 }
 

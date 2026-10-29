@@ -35,22 +35,31 @@ type javaMediaEventState struct {
 	Code           int32
 }
 
-func decodeLGTSessionRecord(data []byte) (sessionCheckpointState, *javaMediaState, error) {
+func decodeLGTSessionRecord(data []byte) (sessionCheckpointState, *javaMediaState, *javaLibraryState, error) {
+	// The newest shape first: version 4 carries the class library's tables
+	// beside the media record (checkpoint_java_library.go).
+	var library sessionLibraryCheckpointState
+	if err := backend.DecodeCheckpointRecord(data, &library); err == nil {
+		if library.Version != sessionLibraryCheckpointVersion {
+			return sessionCheckpointState{}, nil, nil, fmt.Errorf("LGT Java class library checkpoint version %d: %w", library.Version, backend.ErrCheckpointVersion)
+		}
+		return library.Session, library.Media, &library.Library, nil
+	}
 	var extended sessionMediaCheckpointState
 	if err := backend.DecodeCheckpointRecord(data, &extended); err == nil {
 		if extended.Version != sessionMediaCheckpointVersion {
-			return sessionCheckpointState{}, nil, fmt.Errorf("LGT Java media checkpoint version %d: %w", extended.Version, backend.ErrCheckpointVersion)
+			return sessionCheckpointState{}, nil, nil, fmt.Errorf("LGT Java media checkpoint version %d: %w", extended.Version, backend.ErrCheckpointVersion)
 		}
-		return extended.Session, &extended.Media, nil
+		return extended.Session, &extended.Media, nil, nil
 	}
 	// The codec validates the entire schema before allocating the decoded
-	// destination. Trying the two disjoint strict shapes cannot partially
+	// destination. Trying the three disjoint strict shapes cannot partially
 	// restore a record, accept unknown fields, or double its decoded payload.
 	var legacy sessionCheckpointState
 	if err := backend.DecodeCheckpointRecord(data, &legacy); err != nil {
-		return sessionCheckpointState{}, nil, err
+		return sessionCheckpointState{}, nil, nil, err
 	}
-	return legacy, nil, nil
+	return legacy, nil, nil, nil
 }
 
 func (client *Client) captureJavaMediaState(audio backend.AudioState) (*javaMediaState, error) {

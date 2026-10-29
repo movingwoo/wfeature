@@ -23,9 +23,11 @@ import (
 // dispatched and is reported instead.
 //
 // Nothing is implemented by guessing at what a method should do. A method is
-// here when a title has been watched reaching for it and the specification says
-// what it answers; everything else stops the title with its own name, which is
-// worth more than a plausible answer that is wrong.
+// here when the specification says what it answers and something says where
+// it sits: a title watched reaching for it, or — for the class library's core
+// (java_class_library.go) — the declaration-order rule the watched slots spell
+// (javaBakedVirtualSlots). Everything else stops the title with its own name,
+// which is worth more than a plausible answer that is wrong.
 
 // javaPlatformMethod is one implemented method. Words is how many argument
 // words it takes, receiver included, because the descriptor alone does not say
@@ -58,7 +60,8 @@ func javaPlatformKey(class string, member javaMemberRef) string {
 }
 
 // javaPlatformMethods is the whole of the platform Java API this runtime
-// serves. It is short, and it is meant to grow one measured entry at a time.
+// serves. It grows one entry at a time: a measured one, or one the
+// specification places (java_class_library.go).
 var javaPlatformMethods = map[string]javaPlatformMethod{
 	// A Jlet's constructor. The application's own Jlet subclass calls it as the
 	// first thing in its own constructor, on an object the module has already
@@ -358,14 +361,12 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// Text. What a String or a StringBuffer holds is kept on this platform's
 	// side, keyed by the object the module allocated; see java_string.go.
 	"java/lang/String.valueOf(I)Ljava/lang/String;": {Words: 1, Implementat: javaStringValueOf},
-	"java/lang/String.valueOf(Ljava/lang/Object;)Ljava/lang/String;": {
-		Words: 1, Implementat: javaStringValueOfObject},
-	"java/lang/String.<init>()V":       {Words: 1, Implementat: javaStringEmpty},
-	"java/lang/String.<init>([B)V":     {Words: 2, Implementat: javaStringConstructor},
-	"java/lang/String.<init>([BII)V":   {Words: 4, Implementat: javaStringConstructor},
-	"java/lang/String.<init>([CII)V":   {Words: 4, Implementat: javaStringFromChars},
-	"java/lang/String.<init>([C)V":     {Words: 2, Implementat: javaStringFromChars},
-	"java/lang/StringBuffer.<init>()V": {Words: 1, Implementat: javaBufferConstructor},
+	"java/lang/String.<init>()V":                    {Words: 1, Implementat: javaStringEmpty},
+	"java/lang/String.<init>([B)V":                  {Words: 2, Implementat: javaStringConstructor},
+	"java/lang/String.<init>([BII)V":                {Words: 4, Implementat: javaStringConstructor},
+	"java/lang/String.<init>([CII)V":                {Words: 4, Implementat: javaStringFromChars},
+	"java/lang/String.<init>([C)V":                  {Words: 2, Implementat: javaStringFromChars},
+	"java/lang/StringBuffer.<init>()V":              {Words: 1, Implementat: javaBufferConstructor},
 	// The capacity form is a hint about a buffer this platform grows on
 	// demand, so it builds the same empty buffer the no-argument form does —
 	// and it takes the no-argument path, because its one argument is a number
@@ -575,6 +576,8 @@ func init() {
 			javaPlatformMethods[key] = method
 		}
 	}
+	// Last, because it adds to the slot tables the lines above assign whole.
+	registerJavaClassLibrary()
 }
 
 // javaBakedSlot is a method the compiler numbered itself, and how it is
@@ -859,26 +862,14 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		10: {Called: "copyInto([Ljava/lang/Object;)V",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaVectorCopyInto}},
 		15: {Called: "size()I", Method: javaPlatformMethod{Words: 1, Implementat: javaVectorSize}},
-		// Slot 19 takes the receiver and one reference and its answer is kept.
-		// **One call site cannot choose between `indexOf`, `contains` and
-		// `removeElement`**, which all take one reference and answer something,
-		// and this is where the numbering above earns its keep: `size` at 15
-		// and `addElement` at 29 are fourteen apart, which is exactly what this
-		// class's declaration order puts between them, and the same order puts
-		// `contains` at 18, `indexOf(Object)` at 19 and `removeElement` at 30.
-		//
-		// The site agrees with the number rather than merely allowing it. It
-		// dispatches this slot on a vector of strings with a string that is in
-		// it, and hands the answer straight to `new char[n][]` and
-		// `new int[n][3]` — a count of rows, which `indexOf` answers and a
-		// boolean does not.
 		// Slot 16 takes the receiver alone and its answer is compared with
 		// zero and branched on — a boolean rather than the count `size`
 		// answers one slot below it, which is the pair this class declares in
 		// that order.
 		16: {Called: "isEmpty()Z", Method: javaPlatformMethod{Words: 1, Implementat: javaVectorEmpty}},
-		19: {Called: "indexOf(Ljava/lang/Object;)I",
-			Method: javaPlatformMethod{Words: 2, Implementat: javaVectorIndexOf}},
+		// Slot 19, `indexOf(Object)`, asks the element's own equals, which is a
+		// call into the title; it is registered with the rest of the class
+		// library (java_class_library.go).
 		// Slot 23 is where a title's save stops, and two things settle it. The
 		// numbering that puts `size` at 15 and `addElement` at 29 puts
 		// `elementAt(int)` at 23 — it is the fourteenth method this class
@@ -951,12 +942,9 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 	javaStringBufferClass: {
 		4: {Called: "toString()Ljava/lang/String;",
 			Method: javaPlatformMethod{Words: 1, Implementat: javaBufferToString}},
-		// Slot 17 sits one before the String append and takes one reference
-		// that is not a String: the call site hands it the exception it just
-		// caught, on its way to a line it prints. `append(Object)` is what the
-		// specification declares there.
-		17: {Called: "append(Ljava/lang/Object;)Ljava/lang/StringBuffer;",
-			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendObject}},
+		// Slot 17, `append(Object)`, appends the object's own toString, which
+		// is a call into the title; it is registered with the rest of the class
+		// library (java_class_library.go).
 		18: {Called: "append(Ljava/lang/String;)Ljava/lang/StringBuffer;",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaBufferAppendText}},
 		21: {Called: "append(Z)Ljava/lang/StringBuffer;",

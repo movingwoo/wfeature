@@ -53,8 +53,9 @@ archive as one no platform claims
 The platform executes native Clets and its supported AOT Java surface. Java
 metadata, objects, arrays, exceptions, monitors, workers, resource streams,
 and supported library methods belong to the LGT implementation. Collection
-traces guest references and platform roots, including shown/focused widgets,
-and releases unreachable resources. A wrapper over a title's own `InputStream`
+traces guest references and platform roots, including shown/focused widgets
+and the registers of every call in flight on a guest thread, and releases
+unreachable resources. A wrapper over a title's own `InputStream`
 holds that stream object and the buffer its `read([BII)` is handed. Byte sinks
 and Vectors stop with an error at `maxJavaArrayLength` (4 Mi bytes or
 references), the largest array the platform builds, and Java `putData` fills a
@@ -121,6 +122,48 @@ Slot 10 implements `copyInto(Object[])`. `Clip.getVolume`, `Jlet.getEventQueue`
 (one queue object; `postEvent` is not implemented) and `Card.getDisplay` (the
 default display) answer the
 [members one title reached first](history/lgt.md#lgt-new-archives-2026-10-19-java-surface).
+
+The class library's core is placed by the specification
+(`java_class_library.go`): Object, String, StringBuffer, the integral number
+classes, Vector, Stack, Hashtable and its enumerations, InputStreamReader,
+`DataInputStream.readUnsignedShort`, `Thread.join`, `System.exit` and
+`getProperty`, `Class.forName`, `newInstance` and `getName`, and Throwable's
+`getMessage`, `toString` and `printStackTrace`. Every slot is the
+declaration-order rule's — a class's own methods from slot 10 in the order its
+CLDC class page declares them, an override at the slot above — and
+`TestJavaBakedSlotsFollowTheDeclarationOrder` holds every served slot of these
+classes to that order. Floating point, `Boolean`, `Character`, the exception
+classes' own constructors, `Class` queries such as `isArray`, and the methods a
+title's own `Reader` subclass would inherit are not served.
+
+- **hashCode, equals and toString are the receiver's own.** A Hashtable hashing
+  a key, a Vector searching for an element, `append(Object)` and
+  `String.valueOf(Object)` call the object's slot 2, 3 or 4 the way a call site
+  does, running the title's override when it has one (`javaCallVirtual`).
+  Object's own forms answer only for a class below no library class that
+  declares its own: a `Date`'s or a `Thread`'s toString, which this platform
+  lacks, stops the title by name instead of answering `java.util.Date@…`,
+  except in the label `append(Object)` and `String.valueOf(Object)` build,
+  which keeps the `Class@address` it had. These answers nest at most 256 deep,
+  so a vector that holds itself stops the title instead of the process.
+- **A Hashtable is the class library's, bucket for bucket**: 11 buckets, 75%
+  load, `2n + 1` on rehash, a new entry at the head of its chain, enumeration
+  from the last bucket. With String and number hashCodes the language's own, a
+  table enumerates in a handset's order. A Vector's enumeration is live; a
+  Hashtable's is the table as it was when `keys()` or `elements()` was asked.
+  Both reach the title through an interface table this platform gives their
+  classes (`javaPlatformInterfaces`), Enumeration's two methods at slots 10
+  and 11.
+- `Vector.indexOf` and the searches beside it ask the argument's `equals`,
+  where they compared references before. Vector and StringBuffer keep the
+  capacity `capacity()` answers by the class library's growth rules.
+- An exception the platform throws carries the text naming what went wrong as
+  its message. `System.getProperty` answers the CLDC table the KTF runtime
+  answers, then the handset table, and null for anything else.
+- `Thread.join` parks a guest thread until the other has ended, a slice at a
+  time, and a checkpoint taken inside it restores to the same wait; the
+  platform's own thread runs the other threads itself, for at most 1,024
+  rounds. See [the history](history/lgt.md#lgt-class-library-2026-10-28).
 
 ### Key callbacks waiting on workers
 
@@ -463,9 +506,17 @@ Three properties of this platform's storage shape how it gets there:
   filling the gap.
 
 A guest thread is restored from wherever a title parks one: inside
-`Thread.sleep` or `Thread.yield`, inside `Object.wait`, behind a lock another
-thread holds, at the end of its instruction budget, inside a static initializer
-it set off, and before its first slice. A thread parked beneath any other
+`Thread.sleep` or `Thread.yield`, inside `Object.wait` or `Thread.join`, behind
+a lock another thread holds, at the end of its instruction budget, inside a
+static initializer it set off, and before its first slice.
+
+The class library's tables — hashtables, enumerations, the numbers, exception
+messages, and the capacities Vector and StringBuffer answer — are a record of
+their own beside the session record (version 4), because the record codec
+refuses a missing or unknown field: added to the Java record, they would make
+every quick save an earlier build took unreadable. A session holding none of
+them is written in the earlier shape, and every earlier slot loads with the
+tables empty, which is what the build that wrote it could leave. A thread parked beneath any other
 platform call refuses the checkpoint, naming the call, and the session carries
 on. An active cheat freeze or patch refuses it too.
 
