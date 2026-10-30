@@ -336,6 +336,15 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 		}
 		client.log("authentication compatibility", "status", client.authentication)
 	}
+	// The main class's constructor and startApp are the first Host service
+	// call, and they get the allowance every later one does. Two local titles
+	// decompress their resources inside one native call of startApp, between
+	// 150 and 300 million instructions, past the single window a bounded run
+	// gets; the ceiling alone called them broken. A start that pumps its own
+	// slices keeps its hook, which already renews every window.
+	if startupHook == nil {
+		defer client.beginHostService(ctx)()
+	}
 	object, _, err := client.NewObject(ctx, archive.Descriptor.MainClass, "()V")
 	if err != nil {
 		client.log("KTF main class construction failed", "class", archive.Descriptor.MainClass, "error", err)

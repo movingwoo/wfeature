@@ -319,6 +319,31 @@ func TestWIPICMediaMuteStateIsRememberedAndSilencesNothing(t *testing.T) {
 	}
 }
 
+// TestWIPICMediaSourceVolumeChangesNothing pins 19. One title hands it a
+// source and a percentage from its sound option and gives the same level to
+// the playing clip through 26 straight after; 19 has to be answered, and has
+// to leave the clip's level and its sound alone.
+func TestWIPICMediaSourceVolumeChangesNothing(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	sink := &countingSink{}
+	client.audio = backend.NewAudio(sink)
+	sound := oneNoteSMAF()
+	clip := mediaCall(t, runtime, wipicMediaClipCreate, 0, uint32(len(sound)), 0)
+	mediaCall(t, runtime, wipicMediaClipPutData, clip, guestBytes(t, runtime, sound), uint32(len(sound)))
+
+	if result := mediaCall(t, runtime, wipicMediaSourceVolume, 7, 0); result != 0 {
+		t.Fatalf("source volume answered %#x", result)
+	}
+	if level := mediaCall(t, runtime, wipicMediaClipGetVolume, clip); level != wipicClipFullVolume {
+		t.Fatalf("clip level after a source volume = %d, want %d", level, wipicClipFullVolume)
+	}
+	mediaCall(t, runtime, wipicMediaPlay, clip, 0)
+	client.audio.Advance(100 * time.Millisecond)
+	if sink.noteOns == 0 {
+		t.Fatal("a source volume of zero silenced a clip")
+	}
+}
+
 // TestWIPICMediaClipVolumeIsTheTitlesOwn pins 14, 25 and 26. A title reads the
 // device level or a clip's level and hands it to every clip it fills, and one
 // title's own volume setting arrives as that level in steps of twenty. The

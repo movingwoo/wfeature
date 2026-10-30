@@ -2,12 +2,15 @@ package ktf
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
 // TestDrawRectOutlinesTheRectangleFillWouldCover pins MC_grpDrawRect against
@@ -174,6 +177,33 @@ func TestKeyDeliveryRunsInsideAServiceScope(t *testing.T) {
 	}
 	if client.serviceDepth != 0 {
 		t.Fatalf("service depth after key delivery = %d, want 0", client.serviceDepth)
+	}
+}
+
+// TestStartAppRunsUnderTheServiceAllowance covers the start: a title's
+// startApp can spend more than one window decompressing what it loads, and it
+// used to fail at the first window while every later service call had its
+// windows renewed. The fixture's startApp is five instructions, so a three-step
+// window is one it cannot finish in.
+func TestStartAppRunsUnderTheServiceAllowance(t *testing.T) {
+	archive, err := testfixture.KTFCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := backend.NewMemorySaveStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := StartSession(t.Context(), archive, SessionOptions{SaveStore: store, MaxSteps: 3})
+	if err != nil {
+		t.Fatalf("start with a window shorter than startApp error = %v", err)
+	}
+	defer session.Close()
+	if got := binary.LittleEndian.Uint32(readTestBytes(t, session.Client, testfixture.KTFCheckpointStartupCounter, 4)); got != 1 {
+		t.Fatalf("startApp ran %d times, want 1", got)
+	}
+	if session.Client.serviceDepth != 0 {
+		t.Fatalf("service depth after the start = %d, want 0", session.Client.serviceDepth)
 	}
 }
 

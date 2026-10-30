@@ -10054,3 +10054,87 @@ did. The last frames of 170 and the tick counts of 7 differ, and they are the
 wall-clock pacing this runner is known for: run twice more under the build
 before, the five such titles taken end on a third frame each time, and the
 seven tick counts move as far between two runs of that build.
+
+<a id="ktf-new-archives-2026-10-30"></a>
+
+## Newly added archives — 2026-10-30
+
+Four plaintext WIPI 2.0 KTF archives stopped where a person launched them; two
+others of the same batch ran unchanged. Each stop had one cause.
+
+<a id="ktf-new-archives-2026-10-30-start"></a>
+
+### startApp ran outside the service allowance
+
+Two titles fail in `startApp` with `ARM instruction limit exceeded (limit
+100000000)`. Neither is stuck: sampled at the limit, both sit in an LZMA
+decoder's probability-table set-up, inside one native call that decompresses
+their resources before the first frame. Raising the ceiling alone finds the
+size of that work — one title starts between 150 and 200 million steps, the
+other between 200 and 300 million — and each takes two seconds of Host time.
+
+Every later Host service call (`beginHostService`) already renews its window
+up to a 500 million step allowance, with the clock-poll and wait rules beside
+it; the constructor and `startApp` were the one guest run that had a single
+window. `startSession` now opens the same scope around them, except on a start
+that pumps its own slices (`StartSessionAsync`), whose hook already renews
+every window. Inside the scope a batch Host's clock moves with the guest's
+execution (`advanceBatchClockTo`), as it does in every later service call, so
+a title that reads the clock in `startApp` now sees time pass there.
+`TestStartAppRunsUnderTheServiceAllowance` starts the authored
+fixture on a three-step window its five-instruction `startApp` cannot finish
+in; before the change that start failed.
+
+After the start both titles show their own startup notice and reach the title
+screen and menu once it is confirmed.
+
+<a id="ktf-new-archives-2026-10-30-kernel"></a>
+
+### Kernel slots 5 and 30
+
+A third title's start calls kernel slot 30 with `"OEMPAD"`, `"MIN"` or
+`"PHONENUMBER"` in `r0` and a string in `r1`, and maps `M_E_INVALID` to an
+error code of its own. Slot 29 is `MC_knlGetSystemProperty`, so this is
+`MC_knlSetSystemProperty(id, buf)`, the next function in the specification's
+order. It answers `M_E_INVALID` — the specification's answer for information
+that cannot be set — for every property: the handset's identity is not the
+title's to change, the Java `HandsetProperty.setSystemProperty` already answers
+false, and an accepted value would have to be answered back by the getter for
+the rest of the run.
+
+Past it the same start asks `MC_knlGetExecNames` for a library's program id
+and hands what it got to slot 5 with a parameter count of zero, going on
+without the library when the answer is negative. Slots 3 to 6 are the
+execute-and-load group between `MC_knlGetExecNames` and `MC_knlExit` at 7, and
+the `(execName, parmCnt)` shape behind a listing lookup is `MC_knlLoad`. It
+answers `M_E_INVALID`: nothing but the running program is installed, which is
+also what the listing says. The title reaches its title screen.
+
+<a id="ktf-new-archives-2026-10-30-media"></a>
+
+### Media function 19
+
+The fourth title, after its logo, calls media function 19 with `(7, level)`,
+the level its sound option scaled to 0–100, and in the next call hands the
+same level to function 26 (`MC_mdaClipSetVolume`) on the playing clip; 19's
+answer is not read. It is accepted and changes nothing, because the level
+reaches the sound through 26 and no second title says what the source number
+selects. The media error now names its caller as the kernel's does. The title
+plays.
+
+<a id="ktf-new-archives-2026-10-30-validation"></a>
+
+### Validation
+
+Unit tests for each answer (`wipic_kernel_test.go`, `wipic_media_test.go`,
+`wipic_call_test.go`); the `ktf` package under `-tags debug` and `-race`, and
+`./internal/... ./cmd/...`. Each of the four titles was run under `runktf`
+past the point where it stopped.
+
+The 332 local archives (KTF, and the LGT and SKT ones in the same folders) at
+500 ticks from an empty save under the build before this change and this one:
+320 end on the same digest, three move from a failed start to a running title,
+one moves between runs of either build, and eight existing KTF titles move
+every run. Their last frames show the same screen at another point of its
+animation — the clock that now moves during `startApp` — and every one runs
+all 500 ticks under both builds.

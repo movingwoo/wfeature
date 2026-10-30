@@ -127,8 +127,12 @@ calls do not grow the arena.
 ## Lifecycle and input
 
 Sessions drive startup, pause, resume, and unconditional `destroyApp(true)`
-before unwinding workers. A failing teardown callback is diagnosed and cannot
-prevent termination; repeated close does not call it twice.
+before unwinding workers. The main class's constructor and `startApp` run under
+the step allowance every Host service call has, so a start that decompresses
+its resources past one window continues
+([history](history/ktf.md#ktf-new-archives-2026-10-30-start)). A failing
+teardown callback is diagnosed and cannot prevent termination; repeated close
+does not call it twice.
 
 Keys reach cards or the guest event queue according to the active path. User
 events at or above `0x5000` retain their type and two arguments; unknown
