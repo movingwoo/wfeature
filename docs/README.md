@@ -38,7 +38,7 @@ the page screenshots the root `README.md` shows.
 | [Sessions](session.md) | Browser protocol, retention, input, frames, audio, and save integrity. |
 | [JVM](jvm.md) | Java execution, class library, and semantic limits. |
 | [ARM](armcore.md) | Instruction boundary, threads, memory, profiling, and backend conformance. |
-| [KTF](ktf.md), [LGT](lgt.md), [SKT Java](skvm.md) | Platform loading, behavior, and remaining limitations. |
+| [KTF](ktf.md), [LGT](lgt.md), [SKT Java](skvm.md), [SKT native](skt-native.md) | Platform loading, behavior, and remaining limitations. |
 | [SKT checkpoints](skt-checkpoints.md) | The SKT Java and SGS quick save/load contract; KTF and LGT are in [architecture](architecture.md#quick-load-and-ordinary-saves) and their platform pages. |
 | [LCDUI](lcdui.md), [native text input](native-text-input.md) | Screens, widgets, Host keyboard/IME, and input ownership. |
 | [Rapid fire](rapid-fire.md) | The keypad's rapid-fire switch, its timing and measured cost. |

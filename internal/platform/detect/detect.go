@@ -196,6 +196,11 @@ func Classify(data []byte) (Platform, Reason, error) {
 	if isKTFNativePackage(names, wrapper) {
 		return claim(reader, KTF)
 	}
+	// After the KTF pair, so an archive that pair already claimed keeps its
+	// answer: the SKT shape is newer here, and a `.mod` is in both.
+	if isSKTNativePackage(names) {
+		return claim(reader, SKT)
+	}
 	if IsScriptPackage(reader) {
 		return claim(reader, SKT)
 	}
@@ -335,6 +340,38 @@ func isKTFNativePackage(names []string, wrapper string) bool {
 		}
 	}
 	return info == 1 && module == 1
+}
+
+// SKT's native package is the directory a handset installed a WIPI-C title
+// into: the executable `<id>.daf` beside its descriptor `<id>.mod`, the same
+// descriptor an SKT Java package carries. The pair has to share its name, and
+// there has to be exactly one executable; see skt.IsNativeArchive, which
+// applies the same rule.
+const (
+	sktNativeExecutableExtension = ".daf"
+	sktNativeDescriptorExtension = ".mod"
+)
+
+// isSKTNativePackage reports whether the entry names are an SKT native
+// package's. Like the KTF pair it is a shape, asked only after every marker
+// and the class scan.
+func isSKTNativePackage(names []string) bool {
+	descriptors := make(map[string]bool)
+	for _, name := range names {
+		if strings.EqualFold(path.Ext(name), sktNativeDescriptorExtension) {
+			descriptors[strings.ToLower(strings.TrimSuffix(name, path.Ext(name)))] = true
+		}
+	}
+	executables := 0
+	paired := false
+	for _, name := range names {
+		if !strings.EqualFold(path.Ext(name), sktNativeExecutableExtension) {
+			continue
+		}
+		executables++
+		paired = descriptors[strings.ToLower(strings.TrimSuffix(name, path.Ext(name)))]
+	}
+	return executables == 1 && paired
 }
 
 // entryName normalizes a zip entry the way the platform loaders do, so a

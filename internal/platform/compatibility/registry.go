@@ -55,6 +55,19 @@ const LGTWideGraphicsContext = "lgt.wide_graphics_context"
 // LGTRecordTableTerminator ends a recognized record table its search runs off.
 const LGTRecordTableTerminator = "lgt.record_table_terminator"
 
+// SKTNativeSaveIdentity accepts a recognized native executable's packaged
+// save, which names the handset it was written on.
+const SKTNativeSaveIdentity = "skt.native_save_identity"
+
+// SKTNativeCertSubscriber accepts a recognized native executable's packaged
+// cert.c2s subscriber field, the comparison that reports error 5001.
+const SKTNativeCertSubscriber = "skt.native_cert_subscriber"
+
+// SKTNativeDiscardOwnerState withholds a recognized device dump's install
+// directory, so the game starts fresh rather than loading the previous
+// owner's device-bound saves.
+const SKTNativeDiscardOwnerState = "skt.native_discard_owner_state"
+
 type target struct {
 	Platform string
 	Kind     string
@@ -131,7 +144,8 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		seen := make(map[string]bool)
 		for _, fix := range entry.Fixes {
 			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache || fix == SKTResumeWithoutStart) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
-				(fix == LGTCertificateMessage || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule
+				(fix == LGTCertificateMessage || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule ||
+				(fix == SKTNativeSaveIdentity || fix == SKTNativeCertSubscriber || fix == SKTNativeDiscardOwnerState) && entry.Platform == "skt" && entry.Match.Kind == NativeModule
 			if !supported {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)
 			}

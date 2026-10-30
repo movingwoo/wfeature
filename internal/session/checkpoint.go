@@ -15,6 +15,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/platform/lgt"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
+	"github.com/movingwoo/wfeature/internal/platform/skt/clet"
 )
 
 var ErrCheckpointUnsupported = errors.New("session: execution checkpoints are unsupported for this platform or variant")
@@ -42,6 +43,12 @@ type checkpointSessionState struct {
 // package's 240x320. See ktf.PackagedScreen.
 func ktfOptions(options Options) ktf.SessionOptions {
 	return ktf.SessionOptions{DisableAuthentication: options.DisableAuthentication, SaveStore: options.SaveStore,
+		AudioSink: options.AudioSink, FrameSink: backend.FrameSink{Output: options.FrameUpdates, Scale: options.Scale, Epoch: options.FrameEpoch},
+		Speed: options.Speed, TraceLimit: options.TraceLimit, Logger: options.Logger, Width: options.Width, Height: options.Height, Clock: options.Clock}
+}
+
+func cletOptions(options Options) clet.SessionOptions {
+	return clet.SessionOptions{DisableAuthentication: options.DisableAuthentication, SaveStore: options.SaveStore,
 		AudioSink: options.AudioSink, FrameSink: backend.FrameSink{Output: options.FrameUpdates, Scale: options.Scale, Epoch: options.FrameEpoch},
 		Speed: options.Speed, TraceLimit: options.TraceLimit, Logger: options.Logger, Width: options.Width, Height: options.Height, Clock: options.Clock}
 }
