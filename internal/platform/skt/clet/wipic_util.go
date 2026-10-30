@@ -77,7 +77,7 @@ func (runtime *initializationRuntime) handleWIPICUtilCall(thread *armcore.Thread
 	case wipicUtilInetAddrStr:
 		return runtime.wipicInetAddrStr(thread)
 	}
-	return 0, fmt.Errorf("KTF WIPI C utility function %d is not implemented%s",
+	return 0, fmt.Errorf("SKT WIPI C utility function %d is not implemented%s",
 		function, runtime.callerSite(thread))
 }
 
@@ -119,7 +119,7 @@ func (runtime *initializationRuntime) wipicInetAddrStr(thread *armcore.Thread) (
 	text := fmt.Sprintf("%d.%d.%d.%d",
 		address&0xff, (address>>8)&0xff, (address>>16)&0xff, (address>>24)&0xff)
 	if err := runtime.client.core.Memory().Write(pointer, append([]byte(text), 0)); err != nil {
-		return 0, fmt.Errorf("write KTF utility address string at %#x: %w", pointer, err)
+		return 0, fmt.Errorf("write SKT Clet utility address string at %#x: %w", pointer, err)
 	}
 	return 0, nil
 }
@@ -163,7 +163,7 @@ func (runtime *initializationRuntime) readGuestCString(pointer uint32, limit int
 	chunk := make([]byte, 1)
 	for offset := 0; offset <= limit; offset++ {
 		if err := memory.Read(pointer+uint32(offset), chunk); err != nil {
-			return "", fmt.Errorf("read KTF guest string at %#x: %w", pointer, err)
+			return "", fmt.Errorf("read SKT Clet guest string at %#x: %w", pointer, err)
 		}
 		if chunk[0] == 0 {
 			return string(data), nil

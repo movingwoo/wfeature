@@ -20,7 +20,7 @@ func (runtime *initializationRuntime) flushLCD(thread *armcore.Thread) error {
 		args[i] = value
 	}
 	if args[0] != 0 {
-		return fmt.Errorf("unsupported KTF LCD index %d", args[0])
+		return fmt.Errorf("unsupported SKT Clet LCD index %d", args[0])
 	}
 	source, err := runtime.readWIPICFramebuffer(args[1])
 	if err != nil {

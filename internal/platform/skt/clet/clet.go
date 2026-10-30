@@ -178,16 +178,6 @@ func (program CletProgram) validate() error {
 // IsClet reports whether the client runs a Clet rather than a KTF image.
 func (client *Client) IsClet() bool { return client != nil && client.clet != nil }
 
-// SupportsCheckpoint reports whether this session has a quick-save codec. A
-// Clet does not: the checkpoint codec captures a KTF Java or module client's
-// state (its AOT metadata and heap), which a Clet has none of, and rebuilds it
-// from the descriptor archive a Clet does not carry. A Host asks this before
-// offering quick save, so a Clet is not offered one rather than being offered
-// one its capture then refuses. See docs/skt-native.md.
-func (session *Session) SupportsCheckpoint() bool {
-	return session != nil && session.Client != nil && !session.Client.IsClet()
-}
-
 // newCletSessionClient attaches the Host boundaries a session needs, the way
 // newSessionClient does for a KTF archive, without running guest code.
 func newCletSessionClient(program CletProgram, options SessionOptions) (*Client, error) {
@@ -319,7 +309,7 @@ func (client *Client) startClet(ctx context.Context) error {
 // entry has nothing to call. Destroy is one-way, like destroyApp for a Jlet.
 func (client *Client) cletLifecycle(ctx context.Context, entry uint32, destroy bool) error {
 	if client == nil || client.core == nil || client.thread == nil {
-		return fmt.Errorf("KTF client is not initialized")
+		return fmt.Errorf("SKT Clet client is not initialized")
 	}
 	client.run.Lock()
 	defer client.run.Unlock()
@@ -357,7 +347,12 @@ func (client *Client) sendCletKey(ctx context.Context, eventType, key int32) err
 	client.run.Lock()
 	defer client.run.Unlock()
 	if client.runtime == nil {
-		return fmt.Errorf("KTF client initialization has not completed")
+		return fmt.Errorf("SKT Clet client initialization has not completed")
+	}
+	if kind == CletEventKeyPressed {
+		// A press the player made can bring a field up; see
+		// cInputState.unreached.
+		client.runtime.cInput.unreached = false
 	}
 	return client.sendCletEvent(ctx, kind, key, 0)
 }

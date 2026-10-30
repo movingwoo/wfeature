@@ -121,11 +121,25 @@ where a title loads what it needs and arms the timer its frames come from. A
 service round (`tickClet`) runs the timers, the events the title posted itself
 through `MC_grpPostEvent`, a repaint it asked for, and the audio and cheat work
 every round does; there are no guest threads, cards or Java objects to service.
-Pause, resume and destroy run the program's own entries, and destroy is
-one-way. Keys reach the program through its event handler — press 2 and release
+A connection the program asks for fails the way a KTF
+title's does, through the callback it registered, which the next round delivers
+before its timers: one title waits on that answer behind its "checking your data
+on the server" screen and shows nothing else until it comes. Pause, resume and
+destroy run the program's own entries, and destroy is one-way. Keys reach the program through its event handler — press 2 and release
 3, no repeat — which is what both titles compare against. The semihosting
 `svc #0xab` one title's C runtime carries is answered as a semihosting host that
 took it would, and dropped.
+
+The ARM core yields to the Go scheduler every 16,384 instructions rather than
+the default 1,000, which is the figure LGT's Clet runs at. A Clet is a single
+thread between platform calls, so the frequent yield only bought it scheduler
+wakeups: on the wall clock at the web host's pace, with a key every three
+seconds, the two local titles went from 55 to 46 and from 48 to 41 percent of a
+core over the same frames. The steps a service allowance or the batch clock
+counts do not depend on the quantum. A batch Host's manual clock is accepted
+whichever platform's package built it: `SkipToNextDeadline` moves anything that
+answers `Set`, and a service call moves anything that answers `Advance` with
+the guest's execution, the way the KTF runtime moves its own.
 
 The file tree the program sees is its own files and the resources its
 executable carries, at their names below the program's directory, a title's own
@@ -201,14 +215,46 @@ executable accepts only the subscriber comparison, so the other two still run,
 and reports `skt-native-certificate`. No certificate is minted and no file is
 changed.
 
-## Limitations
+<a id="skt-native-quick-save"></a>
 
-Quick save is not offered for a native program. A quick-save codec captures a
-running client's execution state and rebuilds it, and the Clet engine has no
-such codec yet, so a Clet is not in `Session.CanCheckpoint` and a Host does not
-offer it one. A native title's own saves persist through the ordinary save store
-like any other title's; only the execution-state quick save is absent. A Clet
-checkpoint codec is possible future work.
+## Quick save
+
+A Clet is called and returns, so between two service rounds nothing of it is
+running: a checkpoint is its memory, the client thread's registers and the
+tables the engine keeps beside them, taken there and restored without running
+any of the program — not its start entry, and not the destroy entry of the
+session a load displaces. It is the shared envelope's variant 8, carried by the
+same slot, Host commands and page buttons as every other title's, and like
+every other title's it holds no save: the restored program reads its files as
+the store has them when the load commits. What the record holds, how it is
+validated and how it was accepted is in [SKT checkpoints](skt-checkpoints.md#native-clet-state).
+
+<a id="skt-native-text-entry"></a>
+
+## Text entry
+
+A Clet's text field is its own: the program draws it, keeps its value and
+composes characters through the input-method functions, handing each key it is
+given to `MC_imHandleInput`, which answers with the completed text. The page's
+text box reaches it the way a handset's input method did, one character at a
+time through a carrier key the field already takes, and the field appends each
+character under its own rules. The input method's activity is the evidence of a
+field, so text is offered once the program has used its input method, and stops
+being offered when a carrier reaches no input method until the program calls it
+again or the player presses a key. The rules and their reasons are in
+[native text input](native-text-input.md#skt).
+
+Neither local title calls its input method on a screen it reaches offline, so
+neither is offered text here. One title's fields, by the labels its code draws
+them under, are a nickname, a mask's name and description, a gift recipient's
+number and a search term, and each belongs to a feature that talks to a server
+first; the other called its input method on none of the screens a route through
+its menus and story reached. The
+path is covered by an authored native package instead
+(`internal/testfixture.SKTCletArchive`), whose field takes keys either in its
+event entry or on its frame timer.
+
+## Limitations
 
 The Clet engine and the KTF C runtime are two nearly identical WIPI-C
 implementations, because SKT native and KTF native call almost the same
@@ -217,12 +263,10 @@ SKT's own, so a change to it cannot reach a KTF title, which is why it was built
 this way rather than by calling into the KTF runtime. Each vendor keeps its own
 WIPI-C engine today — LGT's diverges from both, KTF's and SKT's are close —
 and unifying the parts KTF and SKT duplicate into one shared runtime is deferred
-work that would not change behavior. Text-field entry through the page's input
-box is not wired for a Clet yet either: the input-method table answers the mode
-queries and N123 digit entry a title makes, but the page-text-input path the
-KTF and LGT platforms carry is future work.
+work that would not change behavior.
 
 The two local examples are both GCC-built, so an executable built with another
 toolchain may lay its header or its relocation table out differently. One
-example is an online game, so a server-connection failure screen is within its
-expected range: its deeper content expects a server that is not there.
+example is an online game: offline it is told its server cannot be reached,
+reports that and plays on, and the content that needs the server stays out of
+reach.

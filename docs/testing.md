@@ -1246,18 +1246,26 @@ its supported boundaries. Focused suites are `TestThreadCheckpoint*`,
 `TestScriptCheckpoint*` and the shared `TestCheckpointSKTJava*`/
 `TestCheckpointScript*`. Authored worker fixtures verify continuation and
 monitor ownership; platform tests verify ordinary-save reconstruction and
-refused-load isolation. Subprocess tests accept
+refused-load isolation. The native Clet has `TestCheckpointSKTClet*` and
+`TestTextInputSKTClet*` in `internal/session`, over the authored native package
+`internal/testfixture.SKTCletArchive`, and the engine's own
+`TestCheckpointAccountsForEveryField`, `TestCheckpointRefuses*` and
+`TestCheckpointLoadReadsTheStoreOnlyAtCommit` in `internal/platform/skt/clet`. Subprocess tests accept
 `WFEATURE_SHARED_CHECKPOINT_RESTORE_BINARY` to exercise both debug/release
 directions with separately compiled test executables.
 
-The CLI and webhost checkpoint suites include both SKT variants. The rendered
+The CLI and webhost checkpoint suites include the SKT Java and script variants,
+and `TestSKTNativeQuickSaveAndTextInputOverTheSocket` takes the native one over
+the real socket: offered quick save, a quick save and a live load, and the
+page's text committed to the program's field before and after the load. The rendered
 route `web/acceptance/checkpoint-skt.mjs` exercises keypad placement, save and
 load, restored pixels and input epochs, corrupt-slot feedback and unchanged
 ordinary save hashes in Chromium and WebKit. It also checks that the first
 restored picture follows the reset and that a later speed change survives page
 reload, including the resumed metadata, control and saved preference.
 Real-archive probes stay opt-in through `TestLocalSKTCheckpoint`
-(`WFEATURE_SKT_CHECKPOINT_ACCEPTANCE`; see the record for its other variables),
+(`WFEATURE_SKT_CHECKPOINT_ACCEPTANCE`, with `WFEATURE_SKT_CHECKPOINT_VARIANT`
+selecting `java`, `script` or `native`; see the record for its other variables),
 with separate temporary saves and anonymous digest labels. No local game data is
 bundled in these tests.
 

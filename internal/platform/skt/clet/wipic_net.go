@@ -102,7 +102,7 @@ func (client *Client) serviceNetCallbacks(ctx context.Context) (int, error) {
 			[]uint32{wipiErrorCode, entry.param},
 			client.runtime.handleSupervisorCall,
 		); err != nil {
-			return 0, fmt.Errorf("deliver KTF network failure to %#x: %w", entry.callback, err)
+			return 0, fmt.Errorf("deliver SKT Clet network failure to %#x: %w", entry.callback, err)
 		}
 	}
 	return len(pending), nil

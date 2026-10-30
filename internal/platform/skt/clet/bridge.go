@@ -84,7 +84,7 @@ func guestStringLength(memory *armcore.Memory, start uint32) (uint32, error) {
 		return 0, err
 	}
 	if !terminated {
-		return 0, fmt.Errorf("KTF guest string at %#x is not terminated within %d bytes", start, maxGuestStringLength)
+		return 0, fmt.Errorf("SKT Clet guest string at %#x is not terminated within %d bytes", start, maxGuestStringLength)
 	}
 	return length, nil
 }
@@ -264,7 +264,7 @@ func (runtime *initializationRuntime) writeWord(address, value uint32) error {
 	var word [4]byte
 	binary.LittleEndian.PutUint32(word[:], value)
 	if err := runtime.client.core.Memory().Write(address, word[:]); err != nil {
-		return fmt.Errorf("write KTF guest word at %#x: %w", address, err)
+		return fmt.Errorf("write SKT Clet guest word at %#x: %w", address, err)
 	}
 	return nil
 }
@@ -433,7 +433,7 @@ func (runtime *initializationRuntime) readAOTBytes(address uint32, size uint64, 
 func (runtime *initializationRuntime) enterAOTCall() error {
 	owner := runtime.aotCallOwner()
 	if runtime.aotCallDepth[owner] >= maxAOTCallDepth {
-		return fmt.Errorf("KTF AOT guest call nesting exceeds %d", maxAOTCallDepth)
+		return fmt.Errorf("SKT Clet guest call nesting exceeds %d", maxAOTCallDepth)
 	}
 	if runtime.aotCallDepth == nil {
 		runtime.aotCallDepth = make(map[*armcore.Thread]uint32)

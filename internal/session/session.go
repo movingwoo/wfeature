@@ -76,8 +76,10 @@ type Summary struct {
 	ScreenWidth  int `json:"-"`
 	ScreenHeight int `json:"-"`
 	// Clet is set for an SKT native package: a WIPI-C program that runs on
-	// the KTF runtime (see skt_native.go), so a Host that drives the KTF
-	// clock itself — a batch run's ktf.ManualClock — drives this one too.
+	// SKT's own Clet engine (see skt_native.go). The engine paces itself on
+	// the guest's deadlines as the KTF runtime does and accepts any manual
+	// clock, so a Host that drives the KTF clock itself — a batch run's
+	// ktf.ManualClock — drives this one with the same clock.
 	Clet bool `json:"-"`
 }
 

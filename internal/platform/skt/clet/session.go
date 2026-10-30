@@ -66,12 +66,22 @@ type SessionOptions struct {
 	Debug func(*armcore.Core)
 }
 
+// cletQuantum is how many instructions the ARM core retires before it yields
+// to the Go scheduler. A Clet is one thread that runs long stretches of guest
+// code between platform calls, so a yield every thousand instructions, the
+// default, buys it nothing and costs it a scheduler wakeup each time: at this
+// figure, which is LGT's Clet quantum for the same reason, both local titles
+// drew the same frames for about a sixth less of the process's CPU. No count
+// the guest or a service allowance sees depends on it, since both count steps
+// rather than quanta. See docs/skt-native.md, "Running".
+const cletQuantum = uint32(16384)
+
 func sessionCoreOptions(options SessionOptions) armcore.CoreOptions {
 	steps := options.MaxSteps
 	if steps == 0 {
 		steps = sessionDefaultMaxSteps
 	}
-	return armcore.CoreOptions{MaxSteps: steps}
+	return armcore.CoreOptions{MaxSteps: steps, Quantum: cletQuantum}
 }
 
 // StartFailure is what a start reports once guest code has run: the failure and

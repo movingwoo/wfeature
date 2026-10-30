@@ -1,7 +1,8 @@
 # SKT checkpoints
 
-SKT Java/MIDP/WIPI and GNEX/GVM SGS use the shared checkpoint envelope, one slot
-per archive, CLI commands and browser keypad controls. Restoration works in a
+SKT Java/MIDP/WIPI, GNEX/GVM SGS and native WIPI-C programs (Clets) use the
+shared checkpoint envelope, one slot per archive, CLI commands and browser keypad
+controls. Restoration works in a
 fresh process and across debug/release profiles. A load does not replay guest
 startup, constructors, initializers or termination callbacks.
 
@@ -113,6 +114,49 @@ clock, speed and pause state accompany the VM. Replacement does not call the
 termination entry. SGS save writes are synchronous and it has no persistent
 file handles to rebuild.
 
+## Native Clet state
+
+A native package's program is a Clet (see [SKT native](skt-native.md)): the
+platform calls one of its entry points and it returns, so between two service
+rounds nothing of it is running and there is no parked guest call to describe.
+`internal/platform/skt/clet` records it there as variant 8 of the envelope
+(`checkpoint_state.go`, `checkpoint_storage.go`, `session_checkpoint.go`):
+
+- the ARM memory with its five mappings — the program's code, its data and BSS,
+  the client stack, the platform's data arena and its stub space — and the
+  client thread's registers. A record laid out any other way is not this
+  program's and is refused, as is one whose code differs from what the archive
+  loads under the session's authentication setting;
+- the arena's cursor, free spans and every live `MC_knlAlloc` block, accepted
+  only when the blocks and spans agree with the cursor, so the restored arena
+  hands out the next address the original would have; the image sources, the
+  recently released blocks a draw on a destroyed surface is told apart by, the
+  user-memory pools, the pixel-operation cache and the platform stubs;
+- the timers with their deadlines, the posted events, the pending network
+  failures, the repaint flags, the input method's record, the media clips with
+  their eviction order and mute states, the opacity masks shared between an
+  image and its framebuffer, the retained frame, and the pacing, audio and
+  vibration records;
+- the file table by name, handle and cursor.
+
+Deadlines are stored as the time left at the capture and laid against the
+restored session's clock when the load commits, so the time a load takes is not
+time a timer ran. The guest clock is stored as its age, and the audio catch-up
+it implies is bounded before anything is built. Capture refuses a session that
+is inside a call, delivering page text, destroyed, or past a failed save read,
+and one without a save store.
+
+The file table follows the shared rule. Every write the program makes is stored
+before the call that made it returns, so a capture has nothing to store first
+and a record holds no file's bytes: a load reads each named file from the store
+as it is then, a handle keeps its cursor over the current file, and a name the
+store no longer has leaves its handle on an empty file that the next write
+makes again. The removal and directory lists are read again at the commit, so
+an unreadable store refuses the load rather than the program's first call
+after it. Neither program runs during a load: not the restored one's start
+entry, and not the displaced one's destroy entry, which is guest code that
+could write.
+
 ## Refusals and validation
 
 A busy Host dispatch, in-progress class initialization, an unknown native
@@ -132,6 +176,10 @@ notes and notes accumulated during catchup. A forged old repeat cannot force
 unbounded work on the first tick. Changing the authentication compatibility
 setting between capture and load is refused because it can change the bytecode
 underlying a continuation.
+A Clet record is checked table against table before adoption — stubs inside
+the stub space and not overlapping, blocks outside the free spans, masks and
+files each held by something, deadlines and the clock anchor in range, callbacks
+in executable memory — and against the restored memory it describes.
 This does not make independently scheduled Java workers deterministic:
 restored workers preserve execution state, but their subsequent interleaving
 still depends on scheduling.
@@ -153,6 +201,18 @@ keypad editor and buttons in Chromium and WebKit, compares saved/changed/restore
 pixels and ordinary save hashes, and checks damaged-slot feedback plus input
 on the new epoch. Browser artifacts remain under ignored `var/acceptance`.
 
+The native Clet is covered by `internal/testfixture.SKTCletArchive`, a native
+package whose program is authored in Thumb instructions: a frame timer that
+counts and draws, a field that composes through the input method, and keys that
+rewrite a save, open a log and append to it through the open handle. The
+`TestCheckpointSKTClet*` session tests restore it and require every later tick's
+frame, flush count and guest clock to match the uninterrupted run, the files
+written through a restored handle to match, and a save written after the
+capture to survive a load. The engine's own tests account for every client and
+runtime field (`TestCheckpointAccountsForEveryField`), refuse 25 kinds of
+inconsistent record and a busy session, and read the store only when a load
+commits.
+
 `TestLocalSKTCheckpoint` is opt-in and reads ignored archives only. It runs each
 archive at speed 4 over a private temporary save store, captures, changes a
 later ordinary save, restores, delivers keys, continues execution and captures
@@ -166,7 +226,7 @@ WFEATURE_SKT_CHECKPOINT_ACCEPTANCE=1 go test ./internal/session \
 
 `WFEATURE_SKT_CHECKPOINT_DIR` (default `var/games/skt`),
 `WFEATURE_SKT_CHECKPOINT_LIMIT` (default six archives) and
-`WFEATURE_SKT_CHECKPOINT_VARIANT=java|script` select a bounded local route. An
+`WFEATURE_SKT_CHECKPOINT_VARIANT=java|script|native` select a bounded local route. An
 archive that fails to start is skipped as an existing startup limitation.
 
 On 2026-10-07, the bounded local route passed for all 15 Java archives in the
@@ -177,3 +237,11 @@ probe and another capture. This establishes that route, not complete gameplay.
 Chromium 153.0.8010.12 and WebKit 26.6 each passed all nine rendered-client checks.
 The complete Go/default and debug suites, 281 page tests, internal race suite
 and `go vet ./...` also passed.
+
+On 2026-10-30 the native route passed for both local native packages, and a
+probe on the CLI's manual clock compared every tick after a restore with the
+uninterrupted run: one title captured every 47 ticks over 1,400 ticks of menus,
+the world map and its dialogs (29 captures, 150 ticks each), the other every 83
+ticks over 2,400 ticks from its start through its story scenes (27 captures, 120
+ticks each), both into a fresh session and into a running one. Every compared
+tick had the same frame, flush count and guest clock, and the saves matched.

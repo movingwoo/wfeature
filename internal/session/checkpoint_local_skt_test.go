@@ -43,12 +43,18 @@ func TestLocalSKTCheckpoint(t *testing.T) {
 		}
 		digest := sha256.Sum256(raw)
 		if variant := os.Getenv("WFEATURE_SKT_CHECKPOINT_VARIANT"); variant != "" {
-			opened, err := skt.Open(raw)
-			if err != nil {
+			native := skt.IsNativeArchive(raw)
+			if native != (variant == "native") {
 				continue
 			}
-			if (opened.Script != nil) != (variant == "script") {
-				continue
+			if !native {
+				opened, err := skt.Open(raw)
+				if err != nil {
+					continue
+				}
+				if (opened.Script != nil) != (variant == "script") {
+					continue
+				}
 			}
 		}
 		t.Run(fmt.Sprintf("archive-%x", digest[:4]), func(t *testing.T) {

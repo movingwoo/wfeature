@@ -234,6 +234,28 @@ delivered. A detached or replaced target, a queued screen change or a
 cancellation stops delivery; any accepted prefix stays guest-owned, and the
 consumed snapshot cannot be retried.
 
+**Native programs.** An SKT native program is a Clet ([SKT native](skt-native.md#skt-native-text-entry)),
+and its only route is the WIPI-C input method: the program draws its own field,
+keeps the value and composes through `MC_imHandleInput`, which SKT's graphics
+table carries at 37 to 41 (`internal/platform/skt/clet/text_input.go`). A commit
+is appended one complete EUC-KR character at a time. Each character is a carrier
+key — a press and then its release — handed to the program's event entry, and
+the field's own `MC_imHandleInput` call receives the character as its completed
+text. The rest follows the KTF C input method's rules:
+
+- Text is offered once the program has used its input method at all — set a
+  mode, asked for its modes or handed it a key — on every screen, since a Clet
+  names no widget the platform could see. A carrier that reaches no input method
+  fails the commit as stale, and text is not offered again until the program
+  calls its input method or the player presses a key.
+- A field that took its keys on the timer that called the input method is given
+  its carrier when that timer is due — the platform waits for it, at most one
+  second, moving a Host's own clock instead of waiting where it has one — and
+  the timer is then run, so the queued carrier reaches the field.
+- A submission holds up to 64 characters; controls and text outside KSC5601 are
+  refused. A field that refuses a character keeps what it took before it and
+  the commit reports the refusal; a consumed character spends the snapshot.
+
 ### LGT
 
 **LWC fields.** LGT supports an LWC `TextField` or `TextBox` whose parent chain
@@ -474,7 +496,13 @@ English and digits in one completed EUC-KR string across all keypad modes,
 strict encoding, stale mode snapshots, output byte lengths, atomic capacity
 rejection and retry. The integrated normal and debug suites, internal race
 checks and `go vet ./...` pass, and CLI and embedded-server binaries build in
-debug and release profiles.
+debug and release profiles. An authored SKT native package
+(`internal/testfixture.SKTCletArchive`) drives the native route through the
+shared session: a field that takes keys in its event entry and one that takes
+them on its frame timer, no offer before the input method is used, a carrier the
+program does not route withdrawing the offer until a key, encoding refusals, a
+spent snapshot, digits the player types completing through the input method, and
+an offer right after a quick load (`TestTextInputSKTClet*`).
 
 Dated end-to-end records, each with its artifacts in an ignored directory:
 

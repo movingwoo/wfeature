@@ -76,7 +76,7 @@ func (runtime *initializationRuntime) cFileNames() (map[string]bool, error) {
 func (runtime *initializationRuntime) listSaves(scope string) ([]string, error) {
 	keys, _, err := backend.ListSaves(runtime.client.saveStore, scope)
 	if err != nil {
-		return nil, fmt.Errorf("list KTF saves under %s: %w", scope, err)
+		return nil, fmt.Errorf("list SKT Clet saves under %s: %w", scope, err)
 	}
 	names := make([]string, 0, len(keys))
 	for _, key := range keys {
@@ -148,7 +148,7 @@ func (runtime *initializationRuntime) cFileDirectory(directory string) ([]string
 func (runtime *initializationRuntime) readDirectoryName(address uint32) (string, uint32, error) {
 	name, err := runtime.readFileName(address)
 	if err != nil {
-		return "", 0, fmt.Errorf("read KTF directory name: %w", err)
+		return "", 0, fmt.Errorf("read SKT Clet directory name: %w", err)
 	}
 	switch {
 	case nameTooLong(name):
@@ -205,7 +205,7 @@ func (runtime *initializationRuntime) wipicFileList(thread *armcore.Thread) (uin
 		return wipicErrorShortBuf, nil
 	}
 	if err := runtime.client.core.Memory().Write(buffer, packed); err != nil {
-		return 0, fmt.Errorf("write KTF directory listing: %w", err)
+		return 0, fmt.Errorf("write SKT Clet directory listing: %w", err)
 	}
 	return 0, nil
 }
@@ -243,7 +243,7 @@ func (runtime *initializationRuntime) wipicRemoveDirectory(thread *armcore.Threa
 	}
 	name, err := runtime.readFileName(nameAddress)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF directory name: %w", err)
+		return 0, fmt.Errorf("read SKT Clet directory name: %w", err)
 	}
 	if nameTooLong(name) {
 		return wipicErrorLongName, nil
@@ -292,7 +292,7 @@ func (runtime *initializationRuntime) wipicFileSetMode(thread *armcore.Thread) (
 	}
 	name, err := runtime.readFileName(nameAddress)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF file name: %w", err)
+		return 0, fmt.Errorf("read SKT Clet file name: %w", err)
 	}
 	if nameTooLong(name) {
 		return wipicErrorLongName, nil

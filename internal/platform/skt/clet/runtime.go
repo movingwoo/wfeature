@@ -433,7 +433,7 @@ func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id
 			return wipicErrorShortBuf, nil
 		}
 		if err := runtime.client.core.Memory().Write(buffer, append([]byte(name), 0)); err != nil {
-			return 0, fmt.Errorf("write KTF program name: %w", err)
+			return 0, fmt.Errorf("write SKT Clet program name: %w", err)
 		}
 		return 0, nil
 	case wipicKernelDefTimer:
@@ -474,7 +474,7 @@ func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id
 		// The stub returns with `bx lr`, so LR still holds the caller's return
 		// address. Naming it turns "some kernel slot is missing" into an address
 		// that can be disassembled in the image.
-		return 0, fmt.Errorf("KTF WIPI C SVC id %#x is not implemented%s", id, runtime.callerSite(thread))
+		return 0, fmt.Errorf("SKT WIPI C SVC id %#x is not implemented%s", id, runtime.callerSite(thread))
 	}
 }
 
@@ -747,7 +747,7 @@ func (runtime *initializationRuntime) handleWIPICTableCall(thread *armcore.Threa
 	// disassemble, which is the only way to find out what an unnumbered table
 	// is for: the interface is an array of function pointers and the game
 	// indexes it, so the table number never appears in the guest's own code.
-	return 0, fmt.Errorf("KTF WIPI C table %d function %d is not implemented%s",
+	return 0, fmt.Errorf("SKT WIPI C table %d function %d is not implemented%s",
 		table, function, runtime.callerSite(thread))
 }
 
@@ -757,7 +757,7 @@ func (runtime *initializationRuntime) wipicInitGraphicsContext(thread *armcore.T
 		return 0, err
 	}
 	if err := runtime.client.core.Memory().Write(address, make([]byte, wipicGraphicsContextSize)); err != nil {
-		return 0, fmt.Errorf("initialize KTF graphics context at %#x: %w", address, err)
+		return 0, fmt.Errorf("initialize SKT Clet graphics context at %#x: %w", address, err)
 	}
 	return 0, nil
 }
@@ -879,7 +879,7 @@ func (runtime *initializationRuntime) wipicAccessGraphicsContext(thread *armcore
 		return 0, nil
 	}
 	if accessErr != nil {
-		return 0, fmt.Errorf("access KTF graphics context field %d at %#x with value %#x%s: %w",
+		return 0, fmt.Errorf("access SKT Clet graphics context field %d at %#x with value %#x%s: %w",
 			operation, contextAddress, value, runtime.callerSite(thread), accessErr)
 	}
 	return 0, nil
@@ -922,7 +922,7 @@ func (runtime *initializationRuntime) wipicRGBFromPixel(thread *armcore.Thread) 
 		var word [4]byte
 		binary.LittleEndian.PutUint32(word[:], component)
 		if err := memory.Write(target, word[:]); err != nil {
-			return 0, fmt.Errorf("write KTF pixel component %d: %w", index, err)
+			return 0, fmt.Errorf("write SKT Clet pixel component %d: %w", index, err)
 		}
 	}
 	return pixel, nil
@@ -939,7 +939,7 @@ func (runtime *initializationRuntime) wipicGetScreenFramebuffer() (uint32, error
 	width, height := runtime.screenSize()
 	record, err := runtime.newWIPICFramebufferRecord(uint32(width), uint32(height))
 	if err != nil {
-		return 0, fmt.Errorf("create KTF screen framebuffer: %w", err)
+		return 0, fmt.Errorf("create SKT Clet screen framebuffer: %w", err)
 	}
 	runtime.screenFramebuffer = record
 	return record, nil
@@ -982,7 +982,7 @@ func (runtime *initializationRuntime) wipicGetDisplayInfo(thread *armcore.Thread
 		binary.LittleEndian.PutUint32(data[index*4:], word)
 	}
 	if err := runtime.client.core.Memory().Write(outAddress, data); err != nil {
-		return 0, fmt.Errorf("write KTF display info at %#x: %w", outAddress, err)
+		return 0, fmt.Errorf("write SKT Clet display info at %#x: %w", outAddress, err)
 	}
 	return 1, nil
 }
@@ -999,7 +999,7 @@ func (runtime *initializationRuntime) wipicDefTimer(thread *armcore.Thread) (uin
 	var word [4]byte
 	binary.LittleEndian.PutUint32(word[:], callback)
 	if err := runtime.client.core.Memory().Write(pointer, word[:]); err != nil {
-		return 0, fmt.Errorf("write KTF timer record at %#x: %w", pointer, err)
+		return 0, fmt.Errorf("write SKT Clet timer record at %#x: %w", pointer, err)
 	}
 	return 0, nil
 }
@@ -1062,7 +1062,7 @@ func (runtime *initializationRuntime) wipicSetTimer(thread *armcore.Thread) (uin
 		}
 	}
 	if len(runtime.pendingTimers) >= maxPendingTimers {
-		return 0, fmt.Errorf("KTF pending timer count exceeds %d", maxPendingTimers)
+		return 0, fmt.Errorf("SKT Clet pending timer count exceeds %d", maxPendingTimers)
 	}
 	runtime.pendingTimers = append(runtime.pendingTimers, armed)
 	return 0, nil
@@ -1125,13 +1125,13 @@ func (runtime *initializationRuntime) allocateWIPIC(size uint32) (uint32, error)
 		return 0, err
 	}
 	if err := runtime.clearGuestRange(address, total); err != nil {
-		return 0, fmt.Errorf("clear KTF WIPI C allocation at %#x: %w", address, err)
+		return 0, fmt.Errorf("clear SKT WIPI C allocation at %#x: %w", address, err)
 	}
 	header := make([]byte, 8)
 	binary.LittleEndian.PutUint32(header[0:], address+runtime.wipicHandleFirstWord())
 	binary.LittleEndian.PutUint32(header[4:], size)
 	if err := runtime.client.core.Memory().Write(address, header); err != nil {
-		return 0, fmt.Errorf("write KTF WIPI C allocation header at %#x: %w", address, err)
+		return 0, fmt.Errorf("write SKT WIPI C allocation header at %#x: %w", address, err)
 	}
 	if runtime.wipicAllocations == nil {
 		runtime.wipicAllocations = make(map[uint32]uint64)
@@ -1265,7 +1265,7 @@ func (runtime *initializationRuntime) wipicSetSystemProperty(thread *armcore.Thr
 	}
 	name, err := runtime.readCString(idAddress, 128)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF system property id: %w", err)
+		return 0, fmt.Errorf("read SKT Clet system property id: %w", err)
 	}
 	runtime.countDiagnostic("sysprop set " + name)
 	return wipicErrorInvalid, nil
@@ -1286,7 +1286,7 @@ func (runtime *initializationRuntime) wipicGetSystemProperty(thread *armcore.Thr
 	}
 	name, err := runtime.readCString(idAddress, 128)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF system property id: %w", err)
+		return 0, fmt.Errorf("read SKT Clet system property id: %w", err)
 	}
 	runtime.countDiagnostic("sysprop " + name)
 	value, ok := runtime.client.systemProperty(name)
@@ -1297,7 +1297,7 @@ func (runtime *initializationRuntime) wipicGetSystemProperty(thread *armcore.Thr
 		return wipicErrorShortBuf, nil
 	}
 	if err := runtime.client.core.Memory().Write(outAddress, append([]byte(value), 0)); err != nil {
-		return 0, fmt.Errorf("write KTF system property %q: %w", name, err)
+		return 0, fmt.Errorf("write SKT Clet system property %q: %w", name, err)
 	}
 	return 0, nil
 }
@@ -1313,7 +1313,7 @@ func (runtime *initializationRuntime) wipicGetResourceID(thread *armcore.Thread)
 	}
 	name, err := runtime.readCString(nameAddress, 512)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF resource name: %w", err)
+		return 0, fmt.Errorf("read SKT Clet resource name: %w", err)
 	}
 	runtime.countDiagnostic("resource " + name)
 	data, ok := runtime.wipicResource(name)
@@ -1327,7 +1327,7 @@ func (runtime *initializationRuntime) wipicGetResourceID(thread *armcore.Thread)
 	}
 	if !ok {
 		if err := writeSize(0); err != nil {
-			return 0, fmt.Errorf("write KTF resource size: %w", err)
+			return 0, fmt.Errorf("write SKT Clet resource size: %w", err)
 		}
 		return wipicErrorNotFound, nil
 	}
@@ -1336,7 +1336,7 @@ func (runtime *initializationRuntime) wipicGetResourceID(thread *armcore.Thread)
 		return 0, err
 	}
 	if err := writeSize(uint32(len(data))); err != nil {
-		return 0, fmt.Errorf("write KTF resource size: %w", err)
+		return 0, fmt.Errorf("write SKT Clet resource size: %w", err)
 	}
 	return handle, nil
 }
@@ -1365,7 +1365,7 @@ func (runtime *initializationRuntime) wipicGetResource(thread *armcore.Thread) (
 	}
 	name, err := runtime.readCString(handle, 512)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF resource handle: %w", err)
+		return 0, fmt.Errorf("read SKT Clet resource handle: %w", err)
 	}
 	data, ok := runtime.wipicResource(name)
 	if !ok {
@@ -1379,14 +1379,14 @@ func (runtime *initializationRuntime) wipicGetResource(thread *armcore.Thread) (
 		return 0, err
 	}
 	if err := runtime.client.core.Memory().Write(runtime.wipicHandleData(base[0]), data); err != nil {
-		return 0, fmt.Errorf("write KTF resource %q: %w", name, err)
+		return 0, fmt.Errorf("write SKT Clet resource %q: %w", name, err)
 	}
 	return 0, nil
 }
 
 func (runtime *initializationRuntime) stub(category, id uint32) (uint32, error) {
 	if category > 0xff {
-		return 0, fmt.Errorf("KTF SVC category %d exceeds Thumb immediate range", category)
+		return 0, fmt.Errorf("SKT Clet SVC category %d exceeds Thumb immediate range", category)
 	}
 	key := uint64(category)<<32 | uint64(id)
 	if address := runtime.stubs[key]; address != 0 {
@@ -1394,11 +1394,11 @@ func (runtime *initializationRuntime) stub(category, id uint32) (uint32, error) 
 	}
 	const stubSize = uint64(svcStubSize)
 	if runtime.codeCursor+stubSize > uint64(platformCodeBase)+platformCodeSize {
-		return 0, fmt.Errorf("KTF platform callback stub space exhausted")
+		return 0, fmt.Errorf("SKT Clet platform callback stub space exhausted")
 	}
 	address := uint32(runtime.codeCursor)
 	if err := runtime.client.core.Memory().Load(address, svcStub(category, id)); err != nil {
-		return 0, fmt.Errorf("load KTF platform callback stub: %w", err)
+		return 0, fmt.Errorf("load SKT Clet platform callback stub: %w", err)
 	}
 	runtime.codeCursor += stubSize
 	runtime.stubs[key] = address | 1
@@ -1408,7 +1408,7 @@ func (runtime *initializationRuntime) stub(category, id uint32) (uint32, error) 
 
 func (runtime *initializationRuntime) allocate(size uint64) (uint32, error) {
 	if size > maxPlatformAllocation {
-		return 0, fmt.Errorf("KTF platform allocation %d exceeds %d bytes", size, maxPlatformAllocation)
+		return 0, fmt.Errorf("SKT Clet platform allocation %d exceeds %d bytes", size, maxPlatformAllocation)
 	}
 	address, ok := runtime.arena.allocate(size)
 	if !ok {
@@ -1420,7 +1420,7 @@ func (runtime *initializationRuntime) allocate(size uint64) (uint32, error) {
 		}
 	}
 	if !ok {
-		return 0, fmt.Errorf("KTF platform initialization data space exhausted")
+		return 0, fmt.Errorf("SKT Clet platform initialization data space exhausted")
 	}
 	return address, nil
 }
@@ -1439,7 +1439,7 @@ func (runtime *initializationRuntime) allocateBytes(data []byte) (uint32, error)
 		return 0, err
 	}
 	if err := runtime.client.core.Memory().Write(address, data); err != nil {
-		return 0, fmt.Errorf("write KTF platform data at %#x: %w", address, err)
+		return 0, fmt.Errorf("write SKT Clet platform data at %#x: %w", address, err)
 	}
 	return address, nil
 }
@@ -1614,7 +1614,7 @@ func (runtime *initializationRuntime) wipicGetExecNames(thread *armcore.Thread) 
 	}
 	wanted, err := runtime.readCString(program, 512)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF program name: %w", err)
+		return 0, fmt.Errorf("read SKT Clet program name: %w", err)
 	}
 	installed := runtime.client.programName
 	if installed == "" || out == 0 {
@@ -1630,7 +1630,7 @@ func (runtime *initializationRuntime) wipicGetExecNames(thread *armcore.Thread) 
 		return wipicErrorShortBuf, nil
 	}
 	if err := runtime.client.core.Memory().Write(out, append([]byte(listing), 0)); err != nil {
-		return 0, fmt.Errorf("write KTF executable names: %w", err)
+		return 0, fmt.Errorf("write SKT Clet executable names: %w", err)
 	}
 	runtime.countDiagnostic(fmt.Sprintf("exec names for %q -> %q", wanted, listing))
 	// One program is installed, and the caller only checks that this is
