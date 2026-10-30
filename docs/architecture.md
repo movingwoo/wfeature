@@ -75,7 +75,7 @@ the Runtime and an API surface for each carrier.
 | `internal/platform/detect` | Names the platform an archive belongs to ([below](#archive-detection)). |
 | `internal/platform/ktf` | KTF: WIPI Java/AOT titles and older descriptor modules on the ARM core with Go JVM objects, and the earlier native package. See [KTF](ktf.md). |
 | `internal/platform/lgt` | LGT: Clets and AOT Java titles on the ARM core. See [LGT](lgt.md). |
-| `internal/platform/skt` | SKT: SKVM/MIDP and WIPI Java on the JVM, GNEX/GVM scripts on `internal/sgsvm`, and native WIPI-C programs on the KTF runtime. See [SKT Java](skvm.md) and [SKT native](skt-native.md). |
+| `internal/platform/skt` | SKT: SKVM/MIDP and WIPI Java on the JVM, GNEX/GVM scripts on `internal/sgsvm`, and native WIPI-C programs on SKT's own Clet engine (`internal/platform/skt/clet`). See [SKT Java](skvm.md) and [SKT native](skt-native.md). |
 | `internal/platform/compatibility` | The embedded registry of code-revision exceptions. See [code-revision compatibility](platform-compatibility.md). |
 | `internal/api/midp`, `internal/api/skvm`, `internal/api/wipi` | Java class libraries declared in Go and installed on a VM by `Define`: MIDP, SKT's extensions (`com.skt.m`, `com.skt.m3d`, `com.xce`) and WIPI Java (`org.kwis.msp`, `org.kwis.msf`). See [JVM](jvm.md#the-class-library-is-declared-not-compiled). |
 | `internal/zipentry` | Entry-name conventions the loaders share ([below](#archive-entry-names)). |
@@ -431,8 +431,8 @@ execution state only: it holds no ordinary save and a load replaces none, which
 [Quick load and ordinary saves](#quick-load-and-ordinary-saves) states in full.
 The KTF records are [below](#ktf-checkpoint-records), followed by
 [the LGT ones](#lgt-checkpoints); [SKT checkpoints](skt-checkpoints.md) describe
-JVM worker continuations and SGS event-boundary restoration through the same
-Host path. The [validation record](testing.md#quick-save-and-checkpoints)
+JVM worker continuations, SGS event-boundary restoration and native Clet records
+through the same Host path. The [validation record](testing.md#quick-save-and-checkpoints)
 describes authored and local-archive coverage.
 
 ### Envelope and slot
@@ -444,7 +444,7 @@ release:
 | --- | --- | --- |
 | 0 | 8 | `WFSTATE\0` |
 | 8 | 2 | Version, 3 |
-| 10 | 2 | Execution variant: 1 KTF Java, 2 KTF module, 3 KTF native, 4 LGT Clet, 5 LGT Java, 6 SKT Java, 7 SKT script |
+| 10 | 2 | Execution variant: 1 KTF Java, 2 KTF module, 3 KTF native, 4 LGT Clet, 5 LGT Java, 6 SKT Java, 7 SKT script, 8 SKT native (Clet) |
 | 12 | 32 | SHA-256 of the whole archive |
 | 44 | 4 | Session section length, at most 64 KiB |
 | 48 | 4 | Runtime section length, at most 128 MiB |

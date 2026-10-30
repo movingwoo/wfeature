@@ -34,6 +34,9 @@ const (
 	CheckpointLGTJava   uint16 = 5
 	CheckpointSKTJava   uint16 = 6
 	CheckpointSKTScript uint16 = 7
+	// CheckpointSKTClet is an SKT native WIPI-C program. Like an LGT Clet it
+	// is called and returns, so its record has no parked guest call.
+	CheckpointSKTClet uint16 = 8
 )
 
 var (
@@ -57,7 +60,7 @@ type Checkpoint struct {
 }
 
 func checkpointVariantSupported(variant uint16) bool {
-	return variant >= CheckpointKTFJava && variant <= CheckpointSKTScript
+	return variant >= CheckpointKTFJava && variant <= CheckpointSKTClet
 }
 
 // EncodeCheckpoint writes a profile-independent, little-endian version 3

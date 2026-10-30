@@ -21,6 +21,8 @@ func (s *Session) TextInput(ctx context.Context) (edit *backend.TextInput, err e
 		switch {
 		case s.ktf != nil:
 			platform = s.ktf
+		case s.cletSession != nil:
+			platform = s.cletSession
 		case s.lgt != nil:
 			platform = s.lgt
 		case s.runtime != nil:
@@ -52,7 +54,7 @@ func (s *Session) TextInput(ctx context.Context) (edit *backend.TextInput, err e
 func (s *Session) commitTextInput(ctx context.Context, platform any, commit func(context.Context, string) error, text string) error {
 	return s.guarded("session text commit", func() error {
 		if s.paused || ctx.Err() != nil ||
-			(platform != s.ktf && platform != s.lgt && platform != s.runtime) {
+			(platform != s.ktf && platform != s.cletSession && platform != s.lgt && platform != s.runtime) {
 			return backend.ErrTextInputChanged
 		}
 		if err := backend.ValidateTextInput(text); err != nil {
