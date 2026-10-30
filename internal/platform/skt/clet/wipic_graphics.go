@@ -103,7 +103,7 @@ func (runtime *initializationRuntime) readWIPICSurface(handle uint32, depth int)
 	}
 	if inner, isImage := runtime.wipicImageFramebuffer(handle); isImage {
 		if depth <= 0 {
-			return wipicFramebuffer{}, fmt.Errorf("KTF image record at %#x names a framebuffer that names another", handle)
+			return wipicFramebuffer{}, fmt.Errorf("SKT Clet image record at %#x names a framebuffer that names another", handle)
 		}
 		return runtime.readWIPICSurface(inner, depth-1)
 	}
@@ -115,15 +115,15 @@ func (runtime *initializationRuntime) readWIPICSurface(handle uint32, depth int)
 		buffer: fields[4],
 	}
 	if framebuffer.bpp != 16 {
-		return wipicFramebuffer{}, fmt.Errorf("KTF framebuffer depth %d is not supported (%s)", framebuffer.bpp, runtime.describeWIPICSurfaceWords(handle, recordBase[0], fields))
+		return wipicFramebuffer{}, fmt.Errorf("SKT Clet framebuffer depth %d is not supported (%s)", framebuffer.bpp, runtime.describeWIPICSurfaceWords(handle, recordBase[0], fields))
 	}
 	// The record is guest memory, so the line check is made wide enough that
 	// a width of 2^31 or more cannot wrap width*2 under a tiny bpl.
 	if framebuffer.width == 0 || framebuffer.height == 0 || uint64(framebuffer.bpl) < uint64(framebuffer.width)*2 {
-		return wipicFramebuffer{}, fmt.Errorf("KTF framebuffer %dx%d bpl %d is invalid (%s)", framebuffer.width, framebuffer.height, framebuffer.bpl, runtime.describeWIPICSurfaceWords(handle, recordBase[0], fields))
+		return wipicFramebuffer{}, fmt.Errorf("SKT Clet framebuffer %dx%d bpl %d is invalid (%s)", framebuffer.width, framebuffer.height, framebuffer.bpl, runtime.describeWIPICSurfaceWords(handle, recordBase[0], fields))
 	}
 	if uint64(framebuffer.bpl)*uint64(framebuffer.height) > maxWIPICFramebufferBytes {
-		return wipicFramebuffer{}, fmt.Errorf("KTF framebuffer %dx%d exceeds size limit", framebuffer.width, framebuffer.height)
+		return wipicFramebuffer{}, fmt.Errorf("SKT Clet framebuffer %dx%d exceeds size limit", framebuffer.width, framebuffer.height)
 	}
 	bufferBase, err := runtime.readAOTWords(framebuffer.buffer, 1, "framebuffer pixel handle")
 	if err != nil {
@@ -326,7 +326,7 @@ func (runtime *initializationRuntime) fillFramebufferRect(framebuffer wipicFrame
 			for column := int32(0); column < width; column++ {
 				address := framebuffer.pixels + uint32(y+line)*framebuffer.bpl + uint32(x+column)*2
 				if err := runtime.blendPixel(op, address, uint16(pixel)); err != nil {
-					return fmt.Errorf("fill KTF framebuffer pixel %d,%d: %w", x+column, y+line, err)
+					return fmt.Errorf("fill SKT Clet framebuffer pixel %d,%d: %w", x+column, y+line, err)
 				}
 			}
 		}
@@ -340,7 +340,7 @@ func (runtime *initializationRuntime) fillFramebufferRect(framebuffer wipicFrame
 	for line := int32(0); line < height; line++ {
 		address := framebuffer.pixels + uint32(y+line)*framebuffer.bpl + uint32(x)*2
 		if err := memory.Write(address, row); err != nil {
-			return fmt.Errorf("fill KTF framebuffer row %d: %w", line, err)
+			return fmt.Errorf("fill SKT Clet framebuffer row %d: %w", line, err)
 		}
 	}
 	return nil
@@ -496,18 +496,18 @@ func (runtime *initializationRuntime) wipicReadString(pointer uint32, length int
 		// up to 4 GiB just to be refused by the read.
 		size := uint64(length) * uint64(unit)
 		if err := memory.ValidateRange(pointer, size, armcore.PermissionRead); err != nil {
-			return nil, fmt.Errorf("read KTF draw string: %w", err)
+			return nil, fmt.Errorf("read SKT Clet draw string: %w", err)
 		}
 		data = make([]byte, size)
 		if err := memory.Read(pointer, data); err != nil {
-			return nil, fmt.Errorf("read KTF draw string: %w", err)
+			return nil, fmt.Errorf("read SKT Clet draw string: %w", err)
 		}
 	} else {
 		// Up to 1024 units: a longer run draws its first 1024 rather than
 		// failing.
 		text, _, err := readGuestString(memory, pointer, 1024*unit, unit)
 		if err != nil {
-			return nil, fmt.Errorf("read KTF draw string: %w", err)
+			return nil, fmt.Errorf("read SKT Clet draw string: %w", err)
 		}
 		data = text
 	}
@@ -627,7 +627,7 @@ func (runtime *initializationRuntime) wipicPutPixel(thread *armcore.Thread) (uin
 	}
 	address := framebuffer.pixels + uint32(y)*framebuffer.bpl + uint32(x)*2
 	if err := runtime.blendPixel(op, address, uint16(pixel)); err != nil {
-		return 0, fmt.Errorf("write KTF pixel at %d,%d: %w", x, y, err)
+		return 0, fmt.Errorf("write SKT Clet pixel at %d,%d: %w", x, y, err)
 	}
 	return 0, nil
 }
@@ -714,7 +714,7 @@ func (runtime *initializationRuntime) wipicPolygon(thread *armcore.Thread, fill 
 		return 0, nil
 	}
 	if count > maxWIPICPolygonPoints {
-		return 0, fmt.Errorf("KTF %s of %d points: %d is the most read", call, count, maxWIPICPolygonPoints)
+		return 0, fmt.Errorf("SKT Clet %s of %d points: %d is the most read", call, count, maxWIPICPolygonPoints)
 	}
 	xs, err := runtime.wipicReadInt32s(registers[1], count, call)
 	if err != nil {
@@ -755,7 +755,7 @@ func (runtime *initializationRuntime) wipicPolygon(thread *armcore.Thread, fill 
 func (runtime *initializationRuntime) wipicReadInt32s(pointer uint32, count int32, call string) ([]int32, error) {
 	data := make([]byte, int(count)*4)
 	if err := runtime.client.core.Memory().Read(pointer, data); err != nil {
-		return nil, fmt.Errorf("read KTF %s points: %w", call, err)
+		return nil, fmt.Errorf("read SKT Clet %s points: %w", call, err)
 	}
 	values := make([]int32, count)
 	for index := range values {
@@ -942,14 +942,14 @@ func (runtime *initializationRuntime) encodeFramebufferRegion(framebuffer wipicF
 		height = int32(int64(framebuffer.height) - int64(y))
 	}
 	if width <= 0 || height <= 0 {
-		return nil, fmt.Errorf("KTF encode region %dx%d is empty", width, height)
+		return nil, fmt.Errorf("SKT Clet encode region %dx%d is empty", width, height)
 	}
 	picture := stdimage.NewRGBA(stdimage.Rect(0, 0, int(width), int(height)))
 	memory := runtime.client.core.Memory()
 	row := make([]byte, int(width)*2)
 	for line := int32(0); line < height; line++ {
 		if err := memory.Read(framebuffer.pixels+uint32(y+line)*framebuffer.bpl+uint32(x)*2, row); err != nil {
-			return nil, fmt.Errorf("read KTF framebuffer row %d: %w", line, err)
+			return nil, fmt.Errorf("read SKT Clet framebuffer row %d: %w", line, err)
 		}
 		for column := int32(0); column < width; column++ {
 			rgb := rgbFromPixel565(binary.LittleEndian.Uint16(row[column*2:]))
@@ -991,7 +991,7 @@ func (runtime *initializationRuntime) wipicEncodeImage(thread *armcore.Thread) (
 		return 0, err
 	}
 	if err := runtime.client.core.Memory().Write(handle+wipicAllocationOverhead, encoded); err != nil {
-		return 0, fmt.Errorf("write KTF encoded image: %w", err)
+		return 0, fmt.Errorf("write SKT Clet encoded image: %w", err)
 	}
 	// The length is an out parameter, and a caller that passes null for it has
 	// asked not to be told.
@@ -999,7 +999,7 @@ func (runtime *initializationRuntime) wipicEncodeImage(thread *armcore.Thread) (
 		var size [4]byte
 		binary.LittleEndian.PutUint32(size[:], uint32(len(encoded)))
 		if err := runtime.client.core.Memory().Write(pointer, size[:]); err != nil {
-			return 0, fmt.Errorf("write KTF encoded image length: %w", err)
+			return 0, fmt.Errorf("write SKT Clet encoded image length: %w", err)
 		}
 	}
 	return handle, nil
@@ -1014,19 +1014,19 @@ func (runtime *initializationRuntime) newWIPICFramebufferRecord(width, height ui
 	// The side bound that remains is only there to keep the multiplication
 	// below obviously in range.
 	if width == 0 || height == 0 || width > maxWIPICFramebufferSide || height > maxWIPICFramebufferSide {
-		return 0, fmt.Errorf("KTF framebuffer size %dx%d is out of range", width, height)
+		return 0, fmt.Errorf("SKT Clet framebuffer size %dx%d is out of range", width, height)
 	}
 	if uint64(width)*2*uint64(height) > maxWIPICFramebufferBytes {
-		return 0, fmt.Errorf("KTF framebuffer %dx%d exceeds size limit", width, height)
+		return 0, fmt.Errorf("SKT Clet framebuffer %dx%d exceeds size limit", width, height)
 	}
 	bytesPerLine := width * 2
 	buffer, err := runtime.allocateWIPIC(bytesPerLine * height)
 	if err != nil {
-		return 0, fmt.Errorf("allocate KTF pixel buffer: %w", err)
+		return 0, fmt.Errorf("allocate SKT Clet pixel buffer: %w", err)
 	}
 	record, err := runtime.allocateWIPIC(20)
 	if err != nil {
-		return 0, fmt.Errorf("allocate KTF framebuffer record: %w", err)
+		return 0, fmt.Errorf("allocate SKT Clet framebuffer record: %w", err)
 	}
 	fields := []uint32{width, height, bytesPerLine, 16, buffer}
 	data := make([]byte, len(fields)*4)
@@ -1034,7 +1034,7 @@ func (runtime *initializationRuntime) newWIPICFramebufferRecord(width, height ui
 		binary.LittleEndian.PutUint32(data[index*4:], word)
 	}
 	if err := runtime.client.core.Memory().Write(record+wipicAllocationOverhead, data); err != nil {
-		return 0, fmt.Errorf("write KTF framebuffer record: %w", err)
+		return 0, fmt.Errorf("write SKT Clet framebuffer record: %w", err)
 	}
 	return record, nil
 }
@@ -1172,7 +1172,7 @@ func (runtime *initializationRuntime) fillWIPICFramebuffer(handle uint32, pixel 
 	memory := runtime.client.core.Memory()
 	for line := uint32(0); line < framebuffer.height; line++ {
 		if err := memory.Write(framebuffer.pixels+line*framebuffer.bpl, row); err != nil {
-			return fmt.Errorf("fill KTF framebuffer row %d: %w", line, err)
+			return fmt.Errorf("fill SKT Clet framebuffer row %d: %w", line, err)
 		}
 	}
 	return nil
@@ -1199,7 +1199,7 @@ func (runtime *initializationRuntime) wipicCreateImage(thread *armcore.Thread) (
 	}
 	encoded := make([]byte, length)
 	if err := runtime.client.core.Memory().Read(runtime.wipicHandleData(dataBase[0])+offset, encoded); err != nil {
-		return 0, fmt.Errorf("read KTF image data: %w", err)
+		return 0, fmt.Errorf("read SKT Clet image data: %w", err)
 	}
 	decoded, err := decodeGuestImage(encoded)
 	if err != nil {
@@ -1232,7 +1232,7 @@ func (runtime *initializationRuntime) wipicCreateImage(thread *armcore.Thread) (
 			binary.LittleEndian.PutUint16(row[x*2:], pixel)
 		}
 		if err := memory.Write(target.pixels+y*target.bpl, row); err != nil {
-			return 0, fmt.Errorf("write KTF decoded image row %d: %w", y, err)
+			return 0, fmt.Errorf("write SKT Clet decoded image row %d: %w", y, err)
 		}
 	}
 	// MC_GrpImage: the image's framebuffer, its mask, animation state, and the
@@ -1255,7 +1255,7 @@ func (runtime *initializationRuntime) wipicCreateImage(thread *armcore.Thread) (
 		binary.LittleEndian.PutUint32(data[index*4:], word)
 	}
 	if err := memory.Write(image+wipicAllocationOverhead, data); err != nil {
-		return 0, fmt.Errorf("write KTF image record: %w", err)
+		return 0, fmt.Errorf("write SKT Clet image record: %w", err)
 	}
 	// A caller reads the image as a framebuffer through the image handle — and
 	// MC_grpDrawImage is always given the image handle, never the inner one.
@@ -1266,7 +1266,7 @@ func (runtime *initializationRuntime) wipicCreateImage(thread *armcore.Thread) (
 	var word [4]byte
 	binary.LittleEndian.PutUint32(word[:], image)
 	if err := memory.Write(targetPointer, word[:]); err != nil {
-		return 0, fmt.Errorf("write KTF image result at %#x: %w", targetPointer, err)
+		return 0, fmt.Errorf("write SKT Clet image result at %#x: %w", targetPointer, err)
 	}
 	if _, owned := runtime.wipicAllocations[dataHandle]; owned {
 		if runtime.imageSourceBuffers == nil {
@@ -1767,7 +1767,7 @@ func (runtime *initializationRuntime) wipicTransferRGBPixels(thread *armcore.Thr
 		rowAddress := buffer + uint32(line)*uint32(pitch)
 		if write {
 			if err := memory.Read(rowAddress, row); err != nil {
-				return 0, fmt.Errorf("read KTF RGB row %d: %w", line, err)
+				return 0, fmt.Errorf("read SKT Clet RGB row %d: %w", line, err)
 			}
 		}
 		for column := int32(0); column < width; column++ {
@@ -1800,7 +1800,7 @@ func (runtime *initializationRuntime) wipicTransferRGBPixels(thread *armcore.Thr
 		}
 		if !write {
 			if err := memory.Write(rowAddress, row); err != nil {
-				return 0, fmt.Errorf("write KTF RGB row %d: %w", line, err)
+				return 0, fmt.Errorf("write SKT Clet RGB row %d: %w", line, err)
 			}
 		}
 	}
@@ -1864,7 +1864,7 @@ func (runtime *initializationRuntime) convertScreen() error {
 	memory := runtime.client.core.Memory()
 	for y := 0; y < height; y++ {
 		if err := memory.Read(framebuffer.pixels+uint32(y)*framebuffer.bpl, row); err != nil {
-			return fmt.Errorf("read KTF screen row %d: %w", y, err)
+			return fmt.Errorf("read SKT Clet screen row %d: %w", y, err)
 		}
 		for x := 0; x < width; x++ {
 			pixel := binary.LittleEndian.Uint16(row[x*2:])

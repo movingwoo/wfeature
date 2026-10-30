@@ -156,7 +156,7 @@ func (runtime *initializationRuntime) handleWIPICFileCall(thread *armcore.Thread
 		}
 		name, err := runtime.readFileName(nameAddress)
 		if err != nil {
-			return 0, fmt.Errorf("read KTF file name: %w", err)
+			return 0, fmt.Errorf("read SKT Clet file name: %w", err)
 		}
 		if nameTooLong(name) {
 			return wipicErrorLongName, nil
@@ -194,7 +194,7 @@ func (runtime *initializationRuntime) handleWIPICFileCall(thread *armcore.Thread
 		// pointers, so it never appears in the guest's own code, and an
 		// address is the only thing about a missing call that can be
 		// disassembled.
-		return 0, fmt.Errorf("KTF WIPI C filesystem function %d is not implemented%s",
+		return 0, fmt.Errorf("SKT WIPI C filesystem function %d is not implemented%s",
 			function, runtime.callerSite(thread))
 	}
 }
@@ -213,7 +213,7 @@ func (runtime *initializationRuntime) wipicFileDelete(thread *armcore.Thread) (u
 	}
 	name, err := runtime.readFileName(nameAddress)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF database name: %w", err)
+		return 0, fmt.Errorf("read SKT Clet database name: %w", err)
 	}
 	if nameTooLong(name) {
 		return wipicErrorLongName, nil
@@ -311,11 +311,11 @@ func (runtime *initializationRuntime) wipicFileRename(thread *armcore.Thread) (u
 	}
 	oldName, err := runtime.readFileName(oldAddress)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF file name: %w", err)
+		return 0, fmt.Errorf("read SKT Clet file name: %w", err)
 	}
 	newName, err := runtime.readFileName(newAddress)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF file name: %w", err)
+		return 0, fmt.Errorf("read SKT Clet file name: %w", err)
 	}
 	if nameTooLong(oldName) || nameTooLong(newName) {
 		return wipicErrorLongName, nil
@@ -448,7 +448,7 @@ func (runtime *initializationRuntime) wipicMakeDirectory(thread *armcore.Thread)
 	}
 	name, err := runtime.readFileName(nameAddress)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF directory name: %w", err)
+		return 0, fmt.Errorf("read SKT Clet directory name: %w", err)
 	}
 	if nameTooLong(name) {
 		return wipicErrorLongName, nil
@@ -551,7 +551,7 @@ func (runtime *initializationRuntime) wipicFileOpen(thread *armcore.Thread) (uin
 	}
 	name, err := runtime.readFileName(nameAddress)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF database name: %w", err)
+		return 0, fmt.Errorf("read SKT Clet database name: %w", err)
 	}
 	runtime.countDiagnostic(fmt.Sprintf("cdb open %s mode %d", name, int32(mode)))
 	if nameTooLong(name) {
@@ -669,7 +669,7 @@ func (runtime *initializationRuntime) wipicFileHandle(thread *armcore.Thread) (*
 	}
 	state, ok := runtime.cFileHandles[handle]
 	if !ok {
-		return nil, fmt.Errorf("KTF database handle %#x is not open", handle)
+		return nil, fmt.Errorf("SKT Clet database handle %#x is not open", handle)
 	}
 	return state, nil
 }
@@ -699,7 +699,7 @@ func (runtime *initializationRuntime) wipicFileStream(thread *armcore.Thread, wr
 	if write {
 		data := make([]byte, length)
 		if err := runtime.client.core.Memory().Read(buffer, data); err != nil {
-			return 0, fmt.Errorf("read KTF database write buffer: %w", err)
+			return 0, fmt.Errorf("read SKT Clet database write buffer: %w", err)
 		}
 		end := state.position + int(length)
 		if end > maxCFileBytes {
@@ -726,7 +726,7 @@ func (runtime *initializationRuntime) wipicFileStream(thread *armcore.Thread, wr
 		count = remaining
 	}
 	if err := runtime.client.core.Memory().Write(buffer, state.store.data[state.position:state.position+count]); err != nil {
-		return 0, fmt.Errorf("write KTF database read buffer: %w", err)
+		return 0, fmt.Errorf("write SKT Clet database read buffer: %w", err)
 	}
 	state.position += count
 	return uint32(count), nil
@@ -763,7 +763,7 @@ func (runtime *initializationRuntime) wipicFileStatByName(thread *armcore.Thread
 	}
 	name, err := runtime.readFileName(nameAddress)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF database name: %w", err)
+		return 0, fmt.Errorf("read SKT Clet database name: %w", err)
 	}
 	if nameTooLong(name) {
 		return wipicErrorLongName, nil
@@ -807,7 +807,7 @@ func (runtime *initializationRuntime) writeFileStat(outAddress, size, attributes
 	binary.LittleEndian.PutUint32(record[0:], attributes)
 	binary.LittleEndian.PutUint32(record[8:], size)
 	if err := runtime.client.core.Memory().Write(outAddress, record); err != nil {
-		return 0, fmt.Errorf("write KTF database stat: %w", err)
+		return 0, fmt.Errorf("write SKT Clet database stat: %w", err)
 	}
 	return 0, nil
 }

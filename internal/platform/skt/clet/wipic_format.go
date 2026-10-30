@@ -61,15 +61,15 @@ func (runtime *initializationRuntime) wipicSprintk(thread *armcore.Thread) (uint
 	}
 	format, err := runtime.readCString(formatAddress, maxSprintfOutput)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF sprintk format: %w", err)
+		return 0, fmt.Errorf("read SKT Clet sprintk format: %w", err)
 	}
 	rendered, err := runtime.wipicFormat([]byte(format), runtime.wipicVarargs(thread, 2))
 	if err != nil {
-		return 0, fmt.Errorf("format KTF sprintk %q: %w", format, err)
+		return 0, fmt.Errorf("format SKT Clet sprintk %q: %w", format, err)
 	}
 	runtime.countDiagnostic("sprintk " + format)
 	if err := runtime.client.core.Memory().Write(destination, append(rendered, 0)); err != nil {
-		return 0, fmt.Errorf("write KTF sprintk output at %#x: %w", destination, err)
+		return 0, fmt.Errorf("write SKT Clet sprintk output at %#x: %w", destination, err)
 	}
 	return uint32(len(rendered)), nil
 }

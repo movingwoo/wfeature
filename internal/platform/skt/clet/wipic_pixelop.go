@@ -146,7 +146,7 @@ func (runtime *initializationRuntime) applyPixelOp(op wipicPixelOp, source, dest
 		runtime.handleSupervisorCall,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("run KTF pixel operation at %#x: %w", op.function, err)
+		return 0, fmt.Errorf("run SKT Clet pixel operation at %#x: %w", op.function, err)
 	}
 	result := uint16(summary.Context.Registers[0])
 	// One count per pair the operation has never been asked about, which is

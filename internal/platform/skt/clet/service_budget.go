@@ -57,13 +57,13 @@ import (
 // exactly what a working one pays, and it leaves both bounds intact: half a
 // second of waiting is fifty million steps, and a guest waiting for an instant
 // nothing will satisfy still runs out of allowance in seconds.
-var ErrServiceStepLimit = errors.New("KTF Host service call exceeded its step allowance")
+var ErrServiceStepLimit = errors.New("SKT Clet Host service call exceeded its step allowance")
 
 // ErrServiceWaitLimit ends a call that has spent the whole wait allowance
 // polling the clock. It is a different failure from the step limit and says so:
 // the guest was waiting, not computing, and no amount of execution would have
 // finished it.
-var ErrServiceWaitLimit = errors.New("KTF Host service call waited past its wait allowance")
+var ErrServiceWaitLimit = errors.New("SKT Clet Host service call waited past its wait allowance")
 
 // serviceDefaultSteps is the total ARM execution one Host service call may
 // spend. The longest observed legitimate call, a save load, needs
@@ -181,7 +181,9 @@ func (client *Client) advanceBatchClockTo(steps uint64) {
 	if client == nil || client.serviceDepth == 0 || steps <= client.serviceStepMark {
 		return
 	}
-	manual, ok := client.clock.(*ManualClock)
+	// Any clock a Host moves by hand answers Advance, whichever platform's
+	// package built it; see SkipToNextDeadline.
+	manual, ok := client.clock.(interface{ Advance(time.Duration) })
 	if !ok {
 		return
 	}

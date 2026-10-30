@@ -110,7 +110,7 @@ func (client *Client) SetSpeed(multiplier float64) {
 	runtimes := [2]*initializationRuntime{client.runtime, client.prepared}
 	if runtimes[0] == nil && runtimes[1] == nil && client.audio != nil {
 		if err := client.audio.SetPlaybackRate(0, next); err != nil {
-			client.log("KTF speed change could not update audio rate", "error", err)
+			client.log("SKT Clet speed change could not update audio rate", "error", err)
 			return
 		}
 	}
@@ -123,7 +123,7 @@ func (client *Client) SetSpeed(multiplier float64) {
 		var ok bool
 		anchors[index], ok = clockBaseForSpeed(now, runtime.clockBase, previous, next)
 		if !ok {
-			client.log("KTF speed change exceeds clock duration range", "speed", next)
+			client.log("SKT Clet speed change exceeds clock duration range", "speed", next)
 			return
 		}
 	}
@@ -132,11 +132,11 @@ func (client *Client) SetSpeed(multiplier float64) {
 			if client.audio != nil && (index == 0 || runtimes[0] == nil) {
 				elapsed := time.Duration(float64(max(now.Sub(runtime.clockBase), 0)) * previous)
 				if err := runtime.syncClipCompletions(elapsed); err != nil {
-					client.log("KTF speed change could not service audio", "error", err)
+					client.log("SKT Clet speed change could not service audio", "error", err)
 					return
 				}
 				if err := client.audio.SetPlaybackRate(elapsed, next); err != nil {
-					client.log("KTF speed change could not update audio rate", "error", err)
+					client.log("SKT Clet speed change could not update audio rate", "error", err)
 					return
 				}
 			}

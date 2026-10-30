@@ -61,7 +61,7 @@ func (runtime *initializationRuntime) wipicGetDLLInterface(thread *armcore.Threa
 	}
 	name, err := runtime.readCString(nameAddress, 128)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF library name: %w", err)
+		return 0, fmt.Errorf("read SKT Clet library name: %w", err)
 	}
 	if name != userMemoryLibrary {
 		// No such library on this handset. Null is the documented answer and
@@ -98,7 +98,7 @@ func (runtime *initializationRuntime) wipicGetDLLInterface(thread *armcore.Threa
 	}
 	minorOut, err := runtime.readGuestWord(stackPointer)
 	if err != nil {
-		return 0, fmt.Errorf("read KTF library version argument: %w", err)
+		return 0, fmt.Errorf("read SKT Clet library version argument: %w", err)
 	}
 	for _, out := range [...]struct {
 		address uint32
@@ -111,7 +111,7 @@ func (runtime *initializationRuntime) wipicGetDLLInterface(thread *armcore.Threa
 			continue
 		}
 		if err := runtime.writeGuestWord(out.address, out.value); err != nil {
-			return 0, fmt.Errorf("write KTF library version at %#x: %w", out.address, err)
+			return 0, fmt.Errorf("write SKT Clet library version at %#x: %w", out.address, err)
 		}
 	}
 	runtime.countDiagnostic(fmt.Sprintf("library %q", name))
@@ -136,7 +136,7 @@ func (runtime *initializationRuntime) handleUserMemoryCall(thread *armcore.Threa
 		// the first block is handed out, so a bad pool fails here rather than
 		// somewhere inside the game's data.
 		if err := runtime.checkGuestRange(pool, argument); err != nil {
-			return 0, fmt.Errorf("KTF user memory pool at %#x: %w", pool, err)
+			return 0, fmt.Errorf("SKT Clet user memory pool at %#x: %w", pool, err)
 		}
 		if runtime.userMemoryPools == nil {
 			runtime.userMemoryPools = make(map[uint32]*userMemoryPool)
@@ -172,7 +172,7 @@ func (runtime *initializationRuntime) handleUserMemoryCall(thread *armcore.Threa
 		runtime.countDiagnostic("user memory free")
 		return 0, nil
 	default:
-		return 0, fmt.Errorf("KTF user memory library function %d is not implemented%s", function, runtime.callerSite(thread))
+		return 0, fmt.Errorf("SKT Clet user memory library function %d is not implemented%s", function, runtime.callerSite(thread))
 	}
 }
 

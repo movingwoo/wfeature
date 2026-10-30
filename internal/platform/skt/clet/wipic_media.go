@@ -321,7 +321,7 @@ func (runtime *initializationRuntime) handleWIPICMediaCall(thread *armcore.Threa
 		return 0, nil
 
 	default:
-		return 0, fmt.Errorf("KTF WIPI C media function %d is not implemented%s", function, runtime.callerSite(thread))
+		return 0, fmt.Errorf("SKT WIPI C media function %d is not implemented%s", function, runtime.callerSite(thread))
 	}
 }
 
@@ -349,7 +349,7 @@ func (runtime *initializationRuntime) wipicCreateClip(thread *armcore.Thread) (u
 		return 0, err
 	}
 	if err := runtime.client.core.Memory().Write(address, make([]byte, wipicMediaClipRecordSize)); err != nil {
-		return 0, fmt.Errorf("clear KTF media clip record at %#x: %w", address, err)
+		return 0, fmt.Errorf("clear SKT Clet media clip record at %#x: %w", address, err)
 	}
 	if runtime.wipicClips == nil {
 		runtime.wipicClips = map[uint32]*wipicMediaClip{}
@@ -434,7 +434,7 @@ func (runtime *initializationRuntime) wipicPutClipData(thread *armcore.Thread) (
 	}
 	data := make([]byte, size)
 	if err := runtime.client.core.Memory().Read(buffer, data); err != nil {
-		return 0, fmt.Errorf("read KTF media clip data at %#x: %w", buffer, err)
+		return 0, fmt.Errorf("read SKT Clet media clip data at %#x: %w", buffer, err)
 	}
 	// The clip's bytes changed, so whatever was decoded from the old ones is
 	// no longer what it holds.

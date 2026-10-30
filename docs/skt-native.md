@@ -130,6 +130,17 @@ destroy run the program's own entries, and destroy is one-way. Keys reach the pr
 `svc #0xab` one title's C runtime carries is answered as a semihosting host that
 took it would, and dropped.
 
+The ARM core yields to the Go scheduler every 16,384 instructions rather than
+the default 1,000, which is the figure LGT's Clet runs at. A Clet is a single
+thread between platform calls, so the frequent yield only bought it scheduler
+wakeups: on the wall clock at the web host's pace, with a key every three
+seconds, the two local titles went from 55 to 46 and from 48 to 41 percent of a
+core over the same frames. The steps a service allowance or the batch clock
+counts do not depend on the quantum. A batch Host's manual clock is accepted
+whichever platform's package built it: `SkipToNextDeadline` moves anything that
+answers `Set`, and a service call moves anything that answers `Advance` with
+the guest's execution, the way the KTF runtime moves its own.
+
 The file tree the program sees is its own files and the resources its
 executable carries, at their names below the program's directory, a title's own
 file winning over a resource of the same name. A title reads the resources

@@ -253,7 +253,7 @@ func (client *Client) guestPrint(line string) {
 	if client == nil || client.logger == nil {
 		return
 	}
-	client.logger.Info("KTF guest printk", "text", strings.TrimRight(line, "\r\n"))
+	client.logger.Info("SKT Clet guest printk", "text", strings.TrimRight(line, "\r\n"))
 }
 
 // SetScreen names the handset the game is told it runs on. Anything but two
@@ -329,7 +329,7 @@ func (client *Client) Frame() ([]byte, int, int, uint32) {
 	defer client.run.Unlock()
 	if client.framePending && client.runtime != nil {
 		if err := client.runtime.convertScreen(); err != nil {
-			client.log("KTF screen conversion failed", "error", err)
+			client.log("SKT Clet screen conversion failed", "error", err)
 		}
 	}
 	return append([]byte(nil), client.frame...), client.frameWidth, client.frameHeight, client.flushCount
@@ -351,7 +351,7 @@ func (client *Client) FrameDigest() uint64 {
 	defer client.run.Unlock()
 	if client.framePending && client.runtime != nil {
 		if err := client.runtime.convertScreen(); err != nil {
-			client.log("KTF screen conversion failed", "error", err)
+			client.log("SKT Clet screen conversion failed", "error", err)
 		}
 	}
 	// FNV-1a over the frame bytes.
