@@ -71,6 +71,17 @@ import (
 // discarded as well. One title's own volume option arrives as that level in
 // steps of twenty, which is what discarding 26 had taken away.
 //
+// **19 is handed a source and a level** and nothing reads its answer:
+//
+//	19 (source, level)       (7, 0..100) from one title's sound option, the
+//	                         level scaled to a percentage and handed to 26
+//	                         on the playing clip in the very next call.
+//
+// It is accepted and changes nothing. The level it carries reaches the sound
+// through 26, which is what that title hears, and no second title calls it to
+// say what the source number selects or whether the level should stack on a
+// clip's own.
+//
 // Every function a local title reaches is now named by its callers, and a
 // number none of them reaches is refused rather than answered from the
 // specification's ordering alone, which is the rule the rest of the WIPI C
@@ -94,6 +105,7 @@ const (
 	wipicMediaVibrator      = 16
 	wipicMediaSetMuteState  = 17
 	wipicMediaGetMuteState  = 18
+	wipicMediaSourceVolume  = 19
 	wipicMediaClipGetVolume = 25
 	wipicMediaClipSetVolume = 26
 )
@@ -305,8 +317,11 @@ func (runtime *initializationRuntime) handleWIPICMediaCall(thread *armcore.Threa
 		}
 		return 0, nil
 
+	case wipicMediaSourceVolume:
+		return 0, nil
+
 	default:
-		return 0, fmt.Errorf("KTF WIPI C media function %d is not implemented", function)
+		return 0, fmt.Errorf("KTF WIPI C media function %d is not implemented%s", function, runtime.callerSite(thread))
 	}
 }
 

@@ -93,7 +93,12 @@ const (
 	wipicKernelPrintk         uint32 = 0
 	wipicKernelSprintk        uint32 = 1
 	wipicKernelGetExecNames   uint32 = 2
-	wipicKernelExit           uint32 = 7
+	// Slot 5 is MC_knlLoad(execName, parmCnt, ...), the dynamic library
+	// loader. Its local caller hands it the name MC_knlGetExecNames wrote for
+	// a library's program id and a parameter count of zero, and goes on
+	// without the library when the answer is negative.
+	wipicKernelLoad uint32 = 5
+	wipicKernelExit uint32 = 7
 	// Slot 9 is MC_knlGetCurProgramID, the program's own identifier. The
 	// specification's order puts it two past MC_knlExit and the table's three
 	// extra slots are already behind both, so it lands where the entries
@@ -111,9 +116,14 @@ const (
 	wipicKernelUnsetTimer      uint32 = 27
 	wipicKernelCurrentTime     uint32 = 28
 	wipicKernelGetSysProperty  uint32 = 29
-	wipicKernelGetResourceID   uint32 = 31
-	wipicKernelGetResource     uint32 = 32
-	wipicKernelReserved1       uint32 = 33
+	// Slot 30 is MC_knlSetSystemProperty(id, value), between the getter and
+	// MC_knlGetResourceID as the specification orders them. A local title's
+	// caller passes "OEMPAD", "MIN" or "PHONENUMBER" in r0 and a string in r1,
+	// and maps M_E_INVALID to an error of its own.
+	wipicKernelSetSysProperty uint32 = 30
+	wipicKernelGetResourceID  uint32 = 31
+	wipicKernelGetResource    uint32 = 32
+	wipicKernelReserved1      uint32 = 33
 	// Slot 36 answers MC_knlGetDLLInterface: a handset library is asked for by
 	// name and version, and the caller receives a table of function pointers.
 	wipicKernelGetDLLInterface uint32 = 36
@@ -1394,6 +1404,13 @@ func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id
 		return wipicAccessLevel, nil
 	case wipicKernelGetExecNames:
 		return runtime.wipicGetExecNames(thread)
+	case wipicKernelLoad:
+		// No library is installed beside the running program — the listing
+		// above names only the program itself — so there is nothing to load
+		// under any name: M_E_INVALID, the answer for a name that does not
+		// resolve.
+		runtime.countDiagnostic("load library")
+		return wipicErrorInvalid, nil
 	case wipicKernelGetProgramName:
 		buffer, err := thread.Register(0)
 		if err != nil {
@@ -1428,6 +1445,8 @@ func (runtime *initializationRuntime) handleWIPICCall(thread *armcore.Thread, id
 		return uint32(millis), nil
 	case wipicKernelGetSysProperty:
 		return runtime.wipicGetSystemProperty(thread)
+	case wipicKernelSetSysProperty:
+		return runtime.wipicSetSystemProperty(thread)
 	case wipicKernelGetResourceID:
 		return runtime.wipicGetResourceID(thread)
 	case wipicKernelGetResource:
@@ -2328,6 +2347,26 @@ func (runtime *initializationRuntime) wipicResource(name string) ([]byte, bool) 
 	trimmed := strings.TrimPrefix(name, "/")
 	data, ok := runtime.client.resources[trimmed]
 	return data, ok
+}
+
+// wipicSetSystemProperty refuses every property with M_E_INVALID, the
+// specification's answer for information that cannot be set. The handset's
+// identity is not the title's to change — the Java HandsetProperty setter
+// answers false for the same reason — and a value accepted here would have
+// to be remembered and answered back by the getter for the rest of the run.
+func (runtime *initializationRuntime) wipicSetSystemProperty(thread *armcore.Thread) (uint32, error) {
+	// The value is never read: nothing keeps it, so a value too long for a
+	// diagnostic is no reason to fail a call that refuses it anyway.
+	idAddress, err := thread.Register(0)
+	if err != nil {
+		return 0, err
+	}
+	name, err := runtime.readCString(idAddress, 128)
+	if err != nil {
+		return 0, fmt.Errorf("read KTF system property id: %w", err)
+	}
+	runtime.countDiagnostic("sysprop set " + name)
+	return wipicErrorInvalid, nil
 }
 
 func (runtime *initializationRuntime) wipicGetSystemProperty(thread *armcore.Thread) (uint32, error) {
