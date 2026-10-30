@@ -29,7 +29,8 @@ The two fingerprints:
   unsigned 64-bit big-endian integer. Any added, removed or changed class changes
   the fingerprint.
 - `native_module` hashes the complete, unmodified native executable. LGT uses
-  `binary.mod`, including its ELF headers and sections; changing any module byte
+  `binary.mod`, including its ELF headers and sections; SKT's native package uses
+  its `.daf`, including its header and relocation table. Changing any module byte
   changes the fingerprint.
 
 Archive filenames, display names, descriptors, ZIP metadata and resources select
@@ -39,12 +40,13 @@ exception.
 Matching always includes the platform and fingerprint kind, not only the hash.
 The shared package owns metadata validation and matching; each platform owns
 fingerprint calculation and correction behavior. Fix names are
-platform-prefixed and accepted only with their platform and kind: SKT fixes
-require `java_class_set`, LGT fixes `native_module`.
+platform-prefixed and accepted only with their platform and kind: SKT's Java
+fixes require `java_class_set` and its native fixes `native_module`, and LGT
+fixes require `native_module`.
 
 ### Registered fixes
 
-The registry holds 16 entries (last changed 2026-10-28). The `evidence` field of
+The registry holds 18 entries (last changed 2026-10-30). The `evidence` field of
 each entry is the authoritative index; this table groups them by fix.
 
 | Fix | Entries | Effect | Evidence |
@@ -61,6 +63,9 @@ each entry is the authoritative index; this table groups them by fix.
 | `lgt.save_subscriber_identity` | 1 | Lets a recognized save reader accept a foreign subscriber identity | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison) |
 | `lgt.certificate_message` | 2 | Selects the recognized two-stage local certificate exchange | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility), [second revision](history/lgt.md#lgt-new-archives-2026-10-19-certificate-message) |
 | `lgt.record_table_terminator` | 1 | Appends the end sequence a record-table search stops on, which the packaged table lacks | [LGT QA](history/lgt.md#lgt-qa-2026-10-28-unterminated-record-table) |
+| `skt.native_discard_owner_state` | 1 | Withholds a recognized device dump's install directory so the game starts fresh | [SKT native](skt-native.md#skt-native-identity-discard) |
+| `skt.native_save_identity` | 1 | Lets a recognized native executable accept its packaged save's handset digits | [SKT native](skt-native.md#skt-native-identity-save) |
+| `skt.native_cert_subscriber` | 1 | Lets a recognized native executable accept its cert.c2s subscriber field (error 5001) | [SKT native](skt-native.md#skt-native-identity-cert) |
 
 `skt.tutorial_name_cache` replaces a redundant phase assignment in an in-memory
 class copy when one verified code revision returns from its tutorial equipment

@@ -86,7 +86,7 @@ func runShared(ctx context.Context, path string, args []string, in io.Reader, ou
 	if backend.DebugBuild() {
 		options.TraceLimit = ktf.DefaultTraceLimit
 	}
-	if summary.Platform == "ktf" && !*play {
+	if (summary.Platform == "ktf" || summary.Clet) && !*play {
 		options.Clock = ktf.NewManualClock(time.Time{})
 	}
 	identity := backend.SaveIdentity(archive)

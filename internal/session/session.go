@@ -30,6 +30,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/platform/lgt"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
+	"github.com/movingwoo/wfeature/internal/platform/skt/clet"
 )
 
 // DefaultWidth and DefaultHeight are the handset screen every platform here
@@ -74,6 +75,10 @@ type Summary struct {
 	// this side can read the archive.
 	ScreenWidth  int `json:"-"`
 	ScreenHeight int `json:"-"`
+	// Clet is set for an SKT native package: a WIPI-C program that runs on
+	// the KTF runtime (see skt_native.go), so a Host that drives the KTF
+	// clock itself — a batch run's ktf.ManualClock — drives this one too.
+	Clet bool `json:"-"`
 }
 
 // Inspect reads an archive far enough to name the game and the directory its
@@ -133,6 +138,17 @@ func Inspect(archive []byte) (Summary, error) {
 		summary.EarlierSaveOwner = lgt.EarlierSaveOwner(opened.Descriptor)
 		summary.MainClass = opened.Descriptor.MClass
 	case detect.SKT:
+		// A native package is a WIPI-C executable rather than a JAR, and it
+		// names itself by its program number alone; see skt_native.go.
+		if skt.IsNativeArchive(archive) {
+			opened, err := skt.OpenNative(archive)
+			if err != nil {
+				return summary, err
+			}
+			summary.SaveOwner = skt.NativeSaveOwner(opened)
+			summary.Clet = true
+			return summary, nil
+		}
 		opened, err := skt.Open(archive)
 		if err != nil {
 			return summary, err
@@ -225,11 +241,12 @@ type Session struct {
 	options         Options
 	archiveIdentity [32]byte
 
-	ktf       *ktf.Session
-	ktfNative *ktf.NativeSession
-	lgt       *lgt.Session
-	runtime   *skt.Runtime
-	script    *skt.ScriptSession
+	ktf         *ktf.Session
+	ktfNative   *ktf.NativeSession
+	cletSession *clet.Session
+	lgt         *lgt.Session
+	runtime     *skt.Runtime
+	script      *skt.ScriptSession
 
 	// surface receives frames on the platforms that draw into one. It also
 	// gives those platforms a flush counter they do not otherwise have.
@@ -358,6 +375,19 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 		}
 		session.lgt = started
 	case detect.SKT:
+		if skt.IsNativeArchive(archive) {
+			program, _, err := sktNativeProgram(archive, options.DisableAuthentication)
+			if err != nil {
+				return nil, err
+			}
+			started, err := clet.StartCletSession(ctx, program, cletOptions(options))
+			if err != nil {
+				return nil, startEndedOrFailed(err)
+			}
+			started.TimeHostPhases(options.TraceLimit > 0)
+			session.cletSession = started
+			break
+		}
 		opened, err := skt.Open(archive)
 		if err != nil {
 			return nil, err
@@ -437,6 +467,9 @@ func (s *Session) SkipToNextDeadline() bool {
 	if s.ktf != nil {
 		return s.ktf.SkipToNextDeadline()
 	}
+	if s.cletSession != nil {
+		return s.cletSession.SkipToNextDeadline()
+	}
 	if s.ktfNative != nil {
 		return s.ktfNative.SkipToNextDeadline()
 	}
@@ -461,6 +494,15 @@ func (s *Session) Summary() Summary { return s.summary }
 // profiler and the diagnostics report. It is nil on every other platform,
 // which is the answer a Host needs anyway.
 func (s *Session) KTF() *ktf.Session { return s.ktf }
+
+// CletDiagnostics is the SKT native (Clet) session's boundary trace, for the
+// probes; the second return is false on every other platform.
+func (s *Session) CletDiagnostics() (clet.Diagnostics, bool) {
+	if s == nil || s.cletSession == nil {
+		return clet.Diagnostics{}, false
+	}
+	return s.cletSession.Diagnostics(), true
+}
 
 // LGT is the LGT session, or nil for anything else. A Host asks for it to read
 // what only that platform reports; see UncaughtCallbacks.
@@ -598,6 +640,15 @@ func (s *Session) tick(ctx context.Context, budget time.Duration) (Progress, err
 		progressed, wait, err := s.ktf.TickFor(ctx, budget)
 		progress := Progress{Progressed: progressed, Wait: wait, Flushes: uint64(s.ktf.Flushes())}
 		if errors.Is(err, ktf.ErrGuestExited) {
+			progress.Exited = true
+			progress.ExitReason = s.noteExit(err)
+			return progress, nil
+		}
+		return progress, err
+	case s.cletSession != nil:
+		progressed, wait, err := s.cletSession.TickFor(ctx, budget)
+		progress := Progress{Progressed: progressed, Wait: wait, Flushes: uint64(s.cletSession.Flushes())}
+		if errors.Is(err, clet.ErrGuestExited) {
 			progress.Exited = true
 			progress.ExitReason = s.noteExit(err)
 			return progress, nil
@@ -747,6 +798,22 @@ func (s *Session) sendKey(ctx context.Context, action string, code int32) error 
 		}
 		s.noteKeyHold(action, code)
 		return nil
+	case s.cletSession != nil:
+		// An SKT Clet compares against the same key values a KTF game does.
+		eventType, ok := ktfKeyEventType(action)
+		if !ok {
+			return fmt.Errorf("session: unknown key action %q", action)
+		}
+		if err := s.checkKeyHold(action, code); err != nil {
+			return err
+		}
+		key := ktfKeyCode(code)
+		s.held.Key(action == KeyPress, key)
+		if err := s.endedOrFailed(s.cletSession.SendKey(ctx, eventType, key)); err != nil {
+			return err
+		}
+		s.noteKeyHold(action, code)
+		return nil
 	case s.lgt != nil:
 		// A Clet compares against the same key values a KTF game does, so the
 		// translation is shared.
@@ -823,7 +890,7 @@ func (s *Session) sendPointer(ctx context.Context, action string, x, y int32) er
 			s.pointerHeld = checkpointPointerState{}
 		}
 		return nil
-	case s.ktfNative != nil, s.lgt != nil, s.runtime != nil, s.script != nil:
+	case s.ktfNative != nil, s.cletSession != nil, s.lgt != nil, s.runtime != nil, s.script != nil:
 		return ErrNoPointer
 	}
 	return ErrNotRunning
@@ -1038,6 +1105,8 @@ func (s *Session) Vibration() (backend.Vibration, bool) {
 		return s.script.Vibration(), true
 	case s.ktf != nil:
 		return s.ktf.Vibration(), true
+	case s.cletSession != nil:
+		return s.cletSession.Vibration(), true
 	case s.runtime != nil:
 		return s.runtime.Vibration(), true
 	case s.lgt != nil:
@@ -1088,6 +1157,8 @@ func (s *Session) frameUpdate() (frame backend.FrameUpdate, ok bool) {
 	frame.Scale = s.options.scale()
 	frame.Epoch = s.options.FrameEpoch
 	switch {
+	case s.cletSession != nil:
+		frame.RGBA, frame.Width, frame.Height, _ = s.cletSession.Frame()
 	case s.ktf != nil:
 		frame.RGBA, frame.Width, frame.Height, _ = s.ktf.Frame()
 	case s.ktfNative != nil:
@@ -1124,6 +1195,8 @@ func (s *Session) Screen() (width, height int) {
 		// Host's default does not know. The platform answers both without
 		// copying the frame.
 		return s.ktf.Screen()
+	case s.cletSession != nil:
+		return s.cletSession.Screen()
 	case s.ktfNative != nil:
 		// The earlier package answers the same way: the title asks for its
 		// size once and draws into what it is given, so the frame is what it
@@ -1160,6 +1233,8 @@ func (s *Session) GuestElapsed() (time.Duration, bool) {
 		return s.script.GuestElapsed(), true
 	case s.ktf != nil:
 		return s.ktf.GuestElapsed(), true
+	case s.cletSession != nil:
+		return s.cletSession.GuestElapsed(), true
 	case s.ktfNative != nil:
 		return s.ktfNative.GuestElapsed(), true
 	case s.lgt != nil:
@@ -1174,6 +1249,8 @@ func (s *Session) Flushes() uint64 {
 	switch {
 	case s.ktf != nil:
 		return uint64(s.ktf.Flushes())
+	case s.cletSession != nil:
+		return uint64(s.cletSession.Flushes())
 	case s.ktfNative != nil:
 		return uint64(s.ktfNative.Flushes())
 	case s.lgt != nil:
@@ -1212,6 +1289,9 @@ func (s *Session) SetSpeed(multiplier float64) {
 	// The repeat clock is scaled by hand because it is this layer's own; every
 	// platform below scales its clock for itself.
 	s.speed = backend.ClampSpeed(multiplier)
+	if s.cletSession != nil {
+		s.cletSession.SetSpeed(s.speed)
+	}
 	if s.ktf != nil {
 		s.ktf.SetSpeed(s.speed)
 		// A KTF origin outside the duration range cannot be rebased. Keep
@@ -1256,6 +1336,9 @@ func (s *Session) SetFrameUpdates(output chan<- backend.FrameUpdate) {
 	if s.ktf != nil {
 		s.ktf.Client.SetFrameSink(backend.FrameSink{Output: output, Scale: s.options.scale(), Epoch: s.options.FrameEpoch})
 	}
+	if s.cletSession != nil {
+		s.cletSession.Client.SetFrameSink(backend.FrameSink{Output: output, Scale: s.options.scale(), Epoch: s.options.FrameEpoch})
+	}
 }
 
 // SetOutputEpoch invalidates previously queued Host pictures after replacement.
@@ -1269,7 +1352,7 @@ func (s *Session) Scale() int { return s.options.scale() }
 
 // Running reports whether there is still a game to tick.
 func (s *Session) Running() bool {
-	return s.ktf != nil || s.ktfNative != nil || s.lgt != nil || s.runtime != nil || s.script != nil
+	return s.ktf != nil || s.ktfNative != nil || s.cletSession != nil || s.lgt != nil || s.runtime != nil || s.script != nil
 }
 
 // Paused reports whether the guest has been told that nobody is watching. A
@@ -1312,6 +1395,8 @@ func (s *Session) pause(ctx context.Context) error {
 	switch {
 	case s.ktf != nil:
 		return s.endedOrFailed(s.ktf.Pause(ctx))
+	case s.cletSession != nil:
+		return s.endedOrFailed(s.cletSession.Pause(ctx))
 	case s.lgt != nil:
 		return s.endedOrFailed(s.lgt.Pause(ctx))
 	case s.runtime != nil:
@@ -1342,6 +1427,8 @@ func (s *Session) resume(ctx context.Context) error {
 	switch {
 	case s.ktf != nil:
 		return s.endedOrFailed(s.ktf.Resume(ctx))
+	case s.cletSession != nil:
+		return s.endedOrFailed(s.cletSession.Resume(ctx))
 	case s.lgt != nil:
 		return s.endedOrFailed(s.lgt.Resume(ctx))
 	case s.runtime != nil:
@@ -1370,9 +1457,11 @@ var closeWait = backend.EndingBound
 // a half-closed game that a second Close would enter again.
 func (s *Session) Close() {
 	ktfSession, nativeSession, lgtSession, runtime := s.ktf, s.ktfNative, s.lgt, s.runtime
+	cletSession := s.cletSession
 	script := s.script
 	s.script = nil
 	s.ktf, s.ktfNative, s.lgt, s.runtime = nil, nil, nil, nil
+	s.cletSession = nil
 	closing := func(where string, run func()) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -1386,6 +1475,9 @@ func (s *Session) Close() {
 	}
 	if nativeSession != nil {
 		closing("session close", nativeSession.Close)
+	}
+	if cletSession != nil {
+		closing("session close", cletSession.Close)
 	}
 	if lgtSession != nil {
 		closing("session close", func() {

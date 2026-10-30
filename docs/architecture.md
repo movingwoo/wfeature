@@ -75,7 +75,7 @@ the Runtime and an API surface for each carrier.
 | `internal/platform/detect` | Names the platform an archive belongs to ([below](#archive-detection)). |
 | `internal/platform/ktf` | KTF: WIPI Java/AOT titles and older descriptor modules on the ARM core with Go JVM objects, and the earlier native package. See [KTF](ktf.md). |
 | `internal/platform/lgt` | LGT: Clets and AOT Java titles on the ARM core. See [LGT](lgt.md). |
-| `internal/platform/skt` | SKT: SKVM/MIDP and WIPI Java on the JVM, and GNEX/GVM scripts on `internal/sgsvm`. See [SKT Java](skvm.md). |
+| `internal/platform/skt` | SKT: SKVM/MIDP and WIPI Java on the JVM, GNEX/GVM scripts on `internal/sgsvm`, and native WIPI-C programs on the KTF runtime. See [SKT Java](skvm.md) and [SKT native](skt-native.md). |
 | `internal/platform/compatibility` | The embedded registry of code-revision exceptions. See [code-revision compatibility](platform-compatibility.md). |
 | `internal/api/midp`, `internal/api/skvm`, `internal/api/wipi` | Java class libraries declared in Go and installed on a VM by `Define`: MIDP, SKT's extensions (`com.skt.m`, `com.skt.m3d`, `com.xce`) and WIPI Java (`org.kwis.msp`, `org.kwis.msf`). See [JVM](jvm.md#the-class-library-is-declared-not-compiled). |
 | `internal/zipentry` | Entry-name conventions the loaders share ([below](#archive-entry-names)). |
@@ -141,6 +141,7 @@ table order:
 | an entry with the extension `.msd` | SKT |
 | a JAR whose class constant pools reference `com/skt/m/`, `com/skt/m3d/` or `com/xce/` | SKT |
 | exactly one `.mif` beside exactly one `.mod` (the earlier KTF package) | KTF |
+| exactly one `.daf` beside a `.mod` of the same name (the SKT native package) | SKT |
 | an `.sgs` payload beside a descriptor naming the GNEX or GVM runtime | SKT |
 
 The constant-pool scan decompresses class files, so it is bounded (4 MiB per

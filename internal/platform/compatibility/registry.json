@@ -194,6 +194,31 @@
         "lgt.record_table_terminator"
       ],
       "evidence": "docs/history/lgt.md#lgt-qa-2026-10-28-unterminated-record-table"
+    },
+    {
+      "id": "skt-native-certificate-001",
+      "platform": "skt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "08c9c730b69403da17d2b43d10cc2a282679c1a122df267118238e20549e4cb2"
+      },
+      "fixes": [
+        "skt.native_discard_owner_state"
+      ],
+      "evidence": "docs/skt-native.md#skt-native-identity-discard"
+    },
+    {
+      "id": "skt-native-save-001",
+      "platform": "skt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "1966e7ecfea09d9da90cd9e3e41c00a20452bfe2fca1a8bf299d072cd1ae80ad"
+      },
+      "fixes": [
+        "skt.native_save_identity",
+        "skt.native_cert_subscriber"
+      ],
+      "evidence": "docs/skt-native.md#skt-native-identity-save"
     }
   ]
 }

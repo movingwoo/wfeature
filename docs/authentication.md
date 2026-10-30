@@ -27,6 +27,8 @@ scripts. A resumed session keeps its original runtime. CLI reporting is in
 | `lgt-save-subscriber` | A recognized native revision's save reader matches. Accept a saved subscriber identity from another handset; the original length and checksum checks still run and no file changes. |
 | `lgt-certificate-message` | One of two recognized native revisions' two-stage certificate exchange matches. Answer it through the bounded local socket service so the guest sets and saves its own certificate-present flag. |
 | `skt-license` | A complete normalized Java license-check shape matches a supported compiler/library layout. Adapt only its terminal license comparison in a private class-file copy. |
+| `skt-native-certificate` | A recognized native executable's packaged certificate names the handset it was issued to. Accept that one comparison in the code before it is loaded; every other check still runs and no file changes. See [SKT native](skt-native.md#skt-native-identity). |
+| `skt-native-save-subscriber` | A recognized native executable's packaged save names the handset it was written on. Accept that one comparison; the save's own length and checksum checks still run and no file changes. See [SKT native](skt-native.md#skt-native-identity). |
 
 The status constants are in `internal/backend/authentication.go`. Selection is
 not evidence that a game reached playable input. Unknown certificate formats,

@@ -19,4 +19,8 @@ const (
 	AuthenticationLGTHandshake          AuthenticationStatus = "lgt-offline-authentication"
 	AuthenticationLGTSaveSubscriber     AuthenticationStatus = "lgt-save-subscriber"
 	AuthenticationLGTCertificateMessage AuthenticationStatus = "lgt-certificate-message"
+	// The SKT native statuses accept one identity comparison in a recognized
+	// executable; see docs/skt-native.md#skt-native-identity.
+	AuthenticationSKTNativeCertificate    AuthenticationStatus = "skt-native-certificate"
+	AuthenticationSKTNativeSaveSubscriber AuthenticationStatus = "skt-native-save-subscriber"
 )
