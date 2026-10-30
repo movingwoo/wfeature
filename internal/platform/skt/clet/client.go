@@ -134,10 +134,18 @@ func (client *Client) serviceTimersLocked(ctx context.Context, limit int) (int, 
 		return 0, nil
 	}
 	defer client.beginHostService(ctx)()
+	// A network failure owed to a caller of MC_netConnect is delivered here for
+	// the same reason a timer callback is: the guest is between its own calls.
+	// It goes first, because a title waiting on one is waiting to start doing
+	// anything at all.
+	netServiced, err := client.serviceNetCallbacks(ctx)
+	if err != nil {
+		return 0, err
+	}
 	pending := client.runtime.pendingTimers
 	client.runtime.pendingTimers = nil
 	now := client.now()
-	serviced := 0
+	serviced := netServiced
 	for index, timer := range pending {
 		if serviced >= limit {
 			client.runtime.requeueTimers(pending[index:])
