@@ -88,10 +88,11 @@ func restoreSessionClientForActivation(archive *Archive, saved clientState, opti
 	if err != nil {
 		return nil, err
 	}
-	client.runtime, err = newInitializationRuntime(client)
+	runtime, err := newInitializationRuntime(client)
 	if err != nil {
 		return nil, err
 	}
+	client.setRuntimes(runtime, client.prepared)
 	if err := client.restoreClientStateForActivation(saved, sessionCoreOptions(options), options.AudioSink, activation); err != nil {
 		return nil, err
 	}

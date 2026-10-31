@@ -1232,7 +1232,10 @@ The two places a title could see a difference:
 
 - **A Clet has cheats.** The adapter is the one every native title uses; the
   program's code and data are both swept as the client's, because the loader
-  maps them side by side and adjacent pages come back as one region. See
+  maps them side by side and adjacent pages come back as one region. A quick
+  save is refused while a freeze or a patch is active, as on every other
+  platform; the first cut of this change left that check out, and a slot taken
+  under a freeze kept the frozen value as the program's own. See
   [SKT native](../skt-native.md#skt-native-cheats).
 - **LGT's polygon fill is the shared one.** Its copy worked a crossing out in
   machine integers, which overflow when a guest puts vertices at both ends of

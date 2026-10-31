@@ -286,7 +286,9 @@ that moved an address. The program's code and its data are both labelled as
 the client's and both swept, because the loader maps them side by side and
 adjacent pages come back as one region; the engine's own regions are named the
 way a KTF title's are. A saved table is named after the program and keyed by
-the hash of its code.
+the hash of its code. A quick save is refused while a freeze or a patch is
+active, as on every platform, because the slot would keep the cheat's values as
+the program's own.
 
 ## Limitations
 
