@@ -229,6 +229,26 @@ every other title's it holds no save: the restored program reads its files as
 the store has them when the load commits. What the record holds, how it is
 validated and how it was accepted is in [SKT checkpoints](skt-checkpoints.md#native-clet-state).
 
+<a id="skt-native-earlier-saves"></a>
+
+## Saves from the earlier engine
+
+The Clet engine before the shared one stored its removal list (`db/.removed`)
+and its directory list (`db/.dirs`) but began every session with both empty, so
+neither was read back. A program that deleted a file in one session and wrote it
+again in a later one left the name on the list over the new bytes, and that
+engine answered the file from them. The shared engine reads the lists, so for a
+Clet it reads a listed name whose save holds bytes as that file
+(`Platform.StaleRemovals`): a removal stores the file empty in the same write
+that lists the name, and a write of the file takes the name off in its own
+write, so only that engine leaves a name over bytes. An empty file stays
+removed. KTF never wrote such a save, and every name its list holds stays
+removed.
+
+The directory list needs no such reading. A directory holds no bytes, and one
+the earlier engine recorded is one `MC_fsMkDir` now answers `M_E_EXIST` for,
+which is what a handset that kept it answers.
+
 <a id="skt-native-text-entry"></a>
 
 ## Text entry

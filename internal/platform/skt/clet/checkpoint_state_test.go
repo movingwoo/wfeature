@@ -390,3 +390,72 @@ func TestASessionReadsTheRemovalsAnEarlierOneStored(t *testing.T) {
 		t.Error("a directory made in an earlier session is not in the directory list")
 	}
 }
+
+// The engine before the shared one wrote the removal list and never read it
+// back, so a program that deleted its save in one session and wrote it again in
+// a later one left the name listed over the bytes, and that engine answered the
+// save from them. A session now answers the same save, and the next write of
+// the list leaves the name off. A name over the empty file a removal stores is
+// still removed.
+func TestASessionKeepsASaveTheEarlierEngineLeftListed(t *testing.T) {
+	program := fixtureProgram(t, testfixture.SKTCletOptions{})
+	store, err := backend.NewMemorySaveStore([]backend.SaveEntry{
+		{Key: "db/.removed", Data: []byte("save.dat\ngone.dat\n")},
+		{Key: "db/save.dat", Data: []byte("progress")},
+		{Key: "db/gone.dat", Data: []byte{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := fixtureSession(t, program, store)
+	defer session.Close()
+	runtime := session.Client.runtime
+	call := func(function uint32, registers ...uint32) uint32 {
+		t.Helper()
+		thread := armcore.NewThread(armcore.NewContext())
+		for index, value := range registers {
+			if err := thread.SetRegister(index, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := runtime.HandleWIPICCall(thread, wipicrt.WIPICTableFilesystem<<16|function)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	name := func(text string) uint32 {
+		t.Helper()
+		address, err := runtime.AllocateBytes([]byte(text + "\x00"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return address
+	}
+	save, gone := name("save.dat"), name("gone.dat")
+	if result := call(wipicrt.WIPICFileExists, save); result != 0 {
+		t.Errorf("MC_fsIsExist of the save = %#x, want 0", result)
+	}
+	if handle := call(wipicrt.WIPICFileOpen, save, 1); handle == wipicrt.WIPICErrorNotFound {
+		t.Error("the save does not open for reading")
+	}
+	if seed, found := runtime.DatabaseSeed("save.dat"); !found || string(seed) != "progress" {
+		t.Errorf("the save reads %q, %v; want the stored progress", seed, found)
+	}
+	if result := call(wipicrt.WIPICFileExists, gone); result != wipicrt.WIPICErrorNotFound {
+		t.Errorf("MC_fsIsExist of the removed file = %#x, want M_E_NOENT", result)
+	}
+	if result := call(wipicrt.WIPICFileDelete, gone); result != wipicrt.WIPICErrorNotFound {
+		t.Errorf("MC_fsRemove of the removed file = %#x, want M_E_NOENT", result)
+	}
+	if err := runtime.MarkDatabaseRemoved("other.dat", true); err != nil {
+		t.Fatal(err)
+	}
+	listed, _ := store.LoadSave("db/.removed")
+	if got := strings.Join(wipicrt.SplitRemovalList(listed), ","); got != "gone.dat,other.dat" {
+		t.Errorf("the list stored next is %q, want gone.dat,other.dat", got)
+	}
+	if saved, _ := store.LoadSave("db/save.dat"); string(saved) != "progress" {
+		t.Errorf("db/save.dat = %q, want the progress kept", saved)
+	}
+}
