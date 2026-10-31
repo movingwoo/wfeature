@@ -704,6 +704,12 @@ const (
 // and answers its address. The storage is allocated once and reused, because
 // that is what a caller holding the previous result across a second call
 // expects to see happen.
+//
+// **The fields are the local time a handset shows**, in the zone this
+// platform's Java `TimeZone` and `Calendar` already answer with, which is the
+// Host's. They were broken down in UTC, so in Korea an LGT Clet read a clock
+// nine hours behind the one this platform's Java side reads and the one an SKT
+// Clet's localtime answers.
 func (client *Client) writeLocaltime(pointer uint32) (uint32, error) {
 	seconds := int64(client.clock.unixMillis() / 1000)
 	if pointer != 0 {
@@ -720,7 +726,7 @@ func (client *Client) writeLocaltime(pointer uint32) (uint32, error) {
 		}
 		client.tmStorage = address
 	}
-	moment := time.Unix(seconds, 0).UTC()
+	moment := time.Unix(seconds, 0).In(time.Local)
 	fields := map[uint32]int32{
 		tmSeconds: int32(moment.Second()),
 		tmMinutes: int32(moment.Minute()),
@@ -731,8 +737,9 @@ func (client *Client) writeLocaltime(pointer uint32) (uint32, error) {
 		tmYear:    int32(moment.Year()) - 1900,
 		tmWeekday: int32(moment.Weekday()),
 		tmYearDay: int32(moment.YearDay()) - 1,
-		// The guest clock carries no zone, so there is no daylight saving to
-		// report rather than an unknown one.
+		// No daylight saving is reported, as the SKT Clet C library reports
+		// none: the handsets these titles ran on kept Korean time, which has
+		// none to report.
 		tmIsDST: 0,
 	}
 	for offset, value := range fields {
