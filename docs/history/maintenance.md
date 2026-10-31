@@ -1228,8 +1228,12 @@ runs the two copies as they were beside the shared list over random allocation
 and release sequences at both alignments and requires the same addresses and
 the same list after every step.
 
-The one place a title could see a difference:
+The two places a title could see a difference:
 
+- **A Clet has cheats.** The adapter is the one every native title uses; the
+  program's code and data are both swept as the client's, because the loader
+  maps them side by side and adjacent pages come back as one region. See
+  [SKT native](../skt-native.md#skt-native-cheats).
 - **LGT's polygon fill is the shared one.** Its copy worked a crossing out in
   machine integers, which overflow when a guest puts vertices at both ends of
   int32 on both axes; the shared rule works that case in a `big.Int`. Every

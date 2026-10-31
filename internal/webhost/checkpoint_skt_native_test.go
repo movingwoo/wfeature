@@ -54,3 +54,31 @@ func TestSKTNativeQuickSaveAndTextInputOverTheSocket(t *testing.T) {
 	send(t, connection, clientMessage{Kind: clientStop, ID: 8, Epoch: 1})
 	expectMessage(t, connection, serverResult)
 }
+
+// A native SKT program answers the cheat panel the way every native title on
+// the ARM core does: the page is told it can watch writes, and a first search
+// sweeps the program's memory rather than being refused as having none.
+func TestSKTNativeAnswersTheCheatPanelOverTheSocket(t *testing.T) {
+	connection, logs := sessionFixture(t)
+	archive, err := testfixture.SKTCletArchive(testfixture.SKTCletOptions{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gameRoot := filepath.Join(filepath.Dir(logs), "games", "skt")
+	if err := os.WriteFile(filepath.Join(gameRoot, "native.zip"), archive, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expectMessage(t, connection, serverReady)
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/native.zip", ID: 1})
+	started := expectMessage(t, connection, serverStarted)
+	if started.Started == nil || !started.Started.CanWatch {
+		t.Fatalf("started = %+v, want an SKT program whose writes can be watched", started.Started)
+	}
+	send(t, connection, clientMessage{Kind: clientCheat, ID: 2, Op: "scan", Type: "u32", Filter: "unknown"})
+	scan := expectMessage(t, connection, serverResult)
+	if scan.ID != 2 || scan.Cheat == nil || !scan.Cheat.Searchable || scan.Cheat.Count == 0 {
+		t.Fatalf("a first scan over an SKT program found %+v (%q)", scan.Cheat, scan.Message)
+	}
+	send(t, connection, clientMessage{Kind: clientStop, ID: 3})
+	expectMessage(t, connection, serverResult)
+}

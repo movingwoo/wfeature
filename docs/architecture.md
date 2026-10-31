@@ -54,7 +54,7 @@ each is written once:
 | `internal/curve` | Arcs and rounded rectangles for every drawing surface. |
 | `internal/glyph` | Runtime-authored 5x7 glyphs; an unsupported character becomes a codepoint-marked box. |
 | `fonts` | The runtime's embedded font assets. |
-| `internal/cheat` | Memory search and patching over a guest's memory: the ARM address space on KTF and LGT, a synthetic address space over the JVM heap on SKT. The Hosts expose it as the cheat panel and the CLI's `-cheat` and `-patch`. |
+| `internal/cheat` | Memory search and patching over a guest's memory: the ARM address space on KTF, LGT and SKT native programs, a synthetic address space over the JVM heap on SKT Java. The Hosts expose it as the cheat panel and the CLI's `-cheat` and `-patch`. |
 
 ### Execution
 
@@ -77,7 +77,7 @@ the Runtime and an API surface for each carrier.
 | `internal/platform/lgt` | LGT: Clets and AOT Java titles on the ARM core. See [LGT](lgt.md). |
 | `internal/platform/skt` | SKT: SKVM/MIDP and WIPI Java on the JVM, GNEX/GVM scripts on `internal/sgsvm`, and native WIPI-C programs (Clets) through `internal/platform/skt/clet` on `internal/platform/wipicrt`. See [SKT Java](skvm.md) and [SKT native](skt-native.md). |
 | `internal/platform/wipicrt` | The WIPI-C engine KTF titles and SKT Clets run on ([below](#the-wipi-c-engine)). |
-| `internal/platform/armcheat` | The cheat engine's adapter for every guest on the ARM core — KTF, its earlier native package and LGT — which differ only in how their memory map is named. |
+| `internal/platform/armcheat` | The cheat engine's adapter for every guest on the ARM core — KTF, its earlier native package, LGT and SKT Clets — which differ only in how their memory map is named. |
 | `internal/platform/compatibility` | The embedded registry of code-revision exceptions. See [code-revision compatibility](platform-compatibility.md). |
 | `internal/api/midp`, `internal/api/skvm`, `internal/api/wipi` | Java class libraries declared in Go and installed on a VM by `Define`: MIDP, SKT's extensions (`com.skt.m`, `com.skt.m3d`, `com.xce`) and WIPI Java (`org.kwis.msp`, `org.kwis.msf`). See [JVM](jvm.md#the-class-library-is-declared-not-compiled). |
 | `internal/zipentry` | Entry-name conventions the loaders share ([below](#archive-entry-names)). |

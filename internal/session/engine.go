@@ -333,10 +333,8 @@ func (e cletEngine) speed() float64                      { return e.session.Spee
 func (e cletEngine) setFrameSink(sink backend.FrameSink) { e.session.Client.SetFrameSink(sink) }
 func (e cletEngine) skipToNextDeadline() bool            { return e.session.SkipToNextDeadline() }
 func (e cletEngine) virtualClock() bool                  { return false }
-
-// cheat is nil: the cheat console is not wired to a native SKT program yet.
-func (e cletEngine) cheat() *cheat.Session        { return nil }
-func (e cletEngine) cheatConsole() *cheat.Console { return nil }
+func (e cletEngine) cheat() *cheat.Session               { return e.session.Cheat() }
+func (e cletEngine) cheatConsole() *cheat.Console        { return e.session.CheatConsole() }
 
 func (e cletEngine) authentication() backend.AuthenticationStatus {
 	return e.session.Authentication()
