@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // These hold the fixes a review of the storage contract made here
@@ -22,21 +23,21 @@ import (
 func TestSpaceDoesNotChargeAShippedFileKeptAsADatabase(t *testing.T) {
 	shipped := bytes.Repeat([]byte{7}, 600<<10)
 	client, runtime := newTestRuntime(t)
-	store := NewDirectorySaveStore(t.TempDir())
-	runtime.client.saveStore = store
+	store := wipicrt.NewDirectorySaveStore(t.TempDir())
+	runtime.client.SaveStore = store
 	client.AttachFilesystem(map[string][]byte{"pack.dat": shipped, "level": shipped})
 	// Saved by an earlier session, as the title left them.
 	for key, records := range map[string][][]byte{
 		"jdb/pack.dat": {shipped},
 		"rdb/level":    {shipped, make([]byte, 1000)},
 	} {
-		if err := store.StoreSave(key, encodeSaveRecords(records)); err != nil {
+		if err := store.StoreSave(key, wipicrt.EncodeSaveRecords(records)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	want := uint32(storageBudget - 1000)
+	want := uint32(wipicrt.StorageBudget - 1000)
 	for name, got := range map[string]uint32{
-		"MC_fsAvailable":            databaseCall(t, runtime, wipicFileAvailable, ""),
+		"MC_fsAvailable":            databaseCall(t, runtime, wipicrt.WIPICFileAvailable, ""),
 		"FileSystem.available":      uint32(mustInt(must(javaCall(t, runtime, client, runtimeFileSystemAvailable)))),
 		"DataBase.getSizeAvailable": uint32(mustInt(must(javaCall(t, runtime, client, runtimeDataBaseSizeAvailable)))),
 	} {
@@ -53,8 +54,8 @@ func TestSpaceDoesNotChargeAShippedFileKeptAsADatabase(t *testing.T) {
 // than before, and the same keys led it somewhere else.
 func TestDatabaseBookkeepingDoesNotReadTheGuestClock(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
-	before := client.guestClockReads
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
+	before := client.GuestClockReads
 	database, err := openJavaDatabase(t, runtime, client, "scores", 8, true)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +67,7 @@ func TestDatabaseBookkeepingDoesNotReadTheGuestClock(t *testing.T) {
 	if modified == 0 {
 		t.Error("getLastModified of a database just written is 0")
 	}
-	if reads := client.guestClockReads - before; reads != 0 {
+	if reads := client.GuestClockReads - before; reads != 0 {
 		t.Fatalf("opening and writing a database counted %d guest clock reads, want none", reads)
 	}
 }
@@ -96,9 +97,9 @@ func TestToCStringConvertsTextAsItIs(t *testing.T) {
 // that write failed the open: the save was there, and the title was told it
 // was not. The open stands, and the object keeps the size.
 func TestOpeningADatabaseSurvivesARefusedSizeTable(t *testing.T) {
-	store := &refusableSaveStore{saves: map[string][]byte{"jdb/scores": encodeSaveRecords([][]byte{[]byte("progress")})}}
+	store := &refusableSaveStore{saves: map[string][]byte{"jdb/scores": wipicrt.EncodeSaveRecords([][]byte{[]byte("progress")})}}
 	client, runtime := newTestRuntime(t)
-	runtime.client.saveStore = store
+	runtime.client.SaveStore = store
 	store.refuse = errors.New("the store is read-only")
 	database, err := openJavaDatabase(t, runtime, client, "scores", 8, false)
 	if err != nil {
@@ -117,18 +118,18 @@ func TestOpeningADatabaseSurvivesARefusedSizeTable(t *testing.T) {
 // and a name that long is no database's, so it is refused as one.
 func TestRecordTableReadsNamesAsFarAsTheFileTable(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 	long := strings.Repeat("n", 600)
-	if got := openRecordDatabase(t, runtime, long, 4, 1); got != wipicErrorInvalid {
+	if got := openRecordDatabase(t, runtime, long, 4, 1); got != wipicrt.WIPICErrorInvalid {
 		t.Errorf("MC_dbOpenDataBase(600 bytes) = %#x, want M_E_INVALID", got)
 	}
-	const address = platformDataBase + 0xa000
-	if err := runtime.client.core.Memory().Write(address, append([]byte(long), 0)); err != nil {
+	const address = wipicrt.PlatformDataBase + 0xa000
+	if err := runtime.client.Core().Memory().Write(address, append([]byte(long), 0)); err != nil {
 		t.Fatal(err)
 	}
 	for slot, want := range map[uint32]uint32{
-		wipicRecordDatabaseDelete:     wipicErrorInvalid,
-		wipicRecordDatabaseAccessMode: wipicErrorNotFound,
+		wipicRecordDatabaseDelete:     wipicrt.WIPICErrorInvalid,
+		wipicRecordDatabaseAccessMode: wipicrt.WIPICErrorNotFound,
 	} {
 		thread := armcore.NewThread(armcore.Context{})
 		if err := thread.SetRegister(0, address); err != nil {

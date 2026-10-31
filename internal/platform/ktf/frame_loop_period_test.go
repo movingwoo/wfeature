@@ -7,6 +7,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // newFrameLoopTestWorker stands in for a guest thread without starting one.
@@ -46,20 +47,20 @@ func sleepOnTestWorker(t *testing.T, runtime *initializationRuntime, millisecond
 // game but an unbounded one: the loop takes the whole of its thread's slice
 // every round and publishes thousands of frames for each one a Host collects.
 func TestAFrameLoopSleepIsRaisedToTheFramePeriod(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
-	if _, err := runtime.wipicGetScreenFramebuffer(); err != nil {
+	if _, err := runtime.WIPICGetScreenFramebuffer(); err != nil {
 		t.Fatal(err)
 	}
 	worker := newFrameLoopTestWorker(client)
 
 	// The loop: publish a frame, then ask to wait for no time at all.
-	if err := runtime.presentScreen(); err != nil {
+	if err := runtime.PresentScreen(); err != nil {
 		t.Fatalf("presentScreen() error = %v", err)
 	}
 	sleepOnTestWorker(t, runtime, 0)
 
-	want := clock.Now().Add(minGuestFramePeriod)
+	want := clock.Now().Add(wipicrt.MinGuestFramePeriod)
 	if !worker.wakeAt.Equal(want) {
 		t.Fatalf("a frame loop's Thread.sleep(0) parks until %v, want %v", worker.wakeAt, want)
 	}
@@ -72,9 +73,9 @@ func TestAFrameLoopSleepIsRaisedToTheFramePeriod(t *testing.T) {
 // of work asked to sleep, and raising each of those waits to a frame would
 // turn a few hundred short waits into a few hundred frames of load time.
 func TestASleepThatFollowsNoFrameIsTheSleepTheGuestAsked(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
-	if _, err := runtime.wipicGetScreenFramebuffer(); err != nil {
+	if _, err := runtime.WIPICGetScreenFramebuffer(); err != nil {
 		t.Fatal(err)
 	}
 	worker := newFrameLoopTestWorker(client)
@@ -87,7 +88,7 @@ func TestASleepThatFollowsNoFrameIsTheSleepTheGuestAsked(t *testing.T) {
 
 	// A frame published, but a wait longer than the floor: the length the
 	// guest asked for stands.
-	if err := runtime.presentScreen(); err != nil {
+	if err := runtime.PresentScreen(); err != nil {
 		t.Fatalf("presentScreen() error = %v", err)
 	}
 	sleepOnTestWorker(t, runtime, 500)

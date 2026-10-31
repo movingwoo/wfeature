@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func enableTestSlotRelay(client *Client) {
@@ -142,7 +143,7 @@ func TestLocalRelayRuntimeStreamRoundTripAndDisconnect(t *testing.T) {
 }
 
 func TestRelayReaderParksAndDisconnectReleasesWorker(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 	socket := &relaySocket{}
 	runtime.relaySocket = socket

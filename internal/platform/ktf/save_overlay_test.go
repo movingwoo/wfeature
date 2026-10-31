@@ -4,17 +4,18 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestSavedFileDoesNotBlockPackagedDescendant(t *testing.T) {
-	store := NewDirectorySaveStore(t.TempDir())
+	store := wipicrt.NewDirectorySaveStore(t.TempDir())
 	if err := store.StoreSave("fs/state", []byte("progress")); err != nil {
 		t.Fatal(err)
 	}
 	for _, restart := range []string{"first", "restart"} {
 		t.Run(restart, func(t *testing.T) {
 			client, runtime := newTestRuntime(t)
-			client.saveStore = store
+			client.SaveStore = store
 			client.AttachFilesystem(map[string][]byte{"state/scene/asset": []byte("resource")})
 			for _, test := range []struct {
 				name string
@@ -27,17 +28,17 @@ func TestSavedFileDoesNotBlockPackagedDescendant(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if got, _ := value.Int32(); got != test.want || runtime.saveReadError != nil {
-					t.Fatalf("exists(%s) = %d, save error = %v", test.name, got, runtime.saveReadError)
+				if got, _ := value.Int32(); got != test.want || runtime.SaveReadError != nil {
+					t.Fatalf("exists(%s) = %d, save error = %v", test.name, got, runtime.SaveReadError)
 				}
 			}
-			if data, exists := runtime.guestFile("/state/scene/asset"); !exists || string(data) != "resource" {
+			if data, exists := runtime.GuestFile("/state/scene/asset"); !exists || string(data) != "resource" {
 				t.Fatalf("packaged resource = %q, %t", data, exists)
 			}
 			if err := runtime.storeGuestFile("state", []byte("updated")); err != nil {
 				t.Fatalf("save after resource lookup: %v", err)
 			}
-			if data, exists := runtime.guestFile("/state"); !exists || string(data) != "updated" {
+			if data, exists := runtime.GuestFile("/state"); !exists || string(data) != "updated" {
 				t.Fatalf("saved file = %q, %t", data, exists)
 			}
 		})
@@ -50,11 +51,11 @@ func TestSavedFileDoesNotBlockPackagedDescendant(t *testing.T) {
 // holds files below the folder's name, and reading that name used to end the
 // session with a read error.
 func TestAFolderOfSavesAnswersAsOnTheFirstRun(t *testing.T) {
-	store := NewDirectorySaveStore(t.TempDir())
+	store := wipicrt.NewDirectorySaveStore(t.TempDir())
 	for _, run := range []string{"first", "second", "third"} {
 		t.Run(run, func(t *testing.T) {
 			client, runtime := newTestRuntime(t)
-			client.saveStore = store
+			client.SaveStore = store
 			exists := func(name string) int32 {
 				t.Helper()
 				value, err := runtimeFileSystemExists(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(client.JVM().NewString(name))})
@@ -68,16 +69,16 @@ func TestAFolderOfSavesAnswersAsOnTheFirstRun(t *testing.T) {
 			if run == "first" {
 				want = 0
 			}
-			if got := exists("/saves"); got != want || runtime.saveReadError != nil {
-				t.Fatalf("exists(/saves) = %d, want %d, save error = %v", got, want, runtime.saveReadError)
+			if got := exists("/saves"); got != want || runtime.SaveReadError != nil {
+				t.Fatalf("exists(/saves) = %d, want %d, save error = %v", got, want, runtime.SaveReadError)
 			}
 			if run == "first" {
 				if err := runtime.storeGuestFile("saves/slot", []byte("progress")); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if got := exists("/saves/slot"); got != 1 || runtime.saveReadError != nil {
-				t.Fatalf("exists(/saves/slot) = %d, save error = %v", got, runtime.saveReadError)
+			if got := exists("/saves/slot"); got != 1 || runtime.SaveReadError != nil {
+				t.Fatalf("exists(/saves/slot) = %d, save error = %v", got, runtime.SaveReadError)
 			}
 		})
 	}

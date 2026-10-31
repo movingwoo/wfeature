@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"golang.org/x/text/encoding/korean"
 )
 
@@ -24,15 +25,15 @@ func newDeferredCInputFixture(t *testing.T) *deferredCInputFixture {
 	s, text, _ := cInputFixture(t)
 	t.Cleanup(s.Close)
 	client, runtime := s.Client, s.Client.runtime
-	clock := NewManualClock(time.Time{})
-	client.clock = clock
+	clock := wipicrt.NewManualClock(time.Time{})
+	client.Clock = clock
 	original := runtime.displayCards[0]
 	runtime.displayCards[0] = newWidget("test/QueuedInputCard")
 	var queued int32
 	fixture := &deferredCInputFixture{session: s, text: text, queued: &queued}
 	if err := client.vm.RegisterNative("test/QueuedInputCard", "keyNotify", "(II)Z", func(_ *jvm.VM, args []jvm.Value) (jvm.Value, error) {
 		kind, _ := args[1].Int32()
-		if kind == KeyPressed {
+		if kind == wipicrt.KeyPressed {
 			queued, _ = args[2].Int32()
 			if fixture.afterQueue != nil {
 				return jvm.VoidValue(), fixture.afterQueue()
@@ -45,13 +46,13 @@ func newDeferredCInputFixture(t *testing.T) *deferredCInputFixture {
 	var callback uint32
 	initialized := false
 	rearm := func() {
-		runtime.pendingTimers = append(runtime.pendingTimers, wipicTimer{pointer: 0x100, callback: callback, due: client.now().Add(50 * time.Millisecond)})
+		runtime.PendingTimers = append(runtime.PendingTimers, wipicrt.WIPICTimer{Pointer: 0x100, Callback: callback, Due: client.Now().Add(50 * time.Millisecond)})
 	}
 	if err := client.vm.RegisterNative("test/InputTimer", "run", "(II)V", func(vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 		defer rearm()
 		if !initialized {
 			initialized = true
-			_, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 2)
+			_, err := cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 2)
 			return jvm.VoidValue(), err
 		}
 		key := queued
@@ -60,7 +61,7 @@ func newDeferredCInputFixture(t *testing.T) *deferredCInputFixture {
 			if fixture.beforeHandle != nil {
 				fixture.beforeHandle()
 			}
-			_, err := vm.InvokeVirtual(original, "keyNotify", "(II)Z", jvm.IntValue(KeyPressed), jvm.IntValue(key))
+			_, err := vm.InvokeVirtual(original, "keyNotify", "(II)Z", jvm.IntValue(wipicrt.KeyPressed), jvm.IntValue(key))
 			return jvm.VoidValue(), err
 		}
 		return jvm.VoidValue(), nil
@@ -86,8 +87,8 @@ func TestCInputHostCommitThroughTimer(t *testing.T) {
 			fixture := newDeferredCInputFixture(t)
 			s, text, queued := fixture.session, fixture.text, fixture.queued
 			if clock == "wall" {
-				s.Client.clock = wallClock{}
-				s.Client.runtime.pendingTimers[0].due = time.Now().Add(time.Millisecond)
+				s.Client.Clock = wipicrt.WallClock{}
+				s.Client.runtime.PendingTimers[0].Due = time.Now().Add(time.Millisecond)
 			}
 			edit, err := s.TextInput(context.Background())
 			if err != nil {
@@ -114,14 +115,14 @@ func TestCInputTimerClearKeepsEditorAvailable(t *testing.T) {
 	if err := edit.Commit(context.Background(), "가나"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SendKey(context.Background(), KeyPressed, KeyClear); err != nil {
+	if err := s.SendKey(context.Background(), wipicrt.KeyPressed, wipicrt.KeyClear); err != nil {
 		t.Fatal(err)
 	}
 	// A repeat can arrive before the timer drains the original press.
-	if err := s.SendKey(context.Background(), KeyRepeated, KeyClear); err != nil {
+	if err := s.SendKey(context.Background(), wipicrt.KeyRepeated, wipicrt.KeyClear); err != nil {
 		t.Fatal(err)
 	}
-	s.Client.clock.(*ManualClock).Advance(50 * time.Millisecond)
+	s.Client.Clock.(*wipicrt.ManualClock).Advance(50 * time.Millisecond)
 	if _, err := s.Client.ServiceTimers(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
@@ -143,14 +144,14 @@ func TestCInputTimerClearKeepsEditorAvailable(t *testing.T) {
 	// live editor of a caller of unknown shape. Nothing tells the Host its
 	// screen went with it, so it stays offered; an edit taken before the
 	// press is spent by it.
-	if err := s.SendKey(context.Background(), KeyPressed, KeyFire); err != nil {
+	if err := s.SendKey(context.Background(), wipicrt.KeyPressed, wipicrt.KeyFire); err != nil {
 		t.Fatal(err)
 	}
-	s.Client.clock.(*ManualClock).Advance(50 * time.Millisecond)
+	s.Client.Clock.(*wipicrt.ManualClock).Advance(50 * time.Millisecond)
 	if _, err := s.Client.ServiceTimers(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
-	if s.Client.runtime.cInput.active {
+	if s.Client.runtime.CInput.Active {
 		t.Fatal("fire without input-method activity left the editor live")
 	}
 	if err := edit.Commit(context.Background(), "x"); !errors.Is(err, backend.ErrTextInputChanged) {
@@ -174,16 +175,16 @@ func TestCInputTimerRejectsTargetChanges(t *testing.T) {
 			ctx := context.Background()
 			switch change {
 			case "mode":
-				fixture.beforeHandle = func() { cInputCall(t, runtime, wipicIMSetCurrentMode, 1) }
+				fixture.beforeHandle = func() { cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 1) }
 			case "card":
 				fixture.beforeHandle = func() { runtime.displayCards[0] = newWidget("test/OtherCard") }
 			case "cancel timer":
-				runtime.pendingTimers = nil
+				runtime.PendingTimers = nil
 			case "distant timer":
-				runtime.pendingTimers[0].due = s.Client.now().Add(2 * time.Second)
+				runtime.PendingTimers[0].Due = s.Client.Now().Add(2 * time.Second)
 			case "cancel wait":
-				s.Client.clock = wallClock{}
-				runtime.pendingTimers[0].due = time.Now().Add(100 * time.Millisecond)
+				s.Client.Clock = wipicrt.WallClock{}
+				runtime.PendingTimers[0].Due = time.Now().Add(100 * time.Millisecond)
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithTimeout(ctx, time.Millisecond)
 				defer cancel()
@@ -202,7 +203,7 @@ func TestCInputTimerRejectsTargetChanges(t *testing.T) {
 func TestCInputCanceledDeliveryDiscardsQueuedCarrier(t *testing.T) {
 	fixture := newDeferredCInputFixture(t)
 	s := fixture.session
-	s.Client.runtime.cInput.mode = 3
+	s.Client.runtime.CInput.Mode = 3
 	edit, err := s.TextInput(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -215,7 +216,7 @@ func TestCInputCanceledDeliveryDiscardsQueuedCarrier(t *testing.T) {
 	if _, err := s.Client.ServiceTimers(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
-	if len(*fixture.text) != 0 || *fixture.queued != 0 || s.Client.runtime.cInput.discardCarrier {
+	if len(*fixture.text) != 0 || *fixture.queued != 0 || s.Client.runtime.CInput.DiscardCarrier {
 		t.Fatalf("canceled delivery left text=%x queued=%d", *fixture.text, *fixture.queued)
 	}
 	edit, err = s.TextInput(context.Background())
@@ -230,13 +231,13 @@ func TestCInputCanceledDeliveryDiscardsQueuedCarrier(t *testing.T) {
 func TestCInputSynchronousActivationReplacesTimerOwner(t *testing.T) {
 	fixture := newDeferredCInputFixture(t)
 	runtime := fixture.session.Client.runtime
-	if runtime.cInput.timerCallback == 0 {
+	if runtime.CInput.TimerCallback == 0 {
 		t.Fatal("timer activation was not recorded")
 	}
-	if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 2); err != nil {
+	if _, err := cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 2); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.cInput.timerCallback != 0 || runtime.cInput.timerPointer != 0 {
+	if runtime.CInput.TimerCallback != 0 || runtime.CInput.TimerPointer != 0 {
 		t.Fatal("synchronous activation retained the previous timer owner")
 	}
 }

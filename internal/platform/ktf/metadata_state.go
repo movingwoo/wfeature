@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"fmt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"maps"
 	"slices"
 
@@ -99,38 +100,38 @@ func metadataKeys[K cmp.Ordered, V any](values map[K]V) []K {
 }
 
 func (runtime *initializationRuntime) captureMetadataState() (runtimeMetadataState, error) {
-	if runtime.collecting || runtime.saveReadError != nil {
+	if runtime.collecting || runtime.SaveReadError != nil {
 		return runtimeMetadataState{}, fmt.Errorf("KTF metadata capture requires an idle collector and successful storage reads")
 	}
-	count := uint64(len(runtime.stubs)) + uint64(len(runtime.classes)) + uint64(len(runtime.loadedClasses)) + uint64(len(runtime.moduleClassByName)) + uint64(len(runtime.nativeMethods)) + uint64(len(runtime.initializedClasses)) + uint64(len(runtime.linkedModuleClasses)) + uint64(len(runtime.classAliases)) + uint64(len(runtime.classSummaries)) + uint64(len(runtime.objects)) + uint64(len(runtime.wipicAllocations)) + uint64(len(runtime.imageSourceBuffers)) + uint64(len(runtime.releasedWIPIC)) + uint64(len(runtime.releasedWIPICOrder)) + uint64(len(runtime.userMemoryPools))
-	if runtime.pixelOps != nil {
-		count += uint64(len(runtime.pixelOps.results))
+	count := uint64(len(runtime.Stubs)) + uint64(len(runtime.classes)) + uint64(len(runtime.loadedClasses)) + uint64(len(runtime.moduleClassByName)) + uint64(len(runtime.nativeMethods)) + uint64(len(runtime.initializedClasses)) + uint64(len(runtime.linkedModuleClasses)) + uint64(len(runtime.classAliases)) + uint64(len(runtime.classSummaries)) + uint64(len(runtime.objects)) + uint64(len(runtime.WIPICAllocations)) + uint64(len(runtime.ImageSourceBuffers)) + uint64(len(runtime.ReleasedWIPIC)) + uint64(len(runtime.ReleasedWIPICOrder)) + uint64(len(runtime.UserMemoryPools))
+	if runtime.PixelOps != nil {
+		count += uint64(len(runtime.PixelOps.Results))
 	}
 	if count > maxMetadataEntries {
 		return runtimeMetadataState{}, fmt.Errorf("KTF metadata records exceed limit")
 	}
 	saved := runtimeMetadataState{
-		CodeCursor: runtime.codeCursor, NextNativeMethod: runtime.nextNativeMethod, CollectAt: runtime.collectAt,
-		LEDs: runtime.leds, MenuTextCompatibility: runtime.menuTextCompatibility,
+		CodeCursor: runtime.CodeCursor, NextNativeMethod: runtime.nextNativeMethod, CollectAt: runtime.CollectAt,
+		LEDs: runtime.Leds, MenuTextCompatibility: runtime.menuTextCompatibility,
 		Bindings: runtimeBindingState{Kernel: runtime.kernelInterface, Java: runtime.javaInterface, WIPIC: runtime.wipicInterface,
 			Module: runtime.moduleInterface, ModuleContext: runtime.moduleContext, ModuleJumpTable: runtime.moduleJumpTable,
-			JVMContext: runtime.jvmContext, ExceptionContext: runtime.exceptionContext, ScreenFramebuffer: runtime.screenFramebuffer,
-			UserMemory: runtime.userMemoryInterface, InputModeTable: runtime.inputModeTableAddress, CameraBoundsStore: runtime.cameraBoundsStore},
+			JVMContext: runtime.jvmContext, ExceptionContext: runtime.exceptionContext, ScreenFramebuffer: runtime.ScreenFramebuffer,
+			UserMemory: runtime.UserMemoryInterface, InputModeTable: runtime.InputModeTableAddress, CameraBoundsStore: runtime.cameraBoundsStore},
 	}
 	var err error
-	saved.Arena, err = runtime.arena.captureState()
+	saved.Arena, err = captureArenaState(runtime.Arena)
 	if err != nil {
 		return runtimeMetadataState{}, err
 	}
 	if runtime.classArena != nil {
-		arena, err := runtime.classArena.captureState()
+		arena, err := captureArenaState(runtime.classArena)
 		if err != nil {
 			return runtimeMetadataState{}, err
 		}
 		saved.ClassArena = &arena
 	}
-	for _, key := range metadataKeys(runtime.stubs) {
-		saved.Stubs = append(saved.Stubs, runtimeStubState{Key: key, Address: runtime.stubs[key]})
+	for _, key := range metadataKeys(runtime.Stubs) {
+		saved.Stubs = append(saved.Stubs, runtimeStubState{Key: key, Address: runtime.Stubs[key]})
 	}
 	var nameBytes uint64
 	name := func(value string) []byte {
@@ -166,7 +167,7 @@ func (runtime *initializationRuntime) captureMetadataState() (runtimeMetadataSta
 		}
 		return result
 	}
-	saved.ClassAliases, saved.ImageSourceBuffers = pairs(runtime.classAliases), pairs(runtime.imageSourceBuffers)
+	saved.ClassAliases, saved.ImageSourceBuffers = pairs(runtime.classAliases), pairs(runtime.ImageSourceBuffers)
 	for _, address := range metadataKeys(runtime.classSummaries) {
 		summary := runtime.classSummaries[address]
 		nameBytes += uint64(len(summary.interfaces)) * 4
@@ -186,21 +187,21 @@ func (runtime *initializationRuntime) captureMetadataState() (runtimeMetadataSta
 		record := runtime.objects[address]
 		saved.Objects = append(saved.Objects, runtimeObjectState{Address: address, Size: record.size, Released: record.released})
 	}
-	for _, address := range metadataKeys(runtime.wipicAllocations) {
-		saved.WIPICAllocations = append(saved.WIPICAllocations, runtimeAllocationState{Address: address, Size: runtime.wipicAllocations[address]})
+	for _, address := range metadataKeys(runtime.WIPICAllocations) {
+		saved.WIPICAllocations = append(saved.WIPICAllocations, runtimeAllocationState{Address: address, Size: runtime.WIPICAllocations[address]})
 	}
-	saved.ReleasedWIPIC, saved.ReleasedWIPICOrder = metadataKeys(runtime.releasedWIPIC), slices.Clone(runtime.releasedWIPICOrder)
-	for _, address := range metadataKeys(runtime.userMemoryPools) {
-		pool := runtime.userMemoryPools[address]
-		if pool == nil || pool.base != address {
+	saved.ReleasedWIPIC, saved.ReleasedWIPICOrder = metadataKeys(runtime.ReleasedWIPIC), slices.Clone(runtime.ReleasedWIPICOrder)
+	for _, address := range metadataKeys(runtime.UserMemoryPools) {
+		pool := runtime.UserMemoryPools[address]
+		if pool == nil || pool.Base != address {
 			return runtimeMetadataState{}, fmt.Errorf("KTF user memory pool has invalid ownership")
 		}
-		saved.UserMemoryPools = append(saved.UserMemoryPools, runtimeUserPoolState{Base: pool.base, Size: pool.size, Cursor: pool.cursor, FreeCalls: pool.freeCalls})
+		saved.UserMemoryPools = append(saved.UserMemoryPools, runtimeUserPoolState{Base: pool.Base, Size: pool.Size, Cursor: pool.Cursor, FreeCalls: pool.FreeCalls})
 	}
-	if cache := runtime.pixelOps; cache != nil {
-		saved.PixelOp = &runtimePixelOpState{Function: cache.function, Param: cache.param}
-		for _, pair := range metadataKeys(cache.results) {
-			saved.PixelOp.Results = append(saved.PixelOp.Results, runtimePixelResultState{Pair: pair, Result: cache.results[pair]})
+	if cache := runtime.PixelOps; cache != nil {
+		saved.PixelOp = &runtimePixelOpState{Function: cache.Function, Param: cache.Param}
+		for _, pair := range metadataKeys(cache.Results) {
+			saved.PixelOp.Results = append(saved.PixelOp.Results, runtimePixelResultState{Pair: pair, Result: cache.Results[pair]})
 		}
 	}
 	if _, err := decodeRuntimeMetadata(runtime.client, saved); err != nil {
@@ -217,30 +218,30 @@ func decodeRuntimeMetadata(client *Client, saved runtimeMetadataState) (*initial
 	if saved.PixelOp != nil {
 		count += uint64(len(saved.PixelOp.Results))
 	}
-	if count > maxMetadataEntries || len(saved.ReleasedWIPIC) > maxReleasedWIPIC || len(saved.ReleasedWIPICOrder) > maxReleasedWIPIC {
+	if count > maxMetadataEntries || len(saved.ReleasedWIPIC) > wipicrt.MaxReleasedWIPIC || len(saved.ReleasedWIPICOrder) > wipicrt.MaxReleasedWIPIC {
 		return nil, fmt.Errorf("KTF metadata records exceed limit")
 	}
-	if saved.CodeCursor < uint64(platformCodeBase) || saved.CodeCursor > uint64(platformCodeBase)+platformCodeSize || saved.CodeCursor&3 != 0 || saved.CollectAt > platformDataSize+collectionFloor {
+	if saved.CodeCursor < uint64(wipicrt.PlatformCodeBase) || saved.CodeCursor > uint64(wipicrt.PlatformCodeBase)+wipicrt.PlatformCodeSize || saved.CodeCursor&3 != 0 || saved.CollectAt > wipicrt.PlatformDataSize+wipicrt.CollectionFloor {
 		return nil, fmt.Errorf("KTF metadata code cursor or collector trigger is invalid")
 	}
-	result := &initializationRuntime{client: client, codeCursor: saved.CodeCursor, nextNativeMethod: saved.NextNativeMethod, collectAt: saved.CollectAt,
-		leds: saved.LEDs, menuTextCompatibility: saved.MenuTextCompatibility}
+	result := &initializationRuntime{client: client, Runtime: &wipicrt.Runtime{CodeCursor: saved.CodeCursor, CollectAt: saved.CollectAt, Leds: saved.LEDs},
+		nextNativeMethod: saved.NextNativeMethod, menuTextCompatibility: saved.MenuTextCompatibility}
 	var err error
-	result.arena, err = restoreArenaState(saved.Arena, platformDataBase, platformDataSize)
+	result.Arena, err = restoreArenaState(saved.Arena, wipicrt.PlatformDataBase, wipicrt.PlatformDataSize)
 	if err != nil {
 		return nil, err
 	}
-	memory := client.core.Memory()
-	if err := memory.ValidateRange(platformDataBase, platformDataSize, armcore.PermissionReadWrite); err != nil {
+	memory := client.Core().Memory()
+	if err := memory.ValidateRange(wipicrt.PlatformDataBase, wipicrt.PlatformDataSize, armcore.PermissionReadWrite); err != nil {
 		return nil, err
 	}
-	if err := memory.ValidateRange(platformCodeBase, platformCodeSize, armcore.PermissionReadExecute); err != nil {
+	if err := memory.ValidateRange(wipicrt.PlatformCodeBase, wipicrt.PlatformCodeSize, armcore.PermissionReadExecute); err != nil {
 		return nil, err
 	}
 	if saved.ClassArena != nil {
-		base := (uint64(ImageBase) + client.mapped + 4095) &^ uint64(4095)
+		base := (uint64(wipicrt.ImageBase) + client.mapped + 4095) &^ uint64(4095)
 		const size = 4 << 20
-		if client.module || base+size > uint64(ThreadStackBase) {
+		if client.module || base+size > uint64(wipicrt.ThreadStackBase) {
 			return nil, fmt.Errorf("KTF class arena differs from the client policy")
 		}
 		result.classArena, err = restoreArenaState(*saved.ClassArena, uint32(base), size)
@@ -268,15 +269,15 @@ func decodeRuntimeMetadata(client *Client, saved runtimeMetadataState) (*initial
 		}
 		return string(value), nil
 	}
-	result.stubs = make(map[uint64]uint32, len(saved.Stubs))
-	stubSpans := make([]arenaBlock, 0, len(saved.Stubs))
+	result.Stubs = make(map[uint64]uint32, len(saved.Stubs))
+	stubSpans := make([]wipicrt.ArenaBlock, 0, len(saved.Stubs))
 	for i, stub := range saved.Stubs {
 		start := uint64(stub.Address &^ 1)
-		if stub.Key>>32 > 255 || stub.Address&1 == 0 || start&3 != 0 || start < uint64(platformCodeBase) || start+svcStubSize > saved.CodeCursor || i > 0 && saved.Stubs[i-1].Key >= stub.Key {
+		if stub.Key>>32 > 255 || stub.Address&1 == 0 || start&3 != 0 || start < uint64(wipicrt.PlatformCodeBase) || start+wipicrt.SVCStubSize > saved.CodeCursor || i > 0 && saved.Stubs[i-1].Key >= stub.Key {
 			return nil, fmt.Errorf("KTF native stub record is invalid")
 		}
-		result.stubs[stub.Key] = stub.Address
-		stubSpans = append(stubSpans, arenaBlock{start: start, end: start + svcStubSize})
+		result.Stubs[stub.Key] = stub.Address
+		stubSpans = append(stubSpans, wipicrt.ArenaBlock{Start: start, End: start + wipicrt.SVCStubSize})
 	}
 	if err := validateMetadataSpans(stubSpans); err != nil {
 		return nil, err
@@ -367,7 +368,7 @@ func decodeRuntimeMetadata(client *Client, saved runtimeMetadataState) (*initial
 	if result.classAliases, err = pairs(saved.ClassAliases); err != nil {
 		return nil, err
 	}
-	if result.imageSourceBuffers, err = pairs(saved.ImageSourceBuffers); err != nil {
+	if result.ImageSourceBuffers, err = pairs(saved.ImageSourceBuffers); err != nil {
 		return nil, err
 	}
 	result.classSummaries = make(map[uint32]aotClassSummary, len(saved.ClassSummaries))
@@ -393,10 +394,10 @@ func decodeRuntimeMetadata(client *Client, saved runtimeMetadataState) (*initial
 		}
 		result.classSummaries[record.Address] = aotClassSummary{name: text, parent: record.Parent, interfaces: slices.Clone(record.Interfaces)}
 	}
-	allocations := make([]arenaBlock, 0, len(saved.Objects)+len(saved.WIPICAllocations))
+	allocations := make([]wipicrt.ArenaBlock, 0, len(saved.Objects)+len(saved.WIPICAllocations))
 	allocation := func(address uint32, size uint64) error {
-		end := uint64(address) + alignArenaSize(size)
-		if address < platformDataBase || address&3 != 0 || size == 0 || size > maxPlatformAllocation || end > saved.Arena.Cursor {
+		end := uint64(address) + wipicrt.AlignArenaSize(size)
+		if address < wipicrt.PlatformDataBase || address&3 != 0 || size == 0 || size > wipicrt.MaxPlatformAllocation || end > saved.Arena.Cursor {
 			return fmt.Errorf("KTF tracked allocation has invalid bounds")
 		}
 		index, _ := slices.BinarySearchFunc(saved.Arena.Free, uint64(address), func(block arenaBlockState, start uint64) int { return cmp.Compare(block.End, start) })
@@ -406,7 +407,7 @@ func decodeRuntimeMetadata(client *Client, saved runtimeMetadataState) (*initial
 		if index < len(saved.Arena.Free) && saved.Arena.Free[index].Start < end {
 			return fmt.Errorf("KTF tracked allocation overlaps free space")
 		}
-		allocations = append(allocations, arenaBlock{start: uint64(address), end: end})
+		allocations = append(allocations, wipicrt.ArenaBlock{Start: uint64(address), End: end})
 		return nil
 	}
 	result.objects = make(map[uint32]objectRecord, len(saved.Objects))
@@ -419,41 +420,41 @@ func decodeRuntimeMetadata(client *Client, saved runtimeMetadataState) (*initial
 		}
 		result.objects[record.Address] = objectRecord{size: record.Size, released: record.Released}
 	}
-	result.wipicAllocations = make(map[uint32]uint64, len(saved.WIPICAllocations))
+	result.WIPICAllocations = make(map[uint32]uint64, len(saved.WIPICAllocations))
 	for i, record := range saved.WIPICAllocations {
-		if record.Size <= uint64(wipicAllocationOverhead) || i > 0 && saved.WIPICAllocations[i-1].Address >= record.Address {
+		if record.Size <= uint64(wipicrt.WIPICAllocationOverhead) || i > 0 && saved.WIPICAllocations[i-1].Address >= record.Address {
 			return nil, fmt.Errorf("KTF WIPI allocations are invalid, repeated or unordered")
 		}
 		if err := allocation(record.Address, record.Size); err != nil {
 			return nil, err
 		}
-		result.wipicAllocations[record.Address] = record.Size
+		result.WIPICAllocations[record.Address] = record.Size
 	}
 	if err := validateMetadataSpans(allocations); err != nil {
 		return nil, err
 	}
-	for image, source := range result.imageSourceBuffers {
-		if result.wipicAllocations[image] == 0 || result.wipicAllocations[source] == 0 {
+	for image, source := range result.ImageSourceBuffers {
+		if result.WIPICAllocations[image] == 0 || result.WIPICAllocations[source] == 0 {
 			return nil, fmt.Errorf("KTF image source ownership has no live allocation")
 		}
 	}
-	result.releasedWIPIC = make(map[uint32]struct{}, len(saved.ReleasedWIPIC))
+	result.ReleasedWIPIC = make(map[uint32]struct{}, len(saved.ReleasedWIPIC))
 	validReleased := func(address uint32) bool {
-		return address >= platformDataBase && uint64(address) < saved.Arena.HighWater && address&3 == 0
+		return address >= wipicrt.PlatformDataBase && uint64(address) < saved.Arena.HighWater && address&3 == 0
 	}
 	for i, address := range saved.ReleasedWIPIC {
-		if !validReleased(address) || result.wipicAllocations[address] != 0 || i > 0 && saved.ReleasedWIPIC[i-1] >= address || !slices.Contains(saved.ReleasedWIPICOrder, address) {
+		if !validReleased(address) || result.WIPICAllocations[address] != 0 || i > 0 && saved.ReleasedWIPIC[i-1] >= address || !slices.Contains(saved.ReleasedWIPICOrder, address) {
 			return nil, fmt.Errorf("KTF released allocation set is invalid")
 		}
-		result.releasedWIPIC[address] = struct{}{}
+		result.ReleasedWIPIC[address] = struct{}{}
 	}
 	for _, address := range saved.ReleasedWIPICOrder {
 		if !validReleased(address) {
 			return nil, fmt.Errorf("KTF released allocation order is invalid")
 		}
 	}
-	result.releasedWIPICOrder = slices.Clone(saved.ReleasedWIPICOrder)
-	result.userMemoryPools = make(map[uint32]*userMemoryPool, len(saved.UserMemoryPools))
+	result.ReleasedWIPICOrder = slices.Clone(saved.ReleasedWIPICOrder)
+	result.UserMemoryPools = make(map[uint32]*wipicrt.UserMemoryPool, len(saved.UserMemoryPools))
 	for i, pool := range saved.UserMemoryPools {
 		if pool.Base == 0 || pool.Size == 0 || pool.Cursor > pool.Size || i > 0 && saved.UserMemoryPools[i-1].Base >= pool.Base {
 			return nil, fmt.Errorf("KTF user memory pool is invalid")
@@ -461,7 +462,7 @@ func decodeRuntimeMetadata(client *Client, saved runtimeMetadataState) (*initial
 		if err := memory.ValidateRange(pool.Base, uint64(pool.Size), armcore.PermissionReadWrite); err != nil {
 			return nil, err
 		}
-		result.userMemoryPools[pool.Base] = &userMemoryPool{base: pool.Base, size: pool.Size, cursor: pool.Cursor, freeCalls: pool.FreeCalls}
+		result.UserMemoryPools[pool.Base] = &wipicrt.UserMemoryPool{Base: pool.Base, Size: pool.Size, Cursor: pool.Cursor, FreeCalls: pool.FreeCalls}
 	}
 	if cache := saved.PixelOp; cache != nil {
 		if cache.Function == 0 {
@@ -470,12 +471,12 @@ func decodeRuntimeMetadata(client *Client, saved runtimeMetadataState) (*initial
 		if err := memory.ValidateRange(cache.Function&^1, 2, armcore.PermissionExecute); err != nil {
 			return nil, err
 		}
-		result.pixelOps = &pixelOpCache{function: cache.Function, param: cache.Param, results: make(map[uint32]uint16, len(cache.Results))}
+		result.PixelOps = &wipicrt.PixelOpCache{Function: cache.Function, Param: cache.Param, Results: make(map[uint32]uint16, len(cache.Results))}
 		for i, record := range cache.Results {
 			if i > 0 && cache.Results[i-1].Pair >= record.Pair {
 				return nil, fmt.Errorf("KTF pixel results are repeated or unordered")
 			}
-			result.pixelOps.results[record.Pair] = record.Result
+			result.PixelOps.Results[record.Pair] = record.Result
 		}
 	}
 	b := saved.Bindings
@@ -496,14 +497,14 @@ func decodeRuntimeMetadata(client *Client, saved runtimeMetadataState) (*initial
 	}
 	result.kernelInterface, result.javaInterface, result.wipicInterface, result.moduleInterface = b.Kernel, b.Java, b.WIPIC, b.Module
 	result.moduleContext, result.moduleJumpTable, result.jvmContext, result.exceptionContext = b.ModuleContext, b.ModuleJumpTable, b.JVMContext, b.ExceptionContext
-	result.screenFramebuffer, result.userMemoryInterface, result.inputModeTableAddress, result.cameraBoundsStore = b.ScreenFramebuffer, b.UserMemory, b.InputModeTable, b.CameraBoundsStore
+	result.ScreenFramebuffer, result.UserMemoryInterface, result.InputModeTableAddress, result.cameraBoundsStore = b.ScreenFramebuffer, b.UserMemory, b.InputModeTable, b.CameraBoundsStore
 	return result, nil
 }
 
-func validateMetadataSpans(spans []arenaBlock) error {
-	slices.SortFunc(spans, func(a, b arenaBlock) int { return cmp.Compare(a.start, b.start) })
+func validateMetadataSpans(spans []wipicrt.ArenaBlock) error {
+	slices.SortFunc(spans, func(a, b wipicrt.ArenaBlock) int { return cmp.Compare(a.Start, b.Start) })
 	for i := 1; i < len(spans); i++ {
-		if spans[i-1].end > spans[i].start {
+		if spans[i-1].End > spans[i].Start {
 			return fmt.Errorf("KTF metadata allocation spans overlap")
 		}
 	}
@@ -515,25 +516,25 @@ func (runtime *initializationRuntime) restoreMetadataState(saved runtimeMetadata
 	if err != nil {
 		return err
 	}
-	runtime.arena, runtime.classArena = result.arena, result.classArena
-	runtime.codeCursor, runtime.stubs = result.codeCursor, result.stubs
-	runtime.stubKeys = make(map[uint32]uint64, len(runtime.stubs))
-	for key, address := range runtime.stubs {
-		runtime.stubKeys[address] = key
+	runtime.Arena, runtime.classArena = result.Arena, result.classArena
+	runtime.CodeCursor, runtime.Stubs = result.CodeCursor, result.Stubs
+	runtime.StubKeys = make(map[uint32]uint64, len(runtime.Stubs))
+	for key, address := range runtime.Stubs {
+		runtime.StubKeys[address] = key
 	}
 	runtime.aotClassReads, runtime.aotClassReadBytes = nil, 0
 	runtime.classes, runtime.loadedClasses, runtime.moduleClassByName = result.classes, result.loadedClasses, result.moduleClassByName
 	runtime.nativeMethods, runtime.nextNativeMethod = result.nativeMethods, result.nextNativeMethod
 	runtime.initializedClasses, runtime.linkedModuleClasses = result.initializedClasses, result.linkedModuleClasses
 	runtime.classAliases, runtime.classSummaries = result.classAliases, result.classSummaries
-	runtime.objects, runtime.collectAt = result.objects, result.collectAt
-	runtime.wipicAllocations, runtime.imageSourceBuffers = result.wipicAllocations, result.imageSourceBuffers
-	runtime.releasedWIPIC, runtime.releasedWIPICOrder = result.releasedWIPIC, result.releasedWIPICOrder
-	runtime.userMemoryPools, runtime.pixelOps = result.userMemoryPools, result.pixelOps
+	runtime.objects, runtime.CollectAt = result.objects, result.CollectAt
+	runtime.WIPICAllocations, runtime.ImageSourceBuffers = result.WIPICAllocations, result.ImageSourceBuffers
+	runtime.ReleasedWIPIC, runtime.ReleasedWIPICOrder = result.ReleasedWIPIC, result.ReleasedWIPICOrder
+	runtime.UserMemoryPools, runtime.PixelOps = result.UserMemoryPools, result.PixelOps
 	runtime.kernelInterface, runtime.javaInterface, runtime.wipicInterface, runtime.moduleInterface = result.kernelInterface, result.javaInterface, result.wipicInterface, result.moduleInterface
 	runtime.moduleContext, runtime.moduleJumpTable, runtime.jvmContext, runtime.exceptionContext = result.moduleContext, result.moduleJumpTable, result.jvmContext, result.exceptionContext
-	runtime.screenFramebuffer, runtime.userMemoryInterface, runtime.inputModeTableAddress, runtime.cameraBoundsStore = result.screenFramebuffer, result.userMemoryInterface, result.inputModeTableAddress, result.cameraBoundsStore
-	runtime.leds, runtime.menuTextCompatibility = result.leds, result.menuTextCompatibility
-	runtime.rebaseArenaShadow()
+	runtime.ScreenFramebuffer, runtime.UserMemoryInterface, runtime.InputModeTableAddress, runtime.cameraBoundsStore = result.ScreenFramebuffer, result.UserMemoryInterface, result.InputModeTableAddress, result.cameraBoundsStore
+	runtime.Leds, runtime.menuTextCompatibility = result.Leds, result.menuTextCompatibility
+	runtime.RebaseArenaShadow()
 	return nil
 }

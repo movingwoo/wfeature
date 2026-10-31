@@ -9,6 +9,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // An older relocatable module carries the same Java metadata the current
@@ -58,7 +59,7 @@ const (
 // with the class it names. A word that is already a pointer is left alone,
 // which is what makes this safe to call twice.
 func (runtime *initializationRuntime) resolveModuleDescriptorCell(address uint32, depth int) error {
-	cell, err := runtime.readWord(address)
+	cell, err := runtime.ReadWord(address)
 	if err != nil {
 		return err
 	}
@@ -73,7 +74,7 @@ func (runtime *initializationRuntime) resolveModuleDescriptorCell(address uint32
 	if err != nil {
 		return fmt.Errorf("%q: %w", name, err)
 	}
-	return runtime.writeWord(address, resolved)
+	return runtime.WriteWord(address, resolved)
 }
 
 // moduleDescriptor is the class table a module publishes for the platform.
@@ -89,11 +90,11 @@ func (runtime *initializationRuntime) readModuleDescriptor() (moduleDescriptor, 
 	if segment == 0 {
 		return moduleDescriptor{}, fmt.Errorf("KTF client is not a relocatable module")
 	}
-	address, err := runtime.readWord(segment)
+	address, err := runtime.ReadWord(segment)
 	if err != nil {
 		return moduleDescriptor{}, fmt.Errorf("read KTF module descriptor pointer: %w", err)
 	}
-	words, err := runtime.readAOTWords(address, moduleDescriptorWords, "module descriptor")
+	words, err := runtime.ReadAOTWords(address, moduleDescriptorWords, "module descriptor")
 	if err != nil {
 		return moduleDescriptor{}, err
 	}
@@ -112,7 +113,7 @@ func (runtime *initializationRuntime) readModuleDescriptor() (moduleDescriptor, 
 // table actually holds, because the two agreeing is what says the table was
 // read correctly.
 func (runtime *initializationRuntime) moduleClasses(descriptor moduleDescriptor) ([]uint32, error) {
-	buckets, err := runtime.readAOTWords(descriptor.classTable, descriptor.tableSize, "module class table")
+	buckets, err := runtime.ReadAOTWords(descriptor.classTable, descriptor.tableSize, "module class table")
 	if err != nil {
 		return nil, err
 	}
@@ -133,11 +134,11 @@ func (runtime *initializationRuntime) moduleClasses(descriptor moduleDescriptor)
 // place, which is the same decode the module's own resolvers do:
 // `(word >> 1) * 4` into the table `seg[4]` points at.
 func (runtime *initializationRuntime) moduleName(cell uint32) (string, error) {
-	table, err := runtime.readWord(runtime.client.moduleSegment + moduleNameTableOffset)
+	table, err := runtime.ReadWord(runtime.client.moduleSegment + moduleNameTableOffset)
 	if err != nil {
 		return "", fmt.Errorf("read KTF module name table: %w", err)
 	}
-	pointer, err := runtime.readWord(table + (cell&0xffff)>>1*4)
+	pointer, err := runtime.ReadWord(table + (cell&0xffff)>>1*4)
 	if err != nil {
 		return "", fmt.Errorf("read KTF module name %#x: %w", cell, err)
 	}
@@ -149,7 +150,7 @@ func (runtime *initializationRuntime) moduleName(cell uint32) (string, error) {
 // anything the guest does, because the guest reaches its superclass through
 // the record rather than through a call.
 func (runtime *initializationRuntime) linkModuleClasses() error {
-	runtime.client.log("KTF module classes", "count", len(runtime.moduleClassByName))
+	runtime.client.Log("KTF module classes", "count", len(runtime.moduleClassByName))
 	// **Name order, not map order.** What a class inherits is read from what
 	// its superclass registered, so the order the classes are linked in used
 	// to decide what a subclass saw -- and a Go map hands them over in a
@@ -191,7 +192,7 @@ func (runtime *initializationRuntime) linkModuleClass(class uint32, depth int) (
 	}
 	runtime.linkedModuleClasses[class] = true
 
-	record, err := runtime.readAOTWords(class, javaClassSize/4, "module class record")
+	record, err := runtime.ReadAOTWords(class, javaClassSize/4, "module class record")
 	if err != nil {
 		return 0, err
 	}
@@ -202,7 +203,7 @@ func (runtime *initializationRuntime) linkModuleClass(class uint32, depth int) (
 	if err := runtime.resolveModuleDescriptorCell(descriptorAddress+8, depth); err != nil {
 		return 0, fmt.Errorf("KTF module class %#x superclass: %w", class, err)
 	}
-	parent, err := runtime.readWord(descriptorAddress + 8)
+	parent, err := runtime.ReadWord(descriptorAddress + 8)
 	if err != nil {
 		return 0, err
 	}
@@ -305,7 +306,7 @@ func (runtime *initializationRuntime) rebaseModuleFields(class, descriptorAddres
 	if base == 0 {
 		return nil
 	}
-	table, err := runtime.readWord(descriptorAddress + moduleDescriptorFieldTable)
+	table, err := runtime.ReadWord(descriptorAddress + moduleDescriptorFieldTable)
 	if err != nil {
 		return err
 	}
@@ -315,7 +316,7 @@ func (runtime *initializationRuntime) rebaseModuleFields(class, descriptorAddres
 			return err
 		}
 		for _, pointer := range pointers {
-			owner, err := runtime.readWord(pointer + 4)
+			owner, err := runtime.ReadWord(pointer + 4)
 			if err != nil {
 				return err
 			}
@@ -327,21 +328,21 @@ func (runtime *initializationRuntime) rebaseModuleFields(class, descriptorAddres
 			// its superclass's size started with every reference static
 			// holding that size, and one local title's first store into
 			// such an array read the word as an array header and faulted.
-			flags, err := runtime.readWord(pointer)
+			flags, err := runtime.ReadWord(pointer)
 			if err != nil {
 				return err
 			}
 			if flags&0x0008 != 0 {
 				continue
 			}
-			offset, err := runtime.readWord(pointer + 12)
+			offset, err := runtime.ReadWord(pointer + 12)
 			if err != nil {
 				return err
 			}
 			if uint64(offset)+uint64(base) > maxModuleInstanceSize {
 				return fmt.Errorf("field at %#x moves to %d bytes, limit %d", pointer, uint64(offset)+uint64(base), maxModuleInstanceSize)
 			}
-			if err := runtime.writeWord(pointer+12, offset+uint32(base)); err != nil {
+			if err := runtime.WriteWord(pointer+12, offset+uint32(base)); err != nil {
 				return err
 			}
 		}
@@ -361,11 +362,11 @@ const maxModuleInstanceSize = 0xffff
 
 // moduleInstanceSize reads a class record's instance size.
 func (runtime *initializationRuntime) moduleInstanceSize(class uint32) (uint16, error) {
-	descriptor, err := runtime.readWord(class + 8)
+	descriptor, err := runtime.ReadWord(class + 8)
 	if err != nil {
 		return 0, err
 	}
-	record, err := runtime.readAOTBytes(descriptor+moduleDescriptorInstanceSize, 2, "class instance size")
+	record, err := runtime.ReadAOTBytes(descriptor+moduleDescriptorInstanceSize, 2, "class instance size")
 	if err != nil {
 		return 0, err
 	}
@@ -375,13 +376,13 @@ func (runtime *initializationRuntime) moduleInstanceSize(class uint32) (uint16, 
 // writeModuleInstanceSize records the size a class's instances need now that
 // its fields sit past its superclass's.
 func (runtime *initializationRuntime) writeModuleInstanceSize(class uint32, size uint16) error {
-	descriptor, err := runtime.readWord(class + 8)
+	descriptor, err := runtime.ReadWord(class + 8)
 	if err != nil {
 		return err
 	}
 	var value [2]byte
 	binary.LittleEndian.PutUint16(value[:], size)
-	return runtime.client.core.Memory().Write(descriptor+moduleDescriptorInstanceSize, value[:])
+	return runtime.client.Core().Memory().Write(descriptor+moduleDescriptorInstanceSize, value[:])
 }
 
 // buildModuleVTable writes the class's virtual dispatch table. A module ships
@@ -395,7 +396,7 @@ func (runtime *initializationRuntime) buildModuleVTable(class, descriptorAddress
 		return err
 	}
 	slots := inherited.pointers()
-	methodTable, err := runtime.readWord(descriptorAddress + 12)
+	methodTable, err := runtime.ReadWord(descriptorAddress + 12)
 	if err != nil {
 		return err
 	}
@@ -425,7 +426,7 @@ func (runtime *initializationRuntime) buildModuleVTable(class, descriptorAddress
 	if len(slots) == 0 {
 		return nil
 	}
-	address, err := runtime.allocateWords(slots)
+	address, err := runtime.AllocateWords(slots)
 	if err != nil {
 		return err
 	}
@@ -438,7 +439,7 @@ func (runtime *initializationRuntime) buildModuleVTable(class, descriptorAddress
 	var tail [6]byte
 	binary.LittleEndian.PutUint32(tail[0:], address)
 	binary.LittleEndian.PutUint16(tail[4:], uint16(len(slots)))
-	if err := runtime.client.core.Memory().Write(class+12, tail[:]); err != nil {
+	if err := runtime.client.Core().Memory().Write(class+12, tail[:]); err != nil {
 		return fmt.Errorf("write KTF module vtable for class %#x: %w", class, err)
 	}
 	return nil
@@ -481,18 +482,18 @@ const (
 // client thread, where every call into the module inherits it.
 func (runtime *initializationRuntime) prepareModuleContext() (uint32, error) {
 	block := make([]byte, moduleContextSize)
-	address, err := runtime.allocateBytes(block)
+	address, err := runtime.AllocateBytes(block)
 	if err != nil {
 		return 0, err
 	}
-	stack, err := runtime.allocate(moduleRuntimeStackSize)
+	stack, err := runtime.Allocate(moduleRuntimeStackSize)
 	if err != nil {
 		return 0, err
 	}
-	if err := runtime.writeWord(address+moduleContextStack, stack+moduleRuntimeStackSize); err != nil {
+	if err := runtime.WriteWord(address+moduleContextStack, stack+moduleRuntimeStackSize); err != nil {
 		return 0, err
 	}
-	if err := runtime.writeWord(address+moduleContextClasses, runtime.jvmContext); err != nil {
+	if err := runtime.WriteWord(address+moduleContextClasses, runtime.jvmContext); err != nil {
 		return 0, err
 	}
 	// Every handler record a protected region pushes copies this word, and
@@ -503,14 +504,14 @@ func (runtime *initializationRuntime) prepareModuleContext() (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	functions, err := runtime.allocateWords([]uint32{0, restore})
+	functions, err := runtime.AllocateWords([]uint32{0, restore})
 	if err != nil {
 		return 0, err
 	}
-	if err := runtime.writeWord(address+moduleContextFrame, functions); err != nil {
+	if err := runtime.WriteWord(address+moduleContextFrame, functions); err != nil {
 		return 0, err
 	}
-	if err := runtime.client.thread.SetRegister(armcore.RegisterFP, address); err != nil {
+	if err := runtime.client.Thread.SetRegister(armcore.RegisterFP, address); err != nil {
 		return 0, fmt.Errorf("install KTF module context: %w", err)
 	}
 	// The same block has to be reachable without a register, because compiled
@@ -518,7 +519,7 @@ func (runtime *initializationRuntime) prepareModuleContext() (uint32, error) {
 	// through `fp`: `[[seg + 0x20] + 0x2c] = head`. That word is one of the
 	// two the segment header carries the module's own constant in — the pair
 	// the loader reads as markers — and the only one anything points at.
-	if err := runtime.writeWord(runtime.client.moduleSegment+moduleContextSlotOffset, address); err != nil {
+	if err := runtime.WriteWord(runtime.client.moduleSegment+moduleContextSlotOffset, address); err != nil {
 		return 0, err
 	}
 	runtime.moduleContext = address
@@ -532,32 +533,15 @@ func (runtime *initializationRuntime) prepareModuleContext() (uint32, error) {
 // region and answers its Thumb address.
 func (runtime *initializationRuntime) loadModuleCode(code []byte) (uint32, error) {
 	size := uint64(len(code)+3) &^ 3
-	if runtime.codeCursor+size > uint64(platformCodeBase)+platformCodeSize {
+	if runtime.CodeCursor+size > uint64(wipicrt.PlatformCodeBase)+wipicrt.PlatformCodeSize {
 		return 0, fmt.Errorf("KTF platform callback stub space exhausted")
 	}
-	address := uint32(runtime.codeCursor)
-	if err := runtime.client.core.Memory().Load(address, code); err != nil {
+	address := uint32(runtime.CodeCursor)
+	if err := runtime.client.Core().Memory().Load(address, code); err != nil {
 		return 0, fmt.Errorf("load KTF module routine: %w", err)
 	}
-	runtime.codeCursor += size
+	runtime.CodeCursor += size
 	return address | 1, nil
-}
-
-func (runtime *initializationRuntime) readWord(address uint32) (uint32, error) {
-	words, err := runtime.readAOTWords(address, 1, "module word")
-	if err != nil {
-		return 0, err
-	}
-	return words[0], nil
-}
-
-func (runtime *initializationRuntime) writeWord(address, value uint32) error {
-	var word [4]byte
-	binary.LittleEndian.PutUint32(word[:], value)
-	if err := runtime.client.core.Memory().Write(address, word[:]); err != nil {
-		return fmt.Errorf("write KTF guest word at %#x: %w", address, err)
-	}
-	return nil
 }
 
 // indexModuleClasses reads the published table once and keys it by name, so
@@ -593,26 +577,26 @@ func (runtime *initializationRuntime) indexModuleClasses() error {
 const moduleJumpSlots = 6
 
 func (runtime *initializationRuntime) installModuleJumps() error {
-	table, err := runtime.readWord(runtime.client.moduleSegment + 5*4)
+	table, err := runtime.ReadWord(runtime.client.moduleSegment + 5*4)
 	if err != nil {
 		return fmt.Errorf("read KTF module jump table pointer: %w", err)
 	}
 	words := make([]byte, moduleJumpSlots*4)
 	for slot := 0; slot < moduleJumpSlots; slot++ {
-		existing, err := runtime.readWord(table + uint32(slot)*4)
+		existing, err := runtime.ReadWord(table + uint32(slot)*4)
 		if err != nil {
 			return err
 		}
 		if existing != 0 {
 			return fmt.Errorf("KTF module jump slot %d at %#x is not empty (%#x)", slot, table+uint32(slot)*4, existing)
 		}
-		stub, err := runtime.stub(svcCategoryModuleJump, uint32(slot))
+		stub, err := runtime.Stub(svcCategoryModuleJump, uint32(slot))
 		if err != nil {
 			return err
 		}
 		binary.LittleEndian.PutUint32(words[slot*4:], stub)
 	}
-	if err := runtime.client.core.Memory().Write(table, words); err != nil {
+	if err := runtime.client.Core().Memory().Write(table, words); err != nil {
 		return fmt.Errorf("write KTF module jump table at %#x: %w", table, err)
 	}
 	runtime.moduleJumpTable = table
@@ -665,7 +649,7 @@ func (runtime *initializationRuntime) handleModuleJumpCall(ctx context.Context, 
 	case moduleJumpInvoke, moduleJumpInvokeNative:
 		return runtime.invokeModuleMethod(ctx, thread, slot == moduleJumpInvokeNative)
 	case moduleJumpPoll:
-		runtime.countDiagnostic("module poll")
+		runtime.CountDiagnostic("module poll")
 		return 0, nil
 	case moduleJumpMonitorEnter, moduleJumpMonitorExit:
 		return 0, nil
@@ -681,7 +665,7 @@ func (runtime *initializationRuntime) handleModuleJumpCall(ctx context.Context, 
 		registers[index] = value
 	}
 	return 0, fmt.Errorf("KTF module jump %d is not implemented (r0=%#x r1=%#x r2=%#x r3=%#x)%s",
-		slot, registers[0], registers[1], registers[2], registers[3], runtime.callerSite(thread))
+		slot, registers[0], registers[1], registers[2], registers[3], runtime.CallerSite(thread))
 }
 
 // moduleJumpSpill is how many argument words the invoke helper pushed before
@@ -729,7 +713,7 @@ func (runtime *initializationRuntime) invokeModuleMethod(ctx context.Context, th
 			}
 			arguments = append(arguments, value)
 		default:
-			value, readErr := runtime.readWord(stackPointer + uint32(index-1)*4)
+			value, readErr := runtime.ReadWord(stackPointer + uint32(index-1)*4)
 			if readErr != nil {
 				return 0, fmt.Errorf("read KTF module call argument %d: %w", index, readErr)
 			}
@@ -740,7 +724,7 @@ func (runtime *initializationRuntime) invokeModuleMethod(ctx context.Context, th
 	call := append([]uint32{0}, arguments...)
 	if native {
 		body = method.NativeBody
-		container, allocationErr := runtime.allocateWords(arguments)
+		container, allocationErr := runtime.AllocateWords(arguments)
 		if allocationErr != nil {
 			return 0, fmt.Errorf("allocate KTF module native argument container: %w", allocationErr)
 		}
@@ -749,13 +733,13 @@ func (runtime *initializationRuntime) invokeModuleMethod(ctx context.Context, th
 	}
 	if body == 0 {
 		return 0, fmt.Errorf("KTF module method %s%s has no %s body%s",
-			method.Name, method.Descriptor, map[bool]string{true: "native", false: "compiled"}[native], runtime.callerSite(thread))
+			method.Name, method.Descriptor, map[bool]string{true: "native", false: "compiled"}[native], runtime.CallerSite(thread))
 	}
-	if err := runtime.enterAOTCall(); err != nil {
+	if err := runtime.EnterAOTCall(); err != nil {
 		return 0, err
 	}
-	defer runtime.leaveAOTCall(runtime.aotCallOwner())
-	summary, err := runtime.client.core.Call(ctx, thread, body, ReturnAddress, call, runtime.handleSupervisorCall)
+	defer runtime.LeaveAOTCall(runtime.AOTCallOwner())
+	summary, err := runtime.client.Core().Call(ctx, thread, body, wipicrt.ReturnAddress, call, runtime.handleSupervisorCall)
 	if err != nil {
 		return 0, fmt.Errorf("execute KTF module method %s%s: %w", method.Name, method.Descriptor, err)
 	}
@@ -812,7 +796,7 @@ func (runtime *initializationRuntime) placeModuleAliases() error {
 		if err != nil {
 			return fmt.Errorf("resolve KTF module class %s: %w", wellKnown.name, err)
 		}
-		record, err := runtime.readAOTBytes(class, javaClassSize, "well-known class record")
+		record, err := runtime.ReadAOTBytes(class, javaClassSize, "well-known class record")
 		if err != nil {
 			return err
 		}
@@ -820,7 +804,7 @@ func (runtime *initializationRuntime) placeModuleAliases() error {
 		copied := make([]byte, javaClassSize)
 		copy(copied, record)
 		binary.LittleEndian.PutUint32(copied[0:], alias+4)
-		if err := runtime.client.core.Memory().Write(alias, copied); err != nil {
+		if err := runtime.client.Core().Memory().Write(alias, copied); err != nil {
 			return fmt.Errorf("write KTF module alias for %s: %w", wellKnown.name, err)
 		}
 		if err := runtime.client.vm.RegisterAOTAddressAlias(alias, wellKnown.name); err != nil {
@@ -852,7 +836,7 @@ func (runtime *initializationRuntime) bindModuleStrings() error {
 	stringHeader := (runtime.jvmContext + javaClassSize - runtime.jvmContext) << 5
 	bound := 0
 	for offset := 0; offset+moduleStringLength+4 <= len(image); offset += 4 {
-		address := ImageBase + uint32(offset)
+		address := wipicrt.ImageBase + uint32(offset)
 		if binary.LittleEndian.Uint32(image[offset:]) != address+4 {
 			continue
 		}
@@ -872,7 +856,7 @@ func (runtime *initializationRuntime) bindModuleStrings() error {
 		bound++
 	}
 	runtime.callbacks.RegisteredStrings += uint32(bound)
-	runtime.client.log("KTF module strings bound", "count", bound)
+	runtime.client.Log("KTF module strings bound", "count", bound)
 	return nil
 }
 
@@ -880,7 +864,7 @@ func (runtime *initializationRuntime) readModuleStringUnits(array, length uint32
 	if length > maxJavaStringUnits {
 		return "", fmt.Errorf("length %d exceeds %d", length, maxJavaStringUnits)
 	}
-	stored, err := runtime.readWord(array + moduleArrayLength)
+	stored, err := runtime.ReadWord(array + moduleArrayLength)
 	if err != nil {
 		return "", err
 	}
@@ -888,7 +872,7 @@ func (runtime *initializationRuntime) readModuleStringUnits(array, length uint32
 		return "", fmt.Errorf("array at %#x holds %d units, string names %d", array, stored, length)
 	}
 	data := make([]byte, uint64(length)*2)
-	if err := runtime.client.core.Memory().Read(array+moduleArrayData, data); err != nil {
+	if err := runtime.client.Core().Memory().Read(array+moduleArrayData, data); err != nil {
 		return "", err
 	}
 	units := make([]uint16, length)
@@ -904,11 +888,11 @@ const moduleClassInitialized = 0x0008
 
 func (runtime *initializationRuntime) setModuleClassInitialized(class uint32) error {
 	var flags [2]byte
-	if err := runtime.client.core.Memory().Read(class+18, flags[:]); err != nil {
+	if err := runtime.client.Core().Memory().Read(class+18, flags[:]); err != nil {
 		return fmt.Errorf("read KTF module class flags at %#x: %w", class, err)
 	}
 	binary.LittleEndian.PutUint16(flags[:], binary.LittleEndian.Uint16(flags[:])|moduleClassInitialized)
-	if err := runtime.client.core.Memory().Write(class+18, flags[:]); err != nil {
+	if err := runtime.client.Core().Memory().Write(class+18, flags[:]); err != nil {
 		return fmt.Errorf("write KTF module class flags at %#x: %w", class, err)
 	}
 	return nil
@@ -1007,7 +991,7 @@ var moduleThreadWords = []uint32{moduleContextStackSave, moduleContextHandlers, 
 
 func (runtime *initializationRuntime) registerModuleThreadWords() error {
 	for _, offset := range moduleThreadWords {
-		if err := runtime.client.core.RegisterThreadLocalWord(runtime.moduleContext + offset); err != nil {
+		if err := runtime.client.Core().RegisterThreadLocalWord(runtime.moduleContext + offset); err != nil {
 			return fmt.Errorf("register KTF module context word %#x: %w", offset, err)
 		}
 	}
@@ -1017,7 +1001,7 @@ func (runtime *initializationRuntime) registerModuleThreadWords() error {
 // prepareModuleThread gives a guest worker its own runtime stack and an empty
 // handler chain.
 func (runtime *initializationRuntime) prepareModuleThread(thread *armcore.Thread) error {
-	stack, err := runtime.allocate(moduleRuntimeStackSize)
+	stack, err := runtime.Allocate(moduleRuntimeStackSize)
 	if err != nil {
 		return err
 	}
@@ -1027,7 +1011,7 @@ func (runtime *initializationRuntime) prepareModuleThread(thread *armcore.Thread
 		moduleContextStack:     stack + moduleRuntimeStackSize,
 	}
 	for offset, value := range values {
-		if err := runtime.client.core.SetThreadLocalWord(thread, runtime.moduleContext+offset, value); err != nil {
+		if err := runtime.client.Core().SetThreadLocalWord(thread, runtime.moduleContext+offset, value); err != nil {
 			return fmt.Errorf("set KTF module context word %#x: %w", offset, err)
 		}
 	}

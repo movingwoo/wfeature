@@ -46,16 +46,16 @@ func writeAOTClassFixture(t *testing.T, runtime *initializationRuntime, client *
 		return address
 	}
 	var fixture aotClassFixture
-	fixture.class = allocate(runtime.allocate(javaClassSize))
-	className := allocate(runtime.allocateBytes([]byte(name + "\x00")))
-	fixture.methodName = allocate(runtime.allocateBytes([]byte("\x00(I)I+run\x00")))
-	fixture.fieldName = allocate(runtime.allocateBytes([]byte("\x00I+value\x00")))
-	fixture.method = allocate(runtime.allocate(javaMethodSize))
-	fixture.field = allocate(runtime.allocate(javaFieldSize))
-	methodTable := allocate(runtime.allocateWords([]uint32{fixture.method, 0}))
-	fieldTable := allocate(runtime.allocateWords([]uint32{fixture.field, 0}))
-	fixture.vtable = allocate(runtime.allocateWords([]uint32{fixture.method}))
-	fixture.descriptor = allocate(runtime.allocate(javaDescriptorSize))
+	fixture.class = allocate(runtime.Allocate(javaClassSize))
+	className := allocate(runtime.AllocateBytes([]byte(name + "\x00")))
+	fixture.methodName = allocate(runtime.AllocateBytes([]byte("\x00(I)I+run\x00")))
+	fixture.fieldName = allocate(runtime.AllocateBytes([]byte("\x00I+value\x00")))
+	fixture.method = allocate(runtime.Allocate(javaMethodSize))
+	fixture.field = allocate(runtime.Allocate(javaFieldSize))
+	methodTable := allocate(runtime.AllocateWords([]uint32{fixture.method, 0}))
+	fieldTable := allocate(runtime.AllocateWords([]uint32{fixture.field, 0}))
+	fixture.vtable = allocate(runtime.AllocateWords([]uint32{fixture.method}))
+	fixture.descriptor = allocate(runtime.Allocate(javaDescriptorSize))
 	writeTestWords(t, client, fixture.method, []uint32{0x101001, fixture.class, 0, fixture.methodName, 0, 0x00010000, 0})
 	writeTestWords(t, client, fixture.field, []uint32{0x0001, fixture.class, fixture.fieldName, 4})
 	descriptorData := make([]byte, javaDescriptorSize)
@@ -259,16 +259,16 @@ func TestAKeptClassReadHoldsOnlyWhatItCovers(t *testing.T) {
 func TestUntrustedClassRecordsCannotMakeTheirReadsHoldUnboundedMemory(t *testing.T) {
 	runtime, client := newAOTFixtureRuntime(t)
 	owner := writeAOTClassFixture(t, runtime, client, "game/Owner")
-	foreignName, err := runtime.allocateBytes([]byte("\x00()V+" + strings.Repeat("x", maxAOTNameBytes-6) + "\x00"))
+	foreignName, err := runtime.AllocateBytes([]byte("\x00()V+" + strings.Repeat("x", maxAOTNameBytes-6) + "\x00"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign, err := runtime.allocateWords([]uint32{0x101001, owner.class, 0, foreignName, 0, 0x00010000, 0})
+	foreign, err := runtime.AllocateWords([]uint32{0x101001, owner.class, 0, foreignName, 0, 0x00010000, 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	table := slices.Repeat([]uint32{foreign}, 1<<11)
-	tableAddress, err := runtime.allocateWords(append(table, 0))
+	tableAddress, err := runtime.AllocateWords(append(table, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,17 +288,17 @@ func TestUntrustedClassRecordsCannotMakeTheirReadsHoldUnboundedMemory(t *testing
 	const recordCost = javaMethodSize + 4 + 1 + len("()V+") + 1000 + 1 + 4*aotReadSpanCost
 	records := make([]uint32, 0, (maxAOTClassReadBytes-16<<10)/recordCost)
 	for range cap(records) {
-		name, err := runtime.allocateBytes([]byte("\x00()V+" + strings.Repeat("y", 1000) + "\x00"))
+		name, err := runtime.AllocateBytes([]byte("\x00()V+" + strings.Repeat("y", 1000) + "\x00"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		record, err := runtime.allocateWords([]uint32{0x101001, owner.class, 0, name, 0, 0x00010000, 0})
+		record, err := runtime.AllocateWords([]uint32{0x101001, owner.class, 0, name, 0, 0x00010000, 0})
 		if err != nil {
 			t.Fatal(err)
 		}
 		records = append(records, record)
 	}
-	sharedTable, err := runtime.allocateWords(append(records, 0))
+	sharedTable, err := runtime.AllocateWords(append(records, 0))
 	if err != nil {
 		t.Fatal(err)
 	}

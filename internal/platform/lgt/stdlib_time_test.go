@@ -35,9 +35,10 @@ func TestLocaltimeAnswersAStructRatherThanNull(t *testing.T) {
 	client := fixtureClient(t)
 
 	// A time_t the guest points at, rather than the guest clock: the argument
-	// is what the caller asked about.
+	// is what the caller asked about. The fields are local time, the zone the
+	// Java calendar on this platform reads too, so the instant is made in it.
 	const stored uint32 = 0x30000100
-	moment := time.Date(2007, time.March, 4, 5, 6, 7, 0, time.UTC)
+	moment := time.Date(2007, time.March, 4, 5, 6, 7, 0, time.Local)
 	if err := client.writeWord(stored, uint32(moment.Unix())); err != nil {
 		t.Fatal(err)
 	}

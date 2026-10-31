@@ -73,9 +73,10 @@ the Runtime and an API surface for each carrier.
 | Package | Role |
 | --- | --- |
 | `internal/platform/detect` | Names the platform an archive belongs to ([below](#archive-detection)). |
-| `internal/platform/ktf` | KTF: WIPI Java/AOT titles and older descriptor modules on the ARM core with Go JVM objects, and the earlier native package. See [KTF](ktf.md). |
+| `internal/platform/ktf` | KTF: WIPI Java/AOT titles and older descriptor modules on the ARM core with Go JVM objects, and the earlier native package. Their WIPI-C calls run on `internal/platform/wipicrt`. See [KTF](ktf.md). |
 | `internal/platform/lgt` | LGT: Clets and AOT Java titles on the ARM core. See [LGT](lgt.md). |
-| `internal/platform/skt` | SKT: SKVM/MIDP and WIPI Java on the JVM, GNEX/GVM scripts on `internal/sgsvm`, and native WIPI-C programs on SKT's own Clet engine (`internal/platform/skt/clet`). See [SKT Java](skvm.md) and [SKT native](skt-native.md). |
+| `internal/platform/skt` | SKT: SKVM/MIDP and WIPI Java on the JVM, GNEX/GVM scripts on `internal/sgsvm`, and native WIPI-C programs (Clets) through `internal/platform/skt/clet` on `internal/platform/wipicrt`. See [SKT Java](skvm.md) and [SKT native](skt-native.md). |
+| `internal/platform/wipicrt` | The WIPI-C engine KTF titles and SKT Clets run on ([below](#the-wipi-c-engine)). |
 | `internal/platform/compatibility` | The embedded registry of code-revision exceptions. See [code-revision compatibility](platform-compatibility.md). |
 | `internal/api/midp`, `internal/api/skvm`, `internal/api/wipi` | Java class libraries declared in Go and installed on a VM by `Define`: MIDP, SKT's extensions (`com.skt.m`, `com.skt.m3d`, `com.xce`) and WIPI Java (`org.kwis.msp`, `org.kwis.msf`). See [JVM](jvm.md#the-class-library-is-declared-not-compiled). |
 | `internal/zipentry` | Entry-name conventions the loaders share ([below](#archive-entry-names)). |
@@ -275,6 +276,44 @@ and the native argument-container entry forms.
 LGT Clets and AOT Java titles, and the earlier KTF native package, run on the
 same ARM core through their own loaders and platform-call tables; see
 [`lgt.md`](lgt.md) and [`ktf.md`](ktf.md).
+
+### The WIPI-C engine
+
+`internal/platform/wipicrt` is the WIPI-C engine KTF titles and SKT Clets
+share. An SKT executable calls almost the same functions under almost the same
+numbers a KTF title's C code does, so one set of handlers answers both: memory
+identifiers, framebuffers and images, drawing, timers, the file table and
+databases, media clips, the input method, the event queue, and the client side
+that paces them — the guest clock, the host-service budget, the screen and its
+frames, diagnostics. A platform's own client and runtime embed the engine's
+`Client` and `Runtime`, and the platform keeps what is its alone: KTF its JVM,
+AOT metadata, cards and worker threads; SKT its root table, C library and six
+entry points. Each platform keeps its own checkpoint codec, and the engine's
+state is exported so those codecs read and write it; the record shapes did not
+change.
+
+What differs between the two platforms is named in one place rather than in two
+copies of the handlers:
+
+- `Platform` is what a platform fixes: the name its messages carry, the
+  sentinel `MC_knlExit` ends the program with, and how a memory identifier is
+  laid out. On KTF an identifier's first word points at the size word and
+  `MC_GETDPTR` is eight bytes past it; on SKT the first word points at the data
+  itself. SKT's also says its earlier engine never read its removal list back,
+  so a save that engine wrote is read as it was then
+  ([SKT native](skt-native.md#skt-native-earlier-saves)).
+- `RuntimeHooks` and `ClientHooks` are the calls a handler makes into the rest
+  of the platform: KTF's Java clips, cards, worker threads, timer tasks,
+  record-database table and collector. A hook a platform leaves nil is work it
+  does not have, which is what the SKT Clet engine leaves most of them.
+
+A behavior the two disagree on is split at the narrowest point as one more
+`Platform` value or hook, and only when one platform's handsets or archives are
+observed to differ; otherwise the shared behavior is the rule. A defect of one
+title's revision stays in the [compatibility registry](platform-compatibility.md).
+LGT's C engine is not on it: LGT allocates with direct pointers, lays out its
+framebuffer and graphics context differently and draws through a Host-side copy
+of the surface, so what it shares with the other two is rules rather than code.
 
 Titles run rather than only start: input, timers, guest threads, archive
 resources, sound and persistence are on the path a played game takes. This

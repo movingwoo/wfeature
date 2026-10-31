@@ -34,7 +34,7 @@ func TestCheckpointPrunesADroppedImageSurface(t *testing.T) {
 	// Registered the way a mutable Image registers its framebuffer, and then
 	// dropped by the title before any round ran.
 	owner := func() weak.Pointer[jvm.Object] {
-		handle, err := runtime.newWIPICFramebufferRecord(4, 4)
+		handle, err := runtime.NewWIPICFramebufferRecord(4, 4)
 		if err != nil {
 			t.Fatal(err)
 		}

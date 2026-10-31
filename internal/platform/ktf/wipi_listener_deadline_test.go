@@ -10,8 +10,8 @@ import (
 
 func TestKTFWIPIListenerDeadlineBypassesLongGuestWait(t *testing.T) {
 	fixture := newKTFWIPIListenerFixture(t)
-	fixture.runtime.guestEventLoop = true
-	fixture.client.clientWakeAt = fixture.clock.Now().Add(time.Hour)
+	fixture.runtime.GuestEventLoop = true
+	fixture.client.ClientWakeAt = fixture.clock.Now().Add(time.Hour)
 	fixture.setListener(fixture.listeners[0])
 	fixture.call("play", true, false)
 	if deadline, ok := fixture.session.NextDeadline(); !ok || !deadline.Equal(fixture.clock.Now()) {
@@ -30,20 +30,20 @@ func TestKTFWIPIListenerDeadlineBypassesLongGuestWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.wantHistory(start, fixture.event(0, wipi.PlayEventEndOfData))
-	if deadline, ok := fixture.session.NextDeadline(); !ok || !deadline.Equal(fixture.client.clientWakeAt) {
+	if deadline, ok := fixture.session.NextDeadline(); !ok || !deadline.Equal(fixture.client.ClientWakeAt) {
 		t.Fatalf("completed clip retained a due deadline: %v, %t", deadline, ok)
 	}
 }
 
 func TestKTFWIPIListenerDeadlineTracksPauseAndRate(t *testing.T) {
 	fixture := newKTFWIPIListenerFixture(t)
-	fixture.client.clientWakeAt = fixture.clock.Now().Add(time.Hour)
+	fixture.client.ClientWakeAt = fixture.clock.Now().Add(time.Hour)
 	fixture.setListener(fixture.listeners[0])
 	fixture.call("play", true, true)
 	fixture.advance(25 * time.Millisecond)
 	fixture.call("pause", true)
 	fixture.drain()
-	if deadline, ok := fixture.session.NextDeadline(); !ok || !deadline.Equal(fixture.client.clientWakeAt) {
+	if deadline, ok := fixture.session.NextDeadline(); !ok || !deadline.Equal(fixture.client.ClientWakeAt) {
 		t.Fatalf("paused score retained a deadline: %v, %t", deadline, ok)
 	}
 	fixture.clock.Advance(time.Second)
@@ -68,13 +68,13 @@ func TestKTFWIPIListenerDeadlineTracksPauseAndRate(t *testing.T) {
 
 func TestKTFWIPIListenerZeroLengthCompletionHasDeadline(t *testing.T) {
 	fixture := newKTFWIPIListenerFixture(t)
-	fixture.client.clientWakeAt = fixture.clock.Now().Add(time.Hour)
-	handle, err := fixture.client.audio.LoadEvents([]smaf.Event{{Type: smaf.EventEnd}})
+	fixture.client.ClientWakeAt = fixture.clock.Now().Add(time.Hour)
+	handle, err := fixture.client.Audio.LoadEvents([]smaf.Event{{Type: smaf.EventEnd}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	state := fixture.runtime.clip(fixture.clip)
-	state.handle, state.loaded = handle, true
+	state.Handle, state.Loaded = handle, true
 	fixture.call("play", true, false)
 	// Installing after Play leaves no START queued, so only the zero-length
 	// score's completion can wake the Host before its unrelated long wait.

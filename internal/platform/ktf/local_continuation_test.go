@@ -12,6 +12,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // This opt-in probe compares a restored client with its source at subsequent
@@ -30,7 +31,7 @@ func TestLocalKTFClientCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := SessionOptions{Clock: NewManualClock(time.Unix(1700000000, 0)), SaveStore: store}
+	options := SessionOptions{Clock: wipicrt.NewManualClock(time.Unix(1700000000, 0)), SaveStore: store}
 	source, err := StartSession(t.Context(), data, options)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +68,7 @@ func TestLocalKTFClientCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	options.Clock, options.SaveStore = NewManualClock(time.Unix(1900000000, 0)), restoredStore
+	options.Clock, options.SaveStore = wipicrt.NewManualClock(time.Unix(1900000000, 0)), restoredStore
 	prepared, err := PrepareSessionCheckpoint(data, decoded, options)
 	if err != nil {
 		t.Fatal(err)
@@ -83,8 +84,8 @@ func TestLocalKTFClientCheckpoint(t *testing.T) {
 	for tick := 0; tick < 100; tick++ {
 		want, wantWidth, wantHeight, wantFlush := source.Frame()
 		got, width, height, flush := restored.Frame()
-		if !bytes.Equal(got, want) || width != wantWidth || height != wantHeight || flush != wantFlush || client.core.Steps() != source.Client.core.Steps() || client.runtime.guestElapsed() != source.Client.runtime.guestElapsed() || len(client.workers) != len(source.Client.workers) {
-			t.Fatalf("client continuation differs at round %d: pixels=%t dimensions=%t flush=%d/%d steps=%d/%d elapsed=%v/%v workers=%d/%d", tick, bytes.Equal(got, want), width == wantWidth && height == wantHeight, flush, wantFlush, client.core.Steps(), source.Client.core.Steps(), client.runtime.guestElapsed(), source.Client.runtime.guestElapsed(), len(client.workers), len(source.Client.workers))
+		if !bytes.Equal(got, want) || width != wantWidth || height != wantHeight || flush != wantFlush || client.Core().Steps() != source.Client.Core().Steps() || client.runtime.GuestElapsed() != source.Client.runtime.GuestElapsed() || len(client.workers) != len(source.Client.workers) {
+			t.Fatalf("client continuation differs at round %d: pixels=%t dimensions=%t flush=%d/%d steps=%d/%d elapsed=%v/%v workers=%d/%d", tick, bytes.Equal(got, want), width == wantWidth && height == wantHeight, flush, wantFlush, client.Core().Steps(), source.Client.Core().Steps(), client.runtime.GuestElapsed(), source.Client.runtime.GuestElapsed(), len(client.workers), len(source.Client.workers))
 		}
 		for _, session := range []*Session{source, restored} {
 			if _, err := session.Tick(t.Context()); err != nil {
@@ -122,7 +123,7 @@ func TestLocalKTFCallCheckpointInventory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := StartSession(t.Context(), data, SessionOptions{Clock: NewManualClock(time.Unix(1700000000, 0))})
+	session, err := StartSession(t.Context(), data, SessionOptions{Clock: wipicrt.NewManualClock(time.Unix(1700000000, 0))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +143,7 @@ func TestLocalKTFCallCheckpointInventory(t *testing.T) {
 			continue
 		}
 		client := session.Client
-		client.run.Lock()
+		client.Run.Lock()
 		var roots []*jvm.Object
 		for _, worker := range client.workers {
 			roots = append(roots, worker.javaThread)
@@ -159,7 +160,7 @@ func TestLocalKTFCallCheckpointInventory(t *testing.T) {
 		}
 		for _, worker := range client.workers {
 			shape := ""
-			_, err := client.core.InspectParkedCalls(worker.armThread, func(_ *armcore.Thread, frame armcore.CallFrame) error {
+			_, err := client.Core().InspectParkedCalls(worker.armThread, func(_ *armcore.Thread, frame armcore.CallFrame) error {
 				if frame.Stop == armcore.CallStoppedAtLimit {
 					shape += "limit;"
 				} else {
@@ -182,7 +183,7 @@ func TestLocalKTFCallCheckpointInventory(t *testing.T) {
 				workers++
 			}
 		}
-		client.run.Unlock()
+		client.Run.Unlock()
 	}
 	t.Logf("accepted_call_components=%d accepted_worker_continuations=%d shapes=%v refusals=%v worker_refusals=%v", accepted, workers, shapes, refusals, workerRefusals)
 	t.Logf("accepted_heap_components=%d heap_refusals=%v", heaps, heapRefusals)

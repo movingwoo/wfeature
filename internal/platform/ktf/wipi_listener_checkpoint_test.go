@@ -9,6 +9,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/audio/smaf"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -25,7 +26,7 @@ func restoreKTFWIPIListenerCheckpoint(t *testing.T, fixture *ktfWIPIListenerFixt
 		}
 	}
 	options := fixture.session.options
-	clock := NewManualClock(time.Unix(1900000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1900000000, 0))
 	sink := &audioPauseProbe{}
 	options.Clock, options.AudioSink = clock, sink
 	prepared, err := PrepareSessionCheckpoint(fixture.archive, saved, options)
@@ -75,16 +76,16 @@ func TestKTFWIPIListenerCheckpointRetainsRecipientsAndPausedGate(t *testing.T) {
 	pause := fixture.event(1, wipi.PlayEventPause)
 	fixture.setListener(nil)
 	fixture.wantHistory()
-	handle := fixture.runtime.clip(fixture.clip).handle
-	elapsed := fixture.runtime.guestElapsed()
+	handle := fixture.runtime.clip(fixture.clip).Handle
+	elapsed := fixture.runtime.GuestElapsed()
 	saved, err := fixture.session.CaptureCheckpoint(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	restoreKTFWIPIListenerCheckpoint(t, fixture, saved)
 	listener, err := clipListener(fixture.clip)
-	if err != nil || listener != nil || !fixture.client.audio.Paused(handle) || fixture.runtime.guestElapsed() != elapsed {
-		t.Fatalf("paused checkpoint changed listener, owner, or guest time: listener=%p elapsed=%v err=%v", listener, fixture.runtime.guestElapsed(), err)
+	if err != nil || listener != nil || !fixture.client.Audio.Paused(handle) || fixture.runtime.GuestElapsed() != elapsed {
+		t.Fatalf("paused checkpoint changed listener, owner, or guest time: listener=%p elapsed=%v err=%v", listener, fixture.runtime.GuestElapsed(), err)
 	}
 	if len(fixture.sink.resumed) != 0 || len(fixture.sink.ofType(smaf.EventNoteOn)) != 0 || len(fixture.sink.ofType(smaf.EventWave)) != 0 {
 		t.Fatal("restoration replayed paused audio")
@@ -266,7 +267,7 @@ func TestKTFWIPIListenerCheckpointPreservesBaseClipPlayback(t *testing.T) {
 		t.Fatalf("restored BaseClip lost its note position: %+v", fixture.sink.resumed)
 	}
 	fixture.advance(15 * time.Millisecond)
-	if fixture.client.audio.Playing(fixture.runtime.clip(fixture.clip).handle) || fixture.drain() != 0 {
+	if fixture.client.Audio.Playing(fixture.runtime.clip(fixture.clip).Handle) || fixture.drain() != 0 {
 		t.Fatal("BaseClip completion changed playback or invented a listener callback")
 	}
 }
@@ -321,12 +322,12 @@ func TestKTFWIPIListenerDerivedGuestInterfaceSurvivesCheckpoint(t *testing.T) {
 	}
 	// The guest graph has a derived interface and a cycle. Cached JVM AOT
 	// metadata carries neither; validation must walk the actual guest table.
-	parents, err := fixture.runtime.allocateWords([]uint32{derived, base, 0})
+	parents, err := fixture.runtime.AllocateWords([]uint32{derived, base, 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	writeTestWords(t, fixture.client, word(derived+8)+16, []uint32{parents})
-	if err := fixture.client.core.Memory().Write(word(derived+8)+30, []byte{2, 0}); err != nil {
+	if err := fixture.client.Core().Memory().Write(word(derived+8)+30, []byte{2, 0}); err != nil {
 		t.Fatal(err)
 	}
 	writeTestWords(t, fixture.client, interfaces, []uint32{derived})

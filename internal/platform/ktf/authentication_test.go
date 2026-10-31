@@ -6,6 +6,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func certificateArchive() *Archive {
@@ -24,7 +25,7 @@ func TestAuthenticationIdentityAgreesAcrossGuestAPIsAndSessions(t *testing.T) {
 		t.Run(number, func(t *testing.T) {
 			t.Parallel()
 			client, runtime := newTestRuntime(t)
-			client.subscriberNumber = number
+			client.SubscriberNumber = number
 			check := func(value jvm.Value, err error) {
 				t.Helper()
 				if err != nil {
@@ -40,11 +41,11 @@ func TestAuthenticationIdentityAgreesAcrossGuestAPIsAndSessions(t *testing.T) {
 				arguments := []jvm.Value{jvm.ReferenceValue(client.JVM().NewString(property))}
 				check(runtimeGetSystemProperty(runtime, client.JVM(), arguments))
 				check(runtimeSystemGetProperty(runtime, client.JVM(), arguments))
-				name, err := runtime.allocateBytes(append([]byte(property), 0))
+				name, err := runtime.AllocateBytes(append([]byte(property), 0))
 				if err != nil {
 					t.Fatal(err)
 				}
-				out, err := runtime.allocate(12)
+				out, err := runtime.Allocate(12)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -54,10 +55,10 @@ func TestAuthenticationIdentityAgreesAcrossGuestAPIsAndSessions(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if result, err := runtime.wipicGetSystemProperty(thread); err != nil || result != 0 {
+				if result, err := runtime.WIPICGetSystemProperty(thread); err != nil || result != 0 {
 					t.Fatalf("C property: %d, %v", result, err)
 				}
-				text, err := runtime.readCString(out, 12)
+				text, err := runtime.ReadCString(out, 12)
 				if err != nil || text != number {
 					t.Fatalf("C identity = %q, %v", text, err)
 				}
@@ -104,7 +105,7 @@ func TestAuthenticationRecognizesCertificateAndExecutableTogether(t *testing.T) 
 
 func TestAuthenticationCertificatePreservesSavedCertificateAndDeletion(t *testing.T) {
 	for _, deleted := range []bool{false, true} {
-		base := NewDirectorySaveStore(t.TempDir())
+		base := wipicrt.NewDirectorySaveStore(t.TempDir())
 		original := []byte("original certificate")
 		if err := base.StoreSave(certificateSaveKey, original); err != nil {
 			t.Fatal(err)
@@ -113,7 +114,7 @@ func TestAuthenticationCertificatePreservesSavedCertificateAndDeletion(t *testin
 		if deleted {
 			removed = append(removed, certificateName)
 		}
-		if err := base.StoreSave(databaseRemovedKey, joinRemovalList(removed)); err != nil {
+		if err := base.StoreSave(wipicrt.DatabaseRemovedKey, wipicrt.JoinRemovalList(removed)); err != nil {
 			t.Fatal(err)
 		}
 		store := newCertificateSaveStore(base, []byte("session certificate"))
@@ -125,7 +126,7 @@ func TestAuthenticationCertificatePreservesSavedCertificateAndDeletion(t *testin
 		if data, _ := store.LoadSave(certificateSaveKey); string(data) != "session certificate" {
 			t.Fatal("load aliases session data")
 		}
-		ledger, _ := store.LoadSave(databaseRemovedKey)
+		ledger, _ := store.LoadSave(wipicrt.DatabaseRemovedKey)
 		if bytes.Contains(ledger, []byte(certificateName)) {
 			t.Fatal("saved deletion hides session certificate")
 		}
@@ -135,10 +136,10 @@ func TestAuthenticationCertificatePreservesSavedCertificateAndDeletion(t *testin
 		if data, _ := base.LoadSave(certificateSaveKey); !bytes.Equal(data, original) {
 			t.Fatal("guest write changed original certificate")
 		}
-		if err := store.StoreSave(databaseRemovedKey, joinRemovalList([]string{certificateName, "new"})); err != nil {
+		if err := store.StoreSave(wipicrt.DatabaseRemovedKey, wipicrt.JoinRemovalList([]string{certificateName, "new"})); err != nil {
 			t.Fatal(err)
 		}
-		persisted, _ := base.LoadSave(databaseRemovedKey)
+		persisted, _ := base.LoadSave(wipicrt.DatabaseRemovedKey)
 		if bytes.Contains(persisted, []byte(certificateName)) != deleted || !bytes.Contains(persisted, []byte("new")) || bytes.Contains(persisted, []byte("old")) {
 			t.Fatalf("unrelated deletions or original certificate deletion lost: %q", persisted)
 		}

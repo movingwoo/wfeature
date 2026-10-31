@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // ClassLoadSummary records the bounded guest call used to resolve one AOT
@@ -32,15 +33,15 @@ type AOTCallSummary struct {
 // guest may construct vtables and register metadata through SVC callbacks;
 // the returned address is then independently parsed and checked against name.
 func (client *Client) LoadClass(ctx context.Context, name string) (ClassLoadSummary, error) {
-	if client == nil || client.core == nil || client.thread == nil || client.vm == nil {
+	if client == nil || client.Core() == nil || client.Thread == nil || client.vm == nil {
 		return ClassLoadSummary{}, fmt.Errorf("KTF client is not initialized")
 	}
 	if err := validateClassName(name); err != nil {
 		return ClassLoadSummary{}, err
 	}
 
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	return client.loadClassLocked(ctx, name)
 }
 
@@ -73,15 +74,15 @@ func (client *Client) loadClassLocked(ctx context.Context, name string) (ClassLo
 		return ClassLoadSummary{Metadata: metadata, Callbacks: client.runtime.callbacks}, nil
 	}
 
-	nameAddress, err := client.runtime.allocateBytes(append([]byte(name), 0))
+	nameAddress, err := client.runtime.AllocateBytes(append([]byte(name), 0))
 	if err != nil {
 		return ClassLoadSummary{}, fmt.Errorf("allocate KTF class name %q: %w", name, err)
 	}
-	summary, err := client.core.Call(
+	summary, err := client.Core().Call(
 		ctx,
-		client.thread,
+		client.Thread,
 		client.executable.Interface.Functions.GetClass,
-		ReturnAddress,
+		wipicrt.ReturnAddress,
 		[]uint32{nameAddress},
 		client.runtime.handleSupervisorCall,
 	)
@@ -111,7 +112,7 @@ func (client *Client) loadClassLocked(ctx context.Context, name string) (ClassLo
 // invokes its native-image constructor through the same bridge used by later
 // lifecycle calls.
 func (client *Client) NewObject(ctx context.Context, className, descriptor string, arguments ...jvm.Value) (*jvm.Object, AOTCallSummary, error) {
-	if client == nil || client.core == nil || client.thread == nil || client.vm == nil {
+	if client == nil || client.Core() == nil || client.Thread == nil || client.vm == nil {
 		return nil, AOTCallSummary{}, fmt.Errorf("KTF client is not initialized")
 	}
 	methodType, err := validateAOTArguments(descriptor, arguments)
@@ -122,8 +123,8 @@ func (client *Client) NewObject(ctx context.Context, className, descriptor strin
 		return nil, AOTCallSummary{}, fmt.Errorf("KTF AOT constructor descriptor must return void: %s", descriptor)
 	}
 
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	loaded, err := client.loadClassLocked(ctx, className)
 	if err != nil {
 		return nil, AOTCallSummary{}, err
@@ -156,7 +157,7 @@ func (client *Client) NewObject(ctx context.Context, className, descriptor strin
 // InvokeVirtual invokes a non-static AOT method on an object previously bound
 // by this client.
 func (client *Client) InvokeVirtual(ctx context.Context, receiver *jvm.Object, name, descriptor string, arguments ...jvm.Value) (AOTCallSummary, error) {
-	if client == nil || client.core == nil || client.thread == nil || client.vm == nil {
+	if client == nil || client.Core() == nil || client.Thread == nil || client.vm == nil {
 		return AOTCallSummary{}, fmt.Errorf("KTF client is not initialized")
 	}
 	if receiver == nil {
@@ -167,8 +168,8 @@ func (client *Client) InvokeVirtual(ctx context.Context, receiver *jvm.Object, n
 		return AOTCallSummary{}, err
 	}
 
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	metadata, ok := client.vm.AOTClass(receiver.ClassName)
 	if !ok {
 		loaded, loadErr := client.loadClassLocked(ctx, receiver.ClassName)
@@ -197,15 +198,15 @@ func (client *Client) InvokeVirtual(ctx context.Context, receiver *jvm.Object, n
 
 // InvokeStatic invokes a static method declared in a loaded AOT class.
 func (client *Client) InvokeStatic(ctx context.Context, className, name, descriptor string, arguments ...jvm.Value) (AOTCallSummary, error) {
-	if client == nil || client.core == nil || client.thread == nil || client.vm == nil {
+	if client == nil || client.Core() == nil || client.Thread == nil || client.vm == nil {
 		return AOTCallSummary{}, fmt.Errorf("KTF client is not initialized")
 	}
 	methodType, err := validateAOTArguments(descriptor, arguments)
 	if err != nil {
 		return AOTCallSummary{}, err
 	}
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	loaded, err := client.loadClassLocked(ctx, className)
 	if err != nil {
 		return AOTCallSummary{}, err
@@ -317,7 +318,7 @@ func (client *Client) invokeAOTMethodLocked(ctx context.Context, method jvm.AOTM
 	if client.runtime == nil {
 		return summary, fmt.Errorf("KTF client initialization has not completed")
 	}
-	result, runs, err := client.runtime.runAOTMethod(ctx, client.thread, "", method, methodType, rawArguments)
+	result, runs, err := client.runtime.runAOTMethod(ctx, client.Thread, "", method, methodType, rawArguments)
 	summary.Runs = runs
 	if err != nil {
 		return summary, err
@@ -331,13 +332,13 @@ func (client *Client) invokeAOTMethodLocked(ctx context.Context, method jvm.AOTM
 // caught exceptions, and restoring the handler head after an uncaught one.
 func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *armcore.Thread, className string, method jvm.AOTMethodMetadata, methodType jvm.MethodDescriptor, rawArguments []uint32) (jvm.Value, []armcore.RunSummary, error) {
 	var runs []armcore.RunSummary
-	if err := runtime.enterAOTCall(); err != nil {
+	if err := runtime.EnterAOTCall(); err != nil {
 		return jvm.VoidValue(), runs, err
 	}
-	defer runtime.leaveAOTCall(runtime.aotCallOwner())
+	defer runtime.LeaveAOTCall(runtime.AOTCallOwner())
 
 	headAddress := runtime.exceptionHead()
-	entryHandler, err := runtime.client.core.ThreadLocalWord(thread, headAddress)
+	entryHandler, err := runtime.client.Core().ThreadLocalWord(thread, headAddress)
 	if err != nil {
 		return jvm.VoidValue(), runs, fmt.Errorf("read KTF AOT entry exception handler: %w", err)
 	}
@@ -355,7 +356,7 @@ func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *
 		if body == 0 {
 			return jvm.VoidValue(), runs, fmt.Errorf("KTF AOT native method body is null")
 		}
-		container, allocationErr := runtime.allocateWords(rawArguments)
+		container, allocationErr := runtime.AllocateWords(rawArguments)
 		if allocationErr != nil {
 			return jvm.VoidValue(), runs, fmt.Errorf("allocate KTF AOT native argument container: %w", allocationErr)
 		}
@@ -366,7 +367,7 @@ func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *
 		return jvm.VoidValue(), runs, fmt.Errorf("KTF AOT method body is null")
 	}
 
-	run, callErr := runtime.client.core.Call(ctx, thread, body, ReturnAddress, arguments, runtime.handleSupervisorCall)
+	run, callErr := runtime.client.Core().Call(ctx, thread, body, wipicrt.ReturnAddress, arguments, runtime.handleSupervisorCall)
 	return runtime.completeAOTMethod(ctx, thread, methodType, entryHandler, run, callErr)
 }
 
@@ -378,13 +379,13 @@ func (runtime *initializationRuntime) runAOTMethod(ctx context.Context, thread *
 // caller's stack. The words are cleared first, as a collected object's are: a
 // stale one would read as a live reference to the next scan.
 func (runtime *initializationRuntime) releaseArgumentContainer(container uint32, words int) {
-	size := alignArenaSize(uint64(words) * 4)
-	if err := runtime.client.core.Memory().Write(container, make([]byte, size)); err != nil {
+	size := wipicrt.AlignArenaSize(uint64(words) * 4)
+	if err := runtime.client.Core().Memory().Write(container, make([]byte, size)); err != nil {
 		// Left allocated rather than handed out with whatever it held.
-		runtime.client.log("KTF argument container not released", "address", fmt.Sprintf("%#x", container), "error", err)
+		runtime.client.Log("KTF argument container not released", "address", fmt.Sprintf("%#x", container), "error", err)
 		return
 	}
-	runtime.arena.release(container, size)
+	runtime.Arena.Release(container, size)
 }
 
 func (runtime *initializationRuntime) completeAOTMethod(ctx context.Context, thread *armcore.Thread, methodType jvm.MethodDescriptor, entryHandler uint32, run armcore.RunSummary, callErr error) (jvm.Value, []armcore.RunSummary, error) {
@@ -397,12 +398,12 @@ func (runtime *initializationRuntime) completeAOTMethod(ctx context.Context, thr
 		}
 		var unwind *aotExceptionUnwind
 		if errors.As(callErr, &unwind) && runtime.ownsUnwind(thread, unwind) {
-			run, callErr = runtime.client.core.Call(ctx, thread, unwind.nextPC, ReturnAddress, []uint32{unwind.contextBase, unwind.target}, runtime.handleSupervisorCall)
+			run, callErr = runtime.client.Core().Call(ctx, thread, unwind.nextPC, wipicrt.ReturnAddress, []uint32{unwind.contextBase, unwind.target}, runtime.handleSupervisorCall)
 			continue
 		}
 		var uncaught *UncaughtAOTException
 		if errors.As(callErr, &uncaught) {
-			if restoreErr := runtime.client.core.SetThreadLocalWord(thread, runtime.exceptionHead(), entryHandler); restoreErr != nil {
+			if restoreErr := runtime.client.Core().SetThreadLocalWord(thread, runtime.exceptionHead(), entryHandler); restoreErr != nil {
 				return jvm.VoidValue(), runs, fmt.Errorf("restore KTF AOT entry exception handler after %w: %v", callErr, restoreErr)
 			}
 		}
@@ -411,8 +412,8 @@ func (runtime *initializationRuntime) completeAOTMethod(ctx context.Context, thr
 		// instruction are, so they travel with the error and into the
 		// diagnostics — the same evidence a guest throw already carries.
 		if fault, isFault := guestFault(callErr); isFault {
-			if report := runtime.describeGuestFault(run.Context, fault); report != "" {
-				runtime.countDiagnostic("guest fault " + report)
+			if report := runtime.describeAOTFault(run.Context, fault); report != "" {
+				runtime.CountDiagnostic("guest fault " + report)
 				return jvm.VoidValue(), runs, fmt.Errorf("%w: %s", callErr, report)
 			}
 		}

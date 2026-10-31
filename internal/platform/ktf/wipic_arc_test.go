@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The two arc calls take eight arguments, so the last four arrive on the stack
@@ -17,7 +18,7 @@ import (
 func callArcFunction(t *testing.T, runtime *initializationRuntime, function uint32, arguments ...uint32) {
 	t.Helper()
 	thread := armcore.NewThread(armcore.NewContext())
-	stack := platformDataBase + 0x8000
+	stack := wipicrt.PlatformDataBase + 0x8000
 	if err := thread.SetRegister(armcore.RegisterSP, stack); err != nil {
 		t.Fatal(err)
 	}
@@ -30,11 +31,11 @@ func callArcFunction(t *testing.T, runtime *initializationRuntime, function uint
 		}
 		var word [4]byte
 		binary.LittleEndian.PutUint32(word[:], value)
-		if err := runtime.client.core.Memory().Write(stack+uint32(index-4)*4, word[:]); err != nil {
+		if err := runtime.client.Core().Memory().Write(stack+uint32(index-4)*4, word[:]); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := runtime.handleWIPICTableCall(thread, wipicTableGraphics, function); err != nil {
+	if _, err := runtime.HandleWIPICTableCall(thread, wipicrt.WIPICTableGraphics, function); err != nil {
 		t.Fatalf("graphics function %d: %v", function, err)
 	}
 }
@@ -42,30 +43,30 @@ func callArcFunction(t *testing.T, runtime *initializationRuntime, function uint
 // arcFixture answers a surface to draw on and a graphics context in guest
 // memory carrying the foreground colour, since a drawing call reads its colour
 // out of the game's own record rather than taking one.
-func arcFixture(t *testing.T, runtime *initializationRuntime, colour uint16) (uint32, wipicFramebuffer, uint32) {
+func arcFixture(t *testing.T, runtime *initializationRuntime, colour uint16) (uint32, wipicrt.WIPICFramebuffer, uint32) {
 	t.Helper()
-	handle, err := runtime.newWIPICFramebufferRecord(8, 8)
+	handle, err := runtime.NewWIPICFramebufferRecord(8, 8)
 	if err != nil {
 		t.Fatal(err)
 	}
-	buffer, err := runtime.readWIPICFramebuffer(handle)
+	buffer, err := runtime.ReadWIPICFramebuffer(handle)
 	if err != nil {
 		t.Fatal(err)
 	}
-	contextAddress := platformDataBase + 0x9000
+	contextAddress := wipicrt.PlatformDataBase + 0x9000
 	record := make([]byte, 32)
 	binary.LittleEndian.PutUint32(record[12:], uint32(colour))
-	if err := runtime.client.core.Memory().Write(contextAddress, record); err != nil {
+	if err := runtime.client.Core().Memory().Write(contextAddress, record); err != nil {
 		t.Fatal(err)
 	}
 	return handle, buffer, contextAddress
 }
 
-func arcPixel(t *testing.T, runtime *initializationRuntime, buffer wipicFramebuffer, x, y uint32) uint16 {
+func arcPixel(t *testing.T, runtime *initializationRuntime, buffer wipicrt.WIPICFramebuffer, x, y uint32) uint16 {
 	t.Helper()
 	var pixel [2]byte
-	address := buffer.pixels + y*buffer.bpl + x*2
-	if err := runtime.client.core.Memory().Read(address, pixel[:]); err != nil {
+	address := buffer.Pixels + y*buffer.Bpl + x*2
+	if err := runtime.client.Core().Memory().Read(address, pixel[:]); err != nil {
 		t.Fatal(err)
 	}
 	return binary.LittleEndian.Uint16(pixel[:])
@@ -75,7 +76,7 @@ func arcPixel(t *testing.T, runtime *initializationRuntime, buffer wipicFramebuf
 // a quarter turn from zero is the top-right quadrant and nothing else.
 func TestWIPICFillArcFillsTheQuadrantItNames(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.currentThread, runtime.currentContext = client.thread, context.Background()
+	runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
 
 	const colour = uint16(0x07e0)
 	handle, buffer, contextAddress := arcFixture(t, runtime, colour)
@@ -99,7 +100,7 @@ func TestWIPICFillArcFillsTheQuadrantItNames(t *testing.T) {
 // and nothing would be visible at all.
 func TestWIPICDrawArcIsTheCurveAndNotThePie(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.currentThread, runtime.currentContext = client.thread, context.Background()
+	runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
 
 	const colour = uint16(0xf800)
 	handle, buffer, contextAddress := arcFixture(t, runtime, colour)

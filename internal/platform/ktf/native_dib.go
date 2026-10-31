@@ -3,6 +3,7 @@ package ktf
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"image"
 	"image/color"
 	"math"
@@ -56,8 +57,8 @@ func (platform *NativePlatform) dibObject(decoded *image.RGBA) (uint32, error) {
 		return 0, fmt.Errorf("KTF native image of %dx%d is too large for a native bitmap", width, height)
 	}
 	size := uint64(nativeDIBHeaderSize) + uint64(pitch)*uint64(height)
-	if size > maxPlatformAllocation {
-		return 0, fmt.Errorf("KTF native image of %dx%d needs %d bytes, limit %d", width, height, size, maxPlatformAllocation)
+	if size > wipicrt.MaxPlatformAllocation {
+		return 0, fmt.Errorf("KTF native image of %dx%d needs %d bytes, limit %d", width, height, size, wipicrt.MaxPlatformAllocation)
 	}
 	object, err := platform.client.InterfaceObject(nativeClassDIB)
 	if err != nil {

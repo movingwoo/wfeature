@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // com/ktf/kfc is the vendor widget toolkit. Runtime classes preserve its
@@ -365,26 +366,26 @@ func (runtime *initializationRuntime) relaxedVendorTextInput() (vendorTextInputS
 // reopen the editor or activate the settings row that the form covered.
 func (runtime *initializationRuntime) dispatchKeyToVendorForm(eventType, key int32) (bool, error) {
 	owner := runtime.kfcOwnedKeys[key]
-	if eventType == KeyReleased {
+	if eventType == wipicrt.KeyReleased {
 		delete(runtime.kfcOwnedKeys, key)
 	}
-	if eventType != KeyPressed && owner.form == nil {
+	if eventType != wipicrt.KeyPressed && owner.form == nil {
 		return false, nil
 	}
 	state, active := runtime.activeVendorTextInput()
 	sameOwner := active && state.form == owner.form && state.visibilityRevision == owner.visibilityRevision &&
 		state.field == owner.field && state.childrenRevision == owner.childrenRevision &&
 		sameRuntimeComponentEventState(state.event, owner.event)
-	if !active || eventType != KeyPressed && !sameOwner {
+	if !active || eventType != wipicrt.KeyPressed && !sameOwner {
 		if owner.form == nil {
 			return false, nil
 		}
-		if eventType == KeyReleased {
+		if eventType == wipicrt.KeyReleased {
 			delete(runtime.kfcOwnedKeys, key)
 		}
 		return true, nil
 	}
-	if eventType == KeyPressed {
+	if eventType == wipicrt.KeyPressed {
 		if runtime.kfcOwnedKeys == nil {
 			runtime.kfcOwnedKeys = make(map[int32]kfcKeyOwner)
 		}
@@ -398,7 +399,7 @@ func (runtime *initializationRuntime) dispatchKeyToVendorForm(eventType, key int
 	if err != nil {
 		return true, fmt.Errorf("notify KTF vendor text field listener %s: %w", state.event.listener.ClassName, err)
 	}
-	if eventType == KeyReleased {
+	if eventType == wipicrt.KeyReleased {
 		delete(runtime.kfcOwnedKeys, key)
 	}
 	return true, nil
@@ -416,7 +417,7 @@ func runtimeGFormDoModal(runtime *initializationRuntime, _ *jvm.VM, arguments []
 	if _, err := runtimeComponentReceiver("GForm.doModal", arguments, 1); err != nil {
 		return jvm.VoidValue(), err
 	}
-	runtime.countDiagnostic("kfc doModal answered without a dialog")
+	runtime.CountDiagnostic("kfc doModal answered without a dialog")
 	return jvm.IntValue(0), nil
 }
 
@@ -475,7 +476,7 @@ func runtimeGTextFieldListener(runtime *initializationRuntime, vm *jvm.VM, argum
 	}
 	listener := jvm.ReferenceValue(&jvm.Object{ClassName: runtimeGTextListenerClass, Fields: map[string]jvm.Value{}})
 	receiver.Fields[componentTextListenerField] = listener
-	runtime.countDiagnostic("kfc text listener created")
+	runtime.CountDiagnostic("kfc text listener created")
 	return listener, nil
 }
 
@@ -525,5 +526,5 @@ func runtimeDMInfoInstance(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Va
 // is. It is the same number every other question about this handset's identity
 // is answered with.
 func runtimeDMInfoHandsetNumber(runtime *initializationRuntime, vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.ReferenceValue(vm.NewString(runtime.client.subscriberNumber)), nil
+	return jvm.ReferenceValue(vm.NewString(runtime.client.SubscriberNumber)), nil
 }

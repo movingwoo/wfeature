@@ -5,11 +5,12 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func inputMethodCall(t *testing.T, runtime *initializationRuntime, function uint32) uint32 {
 	t.Helper()
-	result, err := runtime.handleWIPICTableCall(armcore.NewThread(armcore.NewContext()), wipicTableInputMethod, function)
+	result, err := runtime.HandleWIPICTableCall(armcore.NewThread(armcore.NewContext()), wipicrt.WIPICTableInputMethod, function)
 	if err != nil {
 		t.Fatalf("input method function %d: %v", function, err)
 	}
@@ -23,21 +24,21 @@ func inputMethodCall(t *testing.T, runtime *initializationRuntime, function uint
 func TestInputMethodAnswersItsModesAndTheirCount(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 
-	count := inputMethodCall(t, runtime, wipicIMGetSupportedModeCount)
-	if count != uint32(len(inputModes)) {
-		t.Fatalf("mode count = %d, want %d", count, len(inputModes))
+	count := inputMethodCall(t, runtime, wipicrt.WIPICIMGetSupportedModeCount)
+	if count != uint32(len(wipicrt.InputModes)) {
+		t.Fatalf("mode count = %d, want %d", count, len(wipicrt.InputModes))
 	}
-	table := inputMethodCall(t, runtime, wipicIMGetSupportedModes)
+	table := inputMethodCall(t, runtime, wipicrt.WIPICIMGetSupportedModes)
 	if table == 0 {
 		t.Fatal("the mode table was answered as a null pointer")
 	}
 
-	memory := client.core.Memory()
+	memory := client.Core().Memory()
 	pointers := make([]byte, int(count)*4)
 	if err := memory.Read(table, pointers); err != nil {
 		t.Fatal(err)
 	}
-	for index, want := range inputModes {
+	for index, want := range wipicrt.InputModes {
 		address := binary.LittleEndian.Uint32(pointers[index*4:])
 		text := make([]byte, len(want)+1)
 		if err := memory.Read(address, text); err != nil {
@@ -50,7 +51,7 @@ func TestInputMethodAnswersItsModesAndTheirCount(t *testing.T) {
 
 	// The caller keeps the pointer rather than owning it, so asking twice has
 	// to answer the same table instead of allocating another one.
-	if again := inputMethodCall(t, runtime, wipicIMGetSupportedModes); again != table {
+	if again := inputMethodCall(t, runtime, wipicrt.WIPICIMGetSupportedModes); again != table {
 		t.Fatalf("the mode table moved from %#x to %#x", table, again)
 	}
 }
@@ -66,7 +67,7 @@ func TestInputMethodLeavesUnknownExtensionsStubbed(t *testing.T) {
 	}
 	// The name carries the call site, which is the whole point of counting a
 	// stub at all: a table number appears nowhere in the guest's own code.
-	counts := runtime.diagnosticCounts()
+	counts := runtime.DiagnosticCounts()
 	if counts["wipic stub table 4 function 5 @0x0"] == 0 {
 		t.Fatalf("an unidentified entry was not counted with its call site: %v", counts)
 	}

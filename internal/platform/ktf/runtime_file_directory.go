@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The directory half of org.kwis.msp.io.FileSystem, answered the way every
@@ -35,13 +36,13 @@ func fileSystemName(value jvm.Value) (string, error) {
 		return "", fmt.Errorf("FileSystem name is not a string")
 	}
 	name = strings.ReplaceAll(name, "\\", "/")
-	if nameTooLong(name) {
-		return "", newGuestIOException(fmt.Sprintf("a name of %d bytes is longer than %d", len(name), maxWIPIFileName))
+	if wipicrt.NameTooLong(name) {
+		return "", newGuestIOException(fmt.Sprintf("a name of %d bytes is longer than %d", len(name), wipicrt.MaxWIPIFileName))
 	}
 	// A name the store cannot keep a file under — one that climbs out of
 	// its directory, or one of the lists the platform keeps — is refused by
 	// every call, as the C table refuses it with M_E_BADFILENAME.
-	if slices.Contains(strings.Split(name, "/"), "..") || reservedStorageName(guestFileScope, listingPath(name)) {
+	if slices.Contains(strings.Split(name, "/"), "..") || wipicrt.ReservedStorageName(wipicrt.GuestFileScope, wipicrt.ListingPath(name)) {
 		return "", newGuestIOException(fmt.Sprintf("%q is not a file name", name))
 	}
 	return name, nil
@@ -77,7 +78,7 @@ func runtimeFileSystemExists(runtime *initializationRuntime, _ *jvm.VM, argument
 	// The name and the answer both belong in the trace. A start-up gate is
 	// often a file test, and a test that appears in the trace without its
 	// path says only that the title asked something.
-	runtime.countDiagnostic(fmt.Sprintf("exists %s found=%t", name, exists))
+	runtime.CountDiagnostic(fmt.Sprintf("exists %s found=%t", name, exists))
 	return javaBooleanValue(exists), nil
 }
 
@@ -111,11 +112,11 @@ func runtimeFileSystemMakeDirectory(runtime *initializationRuntime, _ *jvm.VM, a
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	path := listingPath(name)
+	path := wipicrt.ListingPath(name)
 	if path == "" || runtime.guestIsFile(name) {
 		return jvm.VoidValue(), newGuestIOException("already exists: " + name)
 	}
-	if !storableName(guestFileScope, path) {
+	if !wipicrt.StorableName(wipicrt.GuestFileScope, path) {
 		return jvm.VoidValue(), newGuestIOException("cannot make a directory named " + name)
 	}
 	directory, err := runtime.guestIsDirectory(name)
@@ -128,7 +129,7 @@ func runtimeFileSystemMakeDirectory(runtime *initializationRuntime, _ *jvm.VM, a
 	if err := runtime.markGuestDirectory(path, true); err != nil {
 		return jvm.VoidValue(), newGuestIOException(err.Error())
 	}
-	runtime.countDiagnostic(fmt.Sprintf("fs java mkdir %s", path))
+	runtime.CountDiagnostic(fmt.Sprintf("fs java mkdir %s", path))
 	return jvm.VoidValue(), nil
 }
 
@@ -140,7 +141,7 @@ func runtimeFileSystemRemoveDirectory(runtime *initializationRuntime, _ *jvm.VM,
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	path := listingPath(name)
+	path := wipicrt.ListingPath(name)
 	if path == "" {
 		return jvm.VoidValue(), newGuestIOException("cannot remove the program's own directory")
 	}
@@ -249,13 +250,13 @@ func runtimeFileSystemRemoveAny(runtime *initializationRuntime, vm *jvm.VM, argu
 // `totalSpace`: the space every title has and what is left of it, the figures
 // the WIPI C table answers too.
 func runtimeFileSystemAvailable(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(int32(runtime.storageAvailable())), nil
+	return jvm.IntValue(int32(runtime.StorageAvailable())), nil
 }
 
 func runtimeFileSystemTotalSpace(*initializationRuntime, *jvm.VM, []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(storageBudget), nil
+	return jvm.IntValue(wipicrt.StorageBudget), nil
 }
 
 func runtimeFileSystemNameLength(*initializationRuntime, *jvm.VM, []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(maxWIPIFileName), nil
+	return jvm.IntValue(wipicrt.MaxWIPIFileName), nil
 }

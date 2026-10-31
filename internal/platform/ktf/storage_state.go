@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"fmt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"strings"
 )
 
@@ -42,46 +43,46 @@ type cRecordHandleSnapshot struct{ Handle, Store uint32 }
 // validStorageName is what a name in a record has to be to be looked up in a
 // store: a name its table would have accepted from the guest.
 func validStorageName(scope string, name []byte) bool {
-	return len(name) <= 1<<20 && storableName(scope, strings.TrimPrefix(string(name), "/"))
+	return len(name) <= 1<<20 && wipicrt.StorableName(scope, strings.TrimPrefix(string(name), "/"))
 }
 
 // captureStorageState records the tables by name. charge is the checkpoint's
 // storage budget: a load reads back what these objects hold, so what they hold
 // now is charged now, and a checkpoint no load would accept is not taken.
 func (runtime *initializationRuntime) captureStorageState(charge func(uint64) error) (runtimeStorageState, error) {
-	saved := runtimeStorageState{NextFileHandle: runtime.nextCDatabaseHandle, NextRecordHandle: runtime.nextRecordDatabaseHandle}
-	for _, count := range []int{len(runtime.cFiles), len(runtime.recordDatabases), len(runtime.guestFiles)} {
+	saved := runtimeStorageState{NextFileHandle: runtime.NextCDatabaseHandle, NextRecordHandle: runtime.nextRecordDatabaseHandle}
+	for _, count := range []int{len(runtime.CFiles), len(runtime.recordDatabases), len(runtime.GuestFiles)} {
 		if count > 1<<16 {
 			return runtimeStorageState{}, fmt.Errorf("KTF storage table count exceeds limit")
 		}
 	}
-	if len(runtime.cFileHandles) > maxCFileHandles || len(runtime.recordDatabaseHandles) > maxRecordDatabaseHandles {
+	if len(runtime.CFileHandles) > wipicrt.MaxCFileHandles || len(runtime.recordDatabaseHandles) > maxRecordDatabaseHandles {
 		return runtimeStorageState{}, fmt.Errorf("KTF storage handle count exceeds limit")
 	}
-	fileIDs := make(map[*runtimeCFile]uint32)
-	fileID := func(file *runtimeCFile) (uint32, error) {
+	fileIDs := make(map[*wipicrt.RuntimeCFile]uint32)
+	fileID := func(file *wipicrt.RuntimeCFile) (uint32, error) {
 		if file == nil {
 			return 0, fmt.Errorf("KTF file store is nil")
 		}
 		if id := fileIDs[file]; id != 0 {
 			return id, nil
 		}
-		if len(file.name) > 1<<20 || len(saved.Files) >= 1<<16 {
+		if len(file.Name) > 1<<20 || len(saved.Files) >= 1<<16 {
 			return 0, fmt.Errorf("KTF file store exceeds snapshot limits")
 		}
-		if err := charge(uint64(len(file.name)) + uint64(len(file.data)) + 64); err != nil {
+		if err := charge(uint64(len(file.Name)) + uint64(len(file.Data)) + 64); err != nil {
 			return 0, err
 		}
 		id := uint32(len(saved.Files) + 1)
 		fileIDs[file] = id
-		saved.Files = append(saved.Files, cFileSnapshot{Name: []byte(file.name)})
+		saved.Files = append(saved.Files, cFileSnapshot{Name: []byte(file.Name)})
 		return id, nil
 	}
 	// Map order would make two captures of one session differ, and a record
 	// that is compared or hashed has to be the same record.
-	for _, name := range metadataKeys(runtime.cFiles) {
-		file := runtime.cFiles[name]
-		if file == nil || name != file.name {
+	for _, name := range metadataKeys(runtime.CFiles) {
+		file := runtime.CFiles[name]
+		if file == nil || name != file.Name {
 			return runtimeStorageState{}, fmt.Errorf("KTF file catalog differs from its store name")
 		}
 		id, err := fileID(file)
@@ -90,16 +91,16 @@ func (runtime *initializationRuntime) captureStorageState(charge func(uint64) er
 		}
 		saved.Files[id-1].Catalog = true
 	}
-	for _, handle := range metadataKeys(runtime.cFileHandles) {
-		open := runtime.cFileHandles[handle]
-		if open == nil || open.position < 0 || open.position > maxHeapStorageBytes {
+	for _, handle := range metadataKeys(runtime.CFileHandles) {
+		open := runtime.CFileHandles[handle]
+		if open == nil || open.Position < 0 || open.Position > maxHeapStorageBytes {
 			return runtimeStorageState{}, fmt.Errorf("KTF open file cursor is invalid")
 		}
-		id, err := fileID(open.store)
+		id, err := fileID(open.Store)
 		if err != nil {
 			return runtimeStorageState{}, err
 		}
-		saved.FileHandles = append(saved.FileHandles, cFileHandleSnapshot{Handle: handle, Store: id, Position: int32(open.position)})
+		saved.FileHandles = append(saved.FileHandles, cFileHandleSnapshot{Handle: handle, Store: id, Position: int32(open.Position)})
 	}
 	recordIDs := make(map[*runtimeRecordDatabase]uint32)
 	recordID := func(store *runtimeRecordDatabase) (uint32, error) {
@@ -142,11 +143,11 @@ func (runtime *initializationRuntime) captureStorageState(charge func(uint64) er
 		}
 		saved.RecordHandles = append(saved.RecordHandles, cRecordHandleSnapshot{Handle: handle, Store: id})
 	}
-	for _, name := range metadataKeys(runtime.guestFiles) {
+	for _, name := range metadataKeys(runtime.GuestFiles) {
 		if len(name) > 1<<20 {
 			return runtimeStorageState{}, fmt.Errorf("KTF guest filename exceeds snapshot limit")
 		}
-		if err := charge(uint64(len(name)) + uint64(len(runtime.guestFiles[name])) + 64); err != nil {
+		if err := charge(uint64(len(name)) + uint64(len(runtime.GuestFiles[name])) + 64); err != nil {
 			return runtimeStorageState{}, err
 		}
 		saved.GuestFiles = append(saved.GuestFiles, []byte(name))
@@ -169,12 +170,12 @@ func recordListBytes(records [][]byte) uint64 {
 }
 
 func (saved runtimeStorageState) validate() error {
-	if len(saved.Files) > 1<<16 || len(saved.Records) > 1<<16 || len(saved.GuestFiles) > 1<<16 || len(saved.FileHandles) > maxCFileHandles || len(saved.RecordHandles) > maxRecordDatabaseHandles || saved.NextFileHandle > maxCFileHandles || saved.NextRecordHandle > maxRecordDatabaseHandles {
+	if len(saved.Files) > 1<<16 || len(saved.Records) > 1<<16 || len(saved.GuestFiles) > 1<<16 || len(saved.FileHandles) > wipicrt.MaxCFileHandles || len(saved.RecordHandles) > maxRecordDatabaseHandles || saved.NextFileHandle > wipicrt.MaxCFileHandles || saved.NextRecordHandle > maxRecordDatabaseHandles {
 		return fmt.Errorf("KTF storage state counts or handle sequences exceed limits")
 	}
 	catalog := make(map[string]bool)
 	for _, file := range saved.Files {
-		if !validStorageName(cFileScope, file.Name) || file.Catalog && catalog[string(file.Name)] {
+		if !validStorageName(wipicrt.CFileScope, file.Name) || file.Catalog && catalog[string(file.Name)] {
 			return fmt.Errorf("KTF file catalog or name is invalid")
 		}
 		if file.Catalog {
@@ -183,7 +184,7 @@ func (saved runtimeStorageState) validate() error {
 	}
 	catalog = make(map[string]bool)
 	for _, record := range saved.Records {
-		if len(record.Name) > maxRecordDatabaseName || !validStorageName(recordDatabaseScope, record.Name) || record.Catalog && catalog[string(record.Name)] {
+		if len(record.Name) > maxRecordDatabaseName || !validStorageName(wipicrt.RecordDatabaseScope, record.Name) || record.Catalog && catalog[string(record.Name)] {
 			return fmt.Errorf("KTF record catalog or name is invalid")
 		}
 		if record.Catalog {
@@ -196,7 +197,7 @@ func (saved runtimeStorageState) validate() error {
 	}
 	held := make([]bool, len(saved.Files)+1)
 	for _, handle := range saved.FileHandles {
-		if !validHandle(handle.Handle, cFileHandleBit, saved.NextFileHandle) || used[handle.Handle] || handle.Store == 0 || uint64(handle.Store) > uint64(len(saved.Files)) || handle.Position < 0 || handle.Position > maxHeapStorageBytes {
+		if !validHandle(handle.Handle, wipicrt.CFileHandleBit, saved.NextFileHandle) || used[handle.Handle] || handle.Store == 0 || uint64(handle.Store) > uint64(len(saved.Files)) || handle.Position < 0 || handle.Position > maxHeapStorageBytes {
 			return fmt.Errorf("KTF file handle state is invalid")
 		}
 		used[handle.Handle], held[handle.Store] = true, true
@@ -222,7 +223,7 @@ func (saved runtimeStorageState) validate() error {
 	}
 	names := make(map[string]bool)
 	for _, name := range saved.GuestFiles {
-		if names[string(name)] || !validStorageName(guestFileScope, name) {
+		if names[string(name)] || !validStorageName(wipicrt.GuestFileScope, name) {
 			return fmt.Errorf("KTF guest file name is invalid or duplicated")
 		}
 		names[string(name)] = true
@@ -234,8 +235,8 @@ func (saved runtimeStorageState) validate() error {
 // store is there under its handles, with its name and nothing in it. Building
 // it reaches no save store.
 type restoredRuntimeStorage struct {
-	files                map[string]*runtimeCFile
-	fileHandles          map[uint32]*runtimeCFileHandle
+	files                map[string]*wipicrt.RuntimeCFile
+	fileHandles          map[uint32]*wipicrt.RuntimeCFileHandle
 	records              map[string]*runtimeRecordDatabase
 	recordHandles        map[uint32]*runtimeRecordDatabaseHandle
 	nextFile, nextRecord uint32
@@ -246,26 +247,26 @@ func restoreStorageState(saved runtimeStorageState) (restoredRuntimeStorage, err
 	if err := saved.validate(); err != nil {
 		return restoredRuntimeStorage{}, err
 	}
-	state := restoredRuntimeStorage{files: make(map[string]*runtimeCFile), fileHandles: make(map[uint32]*runtimeCFileHandle), records: make(map[string]*runtimeRecordDatabase), recordHandles: make(map[uint32]*runtimeRecordDatabaseHandle), nextFile: saved.NextFileHandle, nextRecord: saved.NextRecordHandle, restored: &restoredStorage{}}
+	state := restoredRuntimeStorage{files: make(map[string]*wipicrt.RuntimeCFile), fileHandles: make(map[uint32]*wipicrt.RuntimeCFileHandle), records: make(map[string]*runtimeRecordDatabase), recordHandles: make(map[uint32]*runtimeRecordDatabaseHandle), nextFile: saved.NextFileHandle, nextRecord: saved.NextRecordHandle, restored: &restoredStorage{}}
 	// One name is one store. A record can name a file twice — once in the
 	// catalog and once under a handle that outlived it — and both are the
 	// same file once they are read back from the store.
-	named := make(map[string]*runtimeCFile, len(saved.Files))
-	files := make([]*runtimeCFile, len(saved.Files)+1)
+	named := make(map[string]*wipicrt.RuntimeCFile, len(saved.Files))
+	files := make([]*wipicrt.RuntimeCFile, len(saved.Files)+1)
 	for i, record := range saved.Files {
 		file := named[string(record.Name)]
 		if file == nil {
-			file = &runtimeCFile{name: string(record.Name)}
-			named[file.name] = file
+			file = &wipicrt.RuntimeCFile{Name: string(record.Name)}
+			named[file.Name] = file
 			state.restored.cFiles = append(state.restored.cFiles, file)
 		}
 		files[i+1] = file
 		if record.Catalog {
-			state.files[file.name] = file
+			state.files[file.Name] = file
 		}
 	}
 	for _, handle := range saved.FileHandles {
-		state.fileHandles[handle.Handle] = &runtimeCFileHandle{store: files[handle.Store], position: int(handle.Position)}
+		state.fileHandles[handle.Handle] = &wipicrt.RuntimeCFileHandle{Store: files[handle.Store], Position: int(handle.Position)}
 	}
 	namedRecords := make(map[string]*runtimeRecordDatabase, len(saved.Records))
 	records := make([]*runtimeRecordDatabase, len(saved.Records)+1)
@@ -298,12 +299,12 @@ func restoreStorageState(saved runtimeStorageState) (restoredRuntimeStorage, err
 // handles: the first use reads the list as the store has it. The written-file
 // table is left empty until a store fills it.
 func (state restoredRuntimeStorage) adopt(runtime *initializationRuntime) {
-	runtime.cFiles, runtime.cFileHandles, runtime.nextCDatabaseHandle = state.files, state.fileHandles, state.nextFile
+	runtime.CFiles, runtime.CFileHandles, runtime.NextCDatabaseHandle = state.files, state.fileHandles, state.nextFile
 	runtime.recordDatabases, runtime.recordDatabaseHandles, runtime.nextRecordDatabaseHandle = state.records, state.recordHandles, state.nextRecord
-	runtime.guestFiles = nil
-	runtime.guestFileWrites = nil
-	runtime.removedFiles, runtime.removedCDatabases, runtime.madeDirectories, runtime.removedDatabaseLists = nil, nil, nil, nil
+	runtime.GuestFiles = nil
+	runtime.GuestFileWrites = nil
+	runtime.RemovedFiles, runtime.RemovedCDatabases, runtime.MadeDirectories, runtime.removedDatabaseLists = nil, nil, nil, nil
 	runtime.madeGuestDirectories, runtime.databaseSizes = nil, nil
-	runtime.detachedCFiles, runtime.detachedRecordDatabases, runtime.detachedDatabases = nil, nil, nil
+	runtime.DetachedCFiles, runtime.detachedRecordDatabases, runtime.detachedDatabases = nil, nil, nil
 	runtime.restoredStorage = state.restored
 }

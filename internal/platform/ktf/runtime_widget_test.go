@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"errors"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"testing"
 	"time"
 
@@ -540,15 +541,15 @@ func TestATextComponentTypesTheKeysItsCardForwards(t *testing.T) {
 	// same key twice inside the commit delay cycles the character it just
 	// produced, and a test that let the wall clock answer would be asserting
 	// how fast it ran.
-	clock := NewManualClock(time.Time{})
-	runtime := &initializationRuntime{client: &Client{clock: clock}}
+	clock := wipicrt.NewManualClock(time.Time{})
+	runtime := detachedRuntime(&wipicrt.Client{Clock: clock})
 	field := newWidget(runtimeTextFieldComponentClass)
 	vm := jvm.New(nil, jvm.Options{})
 
 	press := func(key int32) int32 {
 		t.Helper()
 		result, err := runtimeTextComponentKeyNotify(runtime, vm, []jvm.Value{
-			jvm.ReferenceValue(field), jvm.IntValue(KeyPressed), jvm.IntValue(key),
+			jvm.ReferenceValue(field), jvm.IntValue(wipicrt.KeyPressed), jvm.IntValue(key),
 		})
 		if err != nil {
 			t.Fatalf("keyNotify(%d): %v", key, err)
@@ -581,15 +582,15 @@ func TestATextComponentTypesTheKeysItsCardForwards(t *testing.T) {
 
 	// The clear key deletes, and the two keys the keypad spends on editing are
 	// the component's too.
-	press(KeyClear)
-	press(KeyClear)
+	press(wipicrt.KeyClear)
+	press(wipicrt.KeyClear)
 	if got := runtimeComponentText(field); got != "h" {
 		t.Fatalf("after clear the field holds %q, want %q", got, "h")
 	}
 
 	// Everything else travels on: a screen with a field on it still has to be
 	// able to leave.
-	for _, key := range []int32{KeyUp, KeyDown, KeyLeft, KeyRight, KeyFire, KeyLeftSoft} {
+	for _, key := range []int32{wipicrt.KeyUp, wipicrt.KeyDown, wipicrt.KeyLeft, wipicrt.KeyRight, wipicrt.KeyFire, wipicrt.KeyLeftSoft} {
 		if got := press(key); got != 1 {
 			t.Fatalf("key %d answered %d, want 1 — the component did not take it", key, got)
 		}
@@ -597,7 +598,7 @@ func TestATextComponentTypesTheKeysItsCardForwards(t *testing.T) {
 	// A release is not a press: multi-tap counts presses, and cycling on the
 	// release would type every character twice.
 	result, err := runtimeTextComponentKeyNotify(runtime, vm, []jvm.Value{
-		jvm.ReferenceValue(field), jvm.IntValue(KeyReleased), jvm.IntValue('4'),
+		jvm.ReferenceValue(field), jvm.IntValue(wipicrt.KeyReleased), jvm.IntValue('4'),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -624,7 +625,7 @@ func TestATextComponentTypesTheKeysItsCardForwards(t *testing.T) {
 
 // The limit a title sets is the limit typing obeys.
 func TestTypingStopsAtTheMaximumLength(t *testing.T) {
-	runtime := &initializationRuntime{client: &Client{}}
+	runtime := detachedRuntime(&wipicrt.Client{})
 	vm := jvm.New(nil, jvm.Options{})
 	field := newWidget(runtimeTextFieldComponentClass)
 	if _, err := runtimeTextComponentSetMaxLength(runtime, vm, []jvm.Value{
@@ -634,7 +635,7 @@ func TestTypingStopsAtTheMaximumLength(t *testing.T) {
 	}
 	for _, key := range []int32{'2', '3', '4', '5'} {
 		if _, err := runtimeTextComponentKeyNotify(runtime, vm, []jvm.Value{
-			jvm.ReferenceValue(field), jvm.IntValue(KeyPressed), jvm.IntValue(key),
+			jvm.ReferenceValue(field), jvm.IntValue(wipicrt.KeyPressed), jvm.IntValue(key),
 		}); err != nil {
 			t.Fatal(err)
 		}

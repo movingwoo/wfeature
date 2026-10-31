@@ -7,6 +7,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestKTFRestoredFocus(t *testing.T) {
@@ -228,7 +229,7 @@ func TestKTFHostThenKeypadLimit(t *testing.T) {
 					}
 					return
 				}
-				callShellInput(t, s, runtimeTextComponentKeyNotify, field, jvm.IntValue(KeyPressed), jvm.IntValue(int32(ch)))
+				callShellInput(t, s, runtimeTextComponentKeyNotify, field, jvm.IntValue(wipicrt.KeyPressed), jvm.IntValue(int32(ch)))
 			}
 			edit, err := s.TextInput(t.Context())
 			if err != nil {
@@ -264,7 +265,7 @@ func TestKnownCEncodingLimits(t *testing.T) {
 		{"empty", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := validateCInput(tc.text)
+			_, err := wipicrt.ValidateCInput(tc.text)
 			if (err == nil) != tc.valid {
 				t.Fatalf("encoding contract: valid=%v err=%v", tc.valid, err)
 			}

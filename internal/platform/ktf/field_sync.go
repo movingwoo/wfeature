@@ -140,7 +140,7 @@ func publishGuestByteSource(runtime *initializationRuntime, address uint32, obje
 		return false, err
 	}
 	base := address + javaInstanceSize + javaInstanceHeader
-	current, err := runtime.readAOTWords(base, uint32(len(wanted)), "byte source words")
+	current, err := runtime.ReadAOTWords(base, uint32(len(wanted)), "byte source words")
 	if err != nil {
 		return false, err
 	}
@@ -151,7 +151,7 @@ func publishGuestByteSource(runtime *initializationRuntime, address uint32, obje
 	for index, word := range wanted {
 		binary.LittleEndian.PutUint32(payload[index*4:], word)
 	}
-	if err := runtime.client.core.Memory().Write(base, payload); err != nil {
+	if err := runtime.client.Core().Memory().Write(base, payload); err != nil {
 		return false, fmt.Errorf("write KTF byte source fields at %#x: %w", address, err)
 	}
 	return true, nil
@@ -228,7 +228,7 @@ func publishGuestReferenceWord(runtime *initializationRuntime, address uint32, o
 		}
 		wanted = bound
 	}
-	current, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte buffer word")
+	current, err := runtime.ReadAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte buffer word")
 	if err != nil {
 		return false, err
 	}
@@ -237,7 +237,7 @@ func publishGuestReferenceWord(runtime *initializationRuntime, address uint32, o
 	}
 	payload := make([]byte, 4)
 	binary.LittleEndian.PutUint32(payload, wanted)
-	if err := runtime.client.core.Memory().Write(address+javaInstanceSize+javaInstanceHeader, payload); err != nil {
+	if err := runtime.client.Core().Memory().Write(address+javaInstanceSize+javaInstanceHeader, payload); err != nil {
 		return false, fmt.Errorf("write KTF %s buffer at %#x: %w", class, address, err)
 	}
 	return true, nil
@@ -264,7 +264,7 @@ func adoptGuestByteSource(runtime *initializationRuntime, address uint32, object
 	if expected == nil {
 		return false, nil
 	}
-	current, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader,
+	current, err := runtime.ReadAOTWords(address+javaInstanceSize+javaInstanceHeader,
 		uint32(len(expected)), "byte source words")
 	if err != nil {
 		return false, err
@@ -297,7 +297,7 @@ func adoptGuestReferenceWord(runtime *initializationRuntime, address uint32, obj
 			return false, nil
 		}
 	}
-	current, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte buffer word")
+	current, err := runtime.ReadAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte buffer word")
 	if err != nil {
 		return false, err
 	}
@@ -366,7 +366,7 @@ func (runtime *initializationRuntime) publishGuestFields(object *jvm.Object, met
 		return fmt.Errorf("publish KTF %s fields at %#x: %w", object.ClassName, address, err)
 	}
 	if written {
-		runtime.countDiagnostic("field publish " + object.ClassName)
+		runtime.CountDiagnostic("field publish " + object.ClassName)
 	}
 	return nil
 }
@@ -392,18 +392,18 @@ func (runtime *initializationRuntime) adoptGuestFields(object *jvm.Object) {
 	}
 	diverged, err := sync.adopt(runtime, address, object)
 	if err != nil {
-		runtime.countDiagnostic("field adopt failed " + object.ClassName)
+		runtime.CountDiagnostic("field adopt failed " + object.ClassName)
 		return
 	}
 	if diverged {
-		runtime.countDiagnostic("field divergence " + object.ClassName)
+		runtime.CountDiagnostic("field divergence " + object.ClassName)
 	}
 }
 
 // readGuestStringFields reads the three words a string publishes: the character
 // array, the view's first index into it, and its length.
 func (runtime *initializationRuntime) readGuestStringFields(address uint32) (value, offset, count uint32, err error) {
-	words, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 3, "string fields")
+	words, err := runtime.ReadAOTWords(address+javaInstanceSize+javaInstanceHeader, 3, "string fields")
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -420,7 +420,7 @@ func (runtime *initializationRuntime) readGuestStringUnits(value, offset, count 
 	if count > maxJavaStringUnits {
 		return nil, false, nil
 	}
-	lengths, err := runtime.readAOTWords(value+javaInstanceSize+javaInstanceHeader, 1, "string content length")
+	lengths, err := runtime.ReadAOTWords(value+javaInstanceSize+javaInstanceHeader, 1, "string content length")
 	if err != nil {
 		return nil, false, err
 	}
@@ -432,7 +432,7 @@ func (runtime *initializationRuntime) readGuestStringUnits(value, offset, count 
 		return nil, true, nil
 	}
 	elements := value + javaInstanceSize + javaInstanceHeader + javaArrayLengthSize + offset*2
-	data, err := runtime.readAOTBytes(elements, uint64(count)*2, "string content")
+	data, err := runtime.ReadAOTBytes(elements, uint64(count)*2, "string content")
 	if err != nil {
 		return nil, false, err
 	}
@@ -445,7 +445,7 @@ func (runtime *initializationRuntime) readGuestStringUnits(value, offset, count 
 
 // guestArrayLength reads a guest array's length word.
 func (runtime *initializationRuntime) guestArrayLength(array uint32) (uint32, error) {
-	lengths, err := runtime.readAOTWords(array+javaInstanceSize+javaInstanceHeader, 1, "array length")
+	lengths, err := runtime.ReadAOTWords(array+javaInstanceSize+javaInstanceHeader, 1, "array length")
 	if err != nil {
 		return 0, err
 	}
@@ -486,7 +486,7 @@ func publishGuestString(runtime *initializationRuntime, address uint32, object *
 	binary.LittleEndian.PutUint32(payload[0:], arrayAddress)
 	binary.LittleEndian.PutUint32(payload[4:], 0)
 	binary.LittleEndian.PutUint32(payload[8:], uint32(len(units)))
-	if err := runtime.client.core.Memory().Write(address+javaInstanceSize+javaInstanceHeader, payload); err != nil {
+	if err := runtime.client.Core().Memory().Write(address+javaInstanceSize+javaInstanceHeader, payload); err != nil {
 		return false, fmt.Errorf("write KTF string fields at %#x: %w", address, err)
 	}
 	return true, nil
@@ -571,7 +571,7 @@ var cardBoundsFields = []string{"x:I", "y:I", "w:I", "h:I", "transparent:Z"}
 
 // readGuestCardBounds reads the five words a Card publishes.
 func (runtime *initializationRuntime) readGuestCardBounds(address uint32) ([]uint32, error) {
-	return runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, uint32(len(cardBoundsFields)), "card bounds")
+	return runtime.ReadAOTWords(address+javaInstanceSize+javaInstanceHeader, uint32(len(cardBoundsFields)), "card bounds")
 }
 
 // cardBoundsValues answers what the Go side of a Card says its words are.
@@ -607,7 +607,7 @@ func publishGuestCardBounds(runtime *initializationRuntime, address uint32, obje
 	for index, word := range wanted {
 		binary.LittleEndian.PutUint32(payload[index*4:], word)
 	}
-	if err := runtime.client.core.Memory().Write(address+javaInstanceSize+javaInstanceHeader, payload); err != nil {
+	if err := runtime.client.Core().Memory().Write(address+javaInstanceSize+javaInstanceHeader, payload); err != nil {
 		return false, fmt.Errorf("write KTF card bounds at %#x: %w", address, err)
 	}
 	return true, nil
@@ -651,7 +651,7 @@ func publishGuestTextComponent(runtime *initializationRuntime, address uint32, o
 		return false, nil
 	}
 	base := address + javaInstanceSize + javaInstanceHeader
-	current, err := runtime.readAOTWords(base, words, "text component fields")
+	current, err := runtime.ReadAOTWords(base, words, "text component fields")
 	if err != nil {
 		return false, err
 	}
@@ -743,7 +743,7 @@ func publishGuestTextComponent(runtime *initializationRuntime, address uint32, o
 	for index, word := range wanted {
 		binary.LittleEndian.PutUint32(payload[index*4:], word)
 	}
-	if err := runtime.client.core.Memory().Write(base, payload); err != nil {
+	if err := runtime.client.Core().Memory().Write(base, payload); err != nil {
 		return false, fmt.Errorf("write KTF text component fields at %#x: %w", address, err)
 	}
 	return true, nil
@@ -768,7 +768,7 @@ func (runtime *initializationRuntime) publishTextComponent(component *jvm.Object
 		return fmt.Errorf("publish KTF %s fields at %#x: %w", component.ClassName, address, err)
 	}
 	if written {
-		runtime.countDiagnostic("field publish " + component.ClassName)
+		runtime.CountDiagnostic("field publish " + component.ClassName)
 	}
 	return nil
 }

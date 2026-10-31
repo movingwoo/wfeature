@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/route"
 )
 
@@ -54,7 +55,7 @@ const hostTickBudget = 32 * time.Millisecond
 const blindWarmupTicks = 3000
 
 func newProbeClock() *probeClock {
-	return &probeClock{manual: time.UnixMilli(manualClockEpochMillis).UTC()}
+	return &probeClock{manual: time.UnixMilli(wipicrt.ManualClockEpochMillis).UTC()}
 }
 
 func (clock *probeClock) Now() time.Time {
@@ -116,7 +117,7 @@ func TestRoutedLoadProbe(t *testing.T) {
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
-		script, err = route.Parse(string(text), KeyCodeByName)
+		script, err = route.Parse(string(text), wipicrt.KeyCodeByName)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -162,9 +163,9 @@ func TestRoutedLoadProbe(t *testing.T) {
 	runner := &route.Runner{
 		Digest: session.FrameDigest,
 		SendKey: func(ctx context.Context, pressed bool, key int32) error {
-			eventType := KeyPressed
+			eventType := wipicrt.KeyPressed
 			if !pressed {
-				eventType = KeyReleased
+				eventType = wipicrt.KeyReleased
 			}
 			return session.SendKey(ctx, eventType, key)
 		},
@@ -221,7 +222,7 @@ func TestRoutedLoadProbe(t *testing.T) {
 		clock.golive()
 	}
 
-	startSteps := session.Client.core.Steps()
+	startSteps := session.Client.Core().Steps()
 	started := time.Now()
 	busy := time.Duration(0)
 	// behind counts the entries that came back with no wait left, and slack
@@ -273,12 +274,12 @@ func TestRoutedLoadProbe(t *testing.T) {
 	// The share is what separates a title the drop can rescue from one it
 	// cannot, so a sweep reads this column to see where a title falls.
 	paintShare := 0.0
-	if session.Client.entryCost > 0 {
-		paintShare = session.Client.paintCost.Seconds() / session.Client.entryCost.Seconds()
+	if session.Client.EntryCost > 0 {
+		paintShare = session.Client.PaintCost.Seconds() / session.Client.EntryCost.Seconds()
 	}
 	t.Logf("paint=%v entry=%v share=%.4f (floor %.2f)",
-		session.Client.paintCost.Round(time.Microsecond),
-		session.Client.entryCost.Round(time.Microsecond), paintShare, paintShareFloor)
+		session.Client.PaintCost.Round(time.Microsecond),
+		session.Client.EntryCost.Round(time.Microsecond), paintShare, paintShareFloor)
 	meanSlack := time.Duration(0)
 	if onTime := entries - behind; onTime > 0 {
 		meanSlack = slack / time.Duration(onTime)
@@ -315,7 +316,7 @@ func TestRoutedLoadProbe(t *testing.T) {
 	// need. See docs/history/lgt.md, "What the rate has to be for a title to get the
 	// period it asks for".
 	if rounds > 0 {
-		perRound := float64(session.Client.core.Steps()-startSteps) / float64(rounds)
+		perRound := float64(session.Client.Core().Steps()-startSteps) / float64(rounds)
 		// The slack is wall time; the period the guest asked for is what that
 		// is worth on its own clock.
 		guestPeriodMillis := meanSlack.Seconds() * 1000 * speed

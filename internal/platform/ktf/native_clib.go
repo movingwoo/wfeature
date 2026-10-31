@@ -6,6 +6,7 @@ import (
 	"math"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -74,7 +75,7 @@ const nativeMaxString = 64 << 10
 // limit rather than the string limit: a title that copies a decoded asset
 // around moves more than a name, and a bound that stopped it would report a
 // copy where the fault is a size the title computed.
-const nativeMaxTransfer = maxPlatformAllocation
+const nativeMaxTransfer = wipicrt.MaxPlatformAllocation
 
 // installLibrary registers the platform table's C library.
 func (platform *NativePlatform) installLibrary() {
@@ -129,7 +130,7 @@ func (platform *NativePlatform) readString(address uint32) ([]byte, error) {
 	if address == 0 {
 		return nil, fmt.Errorf("KTF native library call on a null string")
 	}
-	text, terminated, err := readGuestString(platform.client.core.Memory(), address, nativeMaxString, 1)
+	text, terminated, err := wipicrt.ReadGuestString(platform.client.core.Memory(), address, nativeMaxString, 1)
 	if err != nil {
 		return nil, fmt.Errorf("read KTF native string at %#x: %w", address, err)
 	}
@@ -415,7 +416,7 @@ func (platform *NativePlatform) widen(thread *armcore.Thread) (uint32, error) {
 			return 0, fmt.Errorf("KTF native library call on a null string")
 		}
 		memory := platform.client.core.Memory()
-		if text, _, err = readGuestString(memory, source, uint32(min(count, nativeMaxString)), 1); err != nil {
+		if text, _, err = wipicrt.ReadGuestString(memory, source, uint32(min(count, nativeMaxString)), 1); err != nil {
 			return 0, fmt.Errorf("read KTF native string at %#x: %w", source, err)
 		}
 	}

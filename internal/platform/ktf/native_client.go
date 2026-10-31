@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A module from the earlier KTF package reaches the platform through one flat
@@ -40,7 +41,7 @@ const (
 	// The loader plants the platform table pointer in the word below the
 	// module, which needs a mapping of its own: the module's own mapping
 	// starts at the image base.
-	nativeHeaderBase = ImageBase - nativePageSize
+	nativeHeaderBase = wipicrt.ImageBase - nativePageSize
 
 	// nativeStackHeadroom is how much of the stack mapping is left *above* the
 	// module's first stack pointer.
@@ -77,9 +78,9 @@ const (
 
 	// Each surface gets a page for its table and a page for its stubs, which
 	// is more than either needs and keeps the arithmetic legible.
-	nativeTableBase   = platformDataBase
-	nativeStubBase    = platformCodeBase
-	nativeScratchBase = platformDataBase + maxNativeSurfaces*nativePageSize
+	nativeTableBase   = wipicrt.PlatformDataBase
+	nativeStubBase    = wipicrt.PlatformCodeBase
+	nativeScratchBase = wipicrt.PlatformDataBase + maxNativeSurfaces*nativePageSize
 
 	// nativeEntryObject is the object handed to the entry as its first
 	// argument, and nativeEntryOut is the out parameter it writes through.
@@ -92,7 +93,7 @@ const (
 	// a probe that cannot allocate sees one call and nothing after it. The
 	// arena is bump-only here: this client exists to find out what a module
 	// asks for, and reclaiming is a question for the platform that answers it.
-	nativeArenaBase = platformDataBase + (maxNativeSurfaces+1)*nativePageSize
+	nativeArenaBase = wipicrt.PlatformDataBase + (maxNativeSurfaces+1)*nativePageSize
 	nativeArenaSize = 32 << 20
 
 	// nativeBlockAlignment is what an ARM procedure call standard block needs,
@@ -157,7 +158,7 @@ type NativeClient struct {
 	slotCounts map[nativeSlotKey]*NativeSlotCount
 	made       uint64
 	served     map[nativeSlotKey]NativeSlotHandler
-	arena      *guestArena
+	arena      *wipicrt.GuestArena
 	// blocks records the size of every live allocation, because the module
 	// gives a block back as a bare pointer.
 	blocks map[uint32]uint64
@@ -227,7 +228,7 @@ func LoadNativeClient(archive *NativeArchive, options armcore.CoreOptions) (*Nat
 	if err != nil {
 		return nil, err
 	}
-	if uint64(ImageBase)+uint64(mapped) > uint64(ThreadStackBase) {
+	if uint64(wipicrt.ImageBase)+uint64(mapped) > uint64(wipicrt.ThreadStackBase) {
 		return nil, fmt.Errorf("KTF native module maps %d bytes and overlaps the guest stack", mapped)
 	}
 
@@ -237,16 +238,16 @@ func LoadNativeClient(archive *NativeArchive, options armcore.CoreOptions) (*Nat
 	// it is loaded rather than relocated: where the descriptor package's entry
 	// point walks a table adding its own load delta to every word, this one has
 	// nothing to walk and runs wherever it is put.
-	if err := memory.Map(ImageBase, uint64(mapped), armcore.PermissionReadWriteExecute); err != nil {
+	if err := memory.Map(wipicrt.ImageBase, uint64(mapped), armcore.PermissionReadWriteExecute); err != nil {
 		return nil, fmt.Errorf("map KTF native module: %w", err)
 	}
-	if err := memory.Load(ImageBase, archive.Module); err != nil {
+	if err := memory.Load(wipicrt.ImageBase, archive.Module); err != nil {
 		return nil, fmt.Errorf("load KTF native module: %w", err)
 	}
 	if err := memory.Map(nativeHeaderBase, nativePageSize, armcore.PermissionReadWrite); err != nil {
 		return nil, fmt.Errorf("map KTF native module header: %w", err)
 	}
-	if err := memory.Map(ThreadStackBase, ThreadStackSize, armcore.PermissionReadWrite); err != nil {
+	if err := memory.Map(wipicrt.ThreadStackBase, wipicrt.ThreadStackSize, armcore.PermissionReadWrite); err != nil {
 		return nil, fmt.Errorf("map KTF native stack: %w", err)
 	}
 	if err := memory.Map(nativeTableBase, maxNativeSurfaces*nativePageSize, armcore.PermissionReadWrite); err != nil {
@@ -267,7 +268,7 @@ func LoadNativeClient(archive *NativeArchive, options armcore.CoreOptions) (*Nat
 		mapped:     mapped,
 		served:     map[nativeSlotKey]NativeSlotHandler{},
 		interfaces: map[uint32]uint32{},
-		arena:      newGuestArena(nativeArenaBase, nativeArenaSize),
+		arena:      wipicrt.NewGuestArena(nativeArenaBase, nativeArenaSize),
 		blocks:     map[uint32]uint64{},
 	}
 	platformTable, err := client.addSurface(NativePlatformTable)
@@ -291,12 +292,12 @@ func LoadNativeClient(archive *NativeArchive, options armcore.CoreOptions) (*Nat
 	header := make([]byte, 8)
 	binary.LittleEndian.PutUint32(header, nativeInterfaceVersion)
 	binary.LittleEndian.PutUint32(header[4:], platformTable)
-	if err := memory.Load(ImageBase-8, header); err != nil {
+	if err := memory.Load(wipicrt.ImageBase-8, header); err != nil {
 		return nil, fmt.Errorf("plant the words below the KTF native module: %w", err)
 	}
 
 	initial := armcore.NewContext()
-	initial.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize) - nativeStackHeadroom
+	initial.Registers[armcore.RegisterSP] = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize) - nativeStackHeadroom
 	client.thread = armcore.NewThread(initial)
 	client.archive = archive
 	return client, nil
@@ -328,8 +329,8 @@ func (client *NativeClient) addSurface(name NativeSurface) (uint32, error) {
 	memory := client.core.Memory()
 	table := make([]byte, nativeTableSlots*4)
 	for slot := range nativeTableSlots {
-		address := surface.stubs + uint32(slot*svcStubSize)
-		if err := memory.Load(address, svcStub(svcCategoryNativeTable, uint32(index)<<16|uint32(slot))); err != nil {
+		address := surface.stubs + uint32(slot*wipicrt.SVCStubSize)
+		if err := memory.Load(address, wipicrt.SVCStub(svcCategoryNativeTable, uint32(index)<<16|uint32(slot))); err != nil {
 			return 0, fmt.Errorf("load KTF native trap stub %d of surface %q: %w", slot, name, err)
 		}
 		// Every stub is Thumb, which the low bit of its address says.
@@ -402,7 +403,7 @@ func (client *NativeClient) Start(ctx context.Context) error {
 	client.run.Lock()
 	defer client.run.Unlock()
 	arguments := []uint32{nativeEntryObject, nativeScratchBase + 0x100, nativeEntryOut}
-	_, err := client.core.Call(ctx, client.thread, ImageBase, ReturnAddress, arguments, client.handleSupervisorCall)
+	_, err := client.core.Call(ctx, client.thread, wipicrt.ImageBase, wipicrt.ReturnAddress, arguments, client.handleSupervisorCall)
 	return err
 }
 
@@ -446,7 +447,7 @@ func (client *NativeClient) CallExport(ctx context.Context, address uint32, argu
 	// reading r0 from the thread afterwards reports whatever the parent held —
 	// which is zero on a fresh client, and reads exactly like a call that
 	// succeeded.
-	summary, err := client.core.Call(ctx, client.thread, address, ReturnAddress, arguments, client.handleSupervisorCall)
+	summary, err := client.core.Call(ctx, client.thread, address, wipicrt.ReturnAddress, arguments, client.handleSupervisorCall)
 	if err != nil {
 		return 0, err
 	}
@@ -675,13 +676,13 @@ func (client *NativeClient) Allocate(size uint32) (uint32, error) {
 	if size == 0 {
 		return 0, fmt.Errorf("KTF native allocation of zero bytes")
 	}
-	if uint64(size) > maxPlatformAllocation {
-		return 0, fmt.Errorf("KTF native allocation %d exceeds %d bytes", size, maxPlatformAllocation)
+	if uint64(size) > wipicrt.MaxPlatformAllocation {
+		return 0, fmt.Errorf("KTF native allocation %d exceeds %d bytes", size, wipicrt.MaxPlatformAllocation)
 	}
 	// Eight-byte alignment is what an ARM procedure call standard block needs,
 	// and a module that stores doubles into what it was handed needs it here.
 	aligned := (uint64(size) + nativeBlockAlignment - 1) &^ uint64(nativeBlockAlignment-1)
-	address, ok := client.arena.allocate(aligned)
+	address, ok := client.arena.Allocate(aligned)
 	if !ok {
 		return 0, fmt.Errorf("KTF native arena exhausted at %d bytes", size)
 	}
@@ -702,7 +703,7 @@ func (client *NativeClient) Free(address uint32) {
 		return
 	}
 	delete(client.blocks, address)
-	client.arena.release(address, size)
+	client.arena.Release(address, size)
 }
 
 // Reallocate grows or shrinks a block, keeping what fits.
@@ -743,7 +744,7 @@ func (client *NativeClient) Reallocate(address, size uint32) (uint32, error) {
 
 // AvailableMemory reports what a further allocation could still claim, which
 // is the number the module asks the platform for before sizing its own caches.
-func (client *NativeClient) AvailableMemory() uint64 { return client.arena.available() }
+func (client *NativeClient) AvailableMemory() uint64 { return client.arena.Available() }
 
 // ServeAllocator answers one table slot as an allocator taking its size in r0.
 func (client *NativeClient) ServeAllocator(surface NativeSurface, offset uint32) {

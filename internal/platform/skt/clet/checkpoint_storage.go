@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // Quick load and storage
@@ -58,36 +59,36 @@ type fileHandleSnapshot struct {
 }
 
 func (runtime *initializationRuntime) captureStorageState() (storageState, error) {
-	saved := storageState{NextFileHandle: runtime.nextCDatabaseHandle}
-	if len(runtime.cFiles) > 1<<16 || len(runtime.cFileHandles) > maxCFileHandles {
+	saved := storageState{NextFileHandle: runtime.NextCDatabaseHandle}
+	if len(runtime.CFiles) > 1<<16 || len(runtime.CFileHandles) > wipicrt.MaxCFileHandles {
 		return storageState{}, fmt.Errorf("SKT Clet file table exceeds its limits")
 	}
 	var bytesHeld uint64
-	ids := make(map[*runtimeCFile]uint32)
-	id := func(file *runtimeCFile) (uint32, error) {
+	ids := make(map[*wipicrt.RuntimeCFile]uint32)
+	id := func(file *wipicrt.RuntimeCFile) (uint32, error) {
 		if file == nil {
 			return 0, fmt.Errorf("SKT Clet file is nil")
 		}
 		if known := ids[file]; known != 0 {
 			return known, nil
 		}
-		if len(file.name) > maxFileNameRead || len(saved.Files) >= 1<<16 {
+		if len(file.Name) > wipicrt.MaxFileNameRead || len(saved.Files) >= 1<<16 {
 			return 0, fmt.Errorf("SKT Clet file exceeds the checkpoint limits")
 		}
 		// A load reads back what these files hold, so what they hold now is
 		// charged now, and a checkpoint no load would accept is not taken.
-		bytesHeld += uint64(len(file.data))
+		bytesHeld += uint64(len(file.Data))
 		if bytesHeld > maxCheckpointStorageBytes {
 			return 0, fmt.Errorf("the files the program has open hold more than the %d bytes a load restores", maxCheckpointStorageBytes)
 		}
-		saved.Files = append(saved.Files, fileSnapshot{Name: []byte(file.name)})
+		saved.Files = append(saved.Files, fileSnapshot{Name: []byte(file.Name)})
 		ids[file] = uint32(len(saved.Files))
 		return ids[file], nil
 	}
 	// Map order would make two captures of one session differ.
-	for _, name := range sortedKeys(runtime.cFiles) {
-		file := runtime.cFiles[name]
-		if file == nil || name != file.name {
+	for _, name := range sortedKeys(runtime.CFiles) {
+		file := runtime.CFiles[name]
+		if file == nil || name != file.Name {
 			return storageState{}, fmt.Errorf("SKT Clet file table differs from its file names")
 		}
 		known, err := id(file)
@@ -96,16 +97,16 @@ func (runtime *initializationRuntime) captureStorageState() (storageState, error
 		}
 		saved.Files[known-1].Catalog = true
 	}
-	for _, handle := range sortedKeys(runtime.cFileHandles) {
-		open := runtime.cFileHandles[handle]
-		if open == nil || open.position < 0 || open.position > maxCFileBytes {
+	for _, handle := range sortedKeys(runtime.CFileHandles) {
+		open := runtime.CFileHandles[handle]
+		if open == nil || open.Position < 0 || open.Position > wipicrt.MaxCFileBytes {
 			return storageState{}, fmt.Errorf("SKT Clet open file cursor is invalid")
 		}
-		known, err := id(open.store)
+		known, err := id(open.Store)
 		if err != nil {
 			return storageState{}, err
 		}
-		saved.FileHandles = append(saved.FileHandles, fileHandleSnapshot{Handle: handle, Store: known, Position: int32(open.position)})
+		saved.FileHandles = append(saved.FileHandles, fileHandleSnapshot{Handle: handle, Store: known, Position: int32(open.Position)})
 	}
 	if err := saved.validate(); err != nil {
 		return storageState{}, err
@@ -114,12 +115,12 @@ func (runtime *initializationRuntime) captureStorageState() (storageState, error
 }
 
 func (saved storageState) validate() error {
-	if len(saved.Files) > 1<<16 || len(saved.FileHandles) > maxCFileHandles || saved.NextFileHandle > maxCFileHandles {
+	if len(saved.Files) > 1<<16 || len(saved.FileHandles) > wipicrt.MaxCFileHandles || saved.NextFileHandle > wipicrt.MaxCFileHandles {
 		return fmt.Errorf("SKT Clet file table record exceeds its limits")
 	}
 	catalog := make(map[string]bool)
 	for _, file := range saved.Files {
-		if len(file.Name) > maxFileNameRead || !cFileNameKeyed(string(file.Name)) || reservedStorageName(cFileScope, string(file.Name)) ||
+		if len(file.Name) > wipicrt.MaxFileNameRead || !wipicrt.CFileNameKeyed(string(file.Name)) || wipicrt.ReservedStorageName(wipicrt.CFileScope, string(file.Name)) ||
 			file.Catalog && catalog[string(file.Name)] {
 			return fmt.Errorf("SKT Clet file table record names an invalid file")
 		}
@@ -130,8 +131,8 @@ func (saved storageState) validate() error {
 	used := make(map[uint32]bool)
 	held := make([]bool, len(saved.Files)+1)
 	for _, handle := range saved.FileHandles {
-		if handle.Handle <= cFileHandleBit || handle.Handle > cFileHandleBit|saved.NextFileHandle || handle.Handle&^uint32(maxCFileHandles) != cFileHandleBit ||
-			used[handle.Handle] || handle.Store == 0 || uint64(handle.Store) > uint64(len(saved.Files)) || handle.Position < 0 || handle.Position > maxCFileBytes {
+		if handle.Handle <= wipicrt.CFileHandleBit || handle.Handle > wipicrt.CFileHandleBit|saved.NextFileHandle || handle.Handle&^uint32(wipicrt.MaxCFileHandles) != wipicrt.CFileHandleBit ||
+			used[handle.Handle] || handle.Store == 0 || uint64(handle.Store) > uint64(len(saved.Files)) || handle.Position < 0 || handle.Position > wipicrt.MaxCFileBytes {
 			return fmt.Errorf("SKT Clet file handle record is invalid")
 		}
 		used[handle.Handle], held[handle.Store] = true, true
@@ -149,7 +150,7 @@ func (saved storageState) validate() error {
 // restoredStorage is every file a checkpoint named, once, with nothing in it
 // yet: what a store fills when the load commits.
 type restoredStorage struct {
-	files []*runtimeCFile
+	files []*wipicrt.RuntimeCFile
 }
 
 // restoreStorageState builds the file table a record names, every file empty
@@ -161,24 +162,24 @@ func (runtime *initializationRuntime) restoreStorageState(saved storageState) (*
 	restored := &restoredStorage{}
 	// One name is one file: a record can name one twice, in the table and
 	// under a handle that outlived it, and both are the same file once read.
-	named := make(map[string]*runtimeCFile, len(saved.Files))
-	files := make([]*runtimeCFile, len(saved.Files)+1)
+	named := make(map[string]*wipicrt.RuntimeCFile, len(saved.Files))
+	files := make([]*wipicrt.RuntimeCFile, len(saved.Files)+1)
 	for index, record := range saved.Files {
 		file := named[string(record.Name)]
 		if file == nil {
-			file = &runtimeCFile{name: string(record.Name)}
-			named[file.name] = file
+			file = &wipicrt.RuntimeCFile{Name: string(record.Name)}
+			named[file.Name] = file
 			restored.files = append(restored.files, file)
 		}
 		files[index+1] = file
 		if record.Catalog {
-			runtime.cFiles[file.name] = file
+			runtime.CFiles[file.Name] = file
 		}
 	}
 	for _, handle := range saved.FileHandles {
-		runtime.cFileHandles[handle.Handle] = &runtimeCFileHandle{store: files[handle.Store], position: int(handle.Position)}
+		runtime.CFileHandles[handle.Handle] = &wipicrt.RuntimeCFileHandle{Store: files[handle.Store], Position: int(handle.Position)}
 	}
-	runtime.nextCDatabaseHandle = saved.NextFileHandle
+	runtime.NextCDatabaseHandle = saved.NextFileHandle
 	return restored, nil
 }
 
@@ -187,32 +188,32 @@ func (runtime *initializationRuntime) restoreStorageState(saved storageState) (*
 // are made, each key once and on a budget. On a failure the client is left on
 // the store it had, still to be bound, and the error says the saves could not
 // be read; nothing of the store or of a running session has changed.
-func (client *Client) bindRestoredStorage(restored *restoredStorage, live SaveStore) error {
+func (client *Client) bindRestoredStorage(restored *restoredStorage, live wipicrt.SaveStore) error {
 	reader := backend.NewRebuildReader(live, maxCheckpointStorageBytes)
-	unbound := client.saveStore
-	client.saveStore = reader
+	unbound := client.SaveStore
+	client.SaveStore = reader
 	err := client.runtime.rebindRestoredStorage(restored)
 	if err == nil {
 		err = reader.Err()
 	}
 	if err != nil {
-		client.saveStore = unbound
+		client.SaveStore = unbound
 		return fmt.Errorf("%w: %v", backend.ErrCheckpointSaveRead, err)
 	}
-	client.saveStore = live
+	client.SaveStore = live
 	return nil
 }
 
 // rebindRestoredStorage starts from the names every time, so a second attempt
 // after a failed one is the first attempt again.
 func (runtime *initializationRuntime) rebindRestoredStorage(restored *restoredStorage) error {
-	runtime.saveReadError = nil
-	runtime.removedFiles, runtime.removedCDatabases, runtime.madeDirectories = nil, nil, nil
-	runtime.cFiles, runtime.detachedCFiles = make(map[string]*runtimeCFile), make(map[string]*runtimeCFile)
+	runtime.SaveReadError = nil
+	runtime.RemovedFiles, runtime.RemovedCDatabases, runtime.MadeDirectories = nil, nil, nil
+	runtime.CFiles, runtime.DetachedCFiles = make(map[string]*wipicrt.RuntimeCFile), make(map[string]*wipicrt.RuntimeCFile)
 	failed := func(err error) error {
 		// A failed read must not outlive the attempt: the runtime keeps one
 		// for the life of a session and refuses every later write.
-		runtime.saveReadError = nil
+		runtime.SaveReadError = nil
 		return err
 	}
 	if restored == nil {
@@ -222,28 +223,28 @@ func (runtime *initializationRuntime) rebindRestoredStorage(restored *restoredSt
 	// Every list is read here, the ones no lookup below asks for among them:
 	// a read that fails stops every storage call after it, which has to
 	// refuse the load and not meet the program at its first call.
-	runtime.removedGuestFiles()
-	runtime.removedDatabases()
-	runtime.createdDirectories()
-	if runtime.saveReadError != nil {
-		return failed(runtime.saveReadError)
+	runtime.RemovedGuestFiles()
+	runtime.RemovedDatabases()
+	runtime.CreatedDirectories()
+	if runtime.SaveReadError != nil {
+		return failed(runtime.SaveReadError)
 	}
-	held := make(map[*runtimeCFile]bool, len(runtime.cFileHandles))
-	for _, open := range runtime.cFileHandles {
-		held[open.store] = true
+	held := make(map[*wipicrt.RuntimeCFile]bool, len(runtime.CFileHandles))
+	for _, open := range runtime.CFileHandles {
+		held[open.Store] = true
 	}
 	for _, file := range restored.files {
-		seed, found := runtime.databaseSeed(file.name)
-		file.data, file.packaged = nil, 0
-		if packaged, shipped := runtime.packagedDatabase(file.name); shipped {
-			file.packaged = len(packaged)
+		seed, found := runtime.DatabaseSeed(file.Name)
+		file.Data, file.Packaged = nil, 0
+		if packaged, shipped := runtime.PackagedDatabase(file.Name); shipped {
+			file.Packaged = len(packaged)
 		}
-		if runtime.saveReadError != nil {
-			return failed(runtime.saveReadError)
+		if runtime.SaveReadError != nil {
+			return failed(runtime.SaveReadError)
 		}
 		if !found {
 			if held[file] {
-				runtime.detachedCFiles[file.name] = file
+				runtime.DetachedCFiles[file.Name] = file
 			}
 			continue
 		}
@@ -251,8 +252,8 @@ func (runtime *initializationRuntime) rebindRestoredStorage(restored *restoredSt
 			return failed(fmt.Errorf("the files the checkpoint has open hold more than the %d bytes a load restores", maxCheckpointStorageBytes))
 		}
 		kept += uint64(len(seed))
-		file.data = bytes.Clone(seed)
-		runtime.cFiles[file.name] = file
+		file.Data = bytes.Clone(seed)
+		runtime.CFiles[file.Name] = file
 	}
 	return nil
 }

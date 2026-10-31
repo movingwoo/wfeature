@@ -7,18 +7,19 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // newBudgetedTestRuntime is newPacedTestRuntime with a real step window, which
 // the service budget needs: the renewal hook charges one window per call, and
 // a core with no ceiling of its own would make the step allowance unreachable.
-func newBudgetedTestRuntime(t *testing.T, clock Clock, window uint64) *Client {
+func newBudgetedTestRuntime(t *testing.T, clock wipicrt.Clock, window uint64) *Client {
 	t.Helper()
 	client, err := LoadClient(ClientImage{Name: "client.bin0", Data: syntheticInitializableClient()}, armcore.CoreOptions{MaxSteps: window})
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.clock = clock
+	client.Clock = clock
 	client.SetSpeed(1)
 	runtime, err := newInitializationRuntime(client)
 	if err != nil {
@@ -27,7 +28,7 @@ func newBudgetedTestRuntime(t *testing.T, clock Clock, window uint64) *Client {
 	if _, err := runtime.prepare(); err != nil {
 		t.Fatal(err)
 	}
-	client.runtime = runtime
+	client.setRuntimes(runtime, client.prepared)
 	return client
 }
 
@@ -38,19 +39,19 @@ func newBudgetedTestRuntime(t *testing.T, clock Clock, window uint64) *Client {
 // spent passing the time, and charging them to the step allowance ended the
 // title on its first screen.
 func TestAClockPollIsNotChargedToTheStepAllowance(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client := newBudgetedTestRuntime(t, clock, 1000)
-	client.serviceSteps = 2000
+	client.ServiceSteps = 2000
 	ctx := context.Background()
-	closeScope := client.beginHostService(ctx)
+	closeScope := client.BeginHostService(ctx)
 	defer closeScope()
 
 	// Ten windows against an allowance of two: every one of them is a window
 	// the guest spent asking the time on a clock that moved under it.
 	for window := 0; window < 10; window++ {
-		client.runtime.guestMillis()
+		client.runtime.GuestMillis()
 		clock.Advance(100 * time.Millisecond)
-		if err := client.continueHostService(ctx, client.serviceSteps); err != nil {
+		if err := client.ContinueHostService(ctx, client.ServiceSteps); err != nil {
 			t.Fatalf("window %d of a clock poll failed: %v", window, err)
 		}
 	}
@@ -64,19 +65,19 @@ func TestAClockPollIsNotChargedToTheStepAllowance(t *testing.T) {
 // A guest that executes nothing between its reads buys no time with them
 // either, so this is still what a clock nothing moves ends as.
 func TestAFrozenClockStillEndsAServiceCall(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client := newBudgetedTestRuntime(t, clock, 1000)
-	client.serviceSteps = 2000
+	client.ServiceSteps = 2000
 	ctx := context.Background()
-	closeScope := client.beginHostService(ctx)
+	closeScope := client.BeginHostService(ctx)
 	defer closeScope()
 
 	var err error
 	for window := 0; window < 10 && err == nil; window++ {
-		client.runtime.guestMillis()
-		err = client.continueHostService(ctx, client.serviceSteps)
+		client.runtime.GuestMillis()
+		err = client.ContinueHostService(ctx, client.ServiceSteps)
 	}
-	if !errors.Is(err, ErrServiceStepLimit) {
+	if !errors.Is(err, wipicrt.ErrServiceStepLimit) {
 		t.Fatalf("a clock poll on a clock that never moves ended with %v, want the step limit", err)
 	}
 }
@@ -90,29 +91,29 @@ func TestAFrozenClockStillEndsAServiceCall(t *testing.T) {
 // all, and the title spent its whole step allowance eight ticks in without
 // leaving its first screen.
 func TestABatchHostClockRunsAtTheGuestsOwnPace(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client := newBudgetedTestRuntime(t, clock, 1000)
 	ctx := context.Background()
-	closeScope := client.beginHostService(ctx)
+	closeScope := client.BeginHostService(ctx)
 	defer closeScope()
 
 	// The pad loop the guest spins between two reads of the clock, in steps.
 	const padSteps = 160_000
-	started := client.runtime.guestMillis()
-	steps := client.core.Steps()
+	started := client.runtime.GuestMillis()
+	steps := client.Core().Steps()
 	for read := 0; read < 10_000; read++ {
 		steps += padSteps
-		client.advanceBatchClockTo(steps)
-		if client.runtime.guestMillis()-started >= 500 {
-			if spent := steps - client.core.Steps(); spent > serviceDefaultSteps {
+		client.AdvanceBatchClockTo(steps)
+		if client.runtime.GuestMillis()-started >= 500 {
+			if spent := steps - client.Core().Steps(); spent > wipicrt.ServiceDefaultSteps {
 				t.Fatalf("half a second of waiting cost %d steps, past the %d one call is allowed",
-					spent, uint64(serviceDefaultSteps))
+					spent, uint64(wipicrt.ServiceDefaultSteps))
 			}
 			return
 		}
 	}
 	t.Fatalf("half a second of waiting never passed: the clock reached %d of %d",
-		client.runtime.guestMillis(), started+500)
+		client.runtime.GuestMillis(), started+500)
 }
 
 // TestAHostOwnedClockOnlyMovesInsideAServiceCall keeps the change where the
@@ -120,10 +121,10 @@ func TestABatchHostClockRunsAtTheGuestsOwnPace(t *testing.T) {
 // deadline, and a clock that also crept forward under the guest's own
 // execution would arrive at that jump from somewhere the Host did not put it.
 func TestAHostOwnedClockOnlyMovesInsideAServiceCall(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client := newBudgetedTestRuntime(t, clock, 1000)
 	before := clock.Now()
-	client.advanceBatchClockTo(client.core.Steps() + 100*batchGuestStepsPerMillisecond)
+	client.AdvanceBatchClockTo(client.Core().Steps() + 100*wipicrt.BatchGuestStepsPerMillisecond)
 	if moved := clock.Now(); !moved.Equal(before) {
 		t.Fatalf("a clock outside every service call moved to %s from %s", moved, before)
 	}
@@ -133,14 +134,14 @@ func TestAHostOwnedClockOnlyMovesInsideAServiceCall(t *testing.T) {
 // person. Real time passes on its own, so there is nothing here to correct and
 // nothing here may touch.
 func TestAWallClockIsNotTheHostsToAdvance(t *testing.T) {
-	client := newBudgetedTestRuntime(t, wallClock{}, 1000)
+	client := newBudgetedTestRuntime(t, wipicrt.WallClock{}, 1000)
 	ctx := context.Background()
-	closeScope := client.beginHostService(ctx)
+	closeScope := client.BeginHostService(ctx)
 	defer closeScope()
 	// The assertion is that this neither panics nor type-asserts its way onto
 	// a clock it does not own; a wall clock has no reading to compare.
-	client.advanceBatchClockTo(client.core.Steps() + 100*batchGuestStepsPerMillisecond)
-	if _, manual := client.clock.(*ManualClock); manual {
+	client.AdvanceBatchClockTo(client.Core().Steps() + 100*wipicrt.BatchGuestStepsPerMillisecond)
+	if _, manual := client.Clock.(*wipicrt.ManualClock); manual {
 		t.Fatal("the wall-clock session ended up on a manual clock")
 	}
 }
@@ -150,20 +151,20 @@ func TestAWallClockIsNotTheHostsToAdvance(t *testing.T) {
 // for an instant that will never satisfy it holds the Host goroutine, and
 // nothing else on this platform can run while it does.
 func TestAWaitThatNeverEndsFailsOnTheWaitAllowance(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client := newBudgetedTestRuntime(t, clock, 1000)
-	client.serviceWait = time.Second
+	client.ServiceWait = time.Second
 	ctx := context.Background()
-	closeScope := client.beginHostService(ctx)
+	closeScope := client.BeginHostService(ctx)
 	defer closeScope()
 
 	var err error
 	for window := 0; window < 20 && err == nil; window++ {
-		client.runtime.guestMillis()
+		client.runtime.GuestMillis()
 		clock.Advance(100 * time.Millisecond)
-		err = client.continueHostService(ctx, client.serviceSteps)
+		err = client.ContinueHostService(ctx, client.ServiceSteps)
 	}
-	if !errors.Is(err, ErrServiceWaitLimit) {
+	if !errors.Is(err, wipicrt.ErrServiceWaitLimit) {
 		t.Fatalf("a wait that never ends failed with %v, want the wait allowance", err)
 	}
 }

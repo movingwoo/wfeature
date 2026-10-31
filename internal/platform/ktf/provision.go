@@ -3,6 +3,7 @@ package ktf
 import (
 	"fmt"
 
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -205,4 +206,4 @@ func ProvisionCertificate(archive *Archive, number string) (*CertificateProvisio
 // title that rejected a certificate deletes it, and the deletion outlives the
 // run, so provisioning has to clear the name from that list or the entry it
 // just wrote stays hidden.
-const CertificateRemovalKey = databaseRemovedKey
+const CertificateRemovalKey = wipicrt.DatabaseRemovedKey

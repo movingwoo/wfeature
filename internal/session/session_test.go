@@ -17,6 +17,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/platform/lgt"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
+	"github.com/movingwoo/wfeature/internal/platform/skt/clet"
 )
 
 // sktFixture is the MIDlet that paints into whatever surface it is handed. It
@@ -554,7 +555,7 @@ func TestScreenSizeIsTheHostsToChoose(t *testing.T) {
 // that had finished normally — and the session stayed up, streaming that frame
 // for as long as the page was open.
 func TestAGuestEndingIsAnEndingRatherThanAFailure(t *testing.T) {
-	for _, ending := range []error{ktf.ErrGuestExited, lgt.ErrGuestExited} {
+	for _, ending := range []error{ktf.ErrGuestExited, lgt.ErrGuestExited, clet.ErrGuestExited} {
 		running := &Session{}
 		wrapped := fmt.Errorf("notify KTF card key: %w", ending)
 		if err := running.endedOrFailed(wrapped); !errors.Is(err, ErrExited) {
@@ -759,7 +760,7 @@ func TestParkingASessionWithNoGameSaysThereIsNone(t *testing.T) {
 // which is what lets a page say "the game closed itself" where it used to
 // print the platform's own text as a fault.
 func TestAGuestThatEndedDuringItsStartIsAnEnding(t *testing.T) {
-	for _, ending := range []error{ktf.ErrGuestExited, lgt.ErrGuestExited} {
+	for _, ending := range []error{ktf.ErrGuestExited, lgt.ErrGuestExited, clet.ErrGuestExited} {
 		wrapped := fmt.Errorf("start KTF main class Clet: %w", ending)
 		err := startEndedOrFailed(wrapped)
 		if !errors.Is(err, ErrExited) {

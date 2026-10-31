@@ -10,6 +10,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // inputMethodEdit is one notifyTextChanged call as a listener receives it.
@@ -132,18 +133,18 @@ func newNameFieldCard(t *testing.T, client *Client, runtime *initializationRunti
 	err := client.JVM().RegisterNative(class, "keyNotify", "(II)Z", func(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		eventType, _ := arguments[1].Int32()
 		key, _ := arguments[2].Int32()
-		if !field.open || eventType != KeyPressed {
+		if !field.open || eventType != wipicrt.KeyPressed {
 			return jvm.IntValue(0), nil
 		}
 		if field.message {
-			field.message = key != KeyFire
+			field.message = key != wipicrt.KeyFire
 			return jvm.IntValue(0), nil
 		}
 		switch key {
-		case KeyFire:
+		case wipicrt.KeyFire:
 			field.open = false
 			return jvm.IntValue(0), nil
-		case KeyLeftSoft:
+		case wipicrt.KeyLeftSoft:
 			mode, _ := field.handler.Fields[inputMethodModeField].Int32()
 			_, err := vm.InvokeVirtual(field.handler, "setCurrentMode", "(I)Z", jvm.IntValue((mode+1)%4))
 			return jvm.IntValue(0), err
@@ -169,7 +170,7 @@ func newNameFieldCard(t *testing.T, client *Client, runtime *initializationRunti
 
 func pressCardKey(t *testing.T, runtime *initializationRuntime, key int32) {
 	t.Helper()
-	for _, eventType := range []int32{KeyPressed, KeyReleased} {
+	for _, eventType := range []int32{wipicrt.KeyPressed, wipicrt.KeyReleased} {
 		if err := runtime.dispatchKeyToCards(eventType, key); err != nil {
 			t.Fatal(err)
 		}
@@ -183,28 +184,28 @@ func TestInputMethodHandlerKeypadTypesDigitsAndClears(t *testing.T) {
 	listener, edits := recordingInputMethodListener(t, client, "test/NameListener")
 	handler := newGuestInputMethodHandler(t, client, runtime, textConstraintAny, listener)
 	setGuestInputMethodMode(t, client, handler, inputMethodModeNumeric)
-	if !notifyGuestKey(t, client, handler, '7', KeyPressed) || !notifyGuestKey(t, client, handler, KeyClear, KeyPressed) {
+	if !notifyGuestKey(t, client, handler, '7', wipicrt.KeyPressed) || !notifyGuestKey(t, client, handler, wipicrt.KeyClear, wipicrt.KeyPressed) {
 		t.Fatal("a digit or clear in the digit mode was not processed")
 	}
-	for _, eventType := range []int32{KeyReleased, KeyRepeated} {
+	for _, eventType := range []int32{wipicrt.KeyReleased, wipicrt.KeyRepeated} {
 		if notifyGuestKey(t, client, handler, '7', eventType) {
 			t.Fatalf("event type %d typed", eventType)
 		}
 	}
 	for _, mode := range []int32{inputMethodModeLowercase, inputMethodModeUppercase, inputMethodModeHangul, 7} {
 		setGuestInputMethodMode(t, client, handler, mode)
-		if notifyGuestKey(t, client, handler, '2', KeyPressed) {
+		if notifyGuestKey(t, client, handler, '2', wipicrt.KeyPressed) {
 			t.Fatalf("a key in mode %d typed", mode)
 		}
 	}
-	for _, key := range []int32{KeyStar, KeyHash, KeyUp, KeyFire, KeyLeftSoft} {
-		if notifyGuestKey(t, client, handler, key, KeyPressed) {
+	for _, key := range []int32{wipicrt.KeyStar, wipicrt.KeyHash, wipicrt.KeyUp, wipicrt.KeyFire, wipicrt.KeyLeftSoft} {
+		if notifyGuestKey(t, client, handler, key, wipicrt.KeyPressed) {
 			t.Fatalf("key %d was processed", key)
 		}
 	}
 	numbers := newGuestInputMethodHandler(t, client, runtime, textConstraintNumber, listener)
 	setGuestInputMethodMode(t, client, numbers, inputMethodModeUppercase)
-	notifyGuestKey(t, client, numbers, '4', KeyPressed)
+	notifyGuestKey(t, client, numbers, '4', wipicrt.KeyPressed)
 	want := []inputMethodEdit{{"7", 1, inputMethodInsert}, {"", 1, inputMethodDelete}, {"4", 1, inputMethodInsert}}
 	if !reflect.DeepEqual(*edits, want) {
 		t.Fatalf("edits = %+v, want %+v", *edits, want)
@@ -217,7 +218,7 @@ func TestInputMethodHandlerWithoutAListenerProcessesNothing(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	handler := newGuestInputMethodHandler(t, client, runtime, textConstraintAny, nil)
 	setGuestInputMethodMode(t, client, handler, inputMethodModeNumeric)
-	if notifyGuestKey(t, client, handler, '2', KeyPressed) || runtime.runtimeObjects[inputMethodOpenObject] != nil {
+	if notifyGuestKey(t, client, handler, '2', wipicrt.KeyPressed) || runtime.runtimeObjects[inputMethodOpenObject] != nil {
 		t.Fatal("a handler without a listener processed a key or opened a field")
 	}
 	listener, edits := recordingInputMethodListener(t, client, "test/NameListener")
@@ -226,7 +227,7 @@ func TestInputMethodHandlerWithoutAListenerProcessesNothing(t *testing.T) {
 		t.Fatal("registering a listener did not open the field")
 	}
 	setGuestInputMethodListener(t, client, handler, nil)
-	if notifyGuestKey(t, client, handler, '2', KeyPressed) || len(*edits) != 0 || runtime.runtimeObjects[inputMethodOpenObject] != nil {
+	if notifyGuestKey(t, client, handler, '2', wipicrt.KeyPressed) || len(*edits) != 0 || runtime.runtimeObjects[inputMethodOpenObject] != nil {
 		t.Fatal("a removed listener was still handed keys or kept the field open")
 	}
 }
@@ -263,7 +264,7 @@ func TestATitleOwnedFieldStaysOfferedUntilItsListenerIsRemoved(t *testing.T) {
 	if !available() {
 		t.Fatal("an open field offered no text input")
 	}
-	for _, key := range []int32{'2', KeyUp, KeyStar, KeyHash, KeyLeftSoft} {
+	for _, key := range []int32{'2', wipicrt.KeyUp, wipicrt.KeyStar, wipicrt.KeyHash, wipicrt.KeyLeftSoft} {
 		pressCardKey(t, runtime, key)
 		if !available() {
 			t.Fatalf("the field closed on key %d it took", key)
@@ -273,7 +274,7 @@ func TestATitleOwnedFieldStaysOfferedUntilItsListenerIsRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pressCardKey(t, runtime, KeyFire)
+	pressCardKey(t, runtime, wipicrt.KeyFire)
 	if runtime.runtimeObjects[inputMethodOpenObject] != nil {
 		t.Fatal("the field stayed open after fire closed it")
 	}
@@ -306,13 +307,13 @@ func TestATitleOwnedFieldStaysOfferedUntilItsListenerIsRemoved(t *testing.T) {
 		t.Fatal("a field under another card offered text input")
 	}
 	runtime.displayCards = runtime.displayCards[:len(runtime.displayCards)-1]
-	runtime.guestEventLoop = true
+	runtime.GuestEventLoop = true
 	if available() {
 		t.Fatal("a title running its own event loop offered text input")
 	}
-	runtime.guestEventLoop = false
+	runtime.GuestEventLoop = false
 	// Closed and then stripped of its listener, the field is gone.
-	pressCardKey(t, runtime, KeyFire)
+	pressCardKey(t, runtime, wipicrt.KeyFire)
 	setGuestInputMethodListener(t, client, handler, nil)
 	if available() {
 		t.Fatal("a field whose listener was removed offered text input")
@@ -353,7 +354,7 @@ func TestHostTextReachesATitleOwnedFieldThroughItsKeys(t *testing.T) {
 		t.Fatalf("a spent composition was reused: %v", err)
 	}
 	// Clear takes the last character back, whoever typed it.
-	pressCardKey(t, runtime, KeyClear)
+	pressCardKey(t, runtime, wipicrt.KeyClear)
 	if last := (*edits)[len(*edits)-1]; last != (inputMethodEdit{"", 1, inputMethodDelete}) {
 		t.Fatalf("clear handed %+v", last)
 	}
@@ -414,7 +415,7 @@ func TestAResetFieldStaysOpenBehindItsMessage(t *testing.T) {
 	if err := edit.Commit(t.Context(), "x"); !errors.Is(err, backend.ErrTextInputChanged) || !field.message {
 		t.Fatalf("a commit into the message answered %v", err)
 	}
-	pressCardKey(t, runtime, KeyFire)
+	pressCardKey(t, runtime, wipicrt.KeyFire)
 	if field.message || runtime.runtimeObjects[inputMethodOpenObject] != reset {
 		t.Fatal("dismissing the message closed the reset field")
 	}
@@ -429,7 +430,7 @@ func TestAResetFieldStaysOpenBehindItsMessage(t *testing.T) {
 		t.Fatalf("the reset field was handed %+v", last)
 	}
 	// Having taken a key, it closes like any other field.
-	pressCardKey(t, runtime, KeyFire)
+	pressCardKey(t, runtime, wipicrt.KeyFire)
 	if runtime.runtimeObjects[inputMethodOpenObject] != nil {
 		t.Fatal("the reset field stayed open after fire closed it")
 	}
@@ -441,7 +442,7 @@ func TestAResetFieldStaysOpenBehindItsMessage(t *testing.T) {
 	if runtime.runtimeObjects[inputMethodOpenObject] != field.handler {
 		t.Fatal("the new field did not open")
 	}
-	pressCardKey(t, runtime, KeyFire)
+	pressCardKey(t, runtime, wipicrt.KeyFire)
 	if runtime.runtimeObjects[inputMethodOpenObject] != nil {
 		t.Fatal("a field confirmed before taking a key stayed open")
 	}
@@ -620,7 +621,7 @@ func TestHostTextForAClosedFieldSendsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pressCardKey(t, runtime, KeyFire)
+	pressCardKey(t, runtime, wipicrt.KeyFire)
 	field.open = true
 	presses := field.presses
 	if err := edit.Commit(t.Context(), "a"); !errors.Is(err, backend.ErrTextInputChanged) {
@@ -820,7 +821,7 @@ func TestHostTextSurvivesAnUncaughtExceptionInKeyNotify(t *testing.T) {
 	if err := client.JVM().RegisterNative("test/ThrowingNameCard", "keyNotify", "(II)Z", func(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		eventType, _ := arguments[1].Int32()
 		key, _ := arguments[2].Int32()
-		if eventType != KeyPressed {
+		if eventType != wipicrt.KeyPressed {
 			return jvm.IntValue(0), nil
 		}
 		if _, err := vm.InvokeVirtual(handler, "notifyKeyInput", "(II)Z", jvm.IntValue(key), jvm.IntValue(eventType)); err != nil {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The exception hierarchy is published rather than left to the fallback that
@@ -52,7 +53,7 @@ func TestTheExceptionHierarchyIsPublished(t *testing.T) {
 func TestThrowingAGuestExceptionObjectRefusesAWordThatIsNotOne(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	context := armcore.NewContext()
-	context.Registers[0] = ImageBase
+	context.Registers[0] = wipicrt.ImageBase
 	_, err := runtime.throwAOTExceptionObject(armcore.NewThread(context))
 	if err == nil {
 		t.Fatal("a word that is not an object was thrown")

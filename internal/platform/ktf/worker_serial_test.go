@@ -5,11 +5,12 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A self-requeueing UI callback must not consume the worker's only grant.
 func TestSerialRunnableDoesNotStarveStartedWorker(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 	serial := &jvm.Object{ClassName: "test/BusySerial"}
 	serialRuns, workerRuns := 0, 0

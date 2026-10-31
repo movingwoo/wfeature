@@ -10,6 +10,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestClientInvokesSyntheticAOTConstructorAndMethods(t *testing.T) {
@@ -120,7 +121,7 @@ func TestClientOuterCallHandsOffGuestExceptionTyped(t *testing.T) {
 
 	// The wrapper must restore the entry exception-handler head so the same
 	// client keeps working after an uncaught throw.
-	head, err := client.Core().ThreadLocalWord(client.thread, client.runtime.exceptionContext+javaExceptionHead)
+	head, err := client.Core().ThreadLocalWord(client.Thread, client.runtime.exceptionContext+javaExceptionHead)
 	if err != nil || head != 0 {
 		t.Fatalf("exception handler head after uncaught throw = %#x/%v, want 0", head, err)
 	}
@@ -164,11 +165,11 @@ func syntheticLifecycleClient(t *testing.T) *Client {
 	}
 
 	runtime := client.runtime
-	classAddress, err := runtime.allocate(javaClassSize)
+	classAddress, err := runtime.Allocate(javaClassSize)
 	if err != nil {
 		t.Fatal(err)
 	}
-	className, err := runtime.allocateBytes([]byte("game/Lifecycle\x00"))
+	className, err := runtime.AllocateBytes([]byte("game/Lifecycle\x00"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,29 +178,29 @@ func syntheticLifecycleClient(t *testing.T) *Client {
 		body     uint32
 		flags    uint16
 	}{
-		{fullName: "()V+<init>", body: ImageBase + 0x161, flags: 0x0001},
-		{fullName: "(I)I+add", body: ImageBase + 0x169, flags: 0x0001},
-		{fullName: "(I)I+staticAdd", body: ImageBase + 0x175, flags: 0x0009},
-		{fullName: "()Ljava/lang/Object;+self", body: ImageBase + 0x181, flags: 0x0001},
-		{fullName: "(Ljava/lang/Object;)V+take", body: ImageBase + 0x189, flags: 0x0009},
-		{fullName: "(J)J+echoLong", body: ImageBase + 0x191, flags: 0x0001},
-		{fullName: "(D)D+echoDouble", body: ImageBase + 0x199, flags: 0x0009},
-		{fullName: "(IIJ)J+spillLong", body: ImageBase + 0x1a1, flags: 0x0009},
-		{fullName: "()V+boom", body: ImageBase + 0x1b1, flags: 0x0001},
+		{fullName: "()V+<init>", body: wipicrt.ImageBase + 0x161, flags: 0x0001},
+		{fullName: "(I)I+add", body: wipicrt.ImageBase + 0x169, flags: 0x0001},
+		{fullName: "(I)I+staticAdd", body: wipicrt.ImageBase + 0x175, flags: 0x0009},
+		{fullName: "()Ljava/lang/Object;+self", body: wipicrt.ImageBase + 0x181, flags: 0x0001},
+		{fullName: "(Ljava/lang/Object;)V+take", body: wipicrt.ImageBase + 0x189, flags: 0x0009},
+		{fullName: "(J)J+echoLong", body: wipicrt.ImageBase + 0x191, flags: 0x0001},
+		{fullName: "(D)D+echoDouble", body: wipicrt.ImageBase + 0x199, flags: 0x0009},
+		{fullName: "(IIJ)J+spillLong", body: wipicrt.ImageBase + 0x1a1, flags: 0x0009},
+		{fullName: "()V+boom", body: wipicrt.ImageBase + 0x1b1, flags: 0x0001},
 		// The Jlet lifecycle. Each writes what it was told into the receiver's
 		// own first word, which is all a test needs to see: the platform
 		// either ran the body in the class's method table or it did not.
-		{fullName: "()V+pauseApp", body: ImageBase + 0x1c1, flags: 0x0001},
-		{fullName: "()V+resumeApp", body: ImageBase + 0x1c9, flags: 0x0001},
-		{fullName: "(Z)V+destroyApp", body: ImageBase + 0x1d1, flags: 0x0001},
+		{fullName: "()V+pauseApp", body: wipicrt.ImageBase + 0x1c1, flags: 0x0001},
+		{fullName: "()V+resumeApp", body: wipicrt.ImageBase + 0x1c9, flags: 0x0001},
+		{fullName: "(Z)V+destroyApp", body: wipicrt.ImageBase + 0x1d1, flags: 0x0001},
 	}
 	methodPointers := make([]uint32, 0, len(methodSpecs)+1)
 	for _, spec := range methodSpecs {
-		fullName, allocationErr := runtime.allocateBytes(append([]byte{0}, append([]byte(spec.fullName), 0)...))
+		fullName, allocationErr := runtime.AllocateBytes(append([]byte{0}, append([]byte(spec.fullName), 0)...))
 		if allocationErr != nil {
 			t.Fatal(allocationErr)
 		}
-		methodAddress, allocationErr := runtime.allocate(javaMethodSize)
+		methodAddress, allocationErr := runtime.Allocate(javaMethodSize)
 		if allocationErr != nil {
 			t.Fatal(allocationErr)
 		}
@@ -215,19 +216,19 @@ func syntheticLifecycleClient(t *testing.T) *Client {
 		methodPointers = append(methodPointers, methodAddress)
 	}
 	methodPointers = append(methodPointers, 0)
-	methodTable, err := runtime.allocateWords(methodPointers)
+	methodTable, err := runtime.AllocateWords(methodPointers)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fieldTable, err := runtime.allocateWords([]uint32{0})
+	fieldTable, err := runtime.AllocateWords([]uint32{0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	vtable, err := runtime.allocateWords(methodPointers[:2])
+	vtable, err := runtime.AllocateWords(methodPointers[:2])
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor, err := runtime.allocate(javaDescriptorSize)
+	descriptor, err := runtime.Allocate(javaDescriptorSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,12 +256,12 @@ func syntheticLifecycleClient(t *testing.T) *Client {
 		for index, instruction := range instructions {
 			binary.LittleEndian.PutUint16(bytes[index*2:], instruction)
 		}
-		if err := client.Core().Memory().Write(ImageBase+uint32(offset), bytes); err != nil {
+		if err := client.Core().Memory().Write(wipicrt.ImageBase+uint32(offset), bytes); err != nil {
 			t.Fatal(err)
 		}
 	}
 	writeThumb(0x150, 0x4800, 0x4770) // GetClass: ldr r0, literal; bx lr.
-	writeTestWords(t, client, ImageBase+0x154, []uint32{classAddress})
+	writeTestWords(t, client, wipicrt.ImageBase+0x154, []uint32{classAddress})
 	writeThumb(0x160, 0x4770)                 // <init>: bx lr.
 	writeThumb(0x168, 0x4610, 0x3005, 0x4770) // add: r0 = r2 + 5.
 	writeThumb(0x174, 0x4608, 0x3007, 0x4770) // staticAdd: r0 = r1 + 7.
@@ -269,18 +270,18 @@ func syntheticLifecycleClient(t *testing.T) *Client {
 	writeThumb(0x190, 0x4610, 0x4619, 0x4770) // echoLong: r0:r1 = r2:r3 (receiver in r1).
 	writeThumb(0x198, 0x4608, 0x4611, 0x4770) // echoDouble: r0:r1 = r1:r2.
 	writeThumb(0x1a0, 0x4618, 0x9900, 0x4770) // spillLong: r0 = r3, r1 = [sp] (high word spilled).
-	exceptionName, err := runtime.allocateBytes([]byte("java/lang/RuntimeException\x00"))
+	exceptionName, err := runtime.AllocateBytes([]byte("java/lang/RuntimeException\x00"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	throwStub, err := runtime.stub(svcCategoryInit, initSVCJavaThrow)
+	throwStub, err := runtime.Stub(svcCategoryInit, initSVCJavaThrow)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// boom: r0 = exception class name, then tail-branch into the platform's
 	// JavaThrow callback stub — the same route a real client's athrow takes.
 	writeThumb(0x1b0, 0x4801, 0x4b02, 0x4718, 0x0000)
-	writeTestWords(t, client, ImageBase+0x1b8, []uint32{exceptionName, throwStub})
+	writeTestWords(t, client, wipicrt.ImageBase+0x1b8, []uint32{exceptionName, throwStub})
 	// pauseApp and resumeApp: store a marker in the receiver's first field.
 	// An instance method takes its receiver in r1, and an object's fields
 	// start after its two header words and its vtable header — see
@@ -288,7 +289,7 @@ func syntheticLifecycleClient(t *testing.T) *Client {
 	writeThumb(0x1c0, 0x2002, 0x60c8, 0x4770) // movs r0,#2; str r0,[r1,#12]; bx lr
 	writeThumb(0x1c8, 0x2003, 0x60c8, 0x4770) // movs r0,#3; str r0,[r1,#12]; bx lr
 	writeThumb(0x1d0, 0x60ca, 0x4770)         // str r2,[r1,#12]; bx lr
-	client.executable.Interface.Functions.GetClass = ImageBase + 0x151
+	client.executable.Interface.Functions.GetClass = wipicrt.ImageBase + 0x151
 	return client
 }
 
@@ -320,23 +321,23 @@ func TestOnlyATitleThatOverridesPointerNotifyIsOfferedATouch(t *testing.T) {
 	}{
 		{name: "a title with no pointerNotify at all", classes: []jvm.AOTClassMetadata{
 			{Name: "Clet", Methods: []jvm.AOTMethodMetadata{
-				{Name: "startApp", Descriptor: "([Ljava/lang/String;)V", Body: ImageBase + 0x100},
-				{Name: "keyNotify", Descriptor: "(II)Z", Body: ImageBase + 0x200},
+				{Name: "startApp", Descriptor: "([Ljava/lang/String;)V", Body: wipicrt.ImageBase + 0x100},
+				{Name: "keyNotify", Descriptor: "(II)Z", Body: wipicrt.ImageBase + 0x200},
 			}},
 		}, want: false},
 		{name: "the platform's own body standing in for the title's", classes: []jvm.AOTClassMetadata{
 			{Name: "org/kwis/msp/lcdui/Card", Methods: []jvm.AOTMethodMetadata{
-				{Name: "pointerNotify", Descriptor: "(III)Z", NativeBody: ImageBase + 0x300},
+				{Name: "pointerNotify", Descriptor: "(III)Z", NativeBody: wipicrt.ImageBase + 0x300},
 			}},
 		}, want: false},
 		{name: "a body of the title's own", classes: []jvm.AOTClassMetadata{
 			{Name: "Clet$CletCard", Methods: []jvm.AOTMethodMetadata{
-				{Name: "pointerNotify", Descriptor: "(III)Z", Body: ImageBase + 0x400},
+				{Name: "pointerNotify", Descriptor: "(III)Z", Body: wipicrt.ImageBase + 0x400},
 			}},
 		}, want: true},
 		{name: "the name without the descriptor is another method", classes: []jvm.AOTClassMetadata{
 			{Name: "Clet$CletCard", Methods: []jvm.AOTMethodMetadata{
-				{Name: "pointerNotify", Descriptor: "(II)Z", Body: ImageBase + 0x500},
+				{Name: "pointerNotify", Descriptor: "(II)Z", Body: wipicrt.ImageBase + 0x500},
 			}},
 		}, want: false},
 	}

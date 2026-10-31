@@ -5,10 +5,11 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestForcedSlicePaintRequiresARequestAndYieldRestoresFallback(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 	paints := 0
 	if err := client.vm.RegisterNative("test/SliceCard", "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
@@ -37,7 +38,7 @@ func TestForcedSlicePaintRequiresARequestAndYieldRestoresFallback(t *testing.T) 
 	if paints != 0 {
 		t.Fatal("forced slice triggered an unrequested paint")
 	}
-	runtime.repaintPending = true
+	runtime.RepaintPending = true
 	if _, err := client.ServicePaint(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +88,7 @@ func TestWorkerPaintKeepsFrameStateUntilTheNextRequest(t *testing.T) {
 			worker := &guestWorker{}
 			client.workers = []*guestWorker{worker}
 			client.activeWorker = worker
-			runtime.repaintPending = true
+			runtime.RepaintPending = true
 			if _, err := runtimeCardServiceRepaints(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(card)}); err != nil {
 				t.Fatal(err)
 			}
@@ -103,7 +104,7 @@ func TestWorkerPaintKeepsFrameStateUntilTheNextRequest(t *testing.T) {
 			}
 
 			// An explicit request still reaches the card immediately.
-			runtime.repaintPending = true
+			runtime.RepaintPending = true
 			if _, err := runtime.paintTopCard(); err != nil {
 				t.Fatal(err)
 			}

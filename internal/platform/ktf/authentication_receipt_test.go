@@ -9,13 +9,14 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // Authored records use a deliberately non-permutation table and carry nonzero
 // settings and reserved bytes. No archive's substitution table is bundled.
-func receiptFixture(t *testing.T) (*DirectorySaveStore, []byte, map[string][]byte, []byte) {
+func receiptFixture(t *testing.T) (*wipicrt.DirectorySaveStore, []byte, map[string][]byte, []byte) {
 	t.Helper()
-	base := NewDirectorySaveStore(t.TempDir())
+	base := wipicrt.NewDirectorySaveStore(t.TempDir())
 	table := make([]byte, 256)
 	for i := range table {
 		table[i] = byte(i/2 + 7)
@@ -116,7 +117,7 @@ func TestSubscriberReceiptRejectsIncompleteOrUnrecognizedState(t *testing.T) {
 			case "data":
 				base.StoreSave("db/char.dat", []byte("incomplete"))
 			case "removed":
-				base.StoreSave(databaseRemovedKey, []byte("char.dat"))
+				base.StoreSave(wipicrt.DatabaseRemovedKey, []byte("char.dat"))
 			case "removed-file":
 				base.StoreSave(guestFileRemovedKey, []byte("char.dat"))
 			case "missing-package":
@@ -150,10 +151,10 @@ func TestSubscriberReceiptBitFieldsCrossWords(t *testing.T) {
 	}
 }
 
-type receiptReadFailure struct{ SaveStore }
+type receiptReadFailure struct{ wipicrt.SaveStore }
 
 func (store receiptReadFailure) ReadSave(name string) ([]byte, bool, error) {
-	if name == databaseRemovedKey {
+	if name == wipicrt.DatabaseRemovedKey {
 		return nil, false, errors.New("receipt read failed")
 	}
 	b, ok := store.LoadSave(name)
@@ -187,7 +188,7 @@ func TestLocalSubscriberReceiptRecognition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := NewDirectorySaveStore(t.TempDir())
+	base := wipicrt.NewDirectorySaveStore(t.TempDir())
 	if _, ok := authenticationSubscriberReceipt(base, archive, "01012349876").(*subscriberReceiptStore); !ok {
 		t.Fatal("local receipt revision not recognized")
 	}

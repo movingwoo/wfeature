@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The remaining WIPI Java classes: database exceptions and the sort/filter
@@ -98,8 +99,8 @@ func runtimeVibratorOn(runtime *initializationRuntime, _ *jvm.VM, arguments []jv
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	runtime.countDiagnostic(fmt.Sprintf("vibrate level=%d ms=%d", level, duration))
-	runtime.client.vibrator.Vibrate(int(level), int(duration))
+	runtime.CountDiagnostic(fmt.Sprintf("vibrate level=%d ms=%d", level, duration))
+	runtime.client.Vibrator.Vibrate(int(level), int(duration))
 	return jvm.VoidValue(), nil
 }
 
@@ -107,8 +108,8 @@ func runtimeVibratorOn(runtime *initializationRuntime, _ *jvm.VM, arguments []jv
 // to stop is `on(0, ...)` — but the guests call this one, so it is served and
 // it records the same request a zero level makes.
 func runtimeVibratorOff(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	runtime.countDiagnostic("vibrate off")
-	runtime.client.vibrator.Stop()
+	runtime.CountDiagnostic("vibrate off")
+	runtime.client.Vibrator.Stop()
 	return jvm.VoidValue(), nil
 }
 
@@ -158,10 +159,10 @@ func runtimeURLFind(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.V
 			runtime.relaySocket.close()
 		}
 		runtime.relaySocket = &relaySocket{}
-		runtime.countDiagnostic("local slot relay opened")
+		runtime.CountDiagnostic("local slot relay opened")
 		return jvm.ReferenceValue(&jvm.Object{ClassName: runtimeRelaySocketClass, Native: runtime.relaySocket}), nil
 	}
-	runtime.countDiagnostic("socket refused " + address)
+	runtime.CountDiagnostic("socket refused " + address)
 	return jvm.VoidValue(), &jvm.GuestException{
 		Object:  &jvm.Object{ClassName: runtimeSchemeExceptionClass, Native: address},
 		Message: fmt.Sprintf("no socket for %q: this emulator has no network", address),
@@ -173,10 +174,10 @@ func runtimeURLFind(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.V
 func runtimeNetworkConnect(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 	if runtime.hasSlotRelay() {
 		runtime.relayOnline = true
-		runtime.countDiagnostic("local slot relay connected")
+		runtime.CountDiagnostic("local slot relay connected")
 		return jvm.IntValue(0), nil
 	}
-	runtime.countDiagnostic("network connect refused")
+	runtime.CountDiagnostic("network connect refused")
 	return jvm.IntValue(-1), nil
 }
 
@@ -229,7 +230,7 @@ func runtimeDataBaseRecordSize(runtime *initializationRuntime, _ *jvm.VM, argume
 // runtimeDataBaseSizeAvailable reports the room left, which is the title's
 // whole storage: the figure FileSystem.available answers.
 func runtimeDataBaseSizeAvailable(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(int32(runtime.storageAvailable())), nil
+	return jvm.IntValue(int32(runtime.StorageAvailable())), nil
 }
 
 // runtimeDataBaseListNames answers every database the title has: the ones
@@ -242,13 +243,13 @@ func runtimeDataBaseListNames(runtime *initializationRuntime, vm *jvm.VM, _ []jv
 	for name := range runtime.databases {
 		present[name] = true
 	}
-	saved, err := runtime.listSaves(javaDatabaseScope)
+	saved, err := runtime.ListSaves(wipicrt.JavaDatabaseScope)
 	if err != nil {
 		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
 	}
 	removed := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)
 	for _, name := range saved {
-		if !removed[name] && !reservedStorageName(javaDatabaseScope, name) {
+		if !removed[name] && !wipicrt.ReservedStorageName(wipicrt.JavaDatabaseScope, name) {
 			present[name] = true
 		}
 	}
@@ -283,7 +284,7 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if !storableName(javaDatabaseScope, name) {
+	if !wipicrt.StorableName(wipicrt.JavaDatabaseScope, name) {
 		return jvm.VoidValue(), runtimeDataBaseException("database name cannot be stored: " + name)
 	}
 	store := runtime.databases[name]
@@ -295,7 +296,7 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 		// the next run as though nothing had been deleted. The WIPI C table
 		// next door already answers the name form this way.
 		deleted := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
-		_, saved := runtime.loadSave("jdb/" + name)
+		_, saved := runtime.LoadSave("jdb/" + name)
 		packaged := false
 		if !runtime.databaseDeleted(name) {
 			_, packaged = runtime.packagedRecordDatabase(name, 0)
@@ -320,14 +321,14 @@ func runtimeDataBaseDeleteStore(runtime *initializationRuntime, _ *jvm.VM, argum
 	// not what a title that deleted its save asked; the list is what makes it
 	// gone. The empty save stays because a save tree written before the list
 	// existed has to keep hiding its packaged copy.
-	if err := runtime.saveChanges(map[string][]byte{"jdb/" + name: encodeSaveRecords(nil)}, javaDatabaseRemovedKey, runtime.recordDatabaseRemovals(javaDatabaseRemovedKey), map[string]bool{name: true}); err != nil {
+	if err := runtime.SaveChanges(map[string][]byte{"jdb/" + name: wipicrt.EncodeSaveRecords(nil)}, javaDatabaseRemovedKey, runtime.recordDatabaseRemovals(javaDatabaseRemovedKey), map[string]bool{name: true}); err != nil {
 		return jvm.VoidValue(), runtimeDataBaseException(err.Error())
 	}
 	store.records = nil
 	// The database is gone by now; a size the table could not forget is
 	// written over by the next creating open, so it does not fail the delete.
 	if err := runtime.setJavaDatabaseSize(name, 0); err != nil {
-		runtime.countDiagnostic(fmt.Sprintf("jdb size %s: %v", name, err))
+		runtime.CountDiagnostic(fmt.Sprintf("jdb size %s: %v", name, err))
 	}
 	if runtime.databases[name] == store {
 		delete(runtime.databases, name)
@@ -357,7 +358,7 @@ func runtimeDataBaseAccessMode(runtime *initializationRuntime, _ *jvm.VM, argume
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if !storableName(javaDatabaseScope, name) {
+	if !wipicrt.StorableName(wipicrt.JavaDatabaseScope, name) {
 		return jvm.VoidValue(), runtimeDataBaseException("no database named " + name)
 	}
 	if runtime.databases[name] == nil {
@@ -381,7 +382,7 @@ func runtimeDataBaseLastModified(runtime *initializationRuntime, _ *jvm.VM, argu
 		return jvm.VoidValue(), err
 	}
 	if store.modified == 0 {
-		store.modified = runtime.recordedMillis()
+		store.modified = runtime.RecordedMillis()
 	}
 	return jvm.LongValue(store.modified), nil
 }

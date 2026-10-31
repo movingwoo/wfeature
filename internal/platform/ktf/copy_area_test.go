@@ -134,7 +134,7 @@ func TestCopyAreaClippedDestinationMovesItsSource(t *testing.T) {
 		}
 	}
 
-	width := int32(state.target.width)
+	width := int32(state.target.Width)
 	fill(0x000000, 0, 0, width, 2)
 	fill(0xffffff, 4, 0, 1, 2)
 	white := readScreenPixel(t, runtime, state, 4, 0)

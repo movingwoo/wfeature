@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"math"
 	"runtime"
 	"slices"
@@ -37,15 +38,15 @@ func makeTimingOrphanPCM(t *testing.T, rt *initializationRuntime) {
 	t.Helper()
 	object := &jvm.Object{ClassName: "org/kwis/msp/media/Clip"}
 	state := rt.clip(object)
-	handle, err := rt.client.audio.LoadEvents([]smaf.Event{
+	handle, err := rt.client.Audio.LoadEvents([]smaf.Event{
 		{Type: smaf.EventWave, WaveChannels: 1, SamplingRate: 10, Wave: make([]int16, 100)},
 		{Time: 100, Type: smaf.EventEnd},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.handle, state.loaded = handle, true
-	if err := rt.client.audio.Play(handle, 0, false); err != nil {
+	state.Handle, state.Loaded = handle, true
+	if err := rt.client.Audio.Play(handle, 0, false); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -53,13 +54,13 @@ func makeTimingOrphanPCM(t *testing.T, rt *initializationRuntime) {
 func TestKTFAudioTimingCollectorCancelsAtCollectionTime(t *testing.T) {
 	client, rt := newCollectorRuntime(t)
 	allocateTestArray(t, rt, 1)
-	clock := NewManualClock(time.Unix(1000, 0))
-	client.clock, rt.clockBase = clock, clock.Now()
+	clock := wipicrt.NewManualClock(time.Unix(1000, 0))
+	client.Clock, rt.ClockBase = clock, clock.Now()
 	sink := &ktfAudioTimingProbe{}
-	client.audio = backend.NewAudioWithClock(sink, clock.Now)
+	client.Audio = backend.NewAudioWithClock(sink, clock.Now)
 	makeTimingOrphanPCM(t, rt)
 	clock.Advance(100 * time.Millisecond)
-	client.audio.Advance(100 * time.Millisecond)
+	client.Audio.Advance(100 * time.Millisecond)
 	runtime.GC()
 	// The score has ended, but its PCM tail remains. Collection can also run
 	// during a guest allocation, without the ordinary Host audio service.
@@ -77,10 +78,10 @@ func TestKTFAudioTimingCollectorCancelsAtCollectionTime(t *testing.T) {
 }
 
 func TestKTFAudioTimingSpeedBeforeRuntimeReachesOutput(t *testing.T) {
-	clock := NewManualClock(time.Unix(1000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1000, 0))
 	sink := &ktfAudioTimingProbe{}
 	audio := backend.NewAudioWithClock(sink, clock.Now)
-	client := &Client{clock: clock, audio: audio}
+	client := &Client{Client: &wipicrt.Client{Clock: clock, Audio: audio}}
 	client.SetSpeed(2)
 	handle, err := audio.LoadEvents([]smaf.Event{
 		{Time: 200, Type: smaf.EventNoteOn, Note: 60, Velocity: 100},
@@ -108,17 +109,17 @@ func TestKTFAudioTimingSpeedChangeReconcilesCompletionBeforeCheckpoint(t *testin
 		t.Fatalf("initial callbacks = %d; want 1", count)
 	}
 	fixture.clock.Advance(duration)
-	elapsed := fixture.runtime.guestElapsed()
+	elapsed := fixture.runtime.GuestElapsed()
 	fixture.client.SetSpeed(2)
-	if fixture.client.Speed() != 2 || fixture.runtime.guestElapsed() != elapsed {
+	if fixture.client.Speed() != 2 || fixture.runtime.GuestElapsed() != elapsed {
 		t.Fatal("speed change moved the guest clock or failed to select the rate")
 	}
 	wantQueued := []clipEvent{{clip: fixture.clip, listener: fixture.listeners[0], code: wipi.PlayEventEndOfData}}
 	if !slices.Equal(fixture.runtime.mediaEvents, wantQueued) {
 		t.Fatalf("speed change queued %+v; want the original recipient's END", fixture.runtime.mediaEvents)
 	}
-	if state := fixture.runtime.clip(fixture.clip); state.completed != 1 || state.owner != nil {
-		t.Fatalf("completed clip retained stale accounting/root: completed=%d owner=%p", state.completed, state.owner)
+	if state := fixture.runtime.clip(fixture.clip); state.Completed != 1 || state.owner != nil {
+		t.Fatalf("completed clip retained stale accounting/root: completed=%d owner=%p", state.Completed, state.owner)
 	}
 	fixture.wantHistory(start)
 	saved, err := fixture.session.CaptureCheckpoint(t.Context())
@@ -130,7 +131,7 @@ func TestKTFAudioTimingSpeedChangeReconcilesCompletionBeforeCheckpoint(t *testin
 		t.Fatal("restoration lost the changed playback rate")
 	}
 	fixture.setListener(fixture.listeners[1])
-	if state := fixture.runtime.clip(fixture.clip); state.completed != 1 || state.owner != nil {
+	if state := fixture.runtime.clip(fixture.clip); state.Completed != 1 || state.owner != nil {
 		t.Fatal("restoration revived the completed clip's active root")
 	}
 	if count := fixture.drain(); count != 1 {

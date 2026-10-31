@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // packagedDatabaseHeader builds the header the two packaged shapes share.
@@ -46,8 +47,8 @@ func splitRecordDatabase(recordSize int, records ...[]byte) (index, data []byte)
 
 func openRecordDatabase(t *testing.T, runtime *initializationRuntime, name string, recordSize, create uint32) uint32 {
 	t.Helper()
-	const nameAddress = platformDataBase + 0x8000
-	if err := runtime.client.core.Memory().Write(nameAddress, append([]byte(name), 0)); err != nil {
+	const nameAddress = wipicrt.PlatformDataBase + 0x8000
+	if err := runtime.client.Core().Memory().Write(nameAddress, append([]byte(name), 0)); err != nil {
 		t.Fatal(err)
 	}
 	thread := armcore.NewThread(armcore.Context{})
@@ -70,7 +71,7 @@ func openRecordDatabase(t *testing.T, runtime *initializationRuntime, name strin
 // zeros for every value it expected to find.
 func TestRecordDatabaseSeedsFromThePackagedFileNamedWithDB(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	runtime.guestFiles = map[string][]byte{
+	runtime.GuestFiles = map[string][]byte{
 		"KEYS.db": packedRecordDatabase(8, []byte("YVQZZQEX"), []byte("EIHNTSAZ")),
 	}
 
@@ -82,7 +83,7 @@ func TestRecordDatabaseSeedsFromThePackagedFileNamedWithDB(t *testing.T) {
 		t.Fatalf("open = %#x, want a record database handle", handle)
 	}
 
-	const buffer = platformDataBase + 0x9000
+	const buffer = wipicrt.PlatformDataBase + 0x9000
 	thread := armcore.NewThread(armcore.Context{})
 	for register, value := range map[int]uint32{0: handle, 1: 1, 2: buffer, 3: 8} {
 		if err := thread.SetRegister(register, value); err != nil {
@@ -94,7 +95,7 @@ func TestRecordDatabaseSeedsFromThePackagedFileNamedWithDB(t *testing.T) {
 		t.Fatalf("select record 1 = %#x, err = %v", result, err)
 	}
 	got := make([]byte, 8)
-	if err := runtime.client.core.Memory().Read(buffer, got); err != nil {
+	if err := runtime.client.Core().Memory().Read(buffer, got); err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != "YVQZZQEX" {
@@ -107,8 +108,8 @@ func TestRecordDatabaseSeedsFromThePackagedFileNamedWithDB(t *testing.T) {
 // fresh-start path is what runs on that answer.
 func TestRecordDatabaseRefusesToOpenWhatIsNotThere(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	if handle := openRecordDatabase(t, runtime, "ABSENT", 8, 0); handle != wipicErrorNotFound {
-		t.Fatalf("open of an absent database = %#x, want %#x", handle, wipicErrorNotFound)
+	if handle := openRecordDatabase(t, runtime, "ABSENT", 8, 0); handle != wipicrt.WIPICErrorNotFound {
+		t.Fatalf("open of an absent database = %#x, want %#x", handle, wipicrt.WIPICErrorNotFound)
 	}
 	// With create set, the same call opens an empty database instead.
 	if handle := openRecordDatabase(t, runtime, "ABSENT", 8, 1); handle&recordDatabaseHandleBit == 0 {
@@ -123,10 +124,10 @@ func TestRecordDatabaseKeepsIdsAcrossADelete(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	handle := openRecordDatabase(t, runtime, "SAVES", 4, 1)
 
-	const buffer = platformDataBase + 0x9000
+	const buffer = wipicrt.PlatformDataBase + 0x9000
 	insert := func(payload string) uint32 {
 		t.Helper()
-		if err := runtime.client.core.Memory().Write(buffer, []byte(payload)); err != nil {
+		if err := runtime.client.Core().Memory().Write(buffer, []byte(payload)); err != nil {
 			t.Fatal(err)
 		}
 		thread := armcore.NewThread(armcore.Context{})
@@ -170,7 +171,7 @@ func TestRecordDatabaseKeepsIdsAcrossADelete(t *testing.T) {
 		t.Fatalf("select record 2 = %#x, err = %v", result, err)
 	}
 	got := make([]byte, 4)
-	if err := runtime.client.core.Memory().Read(buffer, got); err != nil {
+	if err := runtime.client.Core().Memory().Read(buffer, got); err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != "bbbb" {
@@ -183,13 +184,13 @@ func TestRecordDatabaseKeepsIdsAcrossADelete(t *testing.T) {
 // a handle this platform issued distinguishes them.
 func TestRecordDatabaseSlot6TellsTheTwoCallShapesApart(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	runtime.guestFiles = map[string][]byte{
+	runtime.GuestFiles = map[string][]byte{
 		"KEYS.db": packedRecordDatabase(8, []byte("YVQZZQEX")),
 	}
 	handle := openRecordDatabase(t, runtime, "KEYS", 8, 0)
 
 	// A name pointer rather than a handle selects the database form.
-	const nameAddress = platformDataBase + 0x8000
+	const nameAddress = wipicrt.PlatformDataBase + 0x8000
 	thread := armcore.NewThread(armcore.Context{})
 	for register, value := range map[int]uint32{0: nameAddress, 1: 0} {
 		if err := thread.SetRegister(register, value); err != nil {
@@ -209,7 +210,7 @@ func TestRecordDatabaseSlot6TellsTheTwoCallShapesApart(t *testing.T) {
 		t.Fatal("a handle survived the delete of the database it addresses")
 	}
 	// The handle form still reaches records, on a database that is there.
-	runtime.guestFiles = map[string][]byte{"OTHER.db": packedRecordDatabase(8, []byte("YVQZZQEX"))}
+	runtime.GuestFiles = map[string][]byte{"OTHER.db": packedRecordDatabase(8, []byte("YVQZZQEX"))}
 	other := openRecordDatabase(t, runtime, "OTHER", 8, 0)
 	for register, value := range map[int]uint32{0: other, 1: 1} {
 		if err := thread.SetRegister(register, value); err != nil {
@@ -246,7 +247,7 @@ func TestPackagedRecordDatabaseRejectsWhatIsNotOne(t *testing.T) {
 func TestASplitPackagedDatabaseIsOpenedFromItsIndex(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	index, data := splitRecordDatabase(4, []byte("aaaa"), []byte("bbbb"))
-	runtime.guestFiles = map[string][]byte{"SAVE.idx": index, "SAVE.db": data}
+	runtime.GuestFiles = map[string][]byte{"SAVE.idx": index, "SAVE.db": data}
 
 	records, ok := runtime.packagedRecordDatabase("SAVE", 4)
 	if !ok {
@@ -269,7 +270,7 @@ func TestASplitPackagedDatabaseIsOpenedFromItsIndex(t *testing.T) {
 func TestAPackagedIndexDeclaringNoRecordIsStillADatabase(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	index, _ := splitRecordDatabase(100)
-	runtime.guestFiles = map[string][]byte{"EMPTY.idx": index}
+	runtime.GuestFiles = map[string][]byte{"EMPTY.idx": index}
 
 	records, ok := runtime.packagedRecordDatabase("EMPTY", 100)
 	if !ok {
@@ -291,7 +292,7 @@ func TestTheDataFileSettlesARecordSizeItsIndexDisagreesWith(t *testing.T) {
 	// record size overwritten together, which is why neither is trusted.
 	index[recordDatabaseMagicMatch] = 0xff
 	binary.BigEndian.PutUint32(index[recordDatabaseSizeOffset:], 0xff000004)
-	runtime.guestFiles = map[string][]byte{"BENT.idx": index, "BENT.db": data}
+	runtime.GuestFiles = map[string][]byte{"BENT.idx": index, "BENT.db": data}
 
 	records, ok := runtime.packagedRecordDatabase("BENT", 4)
 	if !ok {
@@ -302,7 +303,7 @@ func TestTheDataFileSettlesARecordSizeItsIndexDisagreesWith(t *testing.T) {
 	}
 
 	// A data file the count cannot divide is a disagreement nothing settles.
-	runtime.guestFiles["BENT.db"] = data[:len(data)-1]
+	runtime.GuestFiles["BENT.db"] = data[:len(data)-1]
 	if _, ok := runtime.packagedRecordDatabase("BENT", 4); ok {
 		t.Fatal("parsed a data file the record count does not divide")
 	}
@@ -335,13 +336,13 @@ func TestRecordDatabaseListCountsIdentifiersRatherThanBytes(t *testing.T) {
 	for index := range 12 {
 		records = append(records, []byte{byte(index), 0, 0, 0, 0, 0, 0, 0})
 	}
-	runtime.guestFiles = map[string][]byte{"SLOTS.db": packedRecordDatabase(8, records...)}
+	runtime.GuestFiles = map[string][]byte{"SLOTS.db": packedRecordDatabase(8, records...)}
 	handle := openRecordDatabase(t, runtime, "SLOTS", 8, 0)
 
-	const buffer = platformDataBase + 0x9000
+	const buffer = wipicrt.PlatformDataBase + 0x9000
 	list := func(capacity uint32) uint32 {
 		t.Helper()
-		if err := runtime.client.core.Memory().Write(buffer, make([]byte, 4*len(records)+16)); err != nil {
+		if err := runtime.client.Core().Memory().Write(buffer, make([]byte, 4*len(records)+16)); err != nil {
 			t.Fatal(err)
 		}
 		thread := armcore.NewThread(armcore.Context{})
@@ -362,7 +363,7 @@ func TestRecordDatabaseListCountsIdentifiersRatherThanBytes(t *testing.T) {
 	}
 	for index := range records {
 		var word [4]byte
-		if err := runtime.client.core.Memory().Read(buffer+uint32(index)*4, word[:]); err != nil {
+		if err := runtime.client.Core().Memory().Read(buffer+uint32(index)*4, word[:]); err != nil {
 			t.Fatal(err)
 		}
 		if got := binary.LittleEndian.Uint32(word[:]); got != uint32(index+1) {
@@ -376,7 +377,7 @@ func TestRecordDatabaseListCountsIdentifiersRatherThanBytes(t *testing.T) {
 		t.Fatalf("list into a four-entry array wrote %d, want 4", written)
 	}
 	var past [4]byte
-	if err := runtime.client.core.Memory().Read(buffer+16, past[:]); err != nil {
+	if err := runtime.client.Core().Memory().Read(buffer+16, past[:]); err != nil {
 		t.Fatal(err)
 	}
 	if binary.LittleEndian.Uint32(past[:]) != 0 {
@@ -393,7 +394,7 @@ func TestRecordDatabaseListCountsIdentifiersRatherThanBytes(t *testing.T) {
 			}
 		}
 		result, err := runtime.handleWIPICRecordDatabaseCall(thread, wipicRecordDatabaseList)
-		if err != nil || result != wipicErrorInvalid {
+		if err != nil || result != wipicrt.WIPICErrorInvalid {
 			t.Fatalf("list(buffer=%#x, capacity=%d) = %#x, err = %v", arguments.buffer, arguments.capacity, result, err)
 		}
 	}
@@ -406,20 +407,20 @@ func TestRecordDatabaseListCountsIdentifiersRatherThanBytes(t *testing.T) {
 // back as a list of deleted names, which then hides databases nobody deleted.
 func TestTheNamesTheTablesKeepTheirOwnListsUnderAreReserved(t *testing.T) {
 	for _, name := range []string{".removed", "./.removed", ".removed/"} {
-		if !reservedStorageName(javaDatabaseScope, name) {
+		if !wipicrt.ReservedStorageName(wipicrt.JavaDatabaseScope, name) {
 			t.Fatalf("%q reaches a key a table keeps its own list under", name)
 		}
 	}
 	for _, reserved := range []struct{ scope, name string }{
-		{cFileScope, ".dirs"}, {guestFileScope, ".dirs"}, {javaDatabaseScope, ".sizes"},
+		{wipicrt.CFileScope, ".dirs"}, {wipicrt.GuestFileScope, ".dirs"}, {wipicrt.JavaDatabaseScope, ".sizes"},
 	} {
-		if !reservedStorageName(reserved.scope, reserved.name) {
+		if !wipicrt.ReservedStorageName(reserved.scope, reserved.name) {
 			t.Fatalf("%s/%s, a list a table keeps, is not reserved", reserved.scope, reserved.name)
 		}
 	}
 	// A name is reserved only on the scope that keeps a list of it.
 	for _, name := range []string{".index", ".sizes", "sub/.removed", "removed", ".removedx", "scores"} {
-		if reservedStorageName(guestFileScope, name) {
+		if wipicrt.ReservedStorageName(wipicrt.GuestFileScope, name) {
 			t.Fatalf("%q collides with nothing under fs/ and was refused", name)
 		}
 	}
@@ -429,7 +430,7 @@ func TestTheNamesTheTablesKeepTheirOwnListsUnderAreReserved(t *testing.T) {
 	// refusing: they used to pass, and the store then wrote the scope itself
 	// as a regular file, after which every write under it failed for good.
 	for _, name := range []string{"", "A\nB", "..", ".", "/", "./", "//", ".removed"} {
-		if storableName(javaDatabaseScope, name) {
+		if wipicrt.StorableName(wipicrt.JavaDatabaseScope, name) {
 			t.Fatalf("%q cannot survive the removal list and was accepted", name)
 		}
 	}
@@ -437,22 +438,22 @@ func TestTheNamesTheTablesKeepTheirOwnListsUnderAreReserved(t *testing.T) {
 	// under, so the list carries it as it is rather than the name being
 	// refused: trimming on the way back would have made deleting "save " hide
 	// "save".
-	if !storableName(javaDatabaseScope, "save ") {
+	if !wipicrt.StorableName(wipicrt.JavaDatabaseScope, "save ") {
 		t.Fatal("a name with a trailing space was refused, orphaning any save under it")
 	}
 	// The length cap is the WIPI C record database's own and does not reach
 	// the Java class: eleven Korean characters are thirty-three bytes, and
 	// that class has always accepted them.
 	long := strings.Repeat("가", 11)
-	if !storableName(javaDatabaseScope, long) {
+	if !wipicrt.StorableName(wipicrt.JavaDatabaseScope, long) {
 		t.Fatalf("a %d-byte name the Java class has always taken was refused", len(long))
 	}
-	if !storableName(recordDatabaseScope, "save") {
+	if !wipicrt.StorableName(wipicrt.RecordDatabaseScope, "save") {
 		t.Fatal("an ordinary name was refused")
 	}
 
 	_, runtime := newTestRuntime(t)
-	if handle := openRecordDatabase(t, runtime, ".removed", 8, 1); handle != wipicErrorInvalid {
+	if handle := openRecordDatabase(t, runtime, ".removed", 8, 1); handle != wipicrt.WIPICErrorInvalid {
 		t.Fatalf("the record table opened its own list as a database: %#x", handle)
 	}
 }
@@ -466,7 +467,7 @@ func TestAnIntactIndexIsNotSettledByWhateverFileSitsBesideIt(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	index, _ := splitRecordDatabase(5, []byte("aaaaa"))
 	unrelated := make([]byte, 1400)
-	runtime.guestFiles = map[string][]byte{"CFG.idx": index, "CFG.db": unrelated}
+	runtime.GuestFiles = map[string][]byte{"CFG.idx": index, "CFG.db": unrelated}
 	if records, ok := runtime.packagedRecordDatabase("CFG", 5); ok {
 		t.Fatalf("an intact index took an unrelated file as its data: %d records of %d bytes", len(records), len(records[0]))
 	}
@@ -474,7 +475,7 @@ func TestAnIntactIndexIsNotSettledByWhateverFileSitsBesideIt(t *testing.T) {
 	bent, data := splitRecordDatabase(4, []byte("aaaa"), []byte("bbbb"))
 	bent[recordDatabaseMagicMatch] = 0xff
 	binary.BigEndian.PutUint32(bent[recordDatabaseSizeOffset:], 0xff000004)
-	runtime.guestFiles = map[string][]byte{"BENT.idx": bent, "BENT.db": data}
+	runtime.GuestFiles = map[string][]byte{"BENT.idx": bent, "BENT.db": data}
 	if _, ok := runtime.packagedRecordDatabase("BENT", 4); !ok {
 		t.Fatal("the bent index this recovery exists for was refused")
 	}
@@ -486,7 +487,7 @@ func TestAnIntactIndexIsNotSettledByWhateverFileSitsBesideIt(t *testing.T) {
 func TestAnIndexDeclaringNoRecordIsADatabaseWhateverSitsBesideIt(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	index, _ := splitRecordDatabase(100)
-	runtime.guestFiles = map[string][]byte{"E.idx": index, "E.db": []byte("stale")}
+	runtime.GuestFiles = map[string][]byte{"E.idx": index, "E.db": []byte("stale")}
 	records, ok := runtime.packagedRecordDatabase("E", 100)
 	if !ok {
 		t.Fatal("an index declaring no record was read as no database")
@@ -502,7 +503,7 @@ func TestAnIndexDeclaringNoRecordIsADatabaseWhateverSitsBesideIt(t *testing.T) {
 // guest file table pairs every write with the same unmark.
 func TestWritingADatabaseTakesItBackOffTheDeletionList(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 	runtime.markRecordDatabaseRemoved(recordDatabaseRemovedKey, "SAVE", true)
 	store := &runtimeRecordDatabase{name: "SAVE", records: [][]byte{[]byte("written")}}
 	runtime.persistRecordDatabase(store)
@@ -510,7 +511,7 @@ func TestWritingADatabaseTakesItBackOffTheDeletionList(t *testing.T) {
 		t.Fatal("a database that was written is still on the deletion list")
 	}
 	runtime.recordDatabases = nil
-	if handle := openRecordDatabase(t, runtime, "SAVE", 8, 0); handle == wipicErrorNotFound {
+	if handle := openRecordDatabase(t, runtime, "SAVE", 8, 0); handle == wipicrt.WIPICErrorNotFound {
 		t.Fatal("the record written through a surviving handle is unreachable")
 	}
 }
@@ -522,12 +523,12 @@ func TestWritingADatabaseTakesItBackOffTheDeletionList(t *testing.T) {
 // its handles on removal for the same reason.
 func TestDeletingARecordDatabaseTakesItsHandlesWithIt(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	client.saveStore = NewDirectorySaveStore(t.TempDir())
-	runtime.guestFiles = map[string][]byte{"SAVE.db": packedRecordDatabase(8, []byte("YVQZZQEX"))}
+	client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
+	runtime.GuestFiles = map[string][]byte{"SAVE.db": packedRecordDatabase(8, []byte("YVQZZQEX"))}
 	handle := openRecordDatabase(t, runtime, "SAVE", 8, 0)
 
-	const nameAddress = platformDataBase + 0x8000
-	if err := runtime.client.core.Memory().Write(nameAddress, append([]byte("SAVE"), 0)); err != nil {
+	const nameAddress = wipicrt.PlatformDataBase + 0x8000
+	if err := runtime.client.Core().Memory().Write(nameAddress, append([]byte("SAVE"), 0)); err != nil {
 		t.Fatal(err)
 	}
 	thread := armcore.NewThread(armcore.Context{})
@@ -544,7 +545,7 @@ func TestDeletingARecordDatabaseTakesItsHandlesWithIt(t *testing.T) {
 		t.Fatal("the deleted database is not on the removal list")
 	}
 	runtime.recordDatabases = nil
-	if result := openRecordDatabase(t, runtime, "SAVE", 8, 0); result != wipicErrorNotFound {
+	if result := openRecordDatabase(t, runtime, "SAVE", 8, 0); result != wipicrt.WIPICErrorNotFound {
 		t.Fatalf("open after delete = %#x, want M_E_NOENT", result)
 	}
 }
@@ -555,11 +556,11 @@ func TestDeletingARecordDatabaseTakesItsHandlesWithIt(t *testing.T) {
 // the record a title cleared comes straight back through the other door.
 func TestDeletingThroughOneTableHidesTheArchiveFromTheOther(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 	index, data := splitRecordDatabase(4, []byte("aaaa"))
-	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	runtime.GuestFiles = map[string][]byte{"save.idx": index, "save.db": data}
 	runtime.markRecordDatabaseRemoved(javaDatabaseRemovedKey, "save", true)
-	if handle := openRecordDatabase(t, runtime, "save", 4, 0); handle != wipicErrorNotFound {
+	if handle := openRecordDatabase(t, runtime, "save", 4, 0); handle != wipicrt.WIPICErrorNotFound {
 		t.Fatalf("the C table served the archive's copy of a database the Java table deleted: %#x", handle)
 	}
 }
@@ -571,24 +572,24 @@ func TestDeletingThroughOneTableHidesTheArchiveFromTheOther(t *testing.T) {
 // every database the title had deleted came back on the next open.
 func TestRemovingAReservedNameCannotWipeTheListItNames(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	client.saveStore = NewDirectorySaveStore(t.TempDir())
-	runtime.markDatabaseRemoved("SAVE", true)
-	before, ok := runtime.loadSave(databaseRemovedKey)
+	client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
+	runtime.MarkDatabaseRemoved("SAVE", true)
+	before, ok := runtime.LoadSave(wipicrt.DatabaseRemovedKey)
 	if !ok || string(before) != "SAVE" {
 		t.Fatalf("removal list = %q, want the name that was deleted", before)
 	}
-	const nameAddress = platformDataBase + 0x8000
-	if err := runtime.client.core.Memory().Write(nameAddress, append([]byte(".removed"), 0)); err != nil {
+	const nameAddress = wipicrt.PlatformDataBase + 0x8000
+	if err := runtime.client.Core().Memory().Write(nameAddress, append([]byte(".removed"), 0)); err != nil {
 		t.Fatal(err)
 	}
 	thread := armcore.NewThread(armcore.Context{})
 	if err := thread.SetRegister(0, nameAddress); err != nil {
 		t.Fatal(err)
 	}
-	if result, err := runtime.handleWIPICFileCall(thread, wipicFileDelete); err != nil || result != wipicErrorBadFileName {
+	if result, err := runtime.HandleWIPICFileCall(thread, wipicrt.WIPICFileDelete); err != nil || result != wipicrt.WIPICErrorBadFileName {
 		t.Fatalf("removing the list = %#x, err = %v, want it refused with M_E_BADFILENAME", result, err)
 	}
-	after, ok := runtime.loadSave(databaseRemovedKey)
+	after, ok := runtime.LoadSave(wipicrt.DatabaseRemovedKey)
 	if !ok || string(after) != string(before) {
 		t.Fatalf("removal list = %q, want it untouched", after)
 	}
@@ -596,8 +597,8 @@ func TestRemovingAReservedNameCannotWipeTheListItNames(t *testing.T) {
 	// Renaming one away is the same hole from the other end: the source is
 	// emptied after the copy, so the list would leave under another name and
 	// nothing would be left behind.
-	const toAddress = platformDataBase + 0x8100
-	if err := runtime.client.core.Memory().Write(toAddress, append([]byte("loot"), 0)); err != nil {
+	const toAddress = wipicrt.PlatformDataBase + 0x8100
+	if err := runtime.client.Core().Memory().Write(toAddress, append([]byte("loot"), 0)); err != nil {
 		t.Fatal(err)
 	}
 	for register, value := range map[int]uint32{0: nameAddress, 1: toAddress} {
@@ -605,10 +606,10 @@ func TestRemovingAReservedNameCannotWipeTheListItNames(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if result, err := runtime.handleWIPICFileCall(thread, wipicFileRename); err != nil || result != wipicErrorBadFileName {
+	if result, err := runtime.HandleWIPICFileCall(thread, wipicrt.WIPICFileRename); err != nil || result != wipicrt.WIPICErrorBadFileName {
 		t.Fatalf("renaming the list away = %#x, err = %v, want it refused with M_E_BADFILENAME", result, err)
 	}
-	moved, ok := runtime.loadSave(databaseRemovedKey)
+	moved, ok := runtime.LoadSave(wipicrt.DatabaseRemovedKey)
 	if !ok || string(moved) != string(before) {
 		t.Fatalf("removal list = %q, want it untouched", moved)
 	}
@@ -618,7 +619,7 @@ func TestRemovingAReservedNameCannotWipeTheListItNames(t *testing.T) {
 // read it as a deleted record: the save holds a length of zero, and decoding
 // turned that into nil. The count and a select both say it is there.
 func TestAnEmptyRecordDatabaseRecordOutlivesTheSession(t *testing.T) {
-	store := NewDirectorySaveStore(t.TempDir())
+	store := wipicrt.NewDirectorySaveStore(t.TempDir())
 	call := func(runtime *initializationRuntime, slot uint32, registers ...uint32) uint32 {
 		t.Helper()
 		thread := armcore.NewThread(armcore.Context{})
@@ -633,10 +634,10 @@ func TestAnEmptyRecordDatabaseRecordOutlivesTheSession(t *testing.T) {
 		}
 		return result
 	}
-	const buffer = platformDataBase + 0x9000
+	const buffer = wipicrt.PlatformDataBase + 0x9000
 	for _, session := range []string{"first", "later"} {
 		client, runtime := newTestRuntime(t)
-		client.saveStore = store
+		client.SaveStore = store
 		handle := openRecordDatabase(t, runtime, "SLOTS", 4, 1)
 		if session == "first" {
 			if id := call(runtime, wipicRecordDatabaseInsert, handle, buffer, 0); id != 1 {

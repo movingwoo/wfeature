@@ -13,6 +13,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 const (
@@ -166,7 +167,7 @@ func (runtime *initializationRuntime) aotClassUnchanged(address uint32) bool {
 		return false
 	}
 	revision, ok := runtime.client.vm.AOTClassRevision(address)
-	return ok && revision == read.revision && runtime.client.core.Memory().Holds(read.spans)
+	return ok && revision == read.revision && runtime.client.Core().Memory().Holds(read.spans)
 }
 
 // readAndRegisterAOTClass reads the record at address whole, registers the
@@ -217,12 +218,12 @@ func (runtime *initializationRuntime) runAOTClassInitializer(ctx context.Context
 	if initializer == nil {
 		return nil
 	}
-	runtime.countDiagnostic("clinit " + metadata.Name)
+	runtime.CountDiagnostic("clinit " + metadata.Name)
 	body := initializer.Body
 	arguments := []uint32{0}
 	if initializer.AccessFlags&0x0100 != 0 {
 		body = initializer.NativeBody
-		container, err := runtime.allocateWords([]uint32{0, 0})
+		container, err := runtime.AllocateWords([]uint32{0, 0})
 		if err != nil {
 			return fmt.Errorf("allocate KTF class initializer container for %s: %w", metadata.Name, err)
 		}
@@ -231,12 +232,12 @@ func (runtime *initializationRuntime) runAOTClassInitializer(ctx context.Context
 	if body == 0 {
 		return fmt.Errorf("KTF AOT class %s <clinit> body is null", metadata.Name)
 	}
-	if err := runtime.enterAOTCall(); err != nil {
+	if err := runtime.EnterAOTCall(); err != nil {
 		return err
 	}
-	defer runtime.leaveAOTCall(runtime.aotCallOwner())
+	defer runtime.LeaveAOTCall(runtime.AOTCallOwner())
 	for {
-		_, callErr := runtime.client.core.Call(ctx, thread, body, ReturnAddress, arguments, runtime.handleSupervisorCall)
+		_, callErr := runtime.client.Core().Call(ctx, thread, body, wipicrt.ReturnAddress, arguments, runtime.handleSupervisorCall)
 		if callErr == nil {
 			return nil
 		}
@@ -272,7 +273,7 @@ func (runtime *initializationRuntime) allocateAOTInstance(classAddress uint32) (
 	if err != nil {
 		return 0, nil, err
 	}
-	runtime.recordDiagnostic(diagEvent{kind: diagNew, name: metadata.Name, site: address, hasSite: true})
+	runtime.RecordDiagnostic(wipicrt.DiagEvent{Kind: wipicrt.DiagNew, Name: metadata.Name, Site: address, HasSite: true})
 	return address, object, nil
 }
 
@@ -297,12 +298,12 @@ func (runtime *initializationRuntime) newAOTArray(thread *armcore.Thread) (uint3
 		return 0, err
 	}
 	lr, _ := thread.Register(armcore.RegisterLR)
-	runtime.recordDiagnostic(diagEvent{
-		kind:    diagNewArray,
-		name:    metadata.Name,
-		nums:    [5]uint32{uint32(count), address},
-		site:    lr,
-		hasSite: true,
+	runtime.RecordDiagnostic(wipicrt.DiagEvent{
+		Kind:    wipicrt.DiagNewArray,
+		Name:    metadata.Name,
+		Nums:    [5]uint32{uint32(count), address},
+		Site:    lr,
+		HasSite: true,
 	})
 	return address, nil
 }
@@ -314,8 +315,8 @@ func (runtime *initializationRuntime) allocateAOTArrayObject(metadata jvm.AOTCla
 	}
 	payloadSize := uint64(javaArrayLengthSize) + uint64(count)*elementSize
 	totalSize := uint64(javaInstanceSize+javaInstanceHeader) + payloadSize
-	if totalSize > maxPlatformAllocation {
-		return 0, fmt.Errorf("KTF Java array layout %d exceeds allocation limit %d", totalSize, maxPlatformAllocation)
+	if totalSize > wipicrt.MaxPlatformAllocation {
+		return 0, fmt.Errorf("KTF Java array layout %d exceeds allocation limit %d", totalSize, wipicrt.MaxPlatformAllocation)
 	}
 	object, err := runtime.client.vm.NewAOTArray(metadata.Address, count)
 	if err != nil {
@@ -392,7 +393,7 @@ func (runtime *initializationRuntime) registerAOTAncestors(address uint32) bool 
 	for depth := 0; depth < aotHierarchyLimit; depth++ {
 		parent, err := runtime.aotSuperAddress(address)
 		if err != nil {
-			runtime.client.log("KTF AOT parent record unreadable", "class", fmt.Sprintf("%#x", address), "error", err)
+			runtime.client.Log("KTF AOT parent record unreadable", "class", fmt.Sprintf("%#x", address), "error", err)
 			return false
 		}
 		if parent == 0 || visited[parent] {
@@ -401,13 +402,13 @@ func (runtime *initializationRuntime) registerAOTAncestors(address uint32) bool 
 		visited[parent] = true
 		if !runtime.client.vm.HasAOTClassAt(parent) {
 			if _, err := runtime.registerAOTClassRecord(parent); err != nil {
-				runtime.client.log("KTF AOT parent class not registered", "class", fmt.Sprintf("%#x", address), "parent", fmt.Sprintf("%#x", parent), "error", err)
+				runtime.client.Log("KTF AOT parent class not registered", "class", fmt.Sprintf("%#x", address), "parent", fmt.Sprintf("%#x", parent), "error", err)
 				return false
 			}
 		}
 		address = parent
 	}
-	runtime.client.log("KTF AOT class hierarchy is deeper than the limit", "class", fmt.Sprintf("%#x", address), "limit", aotHierarchyLimit)
+	runtime.client.Log("KTF AOT class hierarchy is deeper than the limit", "class", fmt.Sprintf("%#x", address), "limit", aotHierarchyLimit)
 	return false
 }
 
@@ -417,7 +418,7 @@ func (runtime *initializationRuntime) aotSuperAddress(address uint32) (uint32, e
 	if address&3 != 0 {
 		return 0, fmt.Errorf("class address %#x is not word-aligned", address)
 	}
-	class, err := runtime.readAOTBytes(address, javaClassSize, "class")
+	class, err := runtime.ReadAOTBytes(address, javaClassSize, "class")
 	if err != nil {
 		return 0, err
 	}
@@ -425,7 +426,7 @@ func (runtime *initializationRuntime) aotSuperAddress(address uint32) (uint32, e
 	if descriptorAddress&3 != 0 {
 		return 0, fmt.Errorf("class descriptor address %#x is not word-aligned", descriptorAddress)
 	}
-	descriptor, err := runtime.readAOTBytes(descriptorAddress, javaDescriptorSize, "class descriptor")
+	descriptor, err := runtime.ReadAOTBytes(descriptorAddress, javaDescriptorSize, "class descriptor")
 	if err != nil {
 		return 0, err
 	}
@@ -478,7 +479,7 @@ func (runtime *initializationRuntime) allocateAOTObject(metadata jvm.AOTClassMet
 		return 0, err
 	}
 	totalSize := uint64(javaInstanceSize+javaInstanceHeader) + uint64(len(payload))
-	address, err := runtime.allocate(totalSize)
+	address, err := runtime.Allocate(totalSize)
 	if err != nil {
 		return 0, err
 	}
@@ -488,7 +489,7 @@ func (runtime *initializationRuntime) allocateAOTObject(metadata jvm.AOTClassMet
 	binary.LittleEndian.PutUint32(data[4:], metadata.Address)
 	binary.LittleEndian.PutUint32(data[javaInstanceSize:], header)
 	copy(data[javaInstanceSize+javaInstanceHeader:], payload)
-	if err := runtime.client.core.Memory().Write(address, data); err != nil {
+	if err := runtime.client.Core().Memory().Write(address, data); err != nil {
 		return 0, fmt.Errorf("write KTF AOT object %s at %#x: %w", metadata.Name, address, err)
 	}
 	if err := runtime.client.vm.BindAOTObject(address, object); err != nil {
@@ -575,14 +576,14 @@ func (runtime *initializationRuntime) aotVTableHeader(metadata jvm.AOTClassMetad
 	// Compiled access checks compare class addresses, not descriptor names.
 	// Preserve image records when the signed header displacement can name them.
 	offset := int64(metadata.Address) - int64(runtime.jvmContext)
-	if runtime.classArena != nil && metadata.Address >= ImageBase &&
-		uint64(metadata.Address)+javaClassSize <= uint64(ImageBase)+runtime.client.mapped &&
+	if runtime.classArena != nil && metadata.Address >= wipicrt.ImageBase &&
+		uint64(metadata.Address)+javaClassSize <= uint64(wipicrt.ImageBase)+runtime.client.mapped &&
 		offset >= -(1<<26) && offset < 1<<26 {
 		return uint32(int32(offset)) << 5, nil
 	}
 	alias, ok := runtime.classAliases[metadata.Address]
 	if !ok {
-		record, err := runtime.readAOTBytes(metadata.Address, javaClassSize, "class record for dispatch alias")
+		record, err := runtime.ReadAOTBytes(metadata.Address, javaClassSize, "class record for dispatch alias")
 		if err != nil {
 			return 0, fmt.Errorf("read KTF class %s for dispatch alias: %w", metadata.Name, err)
 		}
@@ -594,7 +595,7 @@ func (runtime *initializationRuntime) aotVTableHeader(metadata jvm.AOTClassMetad
 		}
 		var next [4]byte
 		binary.LittleEndian.PutUint32(next[:], alias+4)
-		if err := runtime.client.core.Memory().Write(alias, next[:]); err != nil {
+		if err := runtime.client.Core().Memory().Write(alias, next[:]); err != nil {
 			return 0, fmt.Errorf("write KTF dispatch alias for %s: %w", metadata.Name, err)
 		}
 		// An alias is a class record in every respect the guest can see, so it
@@ -655,7 +656,7 @@ func (runtime *initializationRuntime) describeAOTOperands(candidates []uint32) s
 		}
 		if _, values, arrayErr := jvm.ArraySnapshot(object); arrayErr == nil {
 			guestLength := "unreadable"
-			if words, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "array length probe"); err == nil {
+			if words, err := runtime.ReadAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "array length probe"); err == nil {
 				guestLength = fmt.Sprintf("%d", words[0])
 			}
 			described = append(described, fmt.Sprintf("%#x %s runtime=%d guest=%s",
@@ -679,7 +680,7 @@ func (runtime *initializationRuntime) describeAOTOperands(candidates []uint32) s
 // arguments the caller never prepared. The two names disagreeing is that bug;
 // agreeing rules it out.
 func (runtime *initializationRuntime) describeDispatchWord(address uint32) string {
-	words, err := runtime.readAOTWords(address, 3, "object header")
+	words, err := runtime.ReadAOTWords(address, 3, "object header")
 	if err != nil {
 		return " header=unreadable"
 	}
@@ -718,7 +719,7 @@ const throwStackWords = 48
 // It reads only, and every read is best effort: a fault has already left the
 // guest somewhere unexpected, so a probe that fails says so and the rest of
 // the report still arrives.
-func (runtime *initializationRuntime) describeGuestFault(faultContext armcore.Context, fault *armcore.InstructionError) string {
+func (runtime *initializationRuntime) describeAOTFault(faultContext armcore.Context, fault *armcore.InstructionError) string {
 	registers := faultContext.Registers[:armcore.RegisterSP]
 	stackPointer := faultContext.Registers[armcore.RegisterSP]
 	linkRegister := faultContext.Registers[armcore.RegisterLR]
@@ -783,7 +784,7 @@ func guestFault(err error) (*armcore.InstructionError, bool) {
 // returning the words that do exist beats returning none.
 func (runtime *initializationRuntime) readStackWindow(stackPointer uint32, words int) []uint32 {
 	for count := words; count > 0; count /= 2 {
-		if window, err := runtime.readAOTWords(stackPointer, uint32(count), "throw stack probe"); err == nil {
+		if window, err := runtime.ReadAOTWords(stackPointer, uint32(count), "throw stack probe"); err == nil {
 			return window
 		}
 	}
@@ -796,18 +797,18 @@ func (runtime *initializationRuntime) readStackWindow(stackPointer uint32, words
 // a call chain: the slots say where a name was found, and reading a chain out
 // of them is the analyst's job, not this function's guess.
 func (runtime *initializationRuntime) symbolizeAOTStack(stack []uint32) string {
-	imageEnd := ImageBase + uint32(runtime.client.image.MappedSize())
+	imageEnd := wipicrt.ImageBase + uint32(runtime.client.image.MappedSize())
 	symbols := runtime.aotSymbolIndex()
 	annotated := make([]string, 0, 16)
 	for slot, word := range stack {
 		switch {
-		case word&^1 >= ImageBase && word&^1 < imageEnd:
+		case word&^1 >= wipicrt.ImageBase && word&^1 < imageEnd:
 			symbol, ok := symbolizeAOTAddress(symbols, word)
 			if !ok {
 				symbol = "code?"
 			}
 			annotated = append(annotated, fmt.Sprintf("[%d]=%#x %s", slot, word, symbol))
-		case word >= platformDataBase:
+		case word >= wipicrt.PlatformDataBase:
 			if object, ok := runtime.client.vm.AOTObject(word); ok && object != nil {
 				annotated = append(annotated, fmt.Sprintf("[%d]=%#x %s", slot, word, object.ClassName))
 			}
@@ -848,29 +849,29 @@ func (runtime *initializationRuntime) checkAOTType(thread *armcore.Thread) (uint
 		// This is the permissive answer the comment above warns about, so the
 		// call site goes in the event: knowing a wrong yes was given is only
 		// half of it, and the other half is which guest code was told.
-		event := diagEvent{
-			kind: diagCheckUnresolved,
-			name: runtime.describeOperandClass(objectAddress),
-			nums: [5]uint32{classAddress},
+		event := wipicrt.DiagEvent{
+			Kind: wipicrt.DiagCheckUnresolved,
+			Name: runtime.describeOperandClass(objectAddress),
+			Nums: [5]uint32{classAddress},
 		}
 		if lr, lrErr := thread.Register(armcore.RegisterLR); lrErr == nil {
-			event.site, event.hasSite = lr, true
+			event.Site, event.HasSite = lr, true
 		}
-		runtime.recordDiagnostic(event)
+		runtime.RecordDiagnostic(event)
 		return 1, nil
 	}
 	object, ok := runtime.client.vm.AOTObject(objectAddress)
 	if !ok || object == nil || object.ClassName == "" {
-		runtime.countDiagnostic("checktype object unbound for " + target.Name)
+		runtime.CountDiagnostic("checktype object unbound for " + target.Name)
 		return 1, nil
 	}
 	assignable, decided := runtime.aotAssignable(object.ClassName, objectAddress, target)
 	if !decided {
-		runtime.recordDiagnostic(diagEvent{kind: diagCheckUndecided, name: object.ClassName, target: target.Name})
+		runtime.RecordDiagnostic(wipicrt.DiagEvent{Kind: wipicrt.DiagCheckUndecided, Name: object.ClassName, Target: target.Name})
 		return 1, nil
 	}
 	if !assignable {
-		runtime.recordDiagnostic(diagEvent{kind: diagCheckReject, name: object.ClassName, target: target.Name})
+		runtime.RecordDiagnostic(wipicrt.DiagEvent{Kind: wipicrt.DiagCheckReject, Name: object.ClassName, Target: target.Name})
 		return 0, nil
 	}
 	return 1, nil
@@ -959,7 +960,7 @@ func (runtime *initializationRuntime) aotObjectClassAddress(objectAddress uint32
 	if objectAddress == 0 || objectAddress&3 != 0 {
 		return 0, fmt.Errorf("object address %#x is null or unaligned", objectAddress)
 	}
-	words, err := runtime.readAOTWords(objectAddress, 2, "object class")
+	words, err := runtime.ReadAOTWords(objectAddress, 2, "object class")
 	if err != nil {
 		return 0, err
 	}
@@ -1092,7 +1093,7 @@ func (runtime *initializationRuntime) readAOTClassSummary(address uint32) (aotCl
 	if address&3 != 0 {
 		return aotClassSummary{}, fmt.Errorf("class address %#x is not word-aligned", address)
 	}
-	class, err := runtime.readAOTBytes(address, javaClassSize, "class")
+	class, err := runtime.ReadAOTBytes(address, javaClassSize, "class")
 	if err != nil {
 		return aotClassSummary{}, err
 	}
@@ -1103,7 +1104,7 @@ func (runtime *initializationRuntime) readAOTClassSummary(address uint32) (aotCl
 	if descriptorAddress&3 != 0 {
 		return aotClassSummary{}, fmt.Errorf("class descriptor address %#x is not word-aligned", descriptorAddress)
 	}
-	descriptor, err := runtime.readAOTBytes(descriptorAddress, javaDescriptorSize, "class descriptor")
+	descriptor, err := runtime.ReadAOTBytes(descriptorAddress, javaDescriptorSize, "class descriptor")
 	if err != nil {
 		return aotClassSummary{}, err
 	}
@@ -1120,7 +1121,7 @@ func (runtime *initializationRuntime) readAOTClassSummary(address uint32) (aotCl
 			return aotClassSummary{}, fmt.Errorf("class %s declares %d interfaces", name, count)
 		}
 		if count > 0 {
-			summary.interfaces, err = runtime.readAOTWords(table, uint32(count), "interface table")
+			summary.interfaces, err = runtime.ReadAOTWords(table, uint32(count), "interface table")
 			if err != nil {
 				return aotClassSummary{}, err
 			}
@@ -1144,11 +1145,11 @@ func (runtime *initializationRuntime) aotMethodFromGuestRecords(classAddress uin
 		if classAddress&3 != 0 {
 			return jvm.AOTMethodMetadata{}, false, fmt.Errorf("class address %#x is not word-aligned", classAddress)
 		}
-		class, err := runtime.readAOTBytes(classAddress, javaClassSize, "class")
+		class, err := runtime.ReadAOTBytes(classAddress, javaClassSize, "class")
 		if err != nil {
 			return jvm.AOTMethodMetadata{}, false, err
 		}
-		descriptorRecord, err := runtime.readAOTBytes(binary.LittleEndian.Uint32(class[8:]), javaDescriptorSize, "class descriptor")
+		descriptorRecord, err := runtime.ReadAOTBytes(binary.LittleEndian.Uint32(class[8:]), javaDescriptorSize, "class descriptor")
 		if err != nil {
 			return jvm.AOTMethodMetadata{}, false, err
 		}
@@ -1209,7 +1210,7 @@ func (runtime *initializationRuntime) throwAOTException(thread *armcore.Thread) 
 		// wants, and asking for them all reads nothing at all.
 		stack := runtime.readStackWindow(stackPointer, throwStackWords)
 		site = fmt.Sprintf("thrown by guest code at %#x sp=%#x regs=%#x stack=%#x", lr, stackPointer, registers, stack)
-		runtime.countDiagnostic(fmt.Sprintf("throw %s @%#x sp=%#x regs=%#x stack=%#x", name, lr, stackPointer, registers, stack))
+		runtime.CountDiagnostic(fmt.Sprintf("throw %s @%#x sp=%#x regs=%#x stack=%#x", name, lr, stackPointer, registers, stack))
 		// The guest compiles its own bounds check against the length word this
 		// runtime wrote into the array header, so an out-of-range throw is
 		// first of all a question about that word. Naming every array the
@@ -1219,7 +1220,7 @@ func (runtime *initializationRuntime) throwAOTException(thread *armcore.Thread) 
 			operands := runtime.describeAOTOperands(append(append([]uint32{}, registers...), stack...))
 			if operands != "" {
 				site += " arrays=" + operands
-				runtime.countDiagnostic("throw arrays " + operands)
+				runtime.CountDiagnostic("throw arrays " + operands)
 			}
 		}
 		// Guest frames are bare addresses until the AOT metadata names them,
@@ -1227,7 +1228,7 @@ func (runtime *initializationRuntime) throwAOTException(thread *armcore.Thread) 
 		// on the stack.
 		if frames := runtime.symbolizeAOTStack(stack); frames != "" {
 			site += " frames=" + frames
-			runtime.countDiagnostic("throw frames " + frames)
+			runtime.CountDiagnostic("throw frames " + frames)
 		}
 	}
 	classAddress, err := runtime.ensureJavaClass(name)
@@ -1289,10 +1290,10 @@ func (runtime *initializationRuntime) throwAOTExceptionObject(thread *armcore.Th
 	if !bound || object == nil {
 		second, _ := thread.Register(1)
 		return 0, fmt.Errorf("KTF Java throw of %s, which is not bound to a JVM object (second word %s)%s",
-			runtime.describeGuestWord(address), runtime.describeGuestWord(second), runtime.callerSite(thread))
+			runtime.describeAOTWord(address), runtime.describeAOTWord(second), runtime.CallerSite(thread))
 	}
 	name := object.ClassName
-	runtime.countDiagnostic("throw object " + name + runtime.callerMark(thread))
+	runtime.CountDiagnostic("throw object " + name + runtime.CallerMark(thread))
 	unwind, err := runtime.findAOTExceptionHandler(thread, name, address)
 	if err != nil {
 		return 0, err
@@ -1318,7 +1319,7 @@ func (runtime *initializationRuntime) raiseGuestException(thread *armcore.Thread
 		return fmt.Errorf("KTF guest exception has no object")
 	}
 	name := guest.Object.ClassName
-	runtime.countDiagnostic("raise " + name)
+	runtime.CountDiagnostic("raise " + name)
 	classAddress, err := runtime.ensureJavaClass(name)
 	if err != nil {
 		return fmt.Errorf("resolve KTF exception class %s: %w", name, err)
@@ -1349,7 +1350,7 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 		return nil, fmt.Errorf("KTF JVM exception context is not prepared")
 	}
 	headAddress := runtime.exceptionHead()
-	handlerAddress, err := runtime.client.core.ThreadLocalWord(thread, headAddress)
+	handlerAddress, err := runtime.client.Core().ThreadLocalWord(thread, headAddress)
 	if err != nil {
 		return nil, fmt.Errorf("read KTF Java exception handler head: %w", err)
 	}
@@ -1372,7 +1373,7 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 		}
 		visited[handlerAddress] = true
 
-		handler, err := runtime.readAOTBytes(handlerAddress, javaExceptionHandler, "Java exception handler")
+		handler, err := runtime.ReadAOTBytes(handlerAddress, javaExceptionHandler, "Java exception handler")
 		if err != nil {
 			return nil, err
 		}
@@ -1380,12 +1381,12 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 		oldHandler := binary.LittleEndian.Uint32(handler[8:])
 		currentPC := binary.LittleEndian.Uint32(handler[runtime.exceptionLabel():])
 		functionsAddress := binary.LittleEndian.Uint32(handler[20:])
-		method, err := runtime.readAOTBytes(methodAddress, javaMethodSize, "Java exception method")
+		method, err := runtime.ReadAOTBytes(methodAddress, javaMethodSize, "Java exception method")
 		if err != nil {
 			return nil, err
 		}
 		entryCount := uint32(binary.LittleEndian.Uint16(method[16:]))
-		entryPointers, err := runtime.readAOTWords(binary.LittleEndian.Uint32(method[8:]), entryCount, "Java exception table")
+		entryPointers, err := runtime.ReadAOTWords(binary.LittleEndian.Uint32(method[8:]), entryCount, "Java exception table")
 		if err != nil {
 			return nil, err
 		}
@@ -1395,7 +1396,7 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 			if entryAddress&3 != 0 {
 				return nil, fmt.Errorf("KTF Java exception entry address %#x is not word-aligned", entryAddress)
 			}
-			entry, err := runtime.readAOTBytes(entryAddress, javaExceptionEntry, "Java exception entry")
+			entry, err := runtime.ReadAOTBytes(entryAddress, javaExceptionEntry, "Java exception entry")
 			if err != nil {
 				return nil, err
 			}
@@ -1420,7 +1421,7 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 			if target == 0 {
 				return nil, fmt.Errorf("KTF Java exception handler target is null")
 			}
-			functions, err := runtime.readAOTWords(functionsAddress, 2, "Java exception restore functions")
+			functions, err := runtime.ReadAOTWords(functionsAddress, 2, "Java exception restore functions")
 			if err != nil {
 				return nil, err
 			}
@@ -1432,7 +1433,7 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 			if err := probe.SetPC(nextPC); err != nil {
 				return nil, fmt.Errorf("KTF Java exception restore function %#x: %w", nextPC, err)
 			}
-			if err := runtime.client.core.SetThreadLocalWord(thread, headAddress, handlerAddress); err != nil {
+			if err := runtime.client.Core().SetThreadLocalWord(thread, headAddress, handlerAddress); err != nil {
 				return nil, fmt.Errorf("write KTF Java exception handler head: %w", err)
 			}
 			// Entering the catch block leaves the region that was
@@ -1445,7 +1446,7 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 			// back to the top of the same block for the rest of the run.
 			var resumed [4]byte
 			binary.LittleEndian.PutUint32(resumed[:], target)
-			if err := runtime.client.core.Memory().Write(handlerAddress+runtime.exceptionLabel(), resumed[:]); err != nil {
+			if err := runtime.client.Core().Memory().Write(handlerAddress+runtime.exceptionLabel(), resumed[:]); err != nil {
 				return nil, fmt.Errorf("write KTF Java handler label at %#x: %w", handlerAddress+runtime.exceptionLabel(), err)
 			}
 			// The handler record is where the catch block reads what it
@@ -1456,7 +1457,7 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 			// report that the word it was handed was not an object.
 			var caught [4]byte
 			binary.LittleEndian.PutUint32(caught[:], exceptionAddress)
-			if err := runtime.client.core.Memory().Write(handlerAddress+runtime.exceptionObject(), caught[:]); err != nil {
+			if err := runtime.client.Core().Memory().Write(handlerAddress+runtime.exceptionObject(), caught[:]); err != nil {
 				return nil, fmt.Errorf("write KTF Java caught exception at %#x: %w", handlerAddress+runtime.exceptionObject(), err)
 			}
 			return &aotExceptionUnwind{
@@ -1473,7 +1474,7 @@ func (runtime *initializationRuntime) findAOTExceptionHandler(thread *armcore.Th
 	if chain == "" {
 		chain = " none"
 	}
-	runtime.countDiagnostic("no handler for " + exceptionClass + " chain" + chain)
+	runtime.CountDiagnostic("no handler for " + exceptionClass + " chain" + chain)
 	return nil, nil
 }
 
@@ -1534,8 +1535,8 @@ func (runtime *initializationRuntime) getAOTMethod(thread *armcore.Thread) (uint
 	if err != nil {
 		return 0, err
 	}
-	runtime.countDiagnostic("getmethod " + name + descriptor)
-	first, err := runtime.readAOTWords(classAddress, 1, "class or vtable reference")
+	runtime.CountDiagnostic("getmethod " + name + descriptor)
+	first, err := runtime.ReadAOTWords(classAddress, 1, "class or vtable reference")
 	if err != nil {
 		return 0, err
 	}
@@ -1578,7 +1579,7 @@ func (runtime *initializationRuntime) getAOTField(thread *armcore.Thread) (uint3
 	if err != nil {
 		return 0, err
 	}
-	runtime.countDiagnostic("getfield " + name + ":" + descriptor)
+	runtime.CountDiagnostic("getfield " + name + ":" + descriptor)
 	field, ok, err := runtime.client.vm.FindAOTField(classAddress, name, descriptor)
 	if err != nil {
 		return 0, err
@@ -1609,7 +1610,7 @@ func (runtime *initializationRuntime) readAOTClass(address uint32) (jvm.AOTClass
 	if address&3 != 0 {
 		return jvm.AOTClassMetadata{}, fmt.Errorf("class address %#x is not word-aligned", address)
 	}
-	class, err := runtime.readAOTBytes(address, javaClassSize, "class")
+	class, err := runtime.ReadAOTBytes(address, javaClassSize, "class")
 	if err != nil {
 		return jvm.AOTClassMetadata{}, err
 	}
@@ -1620,7 +1621,7 @@ func (runtime *initializationRuntime) readAOTClass(address uint32) (jvm.AOTClass
 	if descriptorAddress&3 != 0 {
 		return jvm.AOTClassMetadata{}, fmt.Errorf("class descriptor address %#x is not word-aligned", descriptorAddress)
 	}
-	descriptor, err := runtime.readAOTBytes(descriptorAddress, javaDescriptorSize, "class descriptor")
+	descriptor, err := runtime.ReadAOTBytes(descriptorAddress, javaDescriptorSize, "class descriptor")
 	if err != nil {
 		return jvm.AOTClassMetadata{}, err
 	}
@@ -1671,7 +1672,7 @@ func (runtime *initializationRuntime) readAOTClass(address uint32) (jvm.AOTClass
 	}
 
 	vtableCount := binary.LittleEndian.Uint16(class[16:])
-	vtable, err := runtime.readAOTWords(binary.LittleEndian.Uint32(class[12:]), uint32(vtableCount), "vtable")
+	vtable, err := runtime.ReadAOTWords(binary.LittleEndian.Uint32(class[12:]), uint32(vtableCount), "vtable")
 	if err != nil {
 		return jvm.AOTClassMetadata{}, fmt.Errorf("class %s: %w", name, err)
 	}
@@ -1692,7 +1693,7 @@ func (runtime *initializationRuntime) readAOTClassName(address uint32) (string, 
 	if address&3 != 0 {
 		return "", fmt.Errorf("parent class address %#x is not word-aligned", address)
 	}
-	class, err := runtime.readAOTBytes(address, javaClassSize, "parent class")
+	class, err := runtime.ReadAOTBytes(address, javaClassSize, "parent class")
 	if err != nil {
 		return "", err
 	}
@@ -1703,7 +1704,7 @@ func (runtime *initializationRuntime) readAOTClassName(address uint32) (string, 
 	if descriptorAddress&3 != 0 {
 		return "", fmt.Errorf("parent class descriptor address %#x is not word-aligned", descriptorAddress)
 	}
-	descriptor, err := runtime.readAOTBytes(descriptorAddress, javaDescriptorSize, "parent class descriptor")
+	descriptor, err := runtime.ReadAOTBytes(descriptorAddress, javaDescriptorSize, "parent class descriptor")
 	if err != nil {
 		return "", err
 	}
@@ -1714,7 +1715,7 @@ func (runtime *initializationRuntime) readAOTMethod(address uint32) (jvm.AOTMeth
 	if address&3 != 0 {
 		return jvm.AOTMethodMetadata{}, 0, fmt.Errorf("method address %#x is not word-aligned", address)
 	}
-	method, err := runtime.readAOTBytes(address, javaMethodSize, "method")
+	method, err := runtime.ReadAOTBytes(address, javaMethodSize, "method")
 	if err != nil {
 		return jvm.AOTMethodMetadata{}, 0, err
 	}
@@ -1746,7 +1747,7 @@ func (runtime *initializationRuntime) readAOTField(address uint32) (jvm.AOTField
 	// word is neither the field's offset nor something a kept read depends on.
 	reading := runtime.aotReading
 	runtime.aotReading = nil
-	field, err := runtime.readAOTBytes(address, javaFieldSize, "field")
+	field, err := runtime.ReadAOTBytes(address, javaFieldSize, "field")
 	runtime.aotReading = reading
 	if err != nil {
 		return jvm.AOTFieldMetadata{}, 0, err
@@ -1775,10 +1776,10 @@ func (runtime *initializationRuntime) readAOTFullName(address uint32) (string, s
 	if address == ^uint32(0) {
 		return "", "", fmt.Errorf("Java full-name address overflows")
 	}
-	if _, err := runtime.readAOTBytes(address, 1, "Java full-name tag"); err != nil {
+	if _, err := runtime.ReadAOTBytes(address, 1, "Java full-name tag"); err != nil {
 		return "", "", err
 	}
-	value, err := runtime.readCString(address+1, maxAOTNameBytes)
+	value, err := runtime.ReadCString(address+1, maxAOTNameBytes)
 	if err != nil {
 		return "", "", fmt.Errorf("read Java full name: %w", err)
 	}
@@ -1790,7 +1791,7 @@ func (runtime *initializationRuntime) readAOTFullName(address uint32) (string, s
 }
 
 func (runtime *initializationRuntime) readAOTName(address uint32, label string) (string, error) {
-	name, err := runtime.readCString(address, maxAOTNameBytes)
+	name, err := runtime.ReadCString(address, maxAOTNameBytes)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", label, err)
 	}
@@ -1813,7 +1814,7 @@ func (runtime *initializationRuntime) readAOTPointerTable(address uint32, label 
 		if current+4 > uint64(1)<<32 {
 			return nil, fmt.Errorf("%s address overflows guest memory", label)
 		}
-		word, err := runtime.readAOTWords(uint32(current), 1, label)
+		word, err := runtime.ReadAOTWords(uint32(current), 1, label)
 		if err != nil {
 			return nil, err
 		}
@@ -1823,41 +1824,6 @@ func (runtime *initializationRuntime) readAOTPointerTable(address uint32, label 
 		result = append(result, word[0])
 	}
 	return nil, fmt.Errorf("%s exceeds %d entries", label, maxAOTMemberPointers)
-}
-
-func (runtime *initializationRuntime) readAOTWords(address, count uint32, label string) ([]uint32, error) {
-	if count == 0 {
-		return nil, nil
-	}
-	if address == 0 || address&3 != 0 {
-		return nil, fmt.Errorf("%s address %#x is null or unaligned", label, address)
-	}
-	data, err := runtime.readAOTBytes(address, uint64(count)*4, label)
-	if err != nil {
-		return nil, err
-	}
-	words := make([]uint32, count)
-	for index := range words {
-		words[index] = binary.LittleEndian.Uint32(data[index*4:])
-	}
-	return words, nil
-}
-
-func (runtime *initializationRuntime) readAOTBytes(address uint32, size uint64, label string) ([]byte, error) {
-	if address == 0 || size == 0 || size > maxPlatformAllocation {
-		return nil, fmt.Errorf("%s range at %#x has invalid size %d", label, address, size)
-	}
-	if uint64(address)+size > uint64(1)<<32 {
-		return nil, fmt.Errorf("%s range at %#x overflows guest memory", label, address)
-	}
-	data := make([]byte, int(size))
-	if err := runtime.client.core.Memory().Read(address, data); err != nil {
-		return nil, fmt.Errorf("read %s at %#x: %w", label, address, err)
-	}
-	if runtime.aotReading != nil {
-		runtime.aotReading.note(address, data, false)
-	}
-	return data, nil
 }
 
 // aotClassRead is what reading one class record read. Reading a record is a

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/route"
 )
 
@@ -47,7 +48,7 @@ func TestHeavySceneProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script, err := route.Parse(string(text), KeyCodeByName)
+	script, err := route.Parse(string(text), wipicrt.KeyCodeByName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestHeavySceneProbe(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	clock := NewManualClock(time.Time{})
+	clock := wipicrt.NewManualClock(time.Time{})
 	session, err := StartSession(ctx, archive, SessionOptions{Clock: clock, SaveRoot: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -87,14 +88,14 @@ func TestHeavySceneProbe(t *testing.T) {
 	}
 	costs := make([]tickCost, 0, 4096)
 	marks := map[string]int{}
-	lastSteps := session.Client.core.Steps()
+	lastSteps := session.Client.Core().Steps()
 
 	runner := &route.Runner{
 		Digest: session.FrameDigest,
 		SendKey: func(ctx context.Context, pressed bool, key int32) error {
-			eventType := KeyPressed
+			eventType := wipicrt.KeyPressed
 			if !pressed {
-				eventType = KeyReleased
+				eventType = wipicrt.KeyReleased
 			}
 			return session.SendKey(ctx, eventType, key)
 		},
@@ -119,7 +120,7 @@ func TestHeavySceneProbe(t *testing.T) {
 			entered := time.Now()
 			progressed, tickErr := session.Tick(ctx)
 			spent := time.Since(entered)
-			steps := session.Client.core.Steps()
+			steps := session.Client.Core().Steps()
 			costs = append(costs, tickCost{cost: spent, steps: steps - lastSteps})
 			if digests != nil {
 				fmt.Fprintf(digests, "%d %016x %d\n", len(costs)-1, session.FrameDigest(), steps)

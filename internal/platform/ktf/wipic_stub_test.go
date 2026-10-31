@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A stubbed table answers zero and is counted, and the count names the guest
@@ -18,7 +19,7 @@ func TestStubTableCallCountsItsCallSite(t *testing.T) {
 
 	callContext := armcore.NewContext()
 	callContext.Registers[armcore.RegisterLR] = 0x18f2c1
-	result, err := runtime.handleWIPICTableCall(armcore.NewThread(callContext), 6, 3)
+	result, err := runtime.HandleWIPICTableCall(armcore.NewThread(callContext), 6, 3)
 	if err != nil {
 		t.Fatalf("stub table call: %v", err)
 	}
@@ -27,8 +28,8 @@ func TestStubTableCallCountsItsCallSite(t *testing.T) {
 	}
 
 	const want = "wipic stub table 6 function 3 @0x18f2c1"
-	if got := runtime.diagnosticCounts()[want]; got != 1 {
-		t.Errorf("count for %q is %d, want 1; counts are %v", want, got, runtime.diagnosticCounts())
+	if got := runtime.DiagnosticCounts()[want]; got != 1 {
+		t.Errorf("count for %q is %d, want 1; counts are %v", want, got, runtime.DiagnosticCounts())
 	}
 }
 
@@ -37,12 +38,12 @@ func TestStubTableCallCountsItsCallSite(t *testing.T) {
 // used, and a caller in a loop cannot spend the name budget on one boundary.
 func TestStubTableCountCollapsesToItsSlotName(t *testing.T) {
 	const slot = "wipic stub table 6 function 3"
-	if got := collapseDiagnosticName(slot + " @0x18f2c1"); got != slot {
+	if got := wipicrt.CollapseDiagnosticName(slot + " @0x18f2c1"); got != slot {
 		t.Errorf("collapsed to %q, want %q", got, slot)
 	}
 	// It is also one of the events whose detail survives the name limit, which
 	// is what makes carrying the site worth anything on a busy run.
-	if !diagnosticKeepsDetail(slot + " @0x18f2c1") {
+	if !wipicrt.DiagnosticKeepsDetail(slot + " @0x18f2c1") {
 		t.Errorf("%q lost its detail past the name limit", slot)
 	}
 }

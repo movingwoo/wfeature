@@ -2,8 +2,10 @@ package ktf
 
 import (
 	"encoding/binary"
-	"github.com/movingwoo/wfeature/internal/armcore"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestNativeEnvironmentWordReturnOverridesScratchRegister(t *testing.T) {
@@ -15,7 +17,7 @@ func TestNativeEnvironmentWordReturnOverridesScratchRegister(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client, runtime := newTestRuntime(t)
-			address := uint32((runtime.codeCursor + 3) &^ 3)
+			address := uint32((runtime.CodeCursor + 3) &^ 3)
 			body := make([]byte, 28)
 			// ldr r2,env; ldr r3,value; str r3,[r2,#40]; movs r3,tag;
 			// str r3,[r2,#36]; movs r0,99; bx lr; padding; env; value.
@@ -24,17 +26,17 @@ func TestNativeEnvironmentWordReturnOverridesScratchRegister(t *testing.T) {
 			}
 			binary.LittleEndian.PutUint32(body[16:], runtime.exceptionContext)
 			binary.LittleEndian.PutUint32(body[20:], test.value)
-			if err := client.core.Memory().Load(address, body); err != nil {
+			if err := client.Core().Memory().Load(address, body); err != nil {
 				t.Fatal(err)
 			}
-			container, err := runtime.allocateWords([]uint32{123, 456})
+			container, err := runtime.AllocateWords([]uint32{123, 456})
 			if err != nil {
 				t.Fatal(err)
 			}
 			call := armcore.NewContext()
 			call.Registers[0] = address | 1
 			call.Registers[1] = container
-			call.Registers[13] = ThreadStackBase + uint32(ThreadStackSize)
+			call.Registers[13] = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize)
 			thread := armcore.NewThread(call)
 			if _, err := runtime.callAOTNative(t.Context(), thread); err != nil {
 				t.Fatal(err)
@@ -49,7 +51,7 @@ func TestNativeEnvironmentWordReturnOverridesScratchRegister(t *testing.T) {
 			// A later register-returning native must not inherit the previous tag.
 			binary.LittleEndian.PutUint16(body[0:], 0x202a)
 			binary.LittleEndian.PutUint16(body[2:], 0x4770)
-			if err := client.core.Memory().Load(address, body); err != nil {
+			if err := client.Core().Memory().Load(address, body); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := runtime.callAOTNative(t.Context(), thread); err != nil {
@@ -68,7 +70,7 @@ func TestNativeReturnScopesPreserveNestedAndOtherThreadValues(t *testing.T) {
 	write := func(thread *armcore.Thread, tag, value uint32) {
 		t.Helper()
 		for offset, v := range map[uint32]uint32{nativeReturnTagOffset: tag, nativeReturnValueOffset: value} {
-			if err := client.core.SetThreadLocalWord(thread, runtime.exceptionContext+offset, v); err != nil {
+			if err := client.Core().SetThreadLocalWord(thread, runtime.exceptionContext+offset, v); err != nil {
 				t.Fatal(err)
 			}
 		}

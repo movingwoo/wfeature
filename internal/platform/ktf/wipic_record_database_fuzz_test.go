@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A packaged database is untrusted input: it is a file inside an archive
@@ -31,7 +32,7 @@ func FuzzPackagedRecordDatabaseNeverPanics(f *testing.F) {
 	f.Add([]byte{}, []byte{})
 	f.Fuzz(func(t *testing.T, index, data []byte) {
 		_, runtime := newTestRuntime(t)
-		runtime.guestFiles = map[string][]byte{"F.idx": index, "F.db": data}
+		runtime.GuestFiles = map[string][]byte{"F.idx": index, "F.db": data}
 		records, ok := runtime.packagedRecordDatabase("F", 4)
 		if !ok {
 			return
@@ -72,20 +73,20 @@ func FuzzDatabaseNameSurvivesTheRemovalList(f *testing.F) {
 		"save", "save ", "A\nB", ".removed", ".dirs", "./.removed",
 		"..", ".", "/", "//", "", strings.Repeat("x", 40),
 	} {
-		f.Add(javaDatabaseScope, name)
-		f.Add(recordDatabaseScope, name)
-		f.Add(guestFileScope, name)
-		f.Add(cFileScope, name)
+		f.Add(wipicrt.JavaDatabaseScope, name)
+		f.Add(wipicrt.RecordDatabaseScope, name)
+		f.Add(wipicrt.GuestFileScope, name)
+		f.Add(wipicrt.CFileScope, name)
 	}
 	f.Fuzz(func(t *testing.T, scope, name string) {
-		if reservedStorageNames[scope] == nil || len(name) > 512 {
+		if wipicrt.ReservedStorageNames[scope] == nil || len(name) > 512 {
 			return
 		}
-		if !storableName(scope, name) {
+		if !wipicrt.StorableName(scope, name) {
 			return
 		}
 		// It must not be one of the names a table keeps its own list under.
-		if reservedStorageName(scope, name) {
+		if wipicrt.ReservedStorageName(scope, name) {
 			t.Fatalf("storableName(%q, %q) accepted a name a table keeps its own list under", scope, name)
 		}
 		// It has to key to a name under its own scope: one that normalizes to
@@ -102,7 +103,7 @@ func FuzzDatabaseNameSurvivesTheRemovalList(f *testing.F) {
 		// names joined by newlines, read a line at a time, so a name that does
 		// not round trip hides a database nobody deleted. Beside a second name
 		// as well, because a name that splits takes its neighbours with it.
-		rebuilt := splitRemovalList(joinRemovalList([]string{name, "other"}))
+		rebuilt := wipicrt.SplitRemovalList(wipicrt.JoinRemovalList([]string{name, "other"}))
 		if len(rebuilt) != 2 {
 			t.Fatalf("%q came back from a two-name list as %q", name, rebuilt)
 		}

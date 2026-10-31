@@ -3,24 +3,25 @@ package ktf
 import (
 	"context"
 	"encoding/binary"
-	"github.com/movingwoo/wfeature/internal/backend"
 	"testing"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // newPacedTestRuntime builds a runtime whose guest waits are measured against
 // clock, which is what lets a test state a wait in milliseconds and then
 // decide, itself, whether that wait has passed.
-func newPacedTestRuntime(t *testing.T, clock Clock, speed float64) (*Client, *initializationRuntime) {
+func newPacedTestRuntime(t *testing.T, clock wipicrt.Clock, speed float64) (*Client, *initializationRuntime) {
 	t.Helper()
 	client, err := LoadClient(ClientImage{Name: "client.bin0", Data: syntheticInitializableClient()}, armcore.CoreOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.clock = clock
+	client.Clock = clock
 	client.SetSpeed(speed)
 	runtime, err := newInitializationRuntime(client)
 	if err != nil {
@@ -29,7 +30,7 @@ func newPacedTestRuntime(t *testing.T, clock Clock, speed float64) (*Client, *in
 	if _, err := runtime.prepare(); err != nil {
 		t.Fatal(err)
 	}
-	client.runtime = runtime
+	client.setRuntimes(runtime, client.prepared)
 	return client, runtime
 }
 
@@ -38,9 +39,9 @@ func newPacedTestRuntime(t *testing.T, clock Clock, speed float64) (*Client, *in
 // along to supply one.
 func returningStub(t *testing.T, runtime *initializationRuntime) uint32 {
 	t.Helper()
-	address := uint32(runtime.codeCursor)
-	runtime.codeCursor += 4
-	if err := runtime.client.core.Memory().Load(address, []byte{0x70, 0x47}); err != nil {
+	address := uint32(runtime.CodeCursor)
+	runtime.CodeCursor += 4
+	if err := runtime.client.Core().Memory().Load(address, []byte{0x70, 0x47}); err != nil {
 		t.Fatalf("load returning stub: %v", err)
 	}
 	return address | 1
@@ -50,14 +51,14 @@ func returningStub(t *testing.T, runtime *initializationRuntime) uint32 {
 // kernel call, so the test covers the delay the guest actually declared.
 func setTimer(t *testing.T, client *Client, runtime *initializationRuntime, delay uint64) {
 	t.Helper()
-	record, err := runtime.allocate(4)
+	record, err := runtime.Allocate(4)
 	if err != nil {
 		t.Fatal(err)
 	}
 	callback := returningStub(t, runtime)
 	word := make([]byte, 4)
 	binary.LittleEndian.PutUint32(word, callback)
-	if err := runtime.client.core.Memory().Write(record, word); err != nil {
+	if err := runtime.client.Core().Memory().Write(record, word); err != nil {
 		t.Fatal(err)
 	}
 	for register, value := range map[int]uint32{
@@ -66,11 +67,11 @@ func setTimer(t *testing.T, client *Client, runtime *initializationRuntime, dela
 		2: uint32(delay >> 32),
 		3: 0,
 	} {
-		if err := client.thread.SetRegister(register, value); err != nil {
+		if err := client.Thread.SetRegister(register, value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := runtime.wipicSetTimer(client.thread); err != nil {
+	if _, err := runtime.WIPICSetTimer(client.Thread); err != nil {
 		t.Fatalf("MC_knlSetTimer() error = %v", err)
 	}
 }
@@ -80,7 +81,7 @@ func setTimer(t *testing.T, client *Client, runtime *initializationRuntime, dela
 // Host that ticks faster than the game asked for still gets one callback per
 // delay.
 func TestTimerWaitsOutItsDelay(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 	setTimer(t, client, runtime, 50)
 
@@ -125,31 +126,31 @@ func TestTimerWaitsOutItsDelay(t *testing.T) {
 // hold the guest for the work twice over, which is what a person reported as
 // lag in the scenes that draw the most.
 func TestAFramePeriodRunsFromTheDeadlineItAnswers(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, _ := newPacedTestRuntime(t, clock, 1)
 
 	// Outside a callback there is no deadline being answered — an initial arm
 	// — and the period runs from now.
-	deadline := client.framePeriodDeadline(10 * time.Millisecond)
-	if want := clock.Now().Add(minGuestFramePeriod); !deadline.Equal(want) {
-		t.Fatalf("an initial arm is due in %v, want %v", deadline.Sub(clock.Now()), minGuestFramePeriod)
+	deadline := client.FramePeriodDeadline(10 * time.Millisecond)
+	if want := clock.Now().Add(wipicrt.MinGuestFramePeriod); !deadline.Equal(want) {
+		t.Fatalf("an initial arm is due in %v, want %v", deadline.Sub(clock.Now()), wipicrt.MinGuestFramePeriod)
 	}
 
 	// Inside one, a round that cost the Host ten milliseconds has spent ten
 	// milliseconds of the period that follows it.
 	due := clock.Now()
-	client.servingDue = due
+	client.ServingDue = due
 	clock.Advance(10 * time.Millisecond)
-	deadline = client.framePeriodDeadline(10 * time.Millisecond)
-	if want := due.Add(minGuestFramePeriod); !deadline.Equal(want) {
+	deadline = client.FramePeriodDeadline(10 * time.Millisecond)
+	if want := due.Add(wipicrt.MinGuestFramePeriod); !deadline.Equal(want) {
 		t.Fatalf("a re-arm after a 10ms round is due in %v, want %v: the period runs from the deadline it answers",
 			deadline.Sub(clock.Now()), want.Sub(clock.Now()))
 	}
 
 	// A round that outran the whole period is already late, and holding it any
 	// longer would charge it for time the wall has taken.
-	clock.Advance(minGuestFramePeriod)
-	if deadline := client.framePeriodDeadline(10 * time.Millisecond); !deadline.Equal(clock.Now()) {
+	clock.Advance(wipicrt.MinGuestFramePeriod)
+	if deadline := client.FramePeriodDeadline(10 * time.Millisecond); !deadline.Equal(clock.Now()) {
 		t.Fatalf("a re-arm after a round that outran its period is due in %v, want no wait at all",
 			deadline.Sub(clock.Now()))
 	}
@@ -160,31 +161,31 @@ func TestAFramePeriodRunsFromTheDeadlineItAnswers(t *testing.T) {
 // for, so the two add. Taking the larger of them would give a frame that
 // overran its period no wait at all.
 func TestFrameWorkIsAddedToThePeriodRatherThanReplacingIt(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 
 	// A rate of one instruction a millisecond so that a stub's few retired
 	// instructions are a legible amount of handset time.
-	defer func(rate uint64) { guestInstructionsPerMillisecond = rate }(guestInstructionsPerMillisecond)
-	guestInstructionsPerMillisecond = 1
+	defer func(rate uint64) { wipicrt.GuestInstructionsPerMillisecond = rate }(wipicrt.GuestInstructionsPerMillisecond)
+	wipicrt.GuestInstructionsPerMillisecond = 1
 
-	baseline := client.core.Steps()
+	baseline := client.Core().Steps()
 	setTimer(t, client, runtime, 10)
 	// Past the floor as well as the delay, since a period below the floor is
 	// raised to it.
-	clock.Advance(minGuestFramePeriod + 10*time.Millisecond)
+	clock.Advance(wipicrt.MinGuestFramePeriod + 10*time.Millisecond)
 	if _, err := client.ServiceTimers(context.Background(), 4); err != nil {
 		t.Fatalf("ServiceTimers() error = %v", err)
 	}
-	retired := client.core.Steps() - baseline
+	retired := client.Core().Steps() - baseline
 	if retired == 0 {
 		t.Fatal("the timer callback retired nothing, so there is no work to charge")
 	}
 
-	client.workBaseline = baseline
+	client.WorkBaseline = baseline
 	asked := 20 * time.Millisecond
 	want := asked + time.Duration(retired)*time.Millisecond
-	if charged := client.chargedFramePeriod(asked); charged != want {
+	if charged := client.ChargedFramePeriod(asked); charged != want {
 		t.Fatalf("a %v period after %d instructions of work charged %v, want %v",
 			asked, retired, charged, want)
 	}
@@ -195,10 +196,10 @@ func TestFrameWorkIsAddedToThePeriodRatherThanReplacingIt(t *testing.T) {
 // the guest's own clock grows by, so a game that times its animation itself
 // speeds up instead of compensating for the change.
 func TestSpeedScalesTheWaitAndTheGuestClockTogether(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 2)
 	setTimer(t, client, runtime, 50)
-	before := runtime.guestMillis()
+	before := runtime.GuestMillis()
 
 	// Half the delay in real time is the whole delay at 2x.
 	clock.Advance(25 * time.Millisecond)
@@ -209,7 +210,7 @@ func TestSpeedScalesTheWaitAndTheGuestClockTogether(t *testing.T) {
 	if serviced != 1 {
 		t.Fatalf("serviced %d timers after half a 50ms delay at 2x speed, want 1", serviced)
 	}
-	if elapsed := runtime.guestMillis() - before; elapsed != 50 {
+	if elapsed := runtime.GuestMillis() - before; elapsed != 50 {
 		t.Fatalf("guest clock advanced %dms over 25ms at 2x speed, want 50ms", elapsed)
 	}
 }
@@ -218,11 +219,11 @@ func TestSpeedScalesTheWaitAndTheGuestClockTogether(t *testing.T) {
 // not: a guest that polls the time without ever sleeping still sees it move,
 // which is what lets a busy-wait loop finish.
 func TestGuestClockTracksTheSessionClock(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	_, runtime := newPacedTestRuntime(t, clock, 1)
-	before := runtime.guestMillis()
+	before := runtime.GuestMillis()
 	clock.Advance(time.Second)
-	if elapsed := runtime.guestMillis() - before; elapsed != 1000 {
+	if elapsed := runtime.GuestMillis() - before; elapsed != 1000 {
 		t.Fatalf("guest clock advanced %dms over a second, want 1000ms", elapsed)
 	}
 }
@@ -232,7 +233,7 @@ func TestGuestClockTracksTheSessionClock(t *testing.T) {
 // here has no goroutine behind it, so a Host that granted it a slice anyway
 // would block on the handoff and hang this test rather than fail it.
 func TestSleepingWorkerIsNotGrantedASlice(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, _ := newPacedTestRuntime(t, clock, 1)
 	wakeAt := clock.Now().Add(50 * time.Millisecond)
 	client.workers = append(client.workers, &guestWorker{
@@ -273,7 +274,7 @@ func TestSleepingWorkerIsNotGrantedASlice(t *testing.T) {
 // park — the Host goroutine is inside the paint call — so the wait has to be
 // deferred to the client thread and honoured by holding the next frame.
 func TestClientThreadWaitHoldsOffPaint(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 	painted := 0
 	if err := client.JVM().RegisterNative("test/Card", "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
@@ -323,7 +324,7 @@ func TestClientThreadWaitHoldsOffPaint(t *testing.T) {
 // Host: a session showing the game to a person must wait its waits out, so the
 // skip a batch Host relies on has to be unavailable to it.
 func TestWallClockSessionsCannotSkip(t *testing.T) {
-	client, _ := newPacedTestRuntime(t, wallClock{}, 1)
+	client, _ := newPacedTestRuntime(t, wipicrt.WallClock{}, 1)
 	client.workers = append(client.workers, &guestWorker{
 		armThread: armcore.NewThread(armcore.NewContext()),
 		grant:     make(chan struct{}),
@@ -336,7 +337,7 @@ func TestWallClockSessionsCannotSkip(t *testing.T) {
 }
 
 func TestSpeedClampsToItsRange(t *testing.T) {
-	client, _ := newPacedTestRuntime(t, NewManualClock(time.Time{}), 1)
+	client, _ := newPacedTestRuntime(t, wipicrt.NewManualClock(time.Time{}), 1)
 	for _, testCase := range []struct {
 		set  float64
 		want float64
@@ -356,7 +357,7 @@ func TestSpeedClampsToItsRange(t *testing.T) {
 
 func TestManualClockNeverRunsBackwards(t *testing.T) {
 	start := time.Unix(1700000000, 0)
-	clock := NewManualClock(start)
+	clock := wipicrt.NewManualClock(start)
 	clock.Advance(-time.Second)
 	clock.Set(start.Add(-time.Hour))
 	if now := clock.Now(); !now.Equal(start) {
@@ -371,10 +372,10 @@ func TestManualClockNeverRunsBackwards(t *testing.T) {
 // to. The task's own deadline is a second away on a clock that stopped moving,
 // so the scene never starts and the screen holds whatever the first paint drew.
 func TestElapsedClientWaitIsNotADeadline(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 
-	client.deferClientWait(50 * time.Millisecond)
+	client.DeferClientWait(50 * time.Millisecond)
 	deadline, pending := client.NextDeadline()
 	if !pending || !deadline.Equal(clock.Now().Add(50*time.Millisecond)) {
 		t.Fatalf("NextDeadline() while the wait runs = %v, %v", deadline, pending)
@@ -390,14 +391,14 @@ func TestElapsedClientWaitIsNotADeadline(t *testing.T) {
 
 	// A task scheduled a second out is now the next deadline, and a manual
 	// clock can reach it.
-	runtime.pendingTimers = append(runtime.pendingTimers, wipicTimer{
-		task: &jvm.Object{ClassName: "test/Task"},
-		due:  client.waitDeadline(time.Second),
+	runtime.PendingTimers = append(runtime.PendingTimers, wipicrt.WIPICTimer{
+		Task: guestValue(&jvm.Object{ClassName: "test/Task"}),
+		Due:  client.WaitDeadline(time.Second),
 	})
 	if !client.SkipToNextDeadline() {
 		t.Fatal("SkipToNextDeadline() could not reach a task the elapsed wait was hiding")
 	}
-	if !client.clientThreadDue() {
+	if !client.ClientThreadDue() {
 		t.Fatal("the client thread is not due after its wait elapsed")
 	}
 }
@@ -408,8 +409,8 @@ func TestElapsedClientWaitIsNotADeadline(t *testing.T) {
 // seeds itself from the time of day then diverges, and the corpus A/B had a
 // noise floor made entirely of this.
 func TestAManualClockStartsSomewhereRepeatable(t *testing.T) {
-	first := NewManualClock(time.Time{})
-	second := NewManualClock(time.Time{})
+	first := wipicrt.NewManualClock(time.Time{})
+	second := wipicrt.NewManualClock(time.Time{})
 	if !first.Now().Equal(second.Now()) {
 		t.Errorf("two manual clocks started at %v and %v; a run cannot repeat", first.Now(), second.Now())
 	}
@@ -423,7 +424,7 @@ func TestAManualClockStartsSomewhereRepeatable(t *testing.T) {
 	// A named instant is still honoured — that is how a Host asks for a
 	// particular one.
 	chosen := time.Date(2009, 5, 4, 3, 2, 1, 0, time.UTC)
-	if got := NewManualClock(chosen).Now(); !got.Equal(chosen) {
+	if got := wipicrt.NewManualClock(chosen).Now(); !got.Equal(chosen) {
 		t.Errorf("NewManualClock(%v).Now() = %v", chosen, got)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // These games ship their C runtime compiled into the image, and they lean on
@@ -91,10 +92,10 @@ func (runtime *initializationRuntime) installImageHooks() (int, error) {
 		return 0, nil
 	}
 	loaded := make([]byte, len(image.Data))
-	if err := runtime.client.core.Memory().Read(ImageBase, loaded); err != nil {
+	if err := runtime.client.Core().Memory().Read(wipicrt.ImageBase, loaded); err != nil {
 		return 0, fmt.Errorf("read KTF image for binary hooks: %w", err)
 	}
-	return runtime.installBinaryHooks(loaded, ImageBase)
+	return runtime.installBinaryHooks(loaded, wipicrt.ImageBase)
 }
 
 // installBinaryHooks scans the loaded image for the routines above and
@@ -127,7 +128,7 @@ func (runtime *initializationRuntime) installBinaryHooks(image []byte, base uint
 			address := base + uint32(offset+index)
 			offset += index + 1
 			if overlaps(address) {
-				runtime.client.log("KTF binary hook skipped as overlapping",
+				runtime.client.Log("KTF binary hook skipped as overlapping",
 					"routine", hook.name, "address", fmt.Sprintf("%#x", address))
 				continue
 			}
@@ -137,8 +138,8 @@ func (runtime *initializationRuntime) installBinaryHooks(image []byte, base uint
 				return installed, err
 			}
 			claimed = append(claimed, address)
-			runtime.countDiagnostic("binary hook " + hook.name)
-			runtime.client.log("KTF binary hook installed", "routine", hook.name, "address", fmt.Sprintf("%#x", address))
+			runtime.CountDiagnostic("binary hook " + hook.name)
+			runtime.client.Log("KTF binary hook installed", "routine", hook.name, "address", fmt.Sprintf("%#x", address))
 			installed++
 		}
 	}
@@ -150,63 +151,21 @@ func (runtime *initializationRuntime) installBinaryHooks(image []byte, base uint
 // r12, trap, and return to the caller's link register. Guest arguments stay in
 // r0-r2 where the routine expects them.
 // hookStubSize is how many bytes a stub occupies at a routine's entry.
-const hookStubSize = svcStubSize
+const hookStubSize = wipicrt.SVCStubSize
 
 func (runtime *initializationRuntime) installHookStub(address uint32, kind binaryHookKind) error {
-	stub := svcStub(svcCategoryBinaryHook, uint32(kind))
-	if err := runtime.client.core.Memory().Load(address&^1, stub); err != nil {
+	stub := wipicrt.SVCStub(svcCategoryBinaryHook, uint32(kind))
+	if err := runtime.client.Core().Memory().Load(address&^1, stub); err != nil {
 		return fmt.Errorf("install KTF binary hook stub at %#x: %w", address, err)
 	}
 	return nil
 }
 
-// handleBinaryHookCall answers one hooked routine. The C signatures are the
-// standard ones, and each returns what the original does so a caller using the
-// result keeps working.
-// hookWindowLimit is the largest buffer a hook keeps between calls. Past it a
-// call allocates and lets the result go, because the point of keeping one is
-// to stop paying for the copies a title makes constantly — a sprite, a row of
-// tiles, a structure — and a title that once moved a megabyte should not leave
-// the session holding a megabyte for the rest of the run.
-const hookWindowLimit = 256 << 10
-
-// hookBuffer lends the scratch space a hooked memcpy, memset or strcpy needs.
-//
-// **These were the largest allocation this platform made.** A hooked memcpy
-// reads the source into a buffer and writes that buffer to the destination,
-// and it made a fresh one every call: measured over two thousand ticks of one
-// local title that was 302 MB, 72% of everything the run allocated — the
-// buffer is sized by the guest's own request, so a title that moves a sprite
-// a few dozen times a frame allocates that much a few dozen times a frame,
-// only to drop it before the next instruction.
-//
-// It can be lent for the same reason a frame can: nothing keeps it. The bytes
-// are read in and written out inside one call, and no hook here returns a
-// slice or hands one to anything that outlives the crossing. **And nothing
-// else is running**: this platform grants one guest thread a slice at a time
-// and blocks until it parks, so runtime state is never touched by two
-// goroutines at once — see workers.go, which is the same invariant every other
-// map and buffer on this runtime already rests on.
-//
-// The bytes are not cleared. Every caller fills the whole slice before reading
-// it — a copy reads the source over it, a fill writes every byte — so what a
-// previous call left is overwritten rather than seen, and clearing it would be
-// paying for the zeroing that `make` was doing.
-func (runtime *initializationRuntime) hookBuffer(length uint32) []byte {
-	if length > hookWindowLimit {
-		return make([]byte, length)
-	}
-	if uint32(cap(runtime.hookWindow)) < length {
-		runtime.hookWindow = make([]byte, length, hookWindowLimit)
-	}
-	return runtime.hookWindow[:length]
-}
-
 func (runtime *initializationRuntime) handleBinaryHookCall(thread *armcore.Thread, id uint32) (uint32, error) {
-	memory := runtime.client.core.Memory()
+	memory := runtime.client.Core().Memory()
 	switch binaryHookKind(id) {
 	case hookMemset:
-		runtime.countDiagnostic("hook memset")
+		runtime.CountDiagnostic("hook memset")
 		// void *memset(void *dst, int value, size_t length)
 		destination, value, length, err := hookArguments(thread)
 		if err != nil {
@@ -215,10 +174,10 @@ func (runtime *initializationRuntime) handleBinaryHookCall(thread *armcore.Threa
 		if length == 0 {
 			return destination, nil
 		}
-		if err := hookRange(memory, destination, length, armcore.PermissionWrite); err != nil {
+		if err := wipicrt.HookRange(memory, destination, length, armcore.PermissionWrite); err != nil {
 			return 0, fmt.Errorf("KTF hooked memset(%#x, %d, %d): %w", destination, value, length, err)
 		}
-		fill := runtime.hookBuffer(length)
+		fill := runtime.HookBuffer(length)
 		for index := range fill {
 			fill[index] = byte(value)
 		}
@@ -227,7 +186,7 @@ func (runtime *initializationRuntime) handleBinaryHookCall(thread *armcore.Threa
 		}
 		return destination, nil
 	case hookMemcpy:
-		runtime.countDiagnostic("hook memcpy")
+		runtime.CountDiagnostic("hook memcpy")
 		// void *memcpy(void *dst, const void *src, size_t length)
 		destination, source, length, err := hookArguments(thread)
 		if err != nil {
@@ -236,13 +195,13 @@ func (runtime *initializationRuntime) handleBinaryHookCall(thread *armcore.Threa
 		if length == 0 {
 			return destination, nil
 		}
-		if err := hookRange(memory, source, length, armcore.PermissionRead); err != nil {
+		if err := wipicrt.HookRange(memory, source, length, armcore.PermissionRead); err != nil {
 			return 0, fmt.Errorf("KTF hooked memcpy(%#x, %#x, %d): %w", destination, source, length, err)
 		}
-		if err := hookRange(memory, destination, length, armcore.PermissionWrite); err != nil {
+		if err := wipicrt.HookRange(memory, destination, length, armcore.PermissionWrite); err != nil {
 			return 0, fmt.Errorf("KTF hooked memcpy(%#x, %#x, %d): %w", destination, source, length, err)
 		}
-		buffer := runtime.hookBuffer(length)
+		buffer := runtime.HookBuffer(length)
 		if err := memory.Read(source, buffer); err != nil {
 			return 0, fmt.Errorf("KTF hooked memcpy(%#x, %#x, %d): %w", destination, source, length, err)
 		}
@@ -251,7 +210,7 @@ func (runtime *initializationRuntime) handleBinaryHookCall(thread *armcore.Threa
 		}
 		return destination, nil
 	case hookStrcpy:
-		runtime.countDiagnostic("hook strcpy")
+		runtime.CountDiagnostic("hook strcpy")
 		// char *strcpy(char *dst, const char *src) — the terminator is copied
 		// too, and dst comes back unchanged, which is what r0 already holds.
 		destination, source, _, err := hookArguments(thread)
@@ -262,7 +221,7 @@ func (runtime *initializationRuntime) handleBinaryHookCall(thread *armcore.Threa
 		if err != nil {
 			return 0, fmt.Errorf("KTF hooked strcpy(%#x, %#x): %w", destination, source, err)
 		}
-		buffer := runtime.hookBuffer(length + 1)
+		buffer := runtime.HookBuffer(length + 1)
 		if err := memory.Read(source, buffer); err != nil {
 			return 0, fmt.Errorf("KTF hooked strcpy(%#x, %#x): %w", destination, source, err)
 		}
@@ -271,7 +230,7 @@ func (runtime *initializationRuntime) handleBinaryHookCall(thread *armcore.Threa
 		}
 		return destination, nil
 	case hookStrlen:
-		runtime.countDiagnostic("hook strlen")
+		runtime.CountDiagnostic("hook strlen")
 		// size_t strlen(const char *text)
 		start, err := thread.Register(0)
 		if err != nil {
@@ -285,20 +244,6 @@ func (runtime *initializationRuntime) handleBinaryHookCall(thread *armcore.Threa
 	default:
 		return 0, fmt.Errorf("unknown KTF binary hook %d", id)
 	}
-}
-
-// hookRange refuses a range the guest cannot hold before a buffer is sized
-// from its length. The length is the guest's own r2, and a negative computed
-// size arrives as nearly four gigabytes: allocating and filling that much
-// first, only for the write to refuse it, can take the whole process down. A
-// length the reusable window covers costs nothing to allocate, so only a
-// longer one is checked here; the read or write after it still checks every
-// range.
-func hookRange(memory *armcore.Memory, address, length uint32, permission armcore.Permission) error {
-	if length <= hookWindowLimit {
-		return nil
-	}
-	return memory.ValidateRange(address, uint64(length), permission)
 }
 
 func hookArguments(thread *armcore.Thread) (uint32, uint32, uint32, error) {
@@ -322,15 +267,13 @@ func hookArguments(thread *armcore.Thread) (uint32, uint32, uint32, error) {
 // maxGuestStringLength bounds the walk, so a string that is never terminated
 // fails instead of reading the address space.
 func guestStringLength(memory *armcore.Memory, start uint32) (uint32, error) {
-	var buffer [guestStringBuffer]byte
-	length, terminated, err := scanGuestString(memory, start, maxGuestStringLength, 1, &buffer)
+	var buffer [wipicrt.GuestStringBuffer]byte
+	length, terminated, err := wipicrt.ScanGuestString(memory, start, wipicrt.MaxGuestStringLength, 1, &buffer)
 	if err != nil {
 		return 0, err
 	}
 	if !terminated {
-		return 0, fmt.Errorf("KTF guest string at %#x is not terminated within %d bytes", start, maxGuestStringLength)
+		return 0, fmt.Errorf("KTF guest string at %#x is not terminated within %d bytes", start, wipicrt.MaxGuestStringLength)
 	}
 	return length, nil
 }
-
-const maxGuestStringLength = 1 << 20

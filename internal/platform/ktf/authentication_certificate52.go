@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -86,7 +87,7 @@ func certificateImagePointer(image []byte, pc, baseLiteral, entryLiteral int) (i
 		return 0, false
 	}
 	pointer, ok := certificateImageWord(image, int64(pc)+int64(int32(base))+int64(int32(entry)))
-	offset := int64(pointer) - int64(ImageBase)
+	offset := int64(pointer) - int64(wipicrt.ImageBase)
 	return int(offset), ok && offset >= 0 && offset < int64(len(image))
 }
 

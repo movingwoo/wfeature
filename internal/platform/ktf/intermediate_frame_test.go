@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestIntermediateFramesLeaveTheCallbackBeforeItReturns(t *testing.T) {
@@ -17,22 +18,22 @@ func TestIntermediateFramesLeaveTheCallbackBeforeItReturns(t *testing.T) {
 	screen := graphics.Native.(*runtimeGraphicsState).target
 	updates := make(chan backend.FrameUpdate, 1)
 	now := time.Unix(1700000000, 0)
-	client.frameSampleClock = func() time.Time { return now }
+	client.FrameSampleClock = func() time.Time { return now }
 	client.SetFrameSink(backend.FrameSink{Output: updates})
 	// A guest callback owns this lock until return. Frame() cannot provide
 	// an intermediate image on that path, but the independent queue can.
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	for _, color := range []uint16{0xf800, 0x07e0} {
-		if err := runtime.fillFramebufferRect(screen, wipicClip{}, wipicPixelOp{}, uint32(color), 0, 0, 1, 1); err != nil {
+		if err := runtime.FillFramebufferRect(screen, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{}, uint32(color), 0, 0, 1, 1); err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.presentScreen(); err != nil {
+		if err := runtime.PresentScreen(); err != nil {
 			t.Fatal(err)
 		}
 		select {
 		case frame := <-updates:
-			if frame.Width != int(screen.width) || frame.Height != int(screen.height) {
+			if frame.Width != int(screen.Width) || frame.Height != int(screen.Height) {
 				t.Fatal("incorrect frame dimensions")
 			}
 			if color == 0xf800 && !bytes.Equal(frame.RGBA[:4], []byte{248, 0, 0, 255}) {
@@ -42,7 +43,7 @@ func TestIntermediateFramesLeaveTheCallbackBeforeItReturns(t *testing.T) {
 				t.Fatal("second loading image missing")
 			}
 			frame.RGBA[0] = 99
-			if client.frame[0] == 99 || client.lastSample[0] == 99 {
+			if client.FrameRGBA[0] == 99 || client.LastSample[0] == 99 {
 				t.Fatal("Host frame aliases runtime storage")
 			}
 		default:
@@ -50,7 +51,7 @@ func TestIntermediateFramesLeaveTheCallbackBeforeItReturns(t *testing.T) {
 		}
 		now = now.Add(20 * time.Millisecond)
 	}
-	if err := runtime.presentScreen(); err != nil {
+	if err := runtime.PresentScreen(); err != nil {
 		t.Fatal(err)
 	}
 	if len(updates) != 0 {
@@ -67,14 +68,14 @@ func TestIntermediateFrameRateAndSlowConsumerAreBounded(t *testing.T) {
 	screen := graphics.Native.(*runtimeGraphicsState).target
 	updates := make(chan backend.FrameUpdate, 1)
 	now := time.Unix(1700000000, 0)
-	client.frameSampleClock = func() time.Time { return now }
+	client.FrameSampleClock = func() time.Time { return now }
 	client.SetFrameSink(backend.FrameSink{Output: updates})
 	count := 0
 	for i := 0; i < 1000; i++ {
-		if err := runtime.fillFramebufferRect(screen, wipicClip{}, wipicPixelOp{}, uint32(i+1), 0, 0, 1, 1); err != nil {
+		if err := runtime.FillFramebufferRect(screen, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{}, uint32(i+1), 0, 0, 1, 1); err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.presentScreen(); err != nil {
+		if err := runtime.PresentScreen(); err != nil {
 			t.Fatal(err)
 		}
 		select {
@@ -89,10 +90,10 @@ func TestIntermediateFrameRateAndSlowConsumerAreBounded(t *testing.T) {
 	}
 	for i := 0; i < 100; i++ {
 		now = now.Add(20 * time.Millisecond)
-		if err := runtime.fillFramebufferRect(screen, wipicClip{}, wipicPixelOp{}, uint32(i+1), 0, 0, 1, 1); err != nil {
+		if err := runtime.FillFramebufferRect(screen, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{}, uint32(i+1), 0, 0, 1, 1); err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.presentScreen(); err != nil {
+		if err := runtime.PresentScreen(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -101,12 +102,12 @@ func TestIntermediateFrameRateAndSlowConsumerAreBounded(t *testing.T) {
 	}
 	client.SetFrameSink(backend.FrameSink{})
 	close(updates)
-	if err := runtime.presentScreen(); err != nil {
+	if err := runtime.PresentScreen(); err != nil {
 		t.Fatal(err)
 	}
 	replacement := make(chan backend.FrameUpdate, 1)
 	client.SetFrameSink(backend.FrameSink{Output: replacement, Scale: 3})
-	if err := runtime.presentScreen(); err != nil {
+	if err := runtime.PresentScreen(); err != nil {
 		t.Fatal(err)
 	}
 	select {

@@ -41,7 +41,7 @@ func callTextComponent(t *testing.T, runtime *initializationRuntime, component *
 
 func textComponentWords(t *testing.T, runtime *initializationRuntime, address uint32) []uint32 {
 	t.Helper()
-	words, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, textComponentFieldsSize/4, "test text component words")
+	words, err := runtime.ReadAOTWords(address+javaInstanceSize+javaInstanceHeader, textComponentFieldsSize/4, "test text component words")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func writeTextComponentWord(t *testing.T, runtime *initializationRuntime, addres
 	t.Helper()
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, value)
-	if err := runtime.client.core.Memory().Write(address+javaInstanceSize+javaInstanceHeader+uint32(word)*4, data); err != nil {
+	if err := runtime.client.Core().Memory().Write(address+javaInstanceSize+javaInstanceHeader+uint32(word)*4, data); err != nil {
 		t.Fatal(err)
 	}
 }

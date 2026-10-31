@@ -16,6 +16,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -293,7 +294,7 @@ func TestNativeQuickSaveRefusalsStoreNothing(t *testing.T) {
 	fixture.quickSave()
 
 	// A session with no store has nowhere a load could find its saves.
-	bare, err := StartNativeSession(t.Context(), fixture.archive, NativeSessionOptions{Clock: NewManualClock(time.Unix(1, 0))})
+	bare, err := StartNativeSession(t.Context(), fixture.archive, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Unix(1, 0))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +560,7 @@ func TestNativeQuickLoadReadsADirectoryWhereAFileWasAsNoFile(t *testing.T) {
 	}
 	root := filepath.Join(t.TempDir(), testfixture.KTFNativeSaveOwner)
 	store := backend.NewDirectorySaveStore(root)
-	session, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: NewManualClock(time.Unix(1, 0)), SaveStore: store})
+	session, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Unix(1, 0)), SaveStore: store})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +585,7 @@ func TestNativeQuickLoadReadsADirectoryWhereAFileWasAsNoFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(file, "below"), []byte("kept"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := PrepareNativeSessionCheckpoint(archive, checkpoint, NativeSessionOptions{Clock: NewManualClock(time.Unix(500, 0))})
+	prepared, err := PrepareNativeSessionCheckpoint(archive, checkpoint, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Unix(500, 0))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +691,7 @@ func TestNativeQuickLoadReopensFilesFromTheLiveStore(t *testing.T) {
 		backend.SaveEntry{Key: "fs/gone.dat", Data: original},
 		backend.SaveEntry{Key: "fs/twice.dat", Data: original},
 	)
-	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: NewManualClock(time.Unix(1, 0)), SaveStore: store, Width: 32, Height: 48})
+	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Unix(1, 0)), SaveStore: store, Width: 32, Height: 48})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -725,7 +726,7 @@ func TestNativeQuickLoadReopensFilesFromTheLiveStore(t *testing.T) {
 	}
 	before, attempts := store.snapshot(t), store.attempts
 
-	prepared, err := PrepareNativeSessionCheckpoint(archive, checkpoint, NativeSessionOptions{Clock: NewManualClock(time.Unix(500, 0))})
+	prepared, err := PrepareNativeSessionCheckpoint(archive, checkpoint, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Unix(500, 0))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -878,7 +879,7 @@ func TestNativeReopenFilesChargesEveryObjectAgainstOneLimit(t *testing.T) {
 
 // countedSaveReads counts the reads that reach a store.
 type countedSaveReads struct {
-	SaveStore
+	wipicrt.SaveStore
 	reads int
 }
 

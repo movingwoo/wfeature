@@ -47,7 +47,7 @@ func (runtime *initializationRuntime) installMenuTextCompatibility() error {
 		{menuTextSettingsStart, menuTextSettingsEnd, menuTextSettingsCode},
 	} {
 		code := make([]byte, region.end-region.start)
-		if err := runtime.client.core.Memory().Read(region.start, code); err != nil {
+		if err := runtime.client.Core().Memory().Read(region.start, code); err != nil {
 			return err
 		}
 		if fmt.Sprintf("%x", sha256.Sum256(code)) != region.digest {
@@ -56,12 +56,12 @@ func (runtime *initializationRuntime) installMenuTextCompatibility() error {
 	}
 	for _, address := range menuTextStores {
 		// Every instruction is STR r3,[sp,#4]. Keep r3 and the flags intact.
-		if err := runtime.client.core.Memory().Load(address, []byte{byte(svcCategoryMenuText), 0xdf}); err != nil {
+		if err := runtime.client.Core().Memory().Load(address, []byte{byte(svcCategoryMenuText), 0xdf}); err != nil {
 			return err
 		}
 	}
 	runtime.menuTextCompatibility = true
-	runtime.countDiagnostic("compatibility centered menu text")
+	runtime.CountDiagnostic("compatibility centered menu text")
 	return nil
 }
 
@@ -80,11 +80,11 @@ func (runtime *initializationRuntime) storeMenuTextY(thread *armcore.Thread, cal
 	if uint64(stack)+8 > 1<<32 {
 		return fmt.Errorf("KTF menu text stack address overflows at %#x", stack)
 	}
-	_, height := runtime.screenSize()
+	_, height := runtime.ScreenSize()
 	// The guest centers the panel at floor(height/2). At height 280 its
 	// fixed title/body coordinates already line up with the panel artwork.
 	value += uint32(height/2 - 140)
 	var word [4]byte
 	binary.LittleEndian.PutUint32(word[:], value)
-	return runtime.client.core.Memory().Write(stack+4, word[:])
+	return runtime.client.Core().Memory().Write(stack+4, word[:])
 }

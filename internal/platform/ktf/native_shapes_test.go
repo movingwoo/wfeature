@@ -10,6 +10,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -24,7 +25,7 @@ func nativeStackedCall(t *testing.T, platform *NativePlatform, handler NativeSlo
 			t.Fatal(err)
 		}
 	}
-	stack := ThreadStackBase + uint32(ThreadStackSize) - 0x200
+	stack := wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize) - 0x200
 	if err := thread.SetRegister(armcore.RegisterSP, stack); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +260,7 @@ func TestNativeShapesSurviveAQuickLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	store, _ := backend.NewMemorySaveStore(nil)
-	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: NewManualClock(time.Time{}), SaveStore: store})
+	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Time{}), SaveStore: store})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +279,7 @@ func TestNativeShapesSurviveAQuickLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := PrepareNativeSessionCheckpoint(archive, saved, NativeSessionOptions{Clock: NewManualClock(time.Time{})})
+	prepared, err := PrepareNativeSessionCheckpoint(archive, saved, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Time{})})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +296,7 @@ func TestNativeShapesSurviveAQuickLoad(t *testing.T) {
 	if earlier.Runtime, err = backend.EncodeCheckpointRecord(record.State); err != nil {
 		t.Fatal(err)
 	}
-	prepared, err = PrepareNativeSessionCheckpoint(archive, earlier, NativeSessionOptions{Clock: NewManualClock(time.Time{})})
+	prepared, err = PrepareNativeSessionCheckpoint(archive, earlier, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Time{})})
 	if err != nil {
 		t.Fatalf("a record without the shapes was refused: %v", err)
 	}
@@ -319,7 +320,7 @@ func TestNativeShapesSurviveAQuickLoad(t *testing.T) {
 		if damaged.Runtime, err = backend.EncodeCheckpointRecord(changed); err != nil {
 			t.Fatal(err)
 		}
-		candidate, err := PrepareNativeSessionCheckpoint(archive, damaged, NativeSessionOptions{Clock: NewManualClock(time.Time{})})
+		candidate, err := PrepareNativeSessionCheckpoint(archive, damaged, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Time{})})
 		if candidate != nil {
 			candidate.Discard()
 		}
@@ -404,7 +405,7 @@ func TestNativeShapesEarlierRecordLoadsWithoutAFill(t *testing.T) {
 		t.Fatal(err)
 	}
 	store, _ := backend.NewMemorySaveStore(nil)
-	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: NewManualClock(time.Time{}), SaveStore: store})
+	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Time{}), SaveStore: store})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +428,7 @@ func TestNativeShapesEarlierRecordLoadsWithoutAFill(t *testing.T) {
 	if earlier.Runtime, err = backend.EncodeCheckpointRecord(outline); err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := PrepareNativeSessionCheckpoint(archive, earlier, NativeSessionOptions{Clock: NewManualClock(time.Time{})})
+	prepared, err := PrepareNativeSessionCheckpoint(archive, earlier, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Time{})})
 	if err != nil {
 		t.Fatalf("a record without the fill was refused: %v", err)
 	}
@@ -444,7 +445,7 @@ func TestNativeShapesEarlierRecordLoadsWithoutAFill(t *testing.T) {
 	if earlier.Runtime, err = backend.EncodeCheckpointRecord(outline); err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := PrepareNativeSessionCheckpoint(archive, earlier, NativeSessionOptions{Clock: NewManualClock(time.Time{})})
+	candidate, err := PrepareNativeSessionCheckpoint(archive, earlier, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Time{})})
 	if candidate != nil {
 		candidate.Discard()
 	}

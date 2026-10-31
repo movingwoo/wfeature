@@ -370,7 +370,7 @@ button" and "only the first letter appeared until I deleted it and typed it
 again".
 
 **Whole-value fields ask for a frame.** A KTF LWC or KFC commit sets
-`repaintPending` (and posts the repaint event to a guest event loop); an LGT
+`RepaintPending` (and posts the repaint event to a guest event loop); an LGT
 Java commit marks the pushed card dirty. That is the request a component makes
 when its contents change. Without it, a KTF card whose worker owns its frame
 cadence, and every LGT Java card, kept the old text until the next key.

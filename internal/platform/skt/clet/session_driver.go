@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The session driver is the Host-facing API that runs one Clet. It mirrors the
@@ -32,7 +33,7 @@ func (session *Session) TickFor(ctx context.Context, budget time.Duration) (bool
 	}
 	progressed := false
 	client := session.Client
-	entered := client.now()
+	entered := client.Now()
 	deadline := entered.Add(budget)
 	for {
 		ran, err := session.Tick(ctx)
@@ -43,7 +44,7 @@ func (session *Session) TickFor(ctx context.Context, budget time.Duration) (bool
 		if wait, parked := session.waitBeforeNextRound(); parked {
 			return progressed, wait, nil
 		}
-		if !client.now().Before(deadline) {
+		if !client.Now().Before(deadline) {
 			return progressed, 0, nil
 		}
 	}
@@ -56,7 +57,7 @@ func (session *Session) waitBeforeNextRound() (time.Duration, bool) {
 	if !parked {
 		return 0, false
 	}
-	wait := deadline.Sub(session.Client.now())
+	wait := deadline.Sub(session.Client.Now())
 	if wait <= 0 {
 		return 0, false
 	}
@@ -113,8 +114,8 @@ func (session *Session) Close() {
 	if session == nil || session.Client == nil {
 		return
 	}
-	if session.Client.audio != nil {
-		defer session.Client.audio.StopAll()
+	if session.Client.Audio != nil {
+		defer session.Client.Audio.StopAll()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), backend.EndingBound)
 	defer cancel()
@@ -140,7 +141,7 @@ func (session *Session) FrameDigest() uint64 {
 // Screen is the handset size the program draws on.
 func (session *Session) Screen() (int, int) {
 	if session == nil || session.Client == nil {
-		return runtimeDisplayPixelWidth, runtimeDisplayPixelHeight
+		return wipicrt.RuntimeDisplayPixelWidth, wipicrt.RuntimeDisplayPixelHeight
 	}
 	return session.Client.Screen()
 }
@@ -158,7 +159,7 @@ func (session *Session) GuestElapsed() time.Duration {
 	if session == nil || session.Client == nil || session.Client.runtime == nil {
 		return 0
 	}
-	return session.Client.runtime.guestElapsed()
+	return session.Client.runtime.GuestElapsed()
 }
 
 // Vibration is what the program last asked the handset's motor to do.
@@ -166,7 +167,17 @@ func (session *Session) Vibration() backend.Vibration {
 	if session == nil || session.Client == nil {
 		return backend.Vibration{}
 	}
-	return session.Client.vibrator.State()
+	return session.Client.Vibrator.State()
+}
+
+// Authentication is the compatibility the loader applied to the program's
+// code before it started, which CletProgram carried in. A program started
+// without one reports that authentication is off, as a KTF title does.
+func (session *Session) Authentication() backend.AuthenticationStatus {
+	if session == nil || session.Client == nil || session.Client.authentication == "" {
+		return backend.AuthenticationOff
+	}
+	return session.Client.authentication
 }
 
 // SetSpeed scales the pace, and Speed reports the multiplier in force.
@@ -182,4 +193,39 @@ func (session *Session) Speed() float64 {
 		return 1
 	}
 	return session.Client.Speed()
+}
+
+// Diagnostics snapshots the boundary events this session has crossed. It is
+// safe to call between ticks; the returned maps and slices are copies.
+func (session *Session) Diagnostics() Diagnostics {
+	if session == nil || session.Client == nil {
+		return Diagnostics{Counts: map[string]uint32{}}
+	}
+	return session.Client.Diagnostics()
+}
+
+// CountedEvents names every boundary event this session has counted, with the
+// total number of events recorded.
+func (session *Session) CountedEvents() ([]string, uint64) {
+	if session == nil || session.Client == nil {
+		return nil, 0
+	}
+	return session.Client.CountedEvents()
+}
+
+// TimeHostPhases turns phase timing on or off. It is off by default because
+// the clock reads it adds are themselves a suspect on a slow host.
+func (session *Session) TimeHostPhases(on bool) {
+	if session == nil || session.Client == nil {
+		return
+	}
+	session.Client.TimeHostPhases(on)
+}
+
+// HostCosts reports what this session has spent, by phase.
+func (session *Session) HostCosts() wipicrt.HostCosts {
+	if session == nil || session.Client == nil {
+		return wipicrt.HostCosts{}
+	}
+	return session.Client.HostCosts()
 }

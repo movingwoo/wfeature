@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The handset a descriptor without DisplaySize was packaged for; see
@@ -70,7 +71,7 @@ func PackagedScreen(descriptor Descriptor) (width, height int, ok bool) {
 func AutomaticScreen(descriptor Descriptor) (width, height int) {
 	width, height, ok := PackagedScreen(descriptor)
 	if !ok {
-		return runtimeDisplayPixelWidth, runtimeDisplayPixelHeight
+		return wipicrt.RuntimeDisplayPixelWidth, wipicrt.RuntimeDisplayPixelHeight
 	}
 	return width, height
 }

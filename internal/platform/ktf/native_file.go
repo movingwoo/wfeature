@@ -11,6 +11,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The title's own files sit beside its module in the package, and the module
@@ -198,7 +199,7 @@ func (platform *NativePlatform) installFiles() error {
 // AttachSaves gives the platform somewhere to keep what the title writes.
 // Without one a save lives for the session and no longer, which is what a
 // probe wants and not what a player does.
-func (platform *NativePlatform) AttachSaves(store SaveStore) {
+func (platform *NativePlatform) AttachSaves(store wipicrt.SaveStore) {
 	platform.saves = store
 }
 
@@ -240,7 +241,7 @@ func (platform *NativePlatform) contents(name string) ([]byte, bool, error) {
 // save store, and behind that in the package. It is the lookup a first open
 // makes, and a quick load re-opens its files through it for that reason, over
 // a store that bounds what is read.
-func (platform *NativePlatform) stored(store SaveStore, name string) ([]byte, bool, error) {
+func (platform *NativePlatform) stored(store wipicrt.SaveStore, name string) ([]byte, bool, error) {
 	if store != nil {
 		data, ok, err := backend.ReadSave(store, nativeSaveKey(nativeFileKey(name)))
 		if err != nil {
@@ -668,10 +669,10 @@ func (platform *NativePlatform) openFileBytes() uint64 {
 // one backend.RebuildReader: a key is read once however many names and objects
 // resolve to it, and what is read counts against limit. What the objects keep
 // counts against limit as well, each in a copy of its own.
-func (platform *NativePlatform) reopenFiles(store SaveStore, records []nativeFileState, limit int64) (map[uint32][]byte, error) {
+func (platform *NativePlatform) reopenFiles(store wipicrt.SaveStore, records []nativeFileState, limit int64) (map[uint32][]byte, error) {
 	var (
 		reader  *backend.RebuildReader
-		through SaveStore
+		through wipicrt.SaveStore
 	)
 	if store != nil {
 		reader = backend.NewRebuildReader(store, limit)

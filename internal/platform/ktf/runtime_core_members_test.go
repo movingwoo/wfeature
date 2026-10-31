@@ -224,7 +224,7 @@ func TestTheRestOfTheCoreLibraryResolvesAndAnswers(t *testing.T) {
 	}
 
 	var printed bytes.Buffer
-	client.logger = slog.New(slog.NewTextHandler(&printed, nil))
+	client.Logger = slog.New(slog.NewTextHandler(&printed, nil))
 	stream, err := vm.NewObject("java/io/PrintStream", "(I)V", jvm.IntValue(1))
 	if err != nil {
 		t.Fatal(err)

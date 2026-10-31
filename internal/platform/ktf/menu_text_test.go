@@ -27,7 +27,7 @@ func TestMenuTextFollowsCenteredPanelAndPreservesMachineState(t *testing.T) {
 			client.SetScreen(240, height)
 			runtime.menuTextCompatibility = true
 			original := bytes.Repeat([]byte{0x5a}, 16)
-			if err := client.core.Memory().Write(hookScratch, original); err != nil {
+			if err := client.Core().Memory().Write(hookScratch, original); err != nil {
 				t.Fatal(err)
 			}
 			state := armcore.NewContext()
@@ -65,7 +65,7 @@ func TestMenuTextRejectsUnknownImagesCallsAndInvalidStack(t *testing.T) {
 		t.Fatal("unknown image received a menu correction")
 	}
 	call := armcore.SupervisorCall{Address: menuTextTitle, ResumePC: menuTextTitle + 2}
-	if err := runtime.storeMenuTextY(client.thread, call); err == nil {
+	if err := runtime.storeMenuTextY(client.Thread, call); err == nil {
 		t.Fatal("uninstalled compatibility call accepted")
 	}
 	runtime.menuTextCompatibility = true
@@ -73,15 +73,15 @@ func TestMenuTextRejectsUnknownImagesCallsAndInvalidStack(t *testing.T) {
 		{Address: menuTextTitle + 2, ResumePC: menuTextTitle + 4},
 		{Address: menuTextTitle, ResumePC: menuTextTitle + 4},
 	} {
-		if err := runtime.storeMenuTextY(client.thread, wrong); err == nil {
+		if err := runtime.storeMenuTextY(client.Thread, wrong); err == nil {
 			t.Fatal("unrecognized instruction or resume address accepted")
 		}
 	}
 	for _, stack := range []uint32{0xfffffffc, 0} {
-		if err := client.thread.SetRegister(13, stack); err != nil {
+		if err := client.Thread.SetRegister(13, stack); err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.storeMenuTextY(client.thread, call); err == nil {
+		if err := runtime.storeMenuTextY(client.Thread, call); err == nil {
 			t.Fatalf("invalid stack %#x accepted", stack)
 		}
 	}

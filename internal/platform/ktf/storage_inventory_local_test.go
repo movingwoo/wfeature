@@ -18,6 +18,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/storageinventory"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
@@ -171,12 +172,12 @@ var descriptorInventoryLayout = storageinventory.Layout{
 // It is that function's own lookup, asked of a runtime that has read nothing.
 func descriptorJavaDatabaseNow(view *initializationRuntime, name string) (records [][]byte, found bool, err error) {
 	deleted := view.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
-	saved, present, err := backend.ReadSave(view.client.saveStore, "jdb/"+name)
+	saved, present, err := backend.ReadSave(view.client.SaveStore, "jdb/"+name)
 	if err != nil {
 		return nil, false, err
 	}
 	if present && !deleted {
-		records, err := decodeSaveRecords(saved)
+		records, err := wipicrt.DecodeSaveRecords(saved)
 		return records, true, err
 	}
 	if view.databaseDeleted(name) {
@@ -191,7 +192,7 @@ func descriptorJavaDatabaseNow(view *initializationRuntime, name string) (record
 // packaged copy from being looked at.
 func descriptorRecordDatabaseNow(view *initializationRuntime, name string, recordSize uint32) (records [][]byte, found bool, err error) {
 	deleted := view.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
-	saved, hasSaved := view.loadSave("rdb/" + name)
+	saved, hasSaved := view.LoadSave("rdb/" + name)
 	if !hasSaved {
 		if view.databaseDeleted(name) {
 			return nil, false, nil
@@ -202,7 +203,7 @@ func descriptorRecordDatabaseNow(view *initializationRuntime, name string, recor
 	if deleted {
 		return nil, false, nil
 	}
-	records, err = decodeSaveRecords(saved)
+	records, err = wipicrt.DecodeSaveRecords(saved)
 	return records, true, err
 }
 
@@ -210,7 +211,7 @@ func descriptorRecordDatabaseNow(view *initializationRuntime, name string, recor
 // that an empty record and a deleted slot stay different and no list and an
 // empty list do not.
 func sameRecords(left, right [][]byte) bool {
-	return bytes.Equal(encodeSaveRecords(left), encodeSaveRecords(right))
+	return bytes.Equal(wipicrt.EncodeSaveRecords(left), wipicrt.EncodeSaveRecords(right))
 }
 
 // sameLedger reports whether two ledgers list the same names.
@@ -247,23 +248,23 @@ func inventoryDescriptorStorage(client *Client, roots []*jvm.Object, note func(c
 		}
 	}
 	// A free lock is what says no worker is inside a service call.
-	if !client.run.TryLock() {
+	if !client.Run.TryLock() {
 		counts[descriptorBusy] = 1
 		return counts
 	}
-	defer client.run.Unlock()
+	defer client.Run.Unlock()
 	state := client.runtime
 	if state == nil {
 		return counts
 	}
-	view := &initializationRuntime{client: client}
+	view := &initializationRuntime{client: client, Runtime: &wipicrt.Runtime{Client: client.Client}}
 	// A lookup the store refused says nothing about the copy it was for, so it
 	// is counted as that and the comparison is left out.
 	refused := func(name string, err error) bool {
 		if err == nil {
-			err = view.saveReadError
+			err = view.SaveReadError
 		}
-		view.saveReadError = nil
+		view.SaveReadError = nil
 		if err == nil {
 			return false
 		}
@@ -285,28 +286,28 @@ func inventoryDescriptorStorage(client *Client, roots []*jvm.Object, note func(c
 		}
 	}
 
-	for name, store := range state.cFiles {
+	for name, store := range state.CFiles {
 		counts[descriptorCFiles]++
-		seed, found := view.databaseSeed(name)
+		seed, found := view.DatabaseSeed(name)
 		if refused("db/"+name, nil) {
 			continue
 		}
 		if !found {
 			mark(descriptorUnresolved, "db/"+name)
 		}
-		if !bytes.Equal(store.data, seed) {
+		if !bytes.Equal(store.Data, seed) {
 			mark(descriptorStaleCFiles, name)
 		}
 	}
-	detachedFiles := map[*runtimeCFile]bool{}
-	for _, open := range state.cFileHandles {
-		if open == nil || open.store == nil {
+	detachedFiles := map[*wipicrt.RuntimeCFile]bool{}
+	for _, open := range state.CFileHandles {
+		if open == nil || open.Store == nil {
 			continue
 		}
 		counts[descriptorCFileHandles]++
-		if state.cFiles[open.store.name] != open.store && !detachedFiles[open.store] {
-			detachedFiles[open.store] = true
-			mark(descriptorHandleOnlyStores, "db/"+open.store.name)
+		if state.CFiles[open.Store.Name] != open.Store && !detachedFiles[open.Store] {
+			detachedFiles[open.Store] = true
+			mark(descriptorHandleOnlyStores, "db/"+open.Store.Name)
 		}
 	}
 
@@ -338,9 +339,9 @@ func inventoryDescriptorStorage(client *Client, roots []*jvm.Object, note func(c
 	// The written-file table shadows the store for every name it holds. A
 	// rebuilt one would hold the store's bytes for a name that is still there
 	// and would not hold the name at all otherwise.
-	removedFiles := view.removedGuestFiles()
+	removedFiles := view.RemovedGuestFiles()
 	removedRefused := refused(guestFileRemovedKey, nil)
-	for name, data := range state.guestFiles {
+	for name, data := range state.GuestFiles {
 		counts[descriptorWrittenFiles]++
 		trimmed := strings.TrimPrefix(name, "/")
 		if removedRefused {
@@ -349,7 +350,7 @@ func inventoryDescriptorStorage(client *Client, roots []*jvm.Object, note func(c
 		var stored []byte
 		found := false
 		if !removedFiles[trimmed] {
-			stored, found = view.loadSave("fs/" + trimmed)
+			stored, found = view.LoadSave("fs/" + trimmed)
 		}
 		if refused("fs/"+trimmed, nil) {
 			continue
@@ -368,9 +369,9 @@ func inventoryDescriptorStorage(client *Client, roots []*jvm.Object, note func(c
 		held   map[string]bool
 		stored func() map[string]bool
 	}{
-		{descriptorLedgerFSRemoved, guestFileRemovedKey, state.removedFiles, func() map[string]bool { return removedFiles }},
-		{descriptorLedgerDBRemoved, databaseRemovedKey, state.removedCDatabases, view.removedDatabases},
-		{descriptorLedgerDBDirs, directoryListKey, state.madeDirectories, view.createdDirectories},
+		{descriptorLedgerFSRemoved, guestFileRemovedKey, state.RemovedFiles, func() map[string]bool { return removedFiles }},
+		{descriptorLedgerDBRemoved, wipicrt.DatabaseRemovedKey, state.RemovedCDatabases, view.RemovedDatabases},
+		{descriptorLedgerDBDirs, wipicrt.DirectoryListKey, state.MadeDirectories, view.CreatedDirectories},
 		{descriptorLedgerRDBRemoved, recordDatabaseRemovedKey, state.removedDatabaseLists[recordDatabaseRemovedKey],
 			func() map[string]bool { return view.recordDatabaseRemovals(recordDatabaseRemovedKey) }},
 		{descriptorLedgerJDBRemoved, javaDatabaseRemovedKey, state.removedDatabaseLists[javaDatabaseRemovedKey],
@@ -403,7 +404,7 @@ func inventoryDescriptorStorage(client *Client, roots []*jvm.Object, note func(c
 	// name every File state and record list it meets.
 	var files []*runtimeGuestFile
 	var stores []*runtimeDataBaseStore
-	context := &heapNativeContext{runtime: state, opacityIDs: make(map[*imageOpacity]uint32), now: client.now()}
+	context := &heapNativeContext{runtime: state, opacityIDs: make(map[*wipicrt.ImageOpacity]uint32), now: client.Now()}
 	codec := state.heapCodec()
 	codec.CaptureNative = func(native any) (jvm.HeapExternalPayload, error) {
 		switch value := native.(type) {
@@ -428,7 +429,7 @@ func inventoryDescriptorStorage(client *Client, roots []*jvm.Object, note func(c
 			}
 			seenFiles[file] = true
 			counts[descriptorFilePayloads]++
-			stored, _ := view.guestFile(file.name)
+			stored, _ := view.GuestFile(file.name)
 			if refused("fs/"+strings.TrimPrefix(file.name, "/"), nil) {
 				continue
 			}
@@ -456,7 +457,7 @@ func inventoryDescriptorStorage(client *Client, roots []*jvm.Object, note func(c
 			}
 		}
 	}
-	if state.saveReadError != nil {
+	if state.SaveReadError != nil {
 		counts[descriptorReadError] = 1
 	}
 	return counts
@@ -609,7 +610,7 @@ func descriptorInventoryOfArchive(t *testing.T, file, name string, warm, rounds 
 	}
 	keys := make([]int32, 0, len(localLadderKeys))
 	for _, key := range localLadderKeys {
-		if code, known := KeyCodeByName(key); known {
+		if code, known := wipicrt.KeyCodeByName(key); known {
 			keys = append(keys, code)
 		}
 	}
@@ -618,11 +619,11 @@ func descriptorInventoryOfArchive(t *testing.T, file, name string, warm, rounds 
 		key := keys[tick/storageInventoryKeyPeriod%len(keys)]
 		switch tick % storageInventoryKeyPeriod {
 		case storageInventoryKeyPress:
-			if err := session.SendKey(ctx, KeyPressed, key); err != nil {
+			if err := session.SendKey(ctx, wipicrt.KeyPressed, key); err != nil {
 				return err
 			}
 		case storageInventoryKeyPress + localLadderHoldTicks:
-			if err := session.SendKey(ctx, KeyReleased, key); err != nil {
+			if err := session.SendKey(ctx, wipicrt.KeyReleased, key); err != nil {
 				return err
 			}
 		}
@@ -637,7 +638,7 @@ func descriptorInventoryOfArchive(t *testing.T, file, name string, warm, rounds 
 	var session *Session
 	for launch := 1; session == nil; launch++ {
 		started, err := StartSession(ctx, data, SessionOptions{
-			MaxSteps: maxSteps, Clock: NewManualClock(time.Unix(1700000000, 0)), SaveStore: store,
+			MaxSteps: maxSteps, Clock: wipicrt.NewManualClock(time.Unix(1700000000, 0)), SaveStore: store,
 		})
 		if err != nil {
 			if errors.Is(err, ErrGuestExited) && launch < localLadderLaunches {
@@ -866,7 +867,7 @@ func nativeInventoryOfArchive(t *testing.T, archive []byte, name string, warm, r
 		return tally.Record(name, digest, variant, "skipped: store: "+storageinventory.Reason(err))
 	}
 	ctx := context.Background()
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	session, err := StartNativeSession(ctx, archive, NativeSessionOptions{Clock: clock, SaveStore: store})
 	if err != nil {
 		return tally.Record(name, digest, variant, "skipped: start: "+storageinventory.Reason(err))
@@ -875,14 +876,14 @@ func nativeInventoryOfArchive(t *testing.T, archive []byte, name string, warm, r
 	round := func(tick int) error {
 		// Every digit in turn: an authored package acts on the keys its author
 		// chose, and the probe does not know which.
-		key := KeyNum0 + int32(tick/storageInventoryKeyPeriod%10)
+		key := wipicrt.KeyNum0 + int32(tick/storageInventoryKeyPeriod%10)
 		switch tick % storageInventoryKeyPeriod {
 		case storageInventoryKeyPress:
-			if err := session.SendKey(ctx, KeyPressed, key); err != nil {
+			if err := session.SendKey(ctx, wipicrt.KeyPressed, key); err != nil {
 				return err
 			}
 		case storageInventoryKeyPress + localLadderHoldTicks:
-			if err := session.SendKey(ctx, KeyReleased, key); err != nil {
+			if err := session.SendKey(ctx, wipicrt.KeyReleased, key); err != nil {
 				return err
 			}
 		}

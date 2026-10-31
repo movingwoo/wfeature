@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // TestCollectorScansTheRunningWorker covers a collection an allocation
@@ -55,7 +56,7 @@ func TestNewStringKeepsItsCharactersAcrossACollection(t *testing.T) {
 	// Something unreachable the collection can free, so the String's own
 	// allocation succeeds on the retry.
 	allocateTestArray(t, runtime, 64)
-	runtime.collectAt = 0
+	runtime.CollectAt = 0
 	if _, err := runtime.collectGuestObjects(nil); err != nil {
 		t.Fatal(err)
 	}
@@ -63,9 +64,9 @@ func TestNewStringKeepsItsCharactersAcrossACollection(t *testing.T) {
 
 	// Room for the two-unit character array and nothing more, so the String
 	// itself is what the arena refuses.
-	charactersSize := alignArenaSize(uint64(javaInstanceSize + javaInstanceHeader + javaArrayLengthSize + 2*2))
-	start := (runtime.arena.cursor + arenaAlignment - 1) &^ uint64(arenaAlignment-1)
-	runtime.arena.limit = start + charactersSize
+	charactersSize := wipicrt.AlignArenaSize(uint64(javaInstanceSize + javaInstanceHeader + javaArrayLengthSize + 2*2))
+	start := (runtime.Arena.Cursor + wipicrt.ArenaAlignment - 1) &^ uint64(wipicrt.ArenaAlignment-1)
+	runtime.Arena.Limit = start + charactersSize
 
 	text := client.vm.NewString("hi")
 	address, err := runtime.allocateAOTObject(metadata, make([]byte, metadata.InstanceSize), text)

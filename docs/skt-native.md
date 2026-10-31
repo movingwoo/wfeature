@@ -2,19 +2,18 @@
 
 The SKT carrier ships a third kind of package beside its MIDP/SKVM Java and its
 GNEX/GVM scripts: a native WIPI-C program. `internal/platform/skt` detects and
-opens it, and `internal/platform/skt/clet` runs it — SKT's own WIPI-C engine. A
-WIPI-C program with no Java around it is a Clet: the platform calls it at six
-entry points and it reaches the platform through a root table of interface
-tables, with no Jlet, no interpreted bytecode and no card stack. The engine is
-built on the base the other vendors share (`internal/armcore`,
-`internal/backend`, `internal/wipic`, `internal/curve`, `internal/glyph`,
-`internal/audio/smaf`) and is independent of them: it imports neither
-`internal/platform/ktf` nor `internal/jvm`, the way the LGT platform's own
-WIPI-C engine does. An SKT executable calls almost the same platform functions
-the KTF C titles do under almost the same numbers, so the engine is close to
-the KTF one and the two share no code today; unifying the WIPI-C runtimes they
-duplicate is deferred (see Limitations). [SKT history](history/skt.md) keeps the
-static analysis the implementation started from.
+opens it, and `internal/platform/skt/clet` runs it. A WIPI-C program with no
+Java around it is a Clet: the platform calls it at six entry points and it
+reaches the platform through a root table of interface tables, with no Jlet, no
+interpreted bytecode and no card stack. An SKT executable calls almost the same
+platform functions the KTF C titles do under almost the same numbers, so a Clet
+runs on the WIPI-C engine KTF titles run on, `internal/platform/wipicrt`
+([architecture](architecture.md#the-wipi-c-engine)). What `clet` holds is the
+Clet's own: the root table and its numbering, the C library, the six entry
+points, the platform's values for the engine, and its checkpoint codec. It
+imports neither `internal/platform/ktf` nor `internal/jvm`, and neither does
+the engine. [SKT history](history/skt.md) keeps the static analysis the
+implementation started from.
 
 ## The package
 
@@ -97,13 +96,14 @@ only the order of the tables in the root and the few exceptions above differ, so
 `handleCletCall` routes a call to the handler the engine serves for it
 (`internal/platform/skt/clet/clet_tables.go`).
 
-The indirect handle is where this engine's data model differs from the KTF one.
-A memory identifier's data pointer (`MC_GETDPTR`) and a framebuffer's pixel
+The indirect handle is where the platform's data model differs from KTF's. A
+memory identifier's data pointer (`MC_GETDPTR`) and a framebuffer's pixel
 pointer are the identifier's first word on SKT, where they are eight bytes past
 it on KTF; one SKT title copies a resource out of `*id` and reads a
-framebuffer's fields at `**id`. `wipicHandleData` answers that first word, and
-`allocateWIPIC` writes its own records so the payload data starts twelve bytes
-in (`internal/platform/skt/clet/runtime.go`).
+framebuffer's fields at `**id`. The engine reads the layout from the platform's
+`Platform.HandleFirstWord` and `Platform.HandleData`, so the payload data starts
+twelve bytes in on both and only the first word differs
+(`internal/platform/skt/clet/engine.go`).
 
 The C library at slot 14 is served in `clet_clib.go`: the string, memory,
 conversion and time functions the specification lists, each named where that
@@ -229,6 +229,26 @@ every other title's it holds no save: the restored program reads its files as
 the store has them when the load commits. What the record holds, how it is
 validated and how it was accepted is in [SKT checkpoints](skt-checkpoints.md#native-clet-state).
 
+<a id="skt-native-earlier-saves"></a>
+
+## Saves from the earlier engine
+
+The Clet engine before the shared one stored its removal list (`db/.removed`)
+and its directory list (`db/.dirs`) but began every session with both empty, so
+neither was read back. A program that deleted a file in one session and wrote it
+again in a later one left the name on the list over the new bytes, and that
+engine answered the file from them. The shared engine reads the lists, so for a
+Clet it reads a listed name whose save holds bytes as that file
+(`Platform.StaleRemovals`): a removal stores the file empty in the same write
+that lists the name, and a write of the file takes the name off in its own
+write, so only that engine leaves a name over bytes. An empty file stays
+removed. KTF never wrote such a save, and every name its list holds stays
+removed.
+
+The directory list needs no such reading. A directory holds no bytes, and one
+the earlier engine recorded is one `MC_fsMkDir` now answers `M_E_EXIST` for,
+which is what a handset that kept it answers.
+
 <a id="skt-native-text-entry"></a>
 
 ## Text entry
@@ -256,14 +276,12 @@ event entry or on its frame timer.
 
 ## Limitations
 
-The Clet engine and the KTF C runtime are two nearly identical WIPI-C
-implementations, because SKT native and KTF native call almost the same
-functions under almost the same numbers. They share no code: the engine is
-SKT's own, so a change to it cannot reach a KTF title, which is why it was built
-this way rather than by calling into the KTF runtime. Each vendor keeps its own
-WIPI-C engine today — LGT's diverges from both, KTF's and SKT's are close —
-and unifying the parts KTF and SKT duplicate into one shared runtime is deferred
-work that would not change behavior.
+A change to the WIPI-C engine reaches KTF titles and Clets alike, which is the
+point of sharing it: a handler fixed for one is fixed for the other. A Clet is
+tested by its own fixture and by the engine's KTF tests, so a change to the
+engine is checked against both platforms' archives. Where an SKT handset is
+observed to answer differently from a KTF one, the difference becomes a
+platform value or hook rather than a second copy of the handler.
 
 The two local examples are both GCC-built, so an executable built with another
 toolchain may lay its header or its relocation table out differently. One

@@ -45,7 +45,7 @@ func (storage *guestArrayStorage) Len() int {
 func (storage *guestArrayStorage) Load(index int) (jvm.Value, error) {
 	var slot [8]byte
 	data := slot[:storage.size]
-	if err := storage.runtime.client.core.Memory().Read(storage.address(index), data); err != nil {
+	if err := storage.runtime.client.Core().Memory().Read(storage.address(index), data); err != nil {
 		return jvm.VoidValue(), fmt.Errorf("read KTF array element %d: %w", index, err)
 	}
 	return storage.decode(data, index)
@@ -57,7 +57,7 @@ func (storage *guestArrayStorage) Store(index int, value jvm.Value) error {
 	if err := storage.encode(data, value, index); err != nil {
 		return err
 	}
-	if err := storage.runtime.client.core.Memory().Write(storage.address(index), data); err != nil {
+	if err := storage.runtime.client.Core().Memory().Write(storage.address(index), data); err != nil {
 		return fmt.Errorf("write KTF array element %d: %w", index, err)
 	}
 	return nil
@@ -71,7 +71,7 @@ func (storage *guestArrayStorage) LoadRange(offset, count int) ([]jvm.Value, err
 		return values, nil
 	}
 	data := make([]byte, count*storage.size)
-	if err := storage.runtime.client.core.Memory().Read(storage.address(offset), data); err != nil {
+	if err := storage.runtime.client.Core().Memory().Read(storage.address(offset), data); err != nil {
 		return nil, fmt.Errorf("read KTF array elements %d..%d: %w", offset, offset+count-1, err)
 	}
 	for index := range values {
@@ -95,7 +95,7 @@ func (storage *guestArrayStorage) ReadBytes(offset int, into []byte) error {
 	if len(into) == 0 {
 		return nil
 	}
-	if err := storage.runtime.client.core.Memory().Read(storage.address(offset), into); err != nil {
+	if err := storage.runtime.client.Core().Memory().Read(storage.address(offset), into); err != nil {
 		return fmt.Errorf("read KTF array elements %d..%d: %w", offset, offset+len(into)-1, err)
 	}
 	return nil
@@ -111,7 +111,7 @@ func (storage *guestArrayStorage) StoreRange(offset int, values []jvm.Value) err
 			return err
 		}
 	}
-	if err := storage.runtime.client.core.Memory().Write(storage.address(offset), data); err != nil {
+	if err := storage.runtime.client.Core().Memory().Write(storage.address(offset), data); err != nil {
 		return fmt.Errorf("write KTF array elements %d..%d: %w", offset, offset+len(values)-1, err)
 	}
 	return nil

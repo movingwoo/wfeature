@@ -9,6 +9,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A Clet is a WIPI-C program with no Java around it: the platform calls its
@@ -122,23 +123,22 @@ func LoadCletClient(program CletProgram, options armcore.CoreOptions) (*Client, 
 	if err := memory.Load(program.DataAddress, program.Data); err != nil {
 		return nil, fmt.Errorf("load Clet %q data: %w", program.Name, err)
 	}
-	if err := memory.Map(ThreadStackBase, ThreadStackSize, armcore.PermissionReadWrite); err != nil {
+	if err := memory.Map(wipicrt.ThreadStackBase, wipicrt.ThreadStackSize, armcore.PermissionReadWrite); err != nil {
 		return nil, fmt.Errorf("map Clet stack: %w", err)
 	}
 	initial := armcore.NewContext()
-	initial.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize)
+	initial.Registers[armcore.RegisterSP] = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize)
+	engine := wipicrt.NewClient(cletPlatform, core, armcore.NewThread(initial), uint64(len(program.Code)))
+	engine.SubscriberNumber = HandsetNumber()
 	client := &Client{
-		subscriberNumber: HandsetNumber(),
-		core:             core,
-		thread:           armcore.NewThread(initial),
-		// The image a KTF client is told about is the code alone: it is what
-		// a pixel operation's function pointer has to lie in, what the cheat
+		Client: engine,
+		// The image a client is told about is the code alone: it is what a
+		// pixel operation's function pointer has to lie in, what the cheat
 		// panel labels as the client, and what a checkpoint is bound to.
-		image:  ClientImage{Name: program.Name, Data: program.Code},
-		mapped: uint64(len(program.Code)),
-		entry:  program.Entries.Start,
-		clet:   &cletState{program: program},
+		image: ClientImage{Name: program.Name, Data: program.Code},
+		clet:  &cletState{program: program},
 	}
+	engine.Hooks = client.clientHooks()
 	return client, nil
 }
 
@@ -154,7 +154,7 @@ func (program CletProgram) validate() error {
 	if uint64(program.DataAddress) < codeEnd || len(program.Data)+int(program.BSSSize) == 0 {
 		return fmt.Errorf("Clet %q data at %#x overlaps its code or is empty", program.Name, program.DataAddress)
 	}
-	if uint64(len(program.Data))+uint64(program.BSSSize) > maxCletDataBSS || dataEnd > uint64(ThreadStackBase) {
+	if uint64(len(program.Data))+uint64(program.BSSSize) > maxCletDataBSS || dataEnd > uint64(wipicrt.ThreadStackBase) {
 		return fmt.Errorf("Clet %q data and BSS of %d bytes at %#x do not fit below the stack", program.Name, uint64(len(program.Data))+uint64(program.BSSSize), program.DataAddress)
 	}
 	if program.RootSlot%4 != 0 || program.RootSlot < program.DataAddress || uint64(program.RootSlot)+4 > uint64(program.DataAddress)+uint64(len(program.Data)) {
@@ -186,23 +186,23 @@ func newCletSessionClient(program CletProgram, options SessionOptions) (*Client,
 		return nil, err
 	}
 	if options.Debug != nil {
-		options.Debug(client.core)
+		options.Debug(client.Core())
 	}
-	client.clock = options.Clock
-	if client.clock == nil {
-		client.clock = wallClock{}
+	client.Clock = options.Clock
+	if client.Clock == nil {
+		client.Clock = wipicrt.WallClock{}
 	}
 	client.SetSpeed(options.Speed)
 	if options.Width > 0 && options.Height > 0 {
 		client.SetScreen(options.Width, options.Height)
 	}
 	client.SetDiagnostics(options.TraceLimit, options.Logger)
-	client.audio = backend.NewAudioWithClock(options.AudioSink, client.now)
-	client.audio.SetLogger(options.Logger)
-	_ = client.audio.SetPlaybackRate(0, options.Speed)
-	client.frameSink = options.FrameSink
-	client.threadSliceSteps = options.ThreadSliceSteps
-	client.serviceSteps, client.serviceWait = options.ServiceSteps, options.ServiceWait
+	client.Audio = backend.NewAudioWithClock(options.AudioSink, client.Now)
+	client.Audio.SetLogger(options.Logger)
+	_ = client.Audio.SetPlaybackRate(0, options.Speed)
+	client.FrameSink = options.FrameSink
+	client.ThreadSliceSteps = options.ThreadSliceSteps
+	client.ServiceSteps, client.ServiceWait = options.ServiceSteps, options.ServiceWait
 	client.SetProgramName(program.ProgramName)
 	client.authentication = program.Authentication
 	client.AttachResources(program.Resources)
@@ -210,7 +210,7 @@ func newCletSessionClient(program CletProgram, options SessionOptions) (*Client,
 	if options.SaveStore != nil {
 		client.AttachSaveStore(options.SaveStore)
 	} else if options.SaveRoot != "" && program.SaveOwner != "" {
-		client.AttachSaveStore(NewDirectorySaveStore(filepath.Join(options.SaveRoot, program.SaveOwner)))
+		client.AttachSaveStore(wipicrt.NewDirectorySaveStore(filepath.Join(options.SaveRoot, program.SaveOwner)))
 	}
 	return client, nil
 }
@@ -233,11 +233,12 @@ func (client *Client) prepareClet() error {
 	}
 	var word [4]byte
 	binary.LittleEndian.PutUint32(word[:], root)
-	if err := client.core.Memory().Write(client.clet.program.RootSlot, word[:]); err != nil {
+	if err := client.Core().Memory().Write(client.clet.program.RootSlot, word[:]); err != nil {
 		return fmt.Errorf("write Clet root table: %w", err)
 	}
 	client.clet.root = root
-	client.prepared, client.runtime, client.initializationStarted = runtime, runtime, true
+	client.setRuntimes(runtime, runtime)
+	client.initializationStarted = true
 	return nil
 }
 
@@ -250,19 +251,19 @@ func (runtime *initializationRuntime) makeCletRoot() (uint32, error) {
 	for slot := range roots {
 		entries := make([]uint32, cletTableFunctions)
 		for function := range entries {
-			stub, err := runtime.stub(svcCategoryClet, uint32(slot)<<16|uint32(function))
+			stub, err := runtime.Stub(svcCategoryClet, uint32(slot)<<16|uint32(function))
 			if err != nil {
 				return 0, err
 			}
 			entries[function] = stub
 		}
-		table, err := runtime.allocateWords(entries)
+		table, err := runtime.AllocateWords(entries)
 		if err != nil {
 			return 0, err
 		}
 		roots[slot] = table
 	}
-	return runtime.allocateWords(roots)
+	return runtime.AllocateWords(roots)
 }
 
 // callClet runs one entry on the client thread under a Host service scope,
@@ -273,17 +274,17 @@ func (client *Client) callClet(ctx context.Context, entry uint32, arguments ...u
 		return nil
 	}
 	runtime := client.runtime
-	defer client.beginHostService(ctx)()
-	previousThread, previousContext := runtime.currentThread, runtime.currentContext
-	runtime.currentThread, runtime.currentContext = client.thread, ctx
+	defer client.BeginHostService(ctx)()
+	previousThread, previousContext := runtime.CurrentThread, runtime.CurrentContext
+	runtime.CurrentThread, runtime.CurrentContext = client.Thread, ctx
 	defer func() {
-		runtime.currentThread, runtime.currentContext = previousThread, previousContext
+		runtime.CurrentThread, runtime.CurrentContext = previousThread, previousContext
 	}()
-	run, err := client.core.Call(ctx, client.thread, entry, ReturnAddress, arguments, runtime.handleSupervisorCall)
+	run, err := client.Core().Call(ctx, client.Thread, entry, wipicrt.ReturnAddress, arguments, runtime.handleSupervisorCall)
 	if err != nil {
-		if fault, isFault := guestFault(err); isFault {
-			if report := runtime.describeGuestFault(run.Context, fault); report != "" {
-				runtime.countDiagnostic("guest fault " + report)
+		if fault, isFault := runtime.GuestFault(err); isFault {
+			if report := runtime.DescribeGuestFault(run.Context, fault); report != "" {
+				runtime.CountDiagnostic("guest fault " + report)
 				return fmt.Errorf("Clet entry %#x: %w: %s", entry, err, report)
 			}
 		}
@@ -300,19 +301,19 @@ func (client *Client) startClet(ctx context.Context) error {
 	if err := client.prepareClet(); err != nil {
 		return err
 	}
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	return client.callClet(ctx, client.clet.program.Entries.Start, 0, 0)
 }
 
 // cletLifecycle runs the pause, resume or destroy entry. A program without the
 // entry has nothing to call. Destroy is one-way, like destroyApp for a Jlet.
 func (client *Client) cletLifecycle(ctx context.Context, entry uint32, destroy bool) error {
-	if client == nil || client.core == nil || client.thread == nil {
+	if client == nil || client.Core() == nil || client.Thread == nil {
 		return fmt.Errorf("SKT Clet client is not initialized")
 	}
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	if client.runtime == nil || client.workersStopped {
 		return nil
 	}
@@ -337,22 +338,22 @@ func (client *Client) sendCletEvent(ctx context.Context, kind, first, second int
 func (client *Client) sendCletKey(ctx context.Context, eventType, key int32) error {
 	var kind int32
 	switch eventType {
-	case KeyPressed:
+	case wipicrt.KeyPressed:
 		kind = CletEventKeyPressed
-	case KeyReleased:
+	case wipicrt.KeyReleased:
 		kind = CletEventKeyReleased
 	default:
 		return nil
 	}
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	if client.runtime == nil {
 		return fmt.Errorf("SKT Clet client initialization has not completed")
 	}
 	if kind == CletEventKeyPressed {
 		// A press the player made can bring a field up; see
 		// cInputState.unreached.
-		client.runtime.cInput.unreached = false
+		client.runtime.CInput.Unreached = false
 	}
 	return client.sendCletEvent(ctx, kind, key, 0)
 }
@@ -362,23 +363,23 @@ func (client *Client) sendCletKey(ctx context.Context, eventType, key int32) err
 // two parameters the program posted. A handler that posts again queues for the
 // next round.
 func (client *Client) serviceCletEvents(ctx context.Context) (int, error) {
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	runtime := client.runtime
-	if runtime == nil || len(runtime.events) == 0 {
+	if runtime == nil || len(runtime.Events) == 0 {
 		return 0, nil
 	}
 	delivered := 0
-	for waiting := len(runtime.events); waiting > 0; waiting-- {
-		event, ok := runtime.nextGuestEvent()
+	for waiting := len(runtime.Events); waiting > 0; waiting-- {
+		event, ok := runtime.NextGuestEvent()
 		if !ok {
 			break
 		}
 		delivered++
-		if event.kind != eventKindNotify {
+		if event.Kind != wipicrt.EventKindNotify {
 			continue
 		}
-		if err := client.sendCletEvent(ctx, event.param1, event.param2, event.param3); err != nil {
+		if err := client.sendCletEvent(ctx, event.Param1, event.Param2, event.Param3); err != nil {
 			return delivered, err
 		}
 	}
@@ -390,13 +391,13 @@ func (client *Client) serviceCletEvents(ctx context.Context) (int, error) {
 // frames come from their timers — but the entry is the specification's answer
 // to MC_grpRepaint and a title that does draw there needs it.
 func (client *Client) serviceCletPaint(ctx context.Context) (bool, error) {
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	if client.runtime == nil || !client.clet.repaint {
 		return false, nil
 	}
 	client.clet.repaint = false
-	width, height := client.screenSize()
+	width, height := client.ScreenSize()
 	if err := client.callClet(ctx, client.clet.program.Entries.Paint, 0, 0, uint32(width), uint32(height)); err != nil {
 		return true, err
 	}
@@ -410,45 +411,45 @@ func (client *Client) serviceCletPaint(ctx context.Context) (bool, error) {
 func (session *Session) tickClet(ctx context.Context) (bool, error) {
 	timerLimit := session.options.TimerLimit
 	if timerLimit <= 0 {
-		timerLimit = sessionDefaultTimerLimit
+		timerLimit = wipicrt.SessionDefaultTimerLimit
 	}
 	client := session.Client
-	client.costs.Rounds++
+	client.Costs.Rounds++
 
-	phase := client.phaseClock()
+	phase := client.PhaseClock()
 	ranTimers, err := client.ServiceTimers(ctx, timerLimit)
-	client.sincePhase(phase, &client.costs.Timers)
+	client.SincePhase(phase, &client.Costs.Timers)
 	if err != nil {
-		client.log("Clet timer service failed", "error", err)
+		client.Log("Clet timer service failed", "error", err)
 		return ranTimers > 0, err
 	}
 
-	phase = client.phaseClock()
+	phase = client.PhaseClock()
 	ranEvents, err := client.serviceCletEvents(ctx)
-	client.sincePhase(phase, &client.costs.Events)
+	client.SincePhase(phase, &client.Costs.Events)
 	if err != nil {
-		client.log("Clet event service failed", "error", err)
+		client.Log("Clet event service failed", "error", err)
 		return ranTimers+ranEvents > 0, err
 	}
 
-	phase = client.phaseClock()
+	phase = client.PhaseClock()
 	painted, err := client.serviceCletPaint(ctx)
-	client.sincePhase(phase, &client.costs.Paint)
+	client.SincePhase(phase, &client.Costs.Paint)
 	if err != nil {
-		client.log("Clet paint failed", "error", err)
+		client.Log("Clet paint failed", "error", err)
 		return true, err
 	}
 
-	phase = client.phaseClock()
+	phase = client.PhaseClock()
 	cheatErr := session.serviceCheat()
-	client.sincePhase(phase, &client.costs.Cheat)
+	client.SincePhase(phase, &client.Costs.Cheat)
 	if cheatErr != nil {
 		return true, cheatErr
 	}
 
-	phase = client.phaseClock()
-	audioErr := client.serviceAudio()
-	client.sincePhase(phase, &client.costs.Audio)
+	phase = client.PhaseClock()
+	audioErr := client.ServiceAudio()
+	client.SincePhase(phase, &client.Costs.Audio)
 	if audioErr != nil {
 		return true, audioErr
 	}
@@ -461,18 +462,18 @@ func StartCletSession(ctx context.Context, program CletProgram, options SessionO
 	if err != nil {
 		return nil, err
 	}
-	client.log("Clet session loading", "program", program.Name, "max_steps", client.core.MaxSteps())
+	client.Log("Clet session loading", "program", program.Name, "max_steps", client.Core().MaxSteps())
 	failed := func(err error) (*Session, error) {
 		return nil, &StartFailure{Err: err, Diagnostics: (&Session{Client: client}).Diagnostics()}
 	}
 	if err := client.startClet(ctx); err != nil {
-		client.log("Clet start failed", "error", err)
+		client.Log("Clet start failed", "error", err)
 		if errors.Is(err, ErrGuestExited) {
 			return nil, err
 		}
 		return failed(fmt.Errorf("start Clet %s: %w", program.Name, err))
 	}
-	client.log("Clet started", "program", program.Name)
+	client.Log("Clet started", "program", program.Name)
 	return &Session{Client: client, options: options, archiveIdentity: program.Identity}, nil
 }
 
@@ -486,7 +487,7 @@ func (runtime *initializationRuntime) handleCletSemihosting(thread *armcore.Thre
 	if err != nil {
 		return 0, err
 	}
-	runtime.countDiagnostic(fmt.Sprintf("Clet semihosting operation %#x", operation))
+	runtime.CountDiagnostic(fmt.Sprintf("Clet semihosting operation %#x", operation))
 	switch operation {
 	case semihostingWriteCharacter, semihostingWriteString:
 		return 0, nil

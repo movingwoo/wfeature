@@ -63,7 +63,7 @@ func TestLocalDisassembleProbe(t *testing.T) {
 		// The tail covers the instruction the profile's last sample started
 		// on, plus enough of what follows to show where the loop returns to.
 		buffer := make([]byte, high-low+16)
-		if err := client.core.Memory().Read(low, buffer); err != nil {
+		if err := client.Core().Memory().Read(low, buffer); err != nil {
 			t.Fatalf("read %s: %v", spec, err)
 		}
 		fmt.Printf("%#x %s\n", low, hex.EncodeToString(buffer))

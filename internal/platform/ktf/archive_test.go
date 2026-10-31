@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestOpenKTFArchive(t *testing.T) {
@@ -46,7 +47,7 @@ func TestSyntheticClientRunsFromArchiveThroughSVC(t *testing.T) {
 	}
 
 	bss := make([]byte, archive.JAR.Client.BSSSize)
-	if err := client.Core().Memory().Read(ImageBase+uint32(len(archive.JAR.Client.Data)), bss); err != nil {
+	if err := client.Core().Memory().Read(wipicrt.ImageBase+uint32(len(archive.JAR.Client.Data)), bss); err != nil {
 		t.Fatalf("read BSS: %v", err)
 	}
 	if !bytes.Equal(bss, make([]byte, len(bss))) {
@@ -56,14 +57,14 @@ func TestSyntheticClientRunsFromArchiveThroughSVC(t *testing.T) {
 	var calls int
 	summary, err := client.ExecuteEntry(context.Background(), func(_ context.Context, thread *armcore.Thread, call armcore.SupervisorCall) error {
 		calls++
-		if call.Immediate != 0x2a || call.Address != ImageBase+4 || call.ResumePC != ImageBase+6 {
+		if call.Immediate != 0x2a || call.Address != wipicrt.ImageBase+4 || call.ResumePC != wipicrt.ImageBase+6 {
 			t.Fatalf("supervisor call = %+v", call)
 		}
 		registers := thread.Context().Registers
 		if registers[0] != 17 {
 			t.Fatalf("entry r0 at SVC = %d, want BSS size + 1", registers[0])
 		}
-		if registers[armcore.RegisterSP] != ThreadStackBase+uint32(ThreadStackSize)-4 {
+		if registers[armcore.RegisterSP] != wipicrt.ThreadStackBase+uint32(wipicrt.ThreadStackSize)-4 {
 			t.Fatalf("entry sp at SVC = %#x", registers[armcore.RegisterSP])
 		}
 		return thread.SetRegister(0, 40)

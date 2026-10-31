@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestCameraBoundsStorePreservesRegistersFlagsAndNeighbors(t *testing.T) {
 	for _, value := range []int32{-2147483648, -16, -1, 0, 1, 900, 2147483647} {
 		client, runtime := newHookRuntime(t)
 		original := bytes.Repeat([]byte{0x5a}, 128)
-		if err := client.core.Memory().Write(hookScratch, original); err != nil {
+		if err := client.Core().Memory().Write(hookScratch, original); err != nil {
 			t.Fatal(err)
 		}
 		runtime.cameraBoundsStore = cameraBoundsStore
@@ -43,7 +44,7 @@ func TestCameraBoundsStopsOscillationAndPreservesTallMaps(t *testing.T) {
 	for _, corrected := range []bool{false, true} {
 		for _, height := range []uint32{304, 320, 640} {
 			client, runtime := newHookRuntime(t)
-			address := uint32(runtime.codeCursor)
+			address := uint32(runtime.CodeCursor)
 			words := []uint16{0x2a00, 0xdb05, 0x6e03, 0x1a5b, 0x429a, 0xdc02, 0x4613, 0xe000, 0x2300, 0x6743, 0x4770}
 			if corrected {
 				words[9] = 0xdf00 | uint16(svcCategoryCameraBounds)
@@ -53,12 +54,12 @@ func TestCameraBoundsStopsOscillationAndPreservesTallMaps(t *testing.T) {
 			for i, word := range words {
 				binary.LittleEndian.PutUint16(code[i*2:], word)
 			}
-			if err := client.core.Memory().Load(address, code); err != nil {
+			if err := client.Core().Memory().Load(address, code); err != nil {
 				t.Fatal(err)
 			}
 			var word [4]byte
 			binary.LittleEndian.PutUint32(word[:], height)
-			if err := client.core.Memory().Write(hookScratch+0x60, word[:]); err != nil {
+			if err := client.Core().Memory().Write(hookScratch+0x60, word[:]); err != nil {
 				t.Fatal(err)
 			}
 			var y int32
@@ -73,7 +74,7 @@ func TestCameraBoundsStopsOscillationAndPreservesTallMaps(t *testing.T) {
 				if corrected {
 					want = max(want, 0)
 				}
-				if _, err := client.core.Call(t.Context(), client.thread, address|1, ReturnAddress, []uint32{hookScratch, 320, uint32(candidate)}, runtime.handleSupervisorCall); err != nil {
+				if _, err := client.Core().Call(t.Context(), client.Thread, address|1, wipicrt.ReturnAddress, []uint32{hookScratch, 320, uint32(candidate)}, runtime.handleSupervisorCall); err != nil {
 					t.Fatal(err)
 				}
 				y = int32(binary.LittleEndian.Uint32(readScratch(t, client, hookScratch+0x74, 4)))
@@ -94,20 +95,20 @@ func TestCameraBoundsRejectsUnknownImagesCallsAndInvalidMemory(t *testing.T) {
 		t.Fatal("unknown executable received a compatibility patch")
 	}
 	call := armcore.SupervisorCall{Address: cameraBoundsStore, ResumePC: cameraBoundsStore + 2}
-	if err := runtime.storeCameraBounds(client.thread, call); err == nil {
+	if err := runtime.storeCameraBounds(client.Thread, call); err == nil {
 		t.Fatal("uninstalled compatibility call accepted")
 	}
 	runtime.cameraBoundsStore = cameraBoundsStore
 	wrong := call
 	wrong.Address += 2
-	if err := runtime.storeCameraBounds(client.thread, wrong); err == nil {
+	if err := runtime.storeCameraBounds(client.Thread, wrong); err == nil {
 		t.Fatal("call from another instruction accepted")
 	}
 	for _, base := range []uint32{0xfffffff0, 0} {
-		if err := client.thread.SetRegister(0, base); err != nil {
+		if err := client.Thread.SetRegister(0, base); err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.storeCameraBounds(client.thread, call); err == nil {
+		if err := runtime.storeCameraBounds(client.Thread, call); err == nil {
 			t.Fatalf("invalid camera address %#x accepted", base)
 		}
 	}

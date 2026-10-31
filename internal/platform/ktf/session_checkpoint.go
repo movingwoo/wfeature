@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 var ErrCheckpointBusy = errors.New("KTF checkpoint requires an idle session boundary")
@@ -24,7 +25,7 @@ type sessionCheckpointState struct {
 
 func checkpointTimerLimit(options SessionOptions) int {
 	if options.TimerLimit <= 0 {
-		return sessionDefaultTimerLimit
+		return wipicrt.SessionDefaultTimerLimit
 	}
 	return options.TimerLimit
 }
@@ -65,11 +66,11 @@ func (session *Session) CaptureCheckpointWithSession(ctx context.Context, captur
 		return backend.Checkpoint{}, fmt.Errorf("KTF checkpoint cannot capture active cheat freezes or patches")
 	}
 	client := session.Client
-	if !client.run.TryLock() {
+	if !client.Run.TryLock() {
 		return backend.Checkpoint{}, ErrCheckpointBusy
 	}
-	defer client.run.Unlock()
-	now := client.now()
+	defer client.Run.Unlock()
+	now := client.Now()
 	var shared []byte
 	if captureSession != nil {
 		var err error
@@ -82,7 +83,7 @@ func (session *Session) CaptureCheckpointWithSession(ctx context.Context, captur
 	// it, and an owner Go has collected cannot be named in the record. The
 	// capture prunes what the next round would, rather than refusing.
 	if client.runtime != nil {
-		client.runtime.collectHostResources()
+		client.runtime.collectHostObjects()
 		// A File's position and the store have to agree in the record.
 		client.runtime.storeHeldGuestFiles()
 	}
@@ -90,7 +91,7 @@ func (session *Session) CaptureCheckpointWithSession(ctx context.Context, captur
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
-	adapters, base, err := captureSaveAdapters(client.saveStore)
+	adapters, base, err := captureSaveAdapters(client.SaveStore)
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
@@ -237,7 +238,7 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 			return nil, backend.ErrCheckpointIdentity
 		}
 		old = previous.Client
-		if !old.run.TryLock() {
+		if !old.Run.TryLock() {
 			return nil, ErrCheckpointBusy
 		}
 	}
@@ -248,7 +249,7 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 	unlock := func() {
 		if locked {
 			locked = false
-			old.run.Unlock()
+			old.Run.Unlock()
 		}
 	}
 	defer unlock()
@@ -268,15 +269,15 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 	if err != nil {
 		// The restored runtime goes back to answering nothing: it is not
 		// adopted, and what is discarded must not hold the saves.
-		client.saveStore = prepared.placeholder
+		client.SaveStore = prepared.placeholder
 		unlock()
 		return nil, err
 	}
 	// Nothing after this point can fail.
 	client.runtime.restoredStorage = nil
 	if old != nil {
-		old.saveStore, old.frameSink = rebaseSaveAdapters(old.saveStore, sink), backend.FrameSink{}
-		old.audio.SetSink(nil)
+		old.SaveStore, old.FrameSink = rebaseSaveAdapters(old.SaveStore, sink), backend.FrameSink{}
+		old.Audio.SetSink(nil)
 		unlock()
 		old.StopThreads()
 		previous.Client, previous.cheat, previous.cheatConsole = nil, nil, nil
@@ -284,8 +285,8 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 	session := prepared.session
 	session.options.SaveStore, session.options.SaveRoot = live, ""
 	prepared.activation.activate()
-	session.Client.frameSink = session.options.FrameSink
-	session.Client.audio.SetSink(session.options.AudioSink)
+	session.Client.FrameSink = session.options.FrameSink
+	session.Client.Audio.SetSink(session.options.AudioSink)
 	*prepared = PreparedSession{}
 	return session, nil
 }
@@ -294,6 +295,6 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 // output and queues. Construction and adoption themselves stay silent.
 func (session *Session) ResumeCheckpointOutput() {
 	if session != nil && session.Client != nil {
-		session.Client.audio.ResumeOutput()
+		session.Client.Audio.ResumeOutput()
 	}
 }

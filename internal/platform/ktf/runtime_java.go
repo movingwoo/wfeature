@@ -13,8 +13,8 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
-	"github.com/movingwoo/wfeature/internal/glyph"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 const runtimeJletClass = "org/kwis/msp/lcdui/Jlet"
@@ -1532,25 +1532,17 @@ func init() {
 	}
 }
 
-// The handset these games were written for. It is the default rather than the
-// rule: a Host may name another screen, and Client.SetScreen says what that
-// changes and what it does not.
-const (
-	runtimeDisplayPixelWidth  = 240
-	runtimeDisplayPixelHeight = 320
-)
-
 // runtimeScreenWidth and runtimeScreenHeight are the screen the Java surface
 // answers with. They read the same size the WIPI-C surface does, so a game
 // that asks Display and a game that asks MC_grpGetDisplayInfo are told the
 // same thing.
 func runtimeScreenWidth(runtime *initializationRuntime) int32 {
-	width, _ := runtime.screenSize()
+	width, _ := runtime.ScreenSize()
 	return int32(width)
 }
 
 func runtimeScreenHeight(runtime *initializationRuntime) int32 {
-	_, height := runtime.screenSize()
+	_, height := runtime.ScreenSize()
 	return int32(height)
 }
 
@@ -1593,7 +1585,7 @@ func runtimeDisplayCallSerially(runtime *initializationRuntime, _ *jvm.VM, argum
 	if len(runtime.pendingSerial) >= maxPendingThreads {
 		return jvm.VoidValue(), fmt.Errorf("KTF pending serial runnable count exceeds %d", maxPendingThreads)
 	}
-	runtime.countDiagnostic("callSerially " + runnable.ClassName)
+	runtime.CountDiagnostic("callSerially " + runnable.ClassName)
 	runtime.pendingSerial = append(runtime.pendingSerial, runnable)
 	return jvm.VoidValue(), nil
 }
@@ -1612,21 +1604,21 @@ func runtimeDisplayCallSerially(runtime *initializationRuntime, _ *jvm.VM, argum
 // again; see docs/history/ktf.md, "A game action is a subscript, and only one
 // direction of the table knew it", on what a title did with the answer.
 var runtimeDisplayActions = []struct{ action, key int32 }{
-	{1, KeyUp},
-	{2, KeyLeft},
-	{5, KeyRight},
-	{6, KeyDown},
-	{8, KeyFire},
-	{90, KeyLeftSoft},
-	{91, KeyRightSoft},
-	{92, KeyThirdSoft},
-	{96, KeyVolumeUp},
-	{97, KeyVolumeDown},
+	{1, wipicrt.KeyUp},
+	{2, wipicrt.KeyLeft},
+	{5, wipicrt.KeyRight},
+	{6, wipicrt.KeyDown},
+	{8, wipicrt.KeyFire},
+	{90, wipicrt.KeyLeftSoft},
+	{91, wipicrt.KeyRightSoft},
+	{92, wipicrt.KeyThirdSoft},
+	{96, wipicrt.KeyVolumeUp},
+	{97, wipicrt.KeyVolumeDown},
 	// Which key this pair names is not something this project has identified.
 	// It is what the original reverse table answered for 98, and it is kept
 	// so that the two directions stay inverses of each other.
 	{98, -15},
-	{99, KeyClear},
+	{99, wipicrt.KeyClear},
 }
 
 // runtimeDisplayGameAction maps a WIPI key code to its game action with the
@@ -1747,8 +1739,8 @@ func (runtime *initializationRuntime) notifyCardShown(hidden, shown *jvm.Object)
 		// first paint even when a worker exhausts its instruction slice while
 		// waiting for state that paint initializes. This is a display request,
 		// not ownership of the worker's later frame cadence.
-		runtime.repaintPending = true
-		runtime.postRepaintEvent()
+		runtime.RepaintPending = true
+		runtime.PostRepaintEvent()
 	}
 	return nil
 }
@@ -1820,7 +1812,7 @@ func runtimePrintStreamText(runtime *initializationRuntime, _ *jvm.VM, arguments
 	if !ok {
 		return jvm.VoidValue(), nil
 	}
-	runtime.client.guestPrint(line)
+	runtime.client.GuestPrint(line)
 	return jvm.VoidValue(), nil
 }
 
@@ -1846,7 +1838,7 @@ func runtimePrintStreamChars(runtime *initializationRuntime, _ *jvm.VM, argument
 		}
 		units = append(units, uint16(unit))
 	}
-	runtime.client.guestPrint(string(utf16.Decode(units)))
+	runtime.client.GuestPrint(string(utf16.Decode(units)))
 	return jvm.VoidValue(), nil
 }
 
@@ -1871,7 +1863,7 @@ func (runtime *initializationRuntime) traceIdentityComparison(method runtimeJava
 	if err != nil {
 		return
 	}
-	runtime.countDiagnostic(fmt.Sprintf("equals %s vs %s -> %t",
+	runtime.CountDiagnostic(fmt.Sprintf("equals %s vs %s -> %t",
 		describeIdentity(receiver), describeIdentity(other), receiver == other))
 }
 
@@ -1894,10 +1886,10 @@ func (runtime *initializationRuntime) traceStringConversion(method runtimeJavaMe
 		}
 	}
 	if length <= 0 && text != "" {
-		runtime.countDiagnostic(fmt.Sprintf("getBytes empty for %q (%d chars)", text, len([]rune(text))))
+		runtime.CountDiagnostic(fmt.Sprintf("getBytes empty for %q (%d chars)", text, len([]rune(text))))
 		return
 	}
-	runtime.countDiagnostic(fmt.Sprintf("getBytes %d chars -> %d bytes", len([]rune(text)), length))
+	runtime.CountDiagnostic(fmt.Sprintf("getBytes %d chars -> %d bytes", len([]rune(text)), length))
 }
 
 // describeIdentity names one operand of an identity comparison: its class, the
@@ -1985,7 +1977,7 @@ func runtimeThreadJoin(runtime *initializationRuntime, vm *jvm.VM, arguments []j
 	}
 	for vm.GuestThreadAlive(thread) {
 		if runtime.client.activeWorker == nil {
-			runtime.countDiagnostic("Thread.join on the client thread returned at once")
+			runtime.CountDiagnostic("Thread.join on the client thread returned at once")
 			return jvm.VoidValue(), nil
 		}
 		if err := runtime.sleepCurrentWorker(waitSliceWithoutTimeout); err != nil {
@@ -2083,11 +2075,11 @@ func runtimeComponentZero(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (j
 // same heap MC_knlGetTotalMemory and MC_knlGetFreeMemory describe, through the
 // one bounded view in arena.go.
 func runtimeTotalMemory(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.LongValue(int64(runtime.arena.reportedTotal())), nil
+	return jvm.LongValue(int64(runtime.Arena.ReportedTotal())), nil
 }
 
 func runtimeFreeMemory(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.LongValue(int64(runtime.arena.reportedFree())), nil
+	return jvm.LongValue(int64(runtime.Arena.ReportedFree())), nil
 }
 
 func runtimeImageCreateSized(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -2105,18 +2097,18 @@ func runtimeImageCreateSized(runtime *initializationRuntime, _ *jvm.VM, argument
 	// The size a picture may be is bounded by what it costs rather than by its
 	// sides; newWIPICFramebufferRecord holds that bound and this one only keeps
 	// a negative or absurd argument out of it.
-	if width <= 0 || height <= 0 || width > maxWIPICFramebufferSide || height > maxWIPICFramebufferSide {
+	if width <= 0 || height <= 0 || width > wipicrt.MaxWIPICFramebufferSide || height > wipicrt.MaxWIPICFramebufferSide {
 		return jvm.VoidValue(), fmt.Errorf("Image.createImage size %dx%d is out of range", width, height)
 	}
 	// Mutable images back their pixels with a guest offscreen framebuffer so
 	// Image.getGraphics drawing and Graphics.drawImage blitting share the
 	// WIPI C pixel path. MIDP mutable images start out white.
-	handle, err := runtime.newWIPICFramebufferRecord(uint32(width), uint32(height))
+	handle, err := runtime.NewWIPICFramebufferRecord(uint32(width), uint32(height))
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if err := runtime.fillWIPICFramebuffer(handle, 0xffff); err != nil {
-		runtime.destroyWIPICFramebufferRecord(handle)
+	if err := runtime.FillWIPICFramebuffer(handle, 0xffff); err != nil {
+		runtime.DestroyWIPICFramebufferRecord(handle)
 		return jvm.VoidValue(), err
 	}
 	image := &jvm.Object{ClassName: "org/kwis/msp/lcdui/Image", Fields: map[string]jvm.Value{
@@ -2145,9 +2137,9 @@ func (runtime *initializationRuntime) trackImageSurface(image *jvm.Object, handl
 // runtimeImageFromEncoded decodes encoded image bytes into an Image object
 // carrying its dimensions and decoded pixels.
 func runtimeImageFromEncoded(runtime *initializationRuntime, data []byte) (jvm.Value, error) {
-	decoded, err := decodeGuestImage(data)
+	decoded, err := wipicrt.DecodeGuestImage(data)
 	if err != nil {
-		runtime.countDiagnostic(fmt.Sprintf("java image decode error %v len=%d", err, len(data)))
+		runtime.CountDiagnostic(fmt.Sprintf("java image decode error %v len=%d", err, len(data)))
 		return jvm.VoidValue(), &jvm.GuestException{
 			Object:  &jvm.Object{ClassName: "java/lang/IllegalArgumentException", Native: "undecodable image"},
 			Message: "undecodable image",
@@ -2203,7 +2195,7 @@ func runtimeImageCreateFromResource(runtime *initializationRuntime, _ *jvm.VM, a
 	if !ok {
 		return jvm.VoidValue(), fmt.Errorf("Image.createImage name is not a string")
 	}
-	data, exists := runtime.client.resources[strings.TrimPrefix(name, "/")]
+	data, exists := runtime.client.Resources[strings.TrimPrefix(name, "/")]
 	if !exists {
 		return jvm.VoidValue(), &jvm.GuestException{
 			Object:  &jvm.Object{ClassName: "java/io/IOException", Native: "image not found: " + name},
@@ -2234,14 +2226,14 @@ func runtimeImageGetGraphics(runtime *initializationRuntime, _ *jvm.VM, argument
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
-		target, err := runtime.readWIPICFramebuffer(uint32(handle))
+		target, err := runtime.ReadWIPICFramebuffer(uint32(handle))
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
 		graphics.Native = &runtimeGraphicsState{
 			target:     target,
-			clipWidth:  int32(target.width),
-			clipHeight: int32(target.height),
+			clipWidth:  int32(target.Width),
+			clipHeight: int32(target.Height),
 		}
 	}
 	return jvm.ReferenceValue(graphics), nil
@@ -2290,28 +2282,6 @@ func runtimeClipSetStopTime(_ *initializationRuntime, _ *jvm.VM, arguments []jvm
 // constant remains only as the fallback estimate for text that never reaches a
 // renderer.
 const runtimeFontGlyphAdvance = 6
-
-// fontFace is the pixel face every KTF game's text is drawn and measured with.
-//
-// It is one face for the whole library rather than one per screen size. The
-// screen size the descriptor declares looked like the answer — half these
-// archives say 176x220 and half say 240x320 — but it is not: a 240x320 title
-// that lays a save slot out as "레벨" and a number in columns runs the label
-// into the number and out of the box when its text is drawn at 16, and the
-// same title is correct at the smaller size. A game reads its own layout out
-// of the font's metrics, and the metrics these games were written against are
-// the small ones whatever screen they declare.
-func (runtime *initializationRuntime) fontFace() *glyph.Face {
-	return glyph.Handset()
-}
-
-func (runtime *initializationRuntime) fontHeight() int32 {
-	return int32(runtime.fontFace().Height())
-}
-
-func (runtime *initializationRuntime) fontBaseline() int32 {
-	return int32(runtime.fontFace().Ascent)
-}
 
 func runtimeGraphicsGetFont(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if len(arguments) != 1 {
@@ -2465,7 +2435,7 @@ func runtimeFontCharsWidth(runtime *initializationRuntime, _ *jvm.VM, arguments 
 		}
 		text = append(text, rune(character))
 	}
-	return jvm.IntValue(runtime.graphicsTextWidth(text)), nil
+	return jvm.IntValue(runtime.GraphicsTextWidth(text)), nil
 }
 
 // runtimeFontSubstringWidth measures part of a string with the renderer's own
@@ -2491,15 +2461,15 @@ func runtimeFontSubstringWidth(runtime *initializationRuntime, _ *jvm.VM, argume
 	if offset < 0 || length < 0 || int64(offset)+int64(length) > int64(len(text)) {
 		return jvm.VoidValue(), fmt.Errorf("Font.substringWidth range [%d, %d) is out of bounds", offset, offset+length)
 	}
-	return jvm.IntValue(runtime.graphicsTextWidth(text[offset : offset+length])), nil
+	return jvm.IntValue(runtime.GraphicsTextWidth(text[offset : offset+length])), nil
 }
 
 func runtimeFontHeight(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(runtime.fontHeight()), nil
+	return jvm.IntValue(runtime.FontHeight()), nil
 }
 
 func runtimeFontBaseline(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(runtime.fontBaseline()), nil
+	return jvm.IntValue(runtime.FontBaseline()), nil
 }
 
 func runtimeFontStringWidth(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -2511,13 +2481,13 @@ func runtimeFontStringWidth(runtime *initializationRuntime, _ *jvm.VM, arguments
 		return jvm.VoidValue(), err
 	}
 	value, _ := jvm.StringText(text)
-	return jvm.IntValue(runtime.graphicsTextWidth([]rune(value))), nil
+	return jvm.IntValue(runtime.GraphicsTextWidth([]rune(value))), nil
 }
 
 func runtimeFontCharWidth(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if len(arguments) == 2 {
 		if character, err := arguments[1].Int32(); err == nil {
-			return jvm.IntValue(runtime.graphicsCharAdvance(rune(character))), nil
+			return jvm.IntValue(runtime.GraphicsCharAdvance(rune(character))), nil
 		}
 	}
 	return jvm.IntValue(runtimeFontGlyphAdvance), nil
@@ -2623,8 +2593,8 @@ func runtimeClassGetResourceAsStream(runtime *initializationRuntime, vm *jvm.VM,
 	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/") {
 		return jvm.ReferenceValue(nil), nil
 	}
-	data, ok := runtime.client.resources[cleaned]
-	runtime.countDiagnostic(fmt.Sprintf("stream %s found=%t", cleaned, ok))
+	data, ok := runtime.client.Resources[cleaned]
+	runtime.CountDiagnostic(fmt.Sprintf("stream %s found=%t", cleaned, ok))
 	if !ok {
 		return jvm.ReferenceValue(nil), nil
 	}
@@ -2668,7 +2638,7 @@ func (store *runtimeDataBaseStore) persist(runtime *initializationRuntime) error
 	// Writing a database brings it back, exactly as writing a guest file does
 	// (storeGuestFile). A title holding a handle across its own delete would
 	// otherwise write records to a key the deletion list hides for ever.
-	return runtime.saveChanges(map[string][]byte{"jdb/" + store.name: encodeSaveRecords(store.records)}, javaDatabaseRemovedKey, runtime.recordDatabaseRemovals(javaDatabaseRemovedKey), map[string]bool{store.name: false})
+	return runtime.SaveChanges(map[string][]byte{"jdb/" + store.name: wipicrt.EncodeSaveRecords(store.records)}, javaDatabaseRemovedKey, runtime.recordDatabaseRemovals(javaDatabaseRemovedKey), map[string]bool{store.name: false})
 }
 
 const maxDataBaseRecords = 1 << 16
@@ -2714,7 +2684,7 @@ const (
 // packaged copy, and the release notes say so.
 func (runtime *initializationRuntime) resolveJavaDatabase(name string, recordSize uint32) ([][]byte, storageSource, error) {
 	deleted := runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
-	saved, present, err := backend.ReadSave(runtime.client.saveStore, "jdb/"+name)
+	saved, present, err := backend.ReadSave(runtime.client.SaveStore, "jdb/"+name)
 	if err != nil {
 		return nil, storageAbsent, err
 	}
@@ -2722,7 +2692,7 @@ func (runtime *initializationRuntime) resolveJavaDatabase(name string, recordSiz
 		present = false
 	}
 	if present {
-		records, err := decodeSaveRecords(saved)
+		records, err := wipicrt.DecodeSaveRecords(saved)
 		if err != nil {
 			return nil, storageAbsent, fmt.Errorf("corrupt database %s: %v", name, err)
 		}
@@ -2730,7 +2700,7 @@ func (runtime *initializationRuntime) resolveJavaDatabase(name string, recordSiz
 	}
 	if !runtime.databaseDeleted(name) {
 		if records, packaged := runtime.packagedRecordDatabase(name, recordSize); packaged {
-			runtime.countDiagnostic(fmt.Sprintf("jdb packaged %s records %d", name, len(records)))
+			runtime.CountDiagnostic(fmt.Sprintf("jdb packaged %s records %d", name, len(records)))
 			return records, storagePackaged, nil
 		}
 	}
@@ -2770,7 +2740,7 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if !storableName(javaDatabaseScope, name) {
+	if !wipicrt.StorableName(wipicrt.JavaDatabaseScope, name) {
 		return jvm.VoidValue(), runtimeDataBaseException("database name cannot be stored: " + name)
 	}
 	if create != 0 && recordSize <= 0 {
@@ -2787,7 +2757,7 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 			return jvm.VoidValue(), runtimeDataBaseException(resolveErr.Error())
 		}
 		if source == storageAbsent && create == 0 {
-			runtime.countDiagnostic("jdb absent " + name)
+			runtime.CountDiagnostic("jdb absent " + name)
 			return jvm.VoidValue(), runtimeDataBaseException("database not found: " + name)
 		}
 		// A store left without a database, by a quick load or by a delete,
@@ -2823,7 +2793,7 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 		// object keeps the size, and a later open writes it again.
 		if source == storageAbsent || runtime.javaDatabaseSizes()[name] == 0 && recordSize > 0 {
 			if err := runtime.setJavaDatabaseSize(name, recordSize); err != nil {
-				runtime.countDiagnostic(fmt.Sprintf("jdb size %s: %v", name, err))
+				runtime.CountDiagnostic(fmt.Sprintf("jdb size %s: %v", name, err))
 			}
 		}
 		store.recordSize = runtime.javaDatabaseSizes()[name]
@@ -2832,7 +2802,7 @@ func runtimeOpenDataBase(runtime *initializationRuntime, _ *jvm.VM, arguments []
 		}
 	}
 	if store.modified == 0 {
-		store.modified = runtime.recordedMillis()
+		store.modified = runtime.RecordedMillis()
 	}
 	database := &jvm.Object{
 		ClassName: "org/kwis/msp/db/DataBase",
@@ -3024,7 +2994,7 @@ func (runtime *initializationRuntime) storeDatabaseRecords(store, staged *runtim
 		return runtimeDataBaseException(err.Error())
 	}
 	store.records = staged.records
-	store.modified = runtime.recordedMillis()
+	store.modified = runtime.RecordedMillis()
 	runtime.bindDetachedDatabase(store)
 	return nil
 }
@@ -3069,8 +3039,8 @@ func runtimeGetSystemProperty(runtime *initializationRuntime, _ *jvm.VM, argumen
 	value := ""
 	if name != nil {
 		if text, ok := jvm.StringText(name); ok {
-			runtime.countDiagnostic("sysprop " + text)
-			value, _ = runtime.client.systemProperty(text)
+			runtime.CountDiagnostic("sysprop " + text)
+			value, _ = runtime.client.SystemProperty(text)
 		}
 	}
 	return jvm.ReferenceValue(runtime.client.vm.NewString(value)), nil
@@ -3096,11 +3066,11 @@ func runtimeSystemGetProperty(runtime *initializationRuntime, vm *jvm.VM, argume
 	if !ok {
 		return jvm.ReferenceValue(nil), nil
 	}
-	runtime.countDiagnostic("sysprop " + text)
+	runtime.CountDiagnostic("sysprop " + text)
 	if value, known := runtimeSystemPropertyTable[text]; known {
 		return jvm.ReferenceValue(vm.NewString(value)), nil
 	}
-	if value, known := runtime.client.systemProperty(text); known {
+	if value, known := runtime.client.SystemProperty(text); known {
 		return jvm.ReferenceValue(vm.NewString(value)), nil
 	}
 	return jvm.ReferenceValue(nil), nil
@@ -3301,10 +3271,10 @@ func runtimeCardRepaint(runtime *initializationRuntime, _ *jvm.VM, arguments []j
 			owner.card = card
 		}
 	}
-	runtime.repaintPending = true
+	runtime.RepaintPending = true
 	// A game driving its own event loop is waiting in getNextEvent, so the
 	// repaint request has to reach it as an event too.
-	runtime.postRepaintEvent()
+	runtime.PostRepaintEvent()
 	return jvm.VoidValue(), nil
 }
 
@@ -3336,12 +3306,12 @@ func runtimeCardServiceRepaints(runtime *initializationRuntime, vm *jvm.VM, argu
 	if !runtime.cardIsShown(receiver) {
 		return jvm.VoidValue(), nil
 	}
-	if !runtime.repaintPending || runtime.repaintServicing {
+	if !runtime.RepaintPending || runtime.RepaintServicing {
 		return jvm.VoidValue(), nil
 	}
-	runtime.repaintPending = false
-	runtime.repaintServicing = true
-	defer func() { runtime.repaintServicing = false }()
+	runtime.RepaintPending = false
+	runtime.RepaintServicing = true
+	defer func() { runtime.RepaintServicing = false }()
 	graphics, err := runtime.newScreenGraphics()
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -3349,7 +3319,7 @@ func runtimeCardServiceRepaints(runtime *initializationRuntime, vm *jvm.VM, argu
 	if err := runtime.ensureResultBound(graphics); err != nil {
 		return jvm.VoidValue(), err
 	}
-	finish, err := runtime.beginCardPaint()
+	finish, err := runtime.BeginCardPaint()
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -3408,12 +3378,12 @@ func (runtime *initializationRuntime) registerRuntimeJavaNatives() error {
 				continue
 			}
 			if err := runtime.client.vm.RegisterNative(method.class, method.name, method.descriptor, func(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-				if runtime.saveReadError != nil {
-					return jvm.VoidValue(), runtime.saveReadError
+				if runtime.SaveReadError != nil {
+					return jvm.VoidValue(), runtime.SaveReadError
 				}
 				value, err := implementation(runtime, vm, arguments)
-				if runtime.saveReadError != nil {
-					return jvm.VoidValue(), runtime.saveReadError
+				if runtime.SaveReadError != nil {
+					return jvm.VoidValue(), runtime.SaveReadError
 				}
 				return value, err
 			}); err != nil {
@@ -3443,11 +3413,11 @@ func (runtime *initializationRuntime) createRuntimeJavaClass(definition runtimeJ
 			}
 		}
 	}
-	classAddress, err := runtime.allocate(javaClassSize)
+	classAddress, err := runtime.Allocate(javaClassSize)
 	if err != nil {
 		return 0, err
 	}
-	nameAddress, err := runtime.allocateBytes(append([]byte(definition.name), 0))
+	nameAddress, err := runtime.AllocateBytes(append([]byte(definition.name), 0))
 	if err != nil {
 		return 0, err
 	}
@@ -3465,11 +3435,11 @@ func (runtime *initializationRuntime) createRuntimeJavaClass(definition runtimeJ
 		if err != nil {
 			return 0, err
 		}
-		fullName, err := runtime.allocateBytes(append([]byte{0}, append([]byte(method.descriptor+"+"+method.name), 0)...))
+		fullName, err := runtime.AllocateBytes(append([]byte{0}, append([]byte(method.descriptor+"+"+method.name), 0)...))
 		if err != nil {
 			return 0, err
 		}
-		methodAddress, err := runtime.allocate(javaMethodSize)
+		methodAddress, err := runtime.Allocate(javaMethodSize)
 		if err != nil {
 			return 0, err
 		}
@@ -3481,17 +3451,17 @@ func (runtime *initializationRuntime) createRuntimeJavaClass(definition runtimeJ
 		binary.LittleEndian.PutUint32(methodData[12:], fullName)
 		binary.LittleEndian.PutUint16(methodData[20:], slot)
 		binary.LittleEndian.PutUint16(methodData[22:], method.accessFlags|0x0100)
-		if err := runtime.client.core.Memory().Write(methodAddress, methodData); err != nil {
+		if err := runtime.client.Core().Memory().Write(methodAddress, methodData); err != nil {
 			return 0, fmt.Errorf("write KTF runtime Java method %s.%s%s: %w", method.class, method.name, method.descriptor, err)
 		}
 		methodPointers = append(methodPointers, methodAddress)
 	}
 	methodPointers = append(methodPointers, 0)
-	methodTable, err := runtime.allocateWords(methodPointers)
+	methodTable, err := runtime.AllocateWords(methodPointers)
 	if err != nil {
 		return 0, err
 	}
-	vtableAddress, err := runtime.allocateWords(append(vtable.pointers(), 0))
+	vtableAddress, err := runtime.AllocateWords(append(vtable.pointers(), 0))
 	if err != nil {
 		return 0, err
 	}
@@ -3503,7 +3473,7 @@ func (runtime *initializationRuntime) createRuntimeJavaClass(definition runtimeJ
 	fieldPointers := make([]uint32, 0, len(definition.fields)+1)
 	deferredFields := make([]uint32, len(definition.fields))
 	for index, field := range definition.fields {
-		fullName, err := runtime.allocateBytes(append([]byte{0}, append([]byte(field.descriptor+"+"+field.name), 0)...))
+		fullName, err := runtime.AllocateBytes(append([]byte{0}, append([]byte(field.descriptor+"+"+field.name), 0)...))
 		if err != nil {
 			return 0, err
 		}
@@ -3512,7 +3482,7 @@ func (runtime *initializationRuntime) createRuntimeJavaClass(definition runtimeJ
 		binary.LittleEndian.PutUint32(fieldData[4:], classAddress)
 		binary.LittleEndian.PutUint32(fieldData[8:], fullName)
 		binary.LittleEndian.PutUint32(fieldData[12:], field.offset)
-		fieldAddress, err := runtime.allocateBytes(fieldData)
+		fieldAddress, err := runtime.AllocateBytes(fieldData)
 		if err != nil {
 			return 0, err
 		}
@@ -3521,11 +3491,11 @@ func (runtime *initializationRuntime) createRuntimeJavaClass(definition runtimeJ
 		}
 		fieldPointers = append(fieldPointers, fieldAddress)
 	}
-	fieldTable, err := runtime.allocateWords(append(fieldPointers, 0))
+	fieldTable, err := runtime.AllocateWords(append(fieldPointers, 0))
 	if err != nil {
 		return 0, err
 	}
-	descriptorAddress, err := runtime.allocate(javaDescriptorSize)
+	descriptorAddress, err := runtime.Allocate(javaDescriptorSize)
 	if err != nil {
 		return 0, err
 	}
@@ -3537,7 +3507,7 @@ func (runtime *initializationRuntime) createRuntimeJavaClass(definition runtimeJ
 	binary.LittleEndian.PutUint16(descriptorData[24:], uint16(len(definition.methods)))
 	binary.LittleEndian.PutUint16(descriptorData[26:], definition.instanceSize)
 	binary.LittleEndian.PutUint16(descriptorData[28:], definition.accessFlags)
-	if err := runtime.client.core.Memory().Write(descriptorAddress, descriptorData); err != nil {
+	if err := runtime.client.Core().Memory().Write(descriptorAddress, descriptorData); err != nil {
 		return 0, fmt.Errorf("write KTF runtime Java descriptor %s: %w", definition.name, err)
 	}
 	classData := make([]byte, javaClassSize)
@@ -3546,7 +3516,7 @@ func (runtime *initializationRuntime) createRuntimeJavaClass(definition runtimeJ
 	binary.LittleEndian.PutUint32(classData[12:], vtableAddress)
 	binary.LittleEndian.PutUint16(classData[16:], uint16(len(vtable.entries)))
 	binary.LittleEndian.PutUint16(classData[18:], 8)
-	if err := runtime.client.core.Memory().Write(classAddress, classData); err != nil {
+	if err := runtime.client.Core().Memory().Write(classAddress, classData); err != nil {
 		return 0, fmt.Errorf("write KTF runtime Java class %s: %w", definition.name, err)
 	}
 	metadata, err := runtime.readAOTClass(classAddress)
@@ -3570,7 +3540,7 @@ func (runtime *initializationRuntime) createRuntimeJavaClass(definition runtimeJ
 		}
 		valueData := make([]byte, 4)
 		binary.LittleEndian.PutUint32(valueData, value)
-		if err := runtime.client.core.Memory().Write(deferredFields[index]+12, valueData); err != nil {
+		if err := runtime.client.Core().Memory().Write(deferredFields[index]+12, valueData); err != nil {
 			return 0, fmt.Errorf("write KTF runtime Java field %s.%s: %w", definition.name, field.name, err)
 		}
 	}
@@ -3659,7 +3629,7 @@ func (runtime *initializationRuntime) runtimeJavaStub(method runtimeJavaMethod, 
 	}
 	runtime.nextNativeMethod++
 	id := runtime.nextNativeMethod
-	stub, err := runtime.stub(svcCategoryRuntimeJava, id)
+	stub, err := runtime.Stub(svcCategoryRuntimeJava, id)
 	if err != nil {
 		return 0, err
 	}
@@ -3675,13 +3645,13 @@ func (runtime *initializationRuntime) handleRuntimeJavaCall(thread *armcore.Thre
 	runtime.callbacks.RuntimeJavaCalls++
 	method := invocation.method
 	if lr, lrErr := thread.Register(armcore.RegisterLR); lrErr == nil {
-		runtime.recordDiagnostic(diagEvent{
-			kind:       diagJavaCall,
-			name:       method.class,
-			target:     method.name,
-			descriptor: method.descriptor,
-			site:       lr,
-			hasSite:    true,
+		runtime.RecordDiagnostic(wipicrt.DiagEvent{
+			Kind:       wipicrt.DiagJavaCall,
+			Name:       method.class,
+			Target:     method.name,
+			Descriptor: method.descriptor,
+			Site:       lr,
+			HasSite:    true,
 		})
 	}
 	methodType, err := jvm.ParseMethodDescriptor(method.descriptor)
@@ -3732,8 +3702,8 @@ func (runtime *initializationRuntime) handleRuntimeJavaCall(thread *armcore.Thre
 	invokeStatic := runtime.client.vm.InvokeStatic
 	invokeVirtual := runtime.client.vm.InvokeVirtual
 	invokeSpecial := runtime.client.vm.InvokeSpecial
-	if runtime.currentContext != nil {
-		if call, ok := runtime.currentContext.Value(jvmInvocationKey{}).(*jvm.Invocation); ok {
+	if runtime.CurrentContext != nil {
+		if call, ok := runtime.CurrentContext.Value(jvmInvocationKey{}).(*jvm.Invocation); ok {
 			invokeStatic, invokeVirtual, invokeSpecial = call.InvokeStatic, call.InvokeVirtual, call.InvokeSpecial
 		}
 	}
@@ -3867,7 +3837,7 @@ func (runtime *initializationRuntime) readRuntimeJavaArguments(address uint32, t
 	for _, typeInfo := range types {
 		slots += typeInfo.Slots()
 	}
-	words, err := runtime.readAOTWords(address, uint32(slots), "runtime Java argument container")
+	words, err := runtime.ReadAOTWords(address, uint32(slots), "runtime Java argument container")
 	if err != nil {
 		return nil, err
 	}
@@ -3893,7 +3863,7 @@ func (runtime *initializationRuntime) readDirectRuntimeJavaArguments(thread *arm
 		if err != nil {
 			return nil, err
 		}
-		stackWords, err := runtime.readAOTWords(stackAddress, uint32(slots-registerSlots), "direct runtime Java stack arguments")
+		stackWords, err := runtime.ReadAOTWords(stackAddress, uint32(slots-registerSlots), "direct runtime Java stack arguments")
 		if err != nil {
 			return nil, err
 		}

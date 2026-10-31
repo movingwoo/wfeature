@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // Quick save and quick load
@@ -39,7 +40,7 @@ func (session *Session) CanCheckpoint() bool {
 
 func checkpointTimerLimit(options SessionOptions) int {
 	if options.TimerLimit <= 0 {
-		return sessionDefaultTimerLimit
+		return wipicrt.SessionDefaultTimerLimit
 	}
 	return options.TimerLimit
 }
@@ -62,19 +63,19 @@ func (session *Session) CaptureCheckpointWithSession(ctx context.Context, captur
 		return backend.Checkpoint{}, fmt.Errorf("SKT Clet checkpoint session is not started")
 	}
 	client := session.Client
-	if !client.run.TryLock() {
+	if !client.Run.TryLock() {
 		return backend.Checkpoint{}, ErrCheckpointBusy
 	}
-	defer client.run.Unlock()
+	defer client.Run.Unlock()
 	// A slot carries no save, so a load has to find the saves in a store. A
 	// session that has none could be captured and never loaded.
-	if client.saveStore == nil {
+	if client.SaveStore == nil {
 		return backend.Checkpoint{}, fmt.Errorf("SKT Clet checkpoint requires a save store")
 	}
 	if err := client.checkpointIdle(); err != nil {
 		return backend.Checkpoint{}, err
 	}
-	now := client.now()
+	now := client.Now()
 	var shared []byte
 	if captureSession != nil {
 		var err error
@@ -184,12 +185,12 @@ func PrepareCheckpoint(program CletProgram, checkpoint backend.Checkpoint, optio
 	if err != nil {
 		return nil, err
 	}
-	client.core, client.thread = core, thread
+	client.AttachCore(core, thread)
 	if options.Debug != nil {
 		options.Debug(core)
 	}
-	constructed := client.now()
-	client.speed = saved.Client.Speed
+	constructed := client.Now()
+	client.SpeedMultiplier = saved.Client.Speed
 	runtime, err := restoreRuntimeState(client, saved.Runtime, saved.Client.Audio, constructed)
 	if err != nil {
 		return nil, err
@@ -198,7 +199,7 @@ func PrepareCheckpoint(program CletProgram, checkpoint backend.Checkpoint, optio
 	if err != nil {
 		return nil, err
 	}
-	audio, err := backend.NewAudioFromStateWithClock(*saved.Client.Audio, nil, client.now)
+	audio, err := backend.NewAudioFromStateWithClock(*saved.Client.Audio, nil, client.Now)
 	if err != nil {
 		return nil, err
 	}
@@ -206,20 +207,21 @@ func PrepareCheckpoint(program CletProgram, checkpoint backend.Checkpoint, optio
 	if err := audio.RebasePlaybackClock(time.Duration(elapsed), saved.Client.Speed); err != nil {
 		return nil, err
 	}
-	if err := client.vibrator.RestoreState(saved.Client.Vibration); err != nil {
+	if err := client.Vibrator.RestoreState(saved.Client.Vibration); err != nil {
 		return nil, err
 	}
 	state := saved.Client
-	client.runtime, client.prepared, client.initializationStarted = runtime, runtime, true
+	client.setRuntimes(runtime, runtime)
+	client.initializationStarted = true
 	client.clet.root, client.clet.repaint = state.Root, state.Repaint
 	client.clet.timeRecord, client.clet.tokenNext = state.TimeRecord, state.TokenNext
-	client.subscriberNumber = state.Subscriber
-	client.frame, client.frameWidth, client.frameHeight = state.Frame, state.FrameWidth, state.FrameHeight
-	client.screenWidth, client.screenHeight, client.flushCount = state.ScreenWidth, state.ScreenHeight, state.FlushCount
-	client.framePending, client.partialFrame = state.FramePending, state.PartialFrame
-	client.clientWakeAt, client.nextRoundPaint = state.ClientWake.restore(constructed), state.NextRoundPaint.restore(constructed)
-	client.paintLoad, client.paintCost, client.entryCost, client.workBaseline = state.PaintLoad, state.PaintCost, state.EntryCost, state.WorkBaseline
-	client.audio = audio
+	client.SubscriberNumber = state.Subscriber
+	client.FrameRGBA, client.FrameWidth, client.FrameHeight = state.Frame, state.FrameWidth, state.FrameHeight
+	client.ScreenWidth, client.ScreenHeight, client.FlushCount = state.ScreenWidth, state.ScreenHeight, state.FlushCount
+	client.FramePending, client.PartialFrame = state.FramePending, state.PartialFrame
+	client.ClientWakeAt, client.NextRoundPaint = state.ClientWake.restore(constructed), state.NextRoundPaint.restore(constructed)
+	client.PaintLoad, client.PaintCost, client.EntryCost, client.WorkBaseline = state.PaintLoad, state.PaintCost, state.EntryCost, state.WorkBaseline
+	client.Audio = audio
 	prepared.session = &Session{Client: client, options: options, archiveIdentity: program.Identity}
 	prepared.storage, prepared.constructed = storage, constructed
 	return prepared, nil
@@ -230,8 +232,8 @@ func (prepared *PreparedSession) Discard() {
 	if prepared == nil || prepared.session == nil {
 		return
 	}
-	if client := prepared.session.Client; client != nil && client.audio != nil {
-		client.audio.SetSink(nil)
+	if client := prepared.session.Client; client != nil && client.Audio != nil {
+		client.Audio.SetSink(nil)
 	}
 	*prepared = PreparedSession{}
 }
@@ -253,7 +255,7 @@ func (prepared *PreparedSession) Discard() {
 //  4. The displaced program is cut off and the restored one adopted. Nothing in
 //     this step can fail, and neither program runs: the displaced one is not
 //     destroyed, because its destroy entry is guest code that may write.
-func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, live SaveStore) (*Session, error) {
+func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, live wipicrt.SaveStore) (*Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -269,7 +271,7 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 			return nil, backend.ErrCheckpointIdentity
 		}
 		old = previous.Client
-		if !old.run.TryLock() {
+		if !old.Run.TryLock() {
 			return nil, ErrCheckpointBusy
 		}
 	}
@@ -280,7 +282,7 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 	unlock := func() {
 		if locked {
 			locked = false
-			old.run.Unlock()
+			old.Run.Unlock()
 		}
 	}
 	defer unlock()
@@ -291,7 +293,7 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 	if err := ctx.Err(); err != nil {
 		// The restored program goes back to answering nothing: it is not
 		// adopted, and what is discarded must not hold the saves.
-		client.saveStore = prepared.placeholder
+		client.SaveStore = prepared.placeholder
 		return nil, err
 	}
 	// Nothing after this point can fail.
@@ -299,9 +301,9 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 		// A store of its own, so nothing the displaced client is still asked
 		// to do reaches the saves the restored one now reads.
 		sink, _ := backend.NewMemorySaveStore(nil)
-		old.saveStore, old.frameSink, old.workersStopped = sink, backend.FrameSink{}, true
-		if old.audio != nil {
-			old.audio.SetSink(nil)
+		old.SaveStore, old.FrameSink, old.workersStopped = sink, backend.FrameSink{}, true
+		if old.Audio != nil {
+			old.Audio.SetSink(nil)
 		}
 		unlock()
 		previous.Client = nil
@@ -310,7 +312,7 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 	session.options.SaveStore, session.options.SaveRoot = live, ""
 	// The record's deadlines were laid against the instant the replacement
 	// was built; the time the load took since then moves them all alike.
-	shift := client.now().Sub(prepared.constructed)
+	shift := client.Now().Sub(prepared.constructed)
 	rebase := func(instant time.Time) time.Time {
 		if instant.IsZero() {
 			return instant
@@ -318,16 +320,16 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 		return instant.Add(shift)
 	}
 	runtime := client.runtime
-	runtime.clockBase = runtime.clockBase.Add(shift)
-	for index := range runtime.pendingTimers {
-		runtime.pendingTimers[index].due = rebase(runtime.pendingTimers[index].due)
+	runtime.ClockBase = runtime.ClockBase.Add(shift)
+	for index := range runtime.PendingTimers {
+		runtime.PendingTimers[index].Due = rebase(runtime.PendingTimers[index].Due)
 	}
-	client.clientWakeAt, client.nextRoundPaint = rebase(client.clientWakeAt), rebase(client.nextRoundPaint)
-	client.audio.ActivateOutputClock()
+	client.ClientWakeAt, client.NextRoundPaint = rebase(client.ClientWakeAt), rebase(client.NextRoundPaint)
+	client.Audio.ActivateOutputClock()
 	// This is the already validated record applied to the motor's own clock.
-	_ = client.vibrator.RestoreState(prepared.vibration)
-	client.frameSink = session.options.FrameSink
-	client.audio.SetSink(session.options.AudioSink)
+	_ = client.Vibrator.RestoreState(prepared.vibration)
+	client.FrameSink = session.options.FrameSink
+	client.Audio.SetSink(session.options.AudioSink)
 	*prepared = PreparedSession{}
 	return session, nil
 }
@@ -335,7 +337,7 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 // ResumeCheckpointOutput is called after the Host resets its previous device
 // output and queues. Construction and adoption themselves stay silent.
 func (session *Session) ResumeCheckpointOutput() {
-	if session != nil && session.Client != nil && session.Client.audio != nil {
-		session.Client.audio.ResumeOutput()
+	if session != nil && session.Client != nil && session.Client.Audio != nil {
+		session.Client.Audio.ResumeOutput()
 	}
 }

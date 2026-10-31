@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -54,7 +55,7 @@ func TestNativeOpenSocketSurvivesAQuickLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	store, _ := backend.NewMemorySaveStore(nil)
-	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: NewManualClock(time.Time{}), SaveStore: store})
+	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Time{}), SaveStore: store})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +65,7 @@ func TestNativeOpenSocketSurvivesAQuickLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := PrepareNativeSessionCheckpoint(archive, saved, NativeSessionOptions{Clock: NewManualClock(time.Time{})})
+	prepared, err := PrepareNativeSessionCheckpoint(archive, saved, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Time{})})
 	if err != nil {
 		t.Fatal(err)
 	}

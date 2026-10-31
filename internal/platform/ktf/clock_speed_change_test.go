@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"math"
 	"testing"
 	"time"
@@ -10,7 +11,7 @@ import (
 )
 
 type speedChangeClock struct {
-	*ManualClock
+	*wipicrt.ManualClock
 	reads int
 }
 
@@ -20,18 +21,18 @@ func (clock *speedChangeClock) Now() time.Time {
 }
 
 func TestSpeedChangePreservesGuestTime(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 	clock.Advance(time.Second)
 	for _, speed := range []float64{0.5, 2, 0.1, 16} {
-		elapsed, millis := runtime.guestElapsed(), runtime.guestMillis()
+		elapsed, millis := runtime.GuestElapsed(), runtime.GuestMillis()
 		client.SetSpeed(speed)
-		if got, date := runtime.guestElapsed(), runtime.guestMillis(); got != elapsed || date != millis {
+		if got, date := runtime.GuestElapsed(), runtime.GuestMillis(); got != elapsed || date != millis {
 			t.Fatalf("changing to %gx moved guest time: elapsed %s -> %s, date %d -> %d", speed, elapsed, got, millis, date)
 		}
 		clock.Advance(100 * time.Millisecond)
 		want := elapsed + time.Duration(float64(100*time.Millisecond)*speed)
-		if got, date := runtime.guestElapsed(), runtime.guestMillis(); got != want || date != millis+int64((want-elapsed)/time.Millisecond) {
+		if got, date := runtime.GuestElapsed(), runtime.GuestMillis(); got != want || date != millis+int64((want-elapsed)/time.Millisecond) {
 			t.Fatalf("%gx did not advance at its new rate: elapsed %s, want %s; date %d", speed, got, want, date)
 		}
 	}
@@ -40,11 +41,11 @@ func TestSpeedChangePreservesGuestTime(t *testing.T) {
 func TestSpeedChangePreservesAudioGateAndRemainingPass(t *testing.T) {
 	for _, speed := range []float64{0.5, 2} {
 		t.Run(map[float64]string{0.5: "slower", 2: "faster"}[speed], func(t *testing.T) {
-			clock := NewManualClock(time.Unix(1700000000, 0))
+			clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 			client, runtime := newPacedTestRuntime(t, clock, 1)
 			sink := &audioPauseProbe{}
-			client.audio = backend.NewAudioWithClock(sink, clock.Now)
-			handle, err := client.audio.LoadEvents([]smaf.Event{
+			client.Audio = backend.NewAudioWithClock(sink, clock.Now)
+			handle, err := client.Audio.LoadEvents([]smaf.Event{
 				{Type: smaf.EventNoteOn, Note: 60, Velocity: 80},
 				{Time: 200, Type: smaf.EventNoteOff, Note: 60},
 				{Time: 300, Type: smaf.EventEnd},
@@ -53,17 +54,17 @@ func TestSpeedChangePreservesAudioGateAndRemainingPass(t *testing.T) {
 				t.Fatal(err)
 			}
 			clock.Advance(900 * time.Millisecond)
-			if err := client.audio.PlayCount(handle, runtime.guestElapsed(), 2); err != nil {
+			if err := client.Audio.PlayCount(handle, runtime.GuestElapsed(), 2); err != nil {
 				t.Fatal(err)
 			}
-			client.serviceAudio()
+			client.ServiceAudio()
 			clock.Advance(100 * time.Millisecond)
-			client.serviceAudio()
+			client.ServiceAudio()
 			client.SetSpeed(speed)
-			if err := client.audio.Pause(handle, runtime.guestElapsed()); err != nil {
+			if err := client.Audio.Pause(handle, runtime.GuestElapsed()); err != nil {
 				t.Fatalf("rate change invalidated a running clip's pause: %v", err)
 			}
-			saved, err := client.audio.CaptureState()
+			saved, err := client.Audio.CaptureState()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -72,8 +73,8 @@ func TestSpeedChangePreservesAudioGateAndRemainingPass(t *testing.T) {
 				t.Fatalf("rate change consumed the remaining gate or repeat: position=%v, remaining=%d, completed=%d", sound.Position, sound.Remaining, sound.Completed)
 			}
 			clock.Advance(17 * time.Second)
-			client.serviceAudio()
-			if err := client.audio.Resume(handle, runtime.guestElapsed()); err != nil {
+			client.ServiceAudio()
+			if err := client.Audio.Resume(handle, runtime.GuestElapsed()); err != nil {
 				t.Fatal(err)
 			}
 			if len(sink.resumed) != 1 || sink.resumed[0].age != 100*time.Millisecond {
@@ -82,7 +83,7 @@ func TestSpeedChangePreservesAudioGateAndRemainingPass(t *testing.T) {
 			sink.events = nil
 			advance := func(guest time.Duration) {
 				clock.Advance(time.Duration(float64(guest) / speed))
-				client.serviceAudio()
+				client.ServiceAudio()
 			}
 			advance(99 * time.Millisecond)
 			if len(sink.ofType(smaf.EventNoteOff)) != 0 {
@@ -97,7 +98,7 @@ func TestSpeedChangePreservesAudioGateAndRemainingPass(t *testing.T) {
 				t.Fatal("remaining pass did not start at the score boundary")
 			}
 			advance(300 * time.Millisecond)
-			progress, err := client.audio.Playback(handle, runtime.guestElapsed())
+			progress, err := client.Audio.Playback(handle, runtime.GuestElapsed())
 			if err != nil || progress.Playing || progress.Completed != 2 || len(sink.ofType(smaf.EventNoteOn)) != 1 || len(sink.ofType(smaf.EventNoteOff)) != 2 {
 				t.Fatalf("finite pass count changed after speed and pause: %+v, %v", progress, err)
 			}
@@ -108,27 +109,27 @@ func TestSpeedChangePreservesAudioGateAndRemainingPass(t *testing.T) {
 func TestSpeedChangeRebasesActiveAndPreparedAtOneInstant(t *testing.T) {
 	for _, mode := range []string{"same runtime", "distinct runtime", "prepared only"} {
 		t.Run(mode, func(t *testing.T) {
-			clock := &speedChangeClock{ManualClock: NewManualClock(time.Unix(1700000000, 0))}
+			clock := &speedChangeClock{ManualClock: wipicrt.NewManualClock(time.Unix(1700000000, 0))}
 			client, runtime := newPacedTestRuntime(t, clock, 1)
-			client.prepared = runtime
+			client.setRuntimes(client.runtime, runtime)
 			if mode == "distinct runtime" {
-				client.prepared = &initializationRuntime{client: client, clockBase: runtime.clockBase.Add(-500 * time.Millisecond), virtualBaseMillis: runtime.virtualBaseMillis}
+				client.setRuntimes(client.runtime, &initializationRuntime{client: client, Runtime: &wipicrt.Runtime{Client: client.Client, ClockBase: runtime.ClockBase.Add(-500 * time.Millisecond), VirtualBaseMillis: runtime.VirtualBaseMillis}})
 			} else if mode == "prepared only" {
-				client.runtime = nil
+				client.setRuntimes(nil, client.prepared)
 			}
 			clock.Advance(time.Second)
-			active, prepared := runtime.guestElapsed(), client.prepared.guestElapsed()
-			activeDate, preparedDate := runtime.guestMillis(), client.prepared.guestMillis()
+			active, prepared := runtime.GuestElapsed(), client.prepared.GuestElapsed()
+			activeDate, preparedDate := runtime.GuestMillis(), client.prepared.GuestMillis()
 			reads := clock.reads
 			client.SetSpeed(2)
 			if clock.reads-reads != 1 {
 				t.Fatalf("rate change sampled %d Host instants, want one", clock.reads-reads)
 			}
-			if runtime.guestElapsed() != active || client.prepared.guestElapsed() != prepared || runtime.guestMillis() != activeDate || client.prepared.guestMillis() != preparedDate {
+			if runtime.GuestElapsed() != active || client.prepared.GuestElapsed() != prepared || runtime.GuestMillis() != activeDate || client.prepared.GuestMillis() != preparedDate {
 				t.Fatal("prepared/active clocks jumped or the shared runtime was rebased twice")
 			}
 			clock.Advance(50 * time.Millisecond)
-			if runtime.guestElapsed() != active+100*time.Millisecond || client.prepared.guestElapsed() != prepared+100*time.Millisecond {
+			if runtime.GuestElapsed() != active+100*time.Millisecond || client.prepared.GuestElapsed() != prepared+100*time.Millisecond {
 				t.Fatal("prepared and active runtimes did not adopt the new rate together")
 			}
 		})
@@ -136,20 +137,20 @@ func TestSpeedChangeRebasesActiveAndPreparedAtOneInstant(t *testing.T) {
 }
 
 func TestSpeedChangeFractionalRoundingNeverMovesBackward(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 	clock.Advance(123456789 * time.Nanosecond)
 	for range 4 {
 		for _, speed := range []float64{0.1, 16, 0.5, 2, 1.25, 0.7, 1} {
-			before, date := runtime.guestElapsed(), runtime.guestMillis()
+			before, date := runtime.GuestElapsed(), runtime.GuestMillis()
 			client.SetSpeed(speed)
-			after := runtime.guestElapsed()
+			after := runtime.GuestElapsed()
 			quantum := time.Duration(math.Ceil(speed)) * time.Nanosecond
-			if after < before || after-before > quantum || runtime.guestMillis() < date {
+			if after < before || after-before > quantum || runtime.GuestMillis() < date {
 				t.Fatalf("fractional rebase at %gx moved %s -> %s beyond %s", speed, before, after, quantum)
 			}
 			clock.Advance(37 * time.Nanosecond)
-			step := runtime.guestElapsed() - after
+			step := runtime.GuestElapsed() - after
 			want := time.Duration(37 * speed)
 			if step < want || step > want+time.Nanosecond {
 				t.Fatalf("fractional new rate %gx advanced %s, want %s within 1ns", speed, step, want)
@@ -159,20 +160,20 @@ func TestSpeedChangeFractionalRoundingNeverMovesBackward(t *testing.T) {
 }
 
 func TestSpeedChangeClampedAndRepeatedRatesPreserveTime(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 	clock.Advance(time.Second)
 	for _, test := range []struct{ request, want float64 }{
 		{0.01, 0.1}, {1000, 16}, {0, 1}, {-3, 1}, {1, 1},
 		{math.Inf(1), 16}, {math.Inf(-1), 1}, {math.NaN(), 1},
 	} {
-		elapsed, date, base := runtime.guestElapsed(), runtime.guestMillis(), runtime.clockBase
+		elapsed, date, base := runtime.GuestElapsed(), runtime.GuestMillis(), runtime.ClockBase
 		previous := client.Speed()
 		client.SetSpeed(test.request)
-		if client.Speed() != test.want || runtime.guestElapsed() != elapsed || runtime.guestMillis() != date {
-			t.Fatalf("request %g changed time or selected the wrong rate: speed=%g, elapsed=%s", test.request, client.Speed(), runtime.guestElapsed())
+		if client.Speed() != test.want || runtime.GuestElapsed() != elapsed || runtime.GuestMillis() != date {
+			t.Fatalf("request %g changed time or selected the wrong rate: speed=%g, elapsed=%s", test.request, client.Speed(), runtime.GuestElapsed())
 		}
-		if previous == test.want && !runtime.clockBase.Equal(base) {
+		if previous == test.want && !runtime.ClockBase.Equal(base) {
 			t.Fatal("repeating the current rate changed its anchor")
 		}
 		clock.Advance(100 * time.Millisecond)
@@ -182,27 +183,27 @@ func TestSpeedChangeClampedAndRepeatedRatesPreserveTime(t *testing.T) {
 func TestSpeedChangeOverflowRefusesBothAnchorsAtomically(t *testing.T) {
 	for _, mode := range []string{"required age", "current scaled age", "prepared required age", "unrepresentable Host age"} {
 		t.Run(mode, func(t *testing.T) {
-			clock := NewManualClock(time.Unix(1700000000, 0))
+			clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 			client, runtime := newPacedTestRuntime(t, clock, 1)
 			clock.Advance(time.Second)
-			prepared := &initializationRuntime{client: client, clockBase: runtime.clockBase, virtualBaseMillis: runtime.virtualBaseMillis}
-			client.prepared = prepared
+			prepared := &initializationRuntime{client: client, Runtime: &wipicrt.Runtime{Client: client.Client, ClockBase: runtime.ClockBase, VirtualBaseMillis: runtime.VirtualBaseMillis}}
+			client.setRuntimes(client.runtime, prepared)
 			next := 0.1
 			switch mode {
 			case "required age":
-				runtime.clockBase = clock.Now().Add(-time.Duration(math.MaxInt64 / 2))
+				runtime.ClockBase = clock.Now().Add(-time.Duration(math.MaxInt64 / 2))
 			case "current scaled age":
 				client.SetSpeed(16)
-				runtime.clockBase = clock.Now().Add(-time.Duration(math.MaxInt64 / 8))
+				runtime.ClockBase = clock.Now().Add(-time.Duration(math.MaxInt64 / 8))
 				next = 2
 			case "prepared required age":
-				prepared.clockBase = clock.Now().Add(-time.Duration(math.MaxInt64 / 2))
+				prepared.ClockBase = clock.Now().Add(-time.Duration(math.MaxInt64 / 2))
 			case "unrepresentable Host age":
-				runtime.clockBase = clock.Now().AddDate(-400, 0, 0)
+				runtime.ClockBase = clock.Now().AddDate(-400, 0, 0)
 			}
-			before, other, speed := runtime.clockBase, prepared.clockBase, client.Speed()
+			before, other, speed := runtime.ClockBase, prepared.ClockBase, client.Speed()
 			client.SetSpeed(next)
-			if client.Speed() != speed || !runtime.clockBase.Equal(before) || !prepared.clockBase.Equal(other) {
+			if client.Speed() != speed || !runtime.ClockBase.Equal(before) || !prepared.ClockBase.Equal(other) {
 				t.Fatal("unrepresentable change partially changed the rate or clock anchors")
 			}
 		})

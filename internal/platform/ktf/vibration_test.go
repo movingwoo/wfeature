@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The guest's vibration used to reach a diagnostic counter and stop there,
@@ -22,14 +23,14 @@ func vibrationRuntime(t *testing.T) *initializationRuntime {
 func TestVibratorRequestReachesTheBoundary(t *testing.T) {
 	runtime := vibrationRuntime(t)
 
-	if state := runtime.client.vibrator.State(); state.Request != 0 || state.Active() {
+	if state := runtime.client.Vibrator.State(); state.Request != 0 || state.Active() {
 		t.Fatalf("a title that has not asked reports %+v", state)
 	}
 
 	if _, err := runtimeVibratorOn(runtime, nil, []jvm.Value{jvm.IntValue(60), jvm.IntValue(250)}); err != nil {
 		t.Fatalf("Vibrator.on: %v", err)
 	}
-	state := runtime.client.vibrator.State()
+	state := runtime.client.Vibrator.State()
 	if state.Request != 1 || state.Level != 60 || state.Duration != 250*time.Millisecond {
 		t.Fatalf("state = %+v", state)
 	}
@@ -40,7 +41,7 @@ func TestVibratorRequestReachesTheBoundary(t *testing.T) {
 	if _, err := runtimeVibratorOff(runtime, nil, nil); err != nil {
 		t.Fatalf("Vibrator.off: %v", err)
 	}
-	state = runtime.client.vibrator.State()
+	state = runtime.client.Vibrator.State()
 	// The stop is a request of its own, so a Host watching the counter learns
 	// the motor was turned off rather than waiting out a duration.
 	if state.Request != 2 || state.Level != 0 || state.Active() {
@@ -57,7 +58,7 @@ func TestVibratorZeroDurationIsUntilStopped(t *testing.T) {
 	if _, err := runtimeVibratorOn(runtime, nil, []jvm.Value{jvm.IntValue(100), jvm.IntValue(0)}); err != nil {
 		t.Fatalf("Vibrator.on: %v", err)
 	}
-	state := runtime.client.vibrator.State()
+	state := runtime.client.Vibrator.State()
 	if !state.Indefinite() || !state.Active() {
 		t.Errorf("a zero duration was not read as indefinite: %+v", state)
 	}
@@ -68,20 +69,20 @@ func TestVibratorZeroDurationIsUntilStopped(t *testing.T) {
 // vibrator here — which is the Host's answer rather than this runtime's.
 func TestWIPICVibratorReachesTheSameBoundary(t *testing.T) {
 	runtime := vibrationRuntime(t)
-	if result := mediaCall(t, runtime, wipicMediaVibrator, 40, 120); result != 0 {
+	if result := mediaCall(t, runtime, wipicrt.WIPICMediaVibrator, 40, 120); result != 0 {
 		t.Errorf("MC_mdaVibrator answered %d, want success", result)
 	}
-	state := runtime.client.vibrator.State()
+	state := runtime.client.Vibrator.State()
 	if state.Level != 40 || state.Duration != 120*time.Millisecond {
 		t.Errorf("state = %+v, want level 40 for 120ms", state)
 	}
 
 	// Level zero is how the guest turns it off through this call too; the
 	// local titles pass (0, 0).
-	if result := mediaCall(t, runtime, wipicMediaVibrator, 0, 0); result != 0 {
+	if result := mediaCall(t, runtime, wipicrt.WIPICMediaVibrator, 0, 0); result != 0 {
 		t.Errorf("MC_mdaVibrator(0, 0) answered %d, want success", result)
 	}
-	if state := runtime.client.vibrator.State(); state.Active() || state.Request != 2 {
+	if state := runtime.client.Vibrator.State(); state.Active() || state.Request != 2 {
 		t.Errorf("the motor was left running: %+v", state)
 	}
 }

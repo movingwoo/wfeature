@@ -3,10 +3,9 @@ package clet
 import (
 	"context"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // Text entry through the page's text box.
@@ -34,8 +33,6 @@ import (
 // it has no field for costs a commit that fails; a field the player cannot
 // type into is the failure that matters.
 
-const maxCInputLength = 64
-
 // TextInput snapshots the program's input method for a Host that composes text
 // with its own keyboard. Guest execution and this snapshot share the client
 // run lock.
@@ -47,8 +44,8 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 		return nil, err
 	}
 	client := session.Client
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	if !client.textInputReady() || !client.cInputOffered(true) {
 		return nil, backend.ErrNoTextInput
 	}
@@ -67,22 +64,22 @@ func (client *Client) textInputReady() bool {
 // a snapshot does and a commit does not.
 func (client *Client) cInputOffered(sync bool) bool {
 	runtime := client.runtime
-	state := &runtime.cInput
-	if state.owner.address != 0 {
-		live := state.owner.current(runtime)
-		if sync && state.active != live {
-			state.active = live
-			state.revision++
+	state := &runtime.CInput
+	if state.Owner.Address != 0 {
+		live := state.Owner.Current(runtime.Runtime)
+		if sync && state.Active != live {
+			state.Active = live
+			state.Revision++
 		}
 		return live
 	}
 	// A program that drains its own event queue takes keys in its own time,
 	// so whether a carrier was consumed would be unknown. A Clet's events are
 	// handed to it, so this holds for none today.
-	if runtime.guestEventLoop {
+	if runtime.GuestEventLoop {
 		return false
 	}
-	return runtime.cInputUsed() && !state.unreached
+	return runtime.CInputUsed() && !state.Unreached
 }
 
 // cTextInput offers completed text to the program's field. The caller holds
@@ -90,26 +87,26 @@ func (client *Client) cInputOffered(sync bool) bool {
 // is checked for its encoding, and the program keeps its own content rules.
 func (client *Client) cTextInput() *backend.TextInput {
 	runtime := client.runtime
-	state := &runtime.cInput
-	revision, mode, owner := state.revision, state.mode, state.owner
-	return &backend.TextInput{Append: true, MaxLength: maxCInputLength, InputMode: "text",
+	state := &runtime.CInput
+	revision, mode, owner := state.Revision, state.Mode, state.Owner
+	return &backend.TextInput{Append: true, MaxLength: wipicrt.MaxCInputLength, InputMode: "text",
 		Commit: func(ctx context.Context, text string) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			client.run.Lock()
-			defer client.run.Unlock()
+			client.Run.Lock()
+			defer client.Run.Unlock()
 			// The input method is still the one a snapshot would offer, for
 			// the same controller, and no key or input-method call since has
 			// spent the snapshot.
 			unchanged := func() bool {
-				return client.runtime == runtime && client.textInputReady() && state.owner == owner &&
-					state.revision == revision && state.mode == mode && client.cInputOffered(false)
+				return client.runtime == runtime && client.textInputReady() && state.Owner == owner &&
+					state.Revision == revision && state.Mode == mode && client.cInputOffered(false)
 			}
-			if !unchanged() || len(state.pending) != 0 || state.discardCarrier {
+			if !unchanged() || len(state.Pending) != 0 || state.DiscardCarrier {
 				return backend.ErrTextInputChanged
 			}
-			encoded, err := validateCInput(text)
+			encoded, err := wipicrt.ValidateCInput(text)
 			if err != nil {
 				return err
 			}
@@ -118,18 +115,18 @@ func (client *Client) cTextInput() *backend.TextInput {
 			}
 			inserted := false
 			defer func() {
-				state.pending = nil
-				state.pendingValid = nil
+				state.Pending = nil
+				state.PendingValid = nil
 				if inserted {
-					state.revision++
+					state.Revision++
 				}
 			}()
-			state.pendingValid = unchanged
+			state.PendingValid = unchanged
 			// Only the program runs between here and the deferred reset, so an
 			// input-method call it makes is part of delivering this text.
-			state.delivering = true
-			defer func() { state.delivering = false }()
-			defer client.beginHostService(ctx)()
+			state.Delivering = true
+			defer func() { state.Delivering = false }()
+			defer client.BeginHostService(ctx)()
 			// A completion buffer holds one result of the input method, not the
 			// whole field: the text goes a complete character at a time, and a
 			// two-byte character is never split.
@@ -146,33 +143,33 @@ func (client *Client) cTextInput() *backend.TextInput {
 				if encoded[offset] >= 0x80 {
 					size = 2
 				}
-				calls := state.calls
-				if state.timerCallback != 0 {
+				calls := state.Calls
+				if state.TimerCallback != 0 {
 					if err := client.waitCInputTimerLocked(ctx); err != nil {
 						return err
 					}
 				}
-				state.pending = encoded[offset : offset+size]
+				state.Pending = encoded[offset : offset+size]
 				// The carrier is a key, and a key ends the program on a fault
 				// the way SendKey's does.
-				err := client.sendCletEvent(ctx, CletEventKeyPressed, cInputCarrier, 0)
-				if err == nil && state.calls == calls && state.revision == revision && len(state.pending) != 0 && state.timerCallback != 0 {
+				err := client.sendCletEvent(ctx, CletEventKeyPressed, wipicrt.CInputCarrier, 0)
+				if err == nil && state.Calls == calls && state.Revision == revision && len(state.Pending) != 0 && state.TimerCallback != 0 {
 					// A field that takes its keys on the timer that opened it
 					// has queued this one; its round is due now.
-					_, err = client.serviceTimersLocked(ctx, maxPendingTimers)
+					_, err = client.ServiceTimersLocked(ctx, wipicrt.MaxPendingTimers)
 				}
-				consumed := len(state.pending) == 0
-				reached := state.calls != calls
+				consumed := len(state.Pending) == 0
+				reached := state.Calls != calls
 				inserted = inserted || consumed
-				state.discardCarrier = !consumed && !reached && state.timerCallback != 0
+				state.DiscardCarrier = !consumed && !reached && state.TimerCallback != 0
 				if err != nil {
 					return err
 				}
-				state.pending = nil
+				state.Pending = nil
 				// The press is followed by its release, as a person's is. The
 				// event entry takes both, and a program that keeps its own key
 				// state would otherwise hold the carrier down after the text.
-				if err := client.sendCletEvent(ctx, CletEventKeyReleased, cInputCarrier, 0); err != nil {
+				if err := client.sendCletEvent(ctx, CletEventKeyReleased, wipicrt.CInputCarrier, 0); err != nil {
 					return err
 				}
 				if !reached {
@@ -180,16 +177,16 @@ func (client *Client) cTextInput() *backend.TextInput {
 					// as the key it is. Nothing on this screen takes keys
 					// through the input method, so the offer waits for new
 					// evidence, and this snapshot is spent with it.
-					state.active, state.unreached = false, true
-					state.revision++
+					state.Active, state.Unreached = false, true
+					state.Revision++
 					return backend.ErrTextInputChanged
 				}
 				if !unchanged() {
 					return backend.ErrTextInputChanged
 				}
 				if !consumed {
-					if state.revision != revision {
-						state.active = false
+					if state.Revision != revision {
+						state.Active = false
 						return backend.ErrTextInputChanged
 					}
 					return backend.ErrInvalidTextInput
@@ -209,16 +206,16 @@ func (client *Client) waitCInputTimerLocked(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	state := &client.runtime.cInput
-	for _, timer := range client.runtime.pendingTimers {
-		if timer.pointer != state.timerPointer || timer.callback != state.timerCallback {
+	state := &client.runtime.CInput
+	for _, timer := range client.runtime.PendingTimers {
+		if timer.Pointer != state.TimerPointer || timer.Callback != state.TimerCallback {
 			continue
 		}
-		due := timer.due
-		if client.clientWakeAt.After(due) {
-			due = client.clientWakeAt
+		due := timer.Due
+		if client.ClientWakeAt.After(due) {
+			due = client.ClientWakeAt
 		}
-		wait := due.Sub(client.now())
+		wait := due.Sub(client.Now())
 		if wait > time.Second {
 			return backend.ErrTextInputChanged
 		}
@@ -227,7 +224,7 @@ func (client *Client) waitCInputTimerLocked(ctx context.Context) error {
 		}
 		// A Host that moves its own clock is asked to move it; any such clock
 		// answers Set, whichever platform's package made it.
-		if manual, ok := client.clock.(interface{ Set(time.Time) }); ok {
+		if manual, ok := client.Clock.(interface{ Set(time.Time) }); ok {
 			manual.Set(due)
 			return nil
 		}
@@ -241,20 +238,4 @@ func (client *Client) waitCInputTimerLocked(ctx context.Context) error {
 		return nil
 	}
 	return backend.ErrTextInputChanged
-}
-
-func validateCInput(text string) ([]byte, error) {
-	if err := backend.ValidateTextInput(text); err != nil || utf8.RuneCountInString(text) > maxCInputLength {
-		return nil, backend.ErrInvalidTextInput
-	}
-	for _, r := range text {
-		if unicode.IsControl(r) {
-			return nil, backend.ErrInvalidTextInput
-		}
-	}
-	encoded, ok := backend.EncodeKSC5601(text)
-	if !ok {
-		return nil, backend.ErrInvalidTextInput
-	}
-	return encoded, nil
 }

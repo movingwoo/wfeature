@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // Quick load and storage
@@ -63,7 +64,7 @@ import (
 // not filled yet: every store once, whatever holds it, and every File object
 // of the heap.
 type restoredStorage struct {
-	cFiles     []*runtimeCFile
+	cFiles     []*wipicrt.RuntimeCFile
 	records    []*runtimeRecordDatabase
 	databases  []*runtimeDataBaseStore
 	guestFiles []string
@@ -93,7 +94,7 @@ type restoredGuestFile struct {
 // client is left on the store it had, still to be bound, and the error says
 // the saves could not be read; nothing of the store or of a running session
 // has changed.
-func (client *Client) bindRestoredStorage(adapters saveAdapterState, live SaveStore) error {
+func (client *Client) bindRestoredStorage(adapters saveAdapterState, live wipicrt.SaveStore) error {
 	// Every read goes through one reader, under the adapters: each key is
 	// read once, so every object of one name is given the same bytes, and on
 	// a budget, because the names come from a slot.
@@ -102,19 +103,19 @@ func (client *Client) bindRestoredStorage(adapters saveAdapterState, live SaveSt
 	if err != nil {
 		return fmt.Errorf("%w: %v", backend.ErrCheckpointSaveRead, err)
 	}
-	unbound := client.saveStore
-	client.saveStore = store
+	unbound := client.SaveStore
+	client.SaveStore = store
 	err = client.runtime.rebindRestoredStorage()
 	if err == nil {
 		err = reader.Err()
 	}
 	if err != nil {
-		client.saveStore = unbound
+		client.SaveStore = unbound
 		return fmt.Errorf("%w: %v", backend.ErrCheckpointSaveRead, err)
 	}
 	// The adapters now stand on the store itself, as in a session that was
 	// started over it.
-	client.saveStore = rebaseSaveAdapters(store, live)
+	client.SaveStore = rebaseSaveAdapters(store, live)
 	return nil
 }
 
@@ -127,18 +128,18 @@ func (runtime *initializationRuntime) rebindRestoredStorage() error {
 	if restored == nil {
 		return nil
 	}
-	runtime.saveReadError = nil
-	runtime.removedFiles, runtime.removedCDatabases, runtime.madeDirectories, runtime.removedDatabaseLists = nil, nil, nil, nil
+	runtime.SaveReadError = nil
+	runtime.RemovedFiles, runtime.RemovedCDatabases, runtime.MadeDirectories, runtime.removedDatabaseLists = nil, nil, nil, nil
 	runtime.madeGuestDirectories, runtime.databaseSizes = nil, nil
-	runtime.guestFiles = nil
-	runtime.guestFileWrites = nil
-	runtime.cFiles, runtime.detachedCFiles = make(map[string]*runtimeCFile), nil
+	runtime.GuestFiles = nil
+	runtime.GuestFileWrites = nil
+	runtime.CFiles, runtime.DetachedCFiles = make(map[string]*wipicrt.RuntimeCFile), nil
 	runtime.recordDatabases, runtime.detachedRecordDatabases = make(map[string]*runtimeRecordDatabase), nil
 	runtime.databases, runtime.detachedDatabases = make(map[string]*runtimeDataBaseStore), nil
 	failed := func(err error) error {
 		// A failed read must not outlive the attempt: the runtime keeps one
 		// for the life of a session and refuses every later write.
-		runtime.saveReadError = nil
+		runtime.SaveReadError = nil
 		return err
 	}
 	kept, limit := uint64(0), restored.limit()
@@ -154,25 +155,25 @@ func (runtime *initializationRuntime) rebindRestoredStorage() error {
 	// A list is read once and kept for the session, and a read that fails
 	// stops every storage call after it: that has to refuse the load, not
 	// meet the title at its first call.
-	runtime.removedGuestFiles()
-	runtime.removedDatabases()
-	runtime.createdDirectories()
+	runtime.RemovedGuestFiles()
+	runtime.RemovedDatabases()
+	runtime.CreatedDirectories()
 	runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)
 	runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)
-	if runtime.saveReadError != nil {
-		return failed(runtime.saveReadError)
+	if runtime.SaveReadError != nil {
+		return failed(runtime.SaveReadError)
 	}
 
 	// The names the session wrote come first, because every other lookup
 	// resolves through this table before it asks the store.
 	for _, name := range restored.guestFiles {
 		trimmed := strings.TrimPrefix(name, "/")
-		if runtime.removedGuestFiles()[trimmed] {
+		if runtime.RemovedGuestFiles()[trimmed] {
 			continue
 		}
-		data, present := runtime.loadSave("fs/" + trimmed)
-		if runtime.saveReadError != nil {
-			return failed(runtime.saveReadError)
+		data, present := runtime.LoadSave("fs/" + trimmed)
+		if runtime.SaveReadError != nil {
+			return failed(runtime.SaveReadError)
 		}
 		if !present {
 			continue
@@ -183,33 +184,33 @@ func (runtime *initializationRuntime) rebindRestoredStorage() error {
 		runtime.restoreGuestFile(name, bytes.Clone(data))
 	}
 
-	held := make(map[*runtimeCFile]bool, len(runtime.cFileHandles))
-	for _, open := range runtime.cFileHandles {
-		held[open.store] = true
+	held := make(map[*wipicrt.RuntimeCFile]bool, len(runtime.CFileHandles))
+	for _, open := range runtime.CFileHandles {
+		held[open.Store] = true
 	}
 	for _, store := range restored.cFiles {
-		seed, found := runtime.databaseSeed(store.name)
-		store.data, store.packaged = nil, 0
-		if packaged, shipped := runtime.packagedDatabase(store.name); shipped {
-			store.packaged = len(packaged)
+		seed, found := runtime.DatabaseSeed(store.Name)
+		store.Data, store.Packaged = nil, 0
+		if packaged, shipped := runtime.PackagedDatabase(store.Name); shipped {
+			store.Packaged = len(packaged)
 		}
-		if runtime.saveReadError != nil {
-			return failed(runtime.saveReadError)
+		if runtime.SaveReadError != nil {
+			return failed(runtime.SaveReadError)
 		}
 		if !found {
 			if held[store] {
-				if runtime.detachedCFiles == nil {
-					runtime.detachedCFiles = make(map[string]*runtimeCFile)
+				if runtime.DetachedCFiles == nil {
+					runtime.DetachedCFiles = make(map[string]*wipicrt.RuntimeCFile)
 				}
-				runtime.detachedCFiles[store.name] = store
+				runtime.DetachedCFiles[store.Name] = store
 			}
 			continue
 		}
 		if err := keep(uint64(len(seed))); err != nil {
 			return failed(err)
 		}
-		store.data = append([]byte(nil), seed...)
-		runtime.cFiles[store.name] = store
+		store.Data = append([]byte(nil), seed...)
+		runtime.CFiles[store.Name] = store
 	}
 
 	heldRecords := make(map[*runtimeRecordDatabase]bool, len(runtime.recordDatabaseHandles))
@@ -223,8 +224,8 @@ func (runtime *initializationRuntime) rebindRestoredStorage() error {
 		}
 		// The probes for a packaged copy read the store too, and a read that
 		// failed there is not among the errors the lookup answers.
-		if runtime.saveReadError != nil {
-			return failed(runtime.saveReadError)
+		if runtime.SaveReadError != nil {
+			return failed(runtime.SaveReadError)
 		}
 		store.records = nil
 		if source == storageAbsent {
@@ -251,8 +252,8 @@ func (runtime *initializationRuntime) rebindRestoredStorage() error {
 		if err != nil {
 			return failed(err)
 		}
-		if runtime.saveReadError != nil {
-			return failed(runtime.saveReadError)
+		if runtime.SaveReadError != nil {
+			return failed(runtime.SaveReadError)
 		}
 		store.records = nil
 		if source == storageAbsent {
@@ -271,9 +272,9 @@ func (runtime *initializationRuntime) rebindRestoredStorage() error {
 	}
 
 	for _, file := range restored.files {
-		data, _ := runtime.guestFile(file.state.name)
-		if runtime.saveReadError != nil {
-			return failed(runtime.saveReadError)
+		data, _ := runtime.GuestFile(file.state.name)
+		if runtime.SaveReadError != nil {
+			return failed(runtime.SaveReadError)
 		}
 		if file.state.truncated && len(data) > file.length {
 			data = data[:file.length]

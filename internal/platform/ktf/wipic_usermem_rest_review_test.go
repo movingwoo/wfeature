@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // TestUserMemoryPoolChecksTheRangeBeforeAllocating pins the order the pool
@@ -24,7 +25,7 @@ func TestUserMemoryPoolChecksTheRangeBeforeAllocating(t *testing.T) {
 	}
 	var before, after goruntime.MemStats
 	goruntime.ReadMemStats(&before)
-	_, err := runtime.handleUserMemoryCall(thread, userMemoryCreate)
+	_, err := runtime.HandleUserMemoryCall(thread, wipicrt.UserMemoryCreate)
 	goruntime.ReadMemStats(&after)
 	if err == nil {
 		t.Fatal("a pool past the end of guest memory was accepted")
@@ -32,7 +33,7 @@ func TestUserMemoryPoolChecksTheRangeBeforeAllocating(t *testing.T) {
 	if grown := after.TotalAlloc - before.TotalAlloc; grown >= size/2 {
 		t.Fatalf("the refused pool allocated %d bytes first", grown)
 	}
-	if len(runtime.userMemoryPools) != 0 {
+	if len(runtime.UserMemoryPools) != 0 {
 		t.Fatal("the refused pool was recorded")
 	}
 }

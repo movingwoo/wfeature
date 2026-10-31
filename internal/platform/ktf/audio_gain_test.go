@@ -7,6 +7,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/audio/smaf"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 type audioGainProbe struct {
@@ -35,14 +36,14 @@ func (sink *audioGainProbe) SoundGain(sound backend.AudioHandle, gain uint16) {
 
 func TestJavaAudioGainFollowsClipAndSharedDeviceControls(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	clock := NewManualClock(runtime.clockBase)
-	client.clock = clock
+	clock := wipicrt.NewManualClock(runtime.ClockBase)
+	client.Clock = clock
 	sink := &audioGainProbe{
 		gains: make(map[backend.AudioHandle]uint16),
 		notes: make(map[backend.AudioHandle][]uint8),
 		stops: make(map[backend.AudioHandle]int),
 	}
-	client.audio = backend.NewAudio(sink)
+	client.Audio = backend.NewAudio(sink)
 	vm := client.JVM()
 	const clipClass = "org/kwis/msp/media/Clip"
 	const playerClass = "org/kwis/msp/media/Player"
@@ -100,7 +101,7 @@ func TestJavaAudioGainFollowsClipAndSharedDeviceControls(t *testing.T) {
 	play := func(clip *jvm.Object) backend.AudioHandle {
 		t.Helper()
 		wantInt(static(playerClass, "play", "(Lorg/kwis/msp/media/Clip;Z)Z", jvm.ReferenceValue(clip), jvm.IntValue(1)), 1)
-		return runtime.clip(clip).handle
+		return runtime.clip(clip).Handle
 	}
 	setClip(first, -1, 0)
 	setClip(first, 150, 100)
@@ -120,7 +121,7 @@ func TestJavaAudioGainFollowsClipAndSharedDeviceControls(t *testing.T) {
 		}
 	}
 	clock.Advance(25 * time.Millisecond)
-	client.serviceAudio()
+	client.ServiceAudio()
 	wantGains(2000, 8000)
 	for _, sound := range []backend.AudioHandle{firstSound, secondSound} {
 		if got := sink.notes[sound]; len(got) != 1 || got[0] != 100 {
@@ -134,7 +135,7 @@ func TestJavaAudioGainFollowsClipAndSharedDeviceControls(t *testing.T) {
 	wantGains(0, 8000)
 	setClip(first, 50, 50)
 	wantGains(4000, 8000)
-	mediaCall(t, runtime, wipicMediaSetVolume, 40)
+	mediaCall(t, runtime, wipicrt.WIPICMediaSetVolume, 40)
 	wantInt(static(volumeClass, "get", "()I"), 40)
 	wantGains(2000, 4000)
 	static(volumeClass, "set", "(I)V", jvm.IntValue(-1))
@@ -144,7 +145,7 @@ func TestJavaAudioGainFollowsClipAndSharedDeviceControls(t *testing.T) {
 	wantGains(4000, 8000)
 	if sink.stops[firstSound] != firstStops || sink.stops[secondSound] != secondStops ||
 		len(sink.notes[firstSound]) != 1 || len(sink.notes[secondSound]) != 1 ||
-		!client.audio.Playing(firstSound) || !client.audio.Playing(secondSound) {
+		!client.Audio.Playing(firstSound) || !client.Audio.Playing(secondSound) {
 		t.Fatal("a volume change stopped or retriggered playback")
 	}
 
@@ -167,12 +168,12 @@ func TestJavaAudioGainFollowsClipAndSharedDeviceControls(t *testing.T) {
 		}
 		wantInt(invoke(first, "getVolume", "()I"), 50)
 		clock.Advance(25 * time.Millisecond)
-		client.serviceAudio()
+		client.ServiceAudio()
 		wantGains(4000, 8000)
 		if got := sink.notes[firstSound]; len(got) != 1 || got[0] != 100 {
 			t.Fatalf("%s reloaded note velocities = %v", refill, got)
 		}
-		if sink.stops[secondSound] != secondStops || !client.audio.Playing(secondSound) {
+		if sink.stops[secondSound] != secondStops || !client.Audio.Playing(secondSound) {
 			t.Fatalf("%s interrupted the other clip", refill)
 		}
 	}

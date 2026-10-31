@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -45,14 +46,14 @@ func authenticationCertificate(archive *Archive, number string) ([]byte, bool) {
 // certificate's deletion bit while allowing other database removals to persist.
 type certificateSaveStore struct {
 	mu              sync.Mutex
-	base            SaveStore
+	base            wipicrt.SaveStore
 	certificate     []byte
 	removed         []byte
 	originalRemoved bool
 	readError       error
 }
 
-func newCertificateSaveStore(base SaveStore, certificate []byte) *certificateSaveStore {
+func newCertificateSaveStore(base wipicrt.SaveStore, certificate []byte) *certificateSaveStore {
 	store := &certificateSaveStore{base: base, certificate: bytes.Clone(certificate)}
 	if base != nil {
 		if err := store.loadRemovalView(false); err != nil {
@@ -70,13 +71,13 @@ func newCertificateSaveStore(base SaveStore, certificate []byte) *certificateSav
 // removedInRun says the title removed the certificate in this run. A run that
 // starts has not; one that a checkpoint brought back may have.
 func (store *certificateSaveStore) loadRemovalView(removedInRun bool) error {
-	data, _, err := backend.ReadSave(store.base, databaseRemovedKey)
+	data, _, err := backend.ReadSave(store.base, wipicrt.DatabaseRemovedKey)
 	if err != nil {
 		return err
 	}
 	var names []string
 	original := false
-	for _, name := range splitRemovalList(data) {
+	for _, name := range wipicrt.SplitRemovalList(data) {
 		if name == certificateName {
 			original = true
 		} else {
@@ -86,7 +87,7 @@ func (store *certificateSaveStore) loadRemovalView(removedInRun bool) error {
 	if removedInRun {
 		names = append(names, certificateName)
 	}
-	store.removed, store.originalRemoved = joinRemovalList(names), original
+	store.removed, store.originalRemoved = wipicrt.JoinRemovalList(names), original
 	return nil
 }
 
@@ -96,7 +97,7 @@ func (store *certificateSaveStore) LoadSave(name string) ([]byte, bool) {
 }
 
 func (store *certificateSaveStore) ReadSave(name string) ([]byte, bool, error) {
-	key, err := NormalizeSaveKey(name)
+	key, err := wipicrt.NormalizeSaveKey(name)
 	if err != nil {
 		return nil, false, err
 	}
@@ -105,7 +106,7 @@ func (store *certificateSaveStore) ReadSave(name string) ([]byte, bool, error) {
 	switch key {
 	case certificateSaveKey:
 		return bytes.Clone(store.certificate), true, nil
-	case databaseRemovedKey:
+	case wipicrt.DatabaseRemovedKey:
 		return bytes.Clone(store.removed), true, store.readError
 	}
 	return backend.ReadSave(store.base, key)
@@ -127,7 +128,7 @@ func (store *certificateSaveStore) ListSaves(directory string) ([]string, error)
 	if !listed {
 		return nil, backend.ErrSavesNotListed
 	}
-	for _, own := range []string{certificateSaveKey, databaseRemovedKey} {
+	for _, own := range []string{certificateSaveKey, wipicrt.DatabaseRemovedKey} {
 		if strings.HasPrefix(own, prefix) && !slices.Contains(keys, own) {
 			keys = append(keys, own)
 		}
@@ -147,7 +148,7 @@ func (store *certificateSaveStore) StoreSaves(entries map[string][]byte) error {
 	certificate, removed := store.certificate, store.removed
 	seen := make(map[string]bool)
 	for name, data := range entries {
-		key, err := NormalizeSaveKey(name)
+		key, err := wipicrt.NormalizeSaveKey(name)
 		if err != nil {
 			return err
 		}
@@ -159,13 +160,13 @@ func (store *certificateSaveStore) StoreSaves(entries map[string][]byte) error {
 		case certificateSaveKey:
 			certificate = bytes.Clone(data)
 			continue
-		case databaseRemovedKey:
+		case wipicrt.DatabaseRemovedKey:
 			if store.readError != nil {
 				return store.readError
 			}
 			removed = bytes.Clone(data)
 			var names []string
-			for _, entry := range splitRemovalList(data) {
+			for _, entry := range wipicrt.SplitRemovalList(data) {
 				if entry != certificateName {
 					names = append(names, entry)
 				}
@@ -173,7 +174,7 @@ func (store *certificateSaveStore) StoreSaves(entries map[string][]byte) error {
 			if store.originalRemoved {
 				names = append(names, certificateName)
 			}
-			data = joinRemovalList(names)
+			data = wipicrt.JoinRemovalList(names)
 		}
 		staged[key] = data
 	}
@@ -182,14 +183,4 @@ func (store *certificateSaveStore) StoreSaves(entries map[string][]byte) error {
 	}
 	store.certificate, store.removed = certificate, removed
 	return nil
-}
-
-// Every KTF identity API reads the same session snapshot used to issue the
-// certificate. Host startup defaults are never changed by authentication.
-func (client *Client) systemProperty(name string) (string, bool) {
-	if name == "PHONENUMBER" || name == "MIN" {
-		return client.subscriberNumber, true
-	}
-	value, ok := wipic.SystemProperties[name]
-	return value, ok
 }

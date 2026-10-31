@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // createOffScreenThroughTable and destroyOffScreenThroughTable drive
@@ -17,7 +18,7 @@ func createOffScreenThroughTable(t *testing.T, runtime *initializationRuntime, w
 	context := armcore.NewContext()
 	context.Registers[0] = width
 	context.Registers[1] = height
-	handle, err := runtime.handleWIPICTableCall(armcore.NewThread(context), wipicTableGraphics, 4)
+	handle, err := runtime.HandleWIPICTableCall(armcore.NewThread(context), wipicrt.WIPICTableGraphics, 4)
 	if err != nil {
 		t.Fatalf("MC_grpCreateOffScreenFrameBuffer(%d, %d) error = %v", width, height, err)
 	}
@@ -28,7 +29,7 @@ func destroyThroughTable(t *testing.T, runtime *initializationRuntime, function,
 	t.Helper()
 	context := armcore.NewContext()
 	context.Registers[0] = handle
-	if _, err := runtime.handleWIPICTableCall(armcore.NewThread(context), wipicTableGraphics, function); err != nil {
+	if _, err := runtime.HandleWIPICTableCall(armcore.NewThread(context), wipicrt.WIPICTableGraphics, function); err != nil {
 		t.Fatalf("graphics function %d on %#x error = %v", function, handle, err)
 	}
 }
@@ -42,12 +43,12 @@ func TestDestroyOffScreenFrameBufferReturnsTheRecordAndItsPixels(t *testing.T) {
 
 	first := createOffScreenThroughTable(t, runtime, 240, 320)
 	destroyThroughTable(t, runtime, 3, first)
-	settled := runtime.arena.used()
+	settled := runtime.Arena.Used()
 
 	for round := 0; round < 512; round++ {
 		handle := createOffScreenThroughTable(t, runtime, 240, 320)
 		destroyThroughTable(t, runtime, 3, handle)
-		if used := runtime.arena.used(); used != settled {
+		if used := runtime.Arena.Used(); used != settled {
 			t.Fatalf("round %d left %d bytes handed out, want %d", round, used, settled)
 		}
 	}
@@ -61,21 +62,21 @@ func TestDestroyOffScreenFrameBufferReturnsTheRecordAndItsPixels(t *testing.T) {
 func TestDestroyOffScreenFrameBufferIgnoresTheScreen(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
-	screen, err := runtime.wipicGetScreenFramebuffer()
+	screen, err := runtime.WIPICGetScreenFramebuffer()
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := runtime.arena.used()
+	before := runtime.Arena.Used()
 
 	destroyThroughTable(t, runtime, 3, screen)
 
-	if used := runtime.arena.used(); used != before {
+	if used := runtime.Arena.Used(); used != before {
 		t.Fatalf("used() = %d after destroying the screen framebuffer, want %d", used, before)
 	}
-	if _, err := runtime.readWIPICFramebuffer(screen); err != nil {
+	if _, err := runtime.ReadWIPICFramebuffer(screen); err != nil {
 		t.Fatalf("the screen framebuffer no longer reads back: %v", err)
 	}
-	again, err := runtime.wipicGetScreenFramebuffer()
+	again, err := runtime.WIPICGetScreenFramebuffer()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,18 +92,18 @@ func TestDestroyOffScreenFrameBufferRefusesWhatItDidNotIssue(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
 	live := createOffScreenThroughTable(t, runtime, 32, 32)
-	before := runtime.arena.used()
+	before := runtime.Arena.Used()
 
 	destroyThroughTable(t, runtime, 3, 0)
 	destroyThroughTable(t, runtime, 3, live+4)
-	if used := runtime.arena.used(); used != before {
+	if used := runtime.Arena.Used(); used != before {
 		t.Fatalf("used() = %d after refused destroys, want %d", used, before)
 	}
 
 	destroyThroughTable(t, runtime, 3, live)
-	released := runtime.arena.used()
+	released := runtime.Arena.Used()
 	destroyThroughTable(t, runtime, 3, live)
-	if used := runtime.arena.used(); used != released {
+	if used := runtime.Arena.Used(); used != released {
 		t.Fatalf("a double destroy released the blocks twice: used() = %d, want %d", used, released)
 	}
 }
@@ -118,35 +119,35 @@ func TestDestroyImageReturnsTheRecordThePixelsAndTheSource(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	encoded := encodePalettedPNG(t, 2, 2)
 
-	result, err := runtime.allocateWIPIC(4)
+	result, err := runtime.AllocateWIPIC(4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	settled := runtime.arena.used()
+	settled := runtime.Arena.Used()
 
 	for round := 0; round < 64; round++ {
-		data, err := runtime.allocateWIPIC(uint32(len(encoded)))
+		data, err := runtime.AllocateWIPIC(uint32(len(encoded)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := runtime.client.core.Memory().Write(data+wipicAllocationOverhead, encoded); err != nil {
+		if err := runtime.client.Core().Memory().Write(data+wipicrt.WIPICAllocationOverhead, encoded); err != nil {
 			t.Fatal(err)
 		}
 		thread := armcore.NewThread(armcore.Context{})
-		for register, value := range []uint32{result + wipicAllocationOverhead, data, 0, uint32(len(encoded))} {
+		for register, value := range []uint32{result + wipicrt.WIPICAllocationOverhead, data, 0, uint32(len(encoded))} {
 			if err := thread.SetRegister(register, value); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if code, err := runtime.wipicCreateImage(thread); err != nil || code != 1 {
+		if code, err := runtime.WIPICCreateImage(thread); err != nil || code != 1 {
 			t.Fatalf("round %d: MC_grpCreateImage() = %#x, %v", round, code, err)
 		}
-		handles, err := runtime.readAOTWords(result+wipicAllocationOverhead, 1, "created image handle")
+		handles, err := runtime.ReadAOTWords(result+wipicrt.WIPICAllocationOverhead, 1, "created image handle")
 		if err != nil {
 			t.Fatal(err)
 		}
 		destroyThroughTable(t, runtime, 33, handles[0])
-		if used := runtime.arena.used(); used != settled {
+		if used := runtime.Arena.Used(); used != settled {
 			t.Fatalf("round %d left %d bytes handed out, want %d", round, used, settled)
 		}
 	}
@@ -170,18 +171,18 @@ func TestDestroyImageDoesNotReadPastTheBlockItWasGiven(t *testing.T) {
 	// past its handle, which is inside the neighbour rather than inside target.
 	const sourceWordOffset = 64
 	stray := target + sourceWordOffset
-	if stray < neighbour || uint64(stray) >= uint64(neighbour)+runtime.wipicAllocations[neighbour] {
+	if stray < neighbour || uint64(stray) >= uint64(neighbour)+runtime.WIPICAllocations[neighbour] {
 		t.Skipf("the arena did not lay the blocks out adjacently: %#x is not inside %#x", stray, neighbour)
 	}
 	var handle [4]byte
 	binary.LittleEndian.PutUint32(handle[:], victim)
-	if err := client.core.Memory().Write(stray, handle[:]); err != nil {
+	if err := client.Core().Memory().Write(stray, handle[:]); err != nil {
 		t.Fatal(err)
 	}
 
 	destroyThroughTable(t, runtime, 33, target)
 
-	if _, ok := runtime.wipicAllocations[victim]; !ok {
+	if _, ok := runtime.WIPICAllocations[victim]; !ok {
 		t.Fatal("a destroy read past its block and freed a live framebuffer")
 	}
 }
@@ -193,44 +194,44 @@ func TestDestroyImageLeavesNothingReadable(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	encoded := encodePalettedPNG(t, 2, 2)
 
-	data, err := runtime.allocateWIPIC(uint32(len(encoded)))
+	data, err := runtime.AllocateWIPIC(uint32(len(encoded)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.client.core.Memory().Write(data+wipicAllocationOverhead, encoded); err != nil {
+	if err := runtime.client.Core().Memory().Write(data+wipicrt.WIPICAllocationOverhead, encoded); err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.allocateWIPIC(4)
+	result, err := runtime.AllocateWIPIC(4)
 	if err != nil {
 		t.Fatal(err)
 	}
 	thread := armcore.NewThread(armcore.Context{})
-	for register, value := range []uint32{result + wipicAllocationOverhead, data, 0, uint32(len(encoded))} {
+	for register, value := range []uint32{result + wipicrt.WIPICAllocationOverhead, data, 0, uint32(len(encoded))} {
 		if err := thread.SetRegister(register, value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if code, err := runtime.wipicCreateImage(thread); err != nil || code != 1 {
+	if code, err := runtime.WIPICCreateImage(thread); err != nil || code != 1 {
 		t.Fatalf("MC_grpCreateImage() = %#x, %v", code, err)
 	}
-	handles, err := runtime.readAOTWords(result+wipicAllocationOverhead, 1, "created image handle")
+	handles, err := runtime.ReadAOTWords(result+wipicrt.WIPICAllocationOverhead, 1, "created image handle")
 	if err != nil {
 		t.Fatal(err)
 	}
 	image := handles[0]
-	if runtime.framebufferOpacityOf(image) == nil {
+	if runtime.FramebufferOpacityOf(image) == nil {
 		t.Fatal("the image records no transparency to begin with")
 	}
 
 	destroyThroughTable(t, runtime, 33, image)
 
-	if _, ok := runtime.wipicAllocations[image]; ok {
+	if _, ok := runtime.WIPICAllocations[image]; ok {
 		t.Fatal("the image record is still recorded as live")
 	}
-	if _, ok := runtime.wipicAllocations[data]; ok {
+	if _, ok := runtime.WIPICAllocations[data]; ok {
 		t.Fatal("the encoded source buffer is still recorded as live")
 	}
-	if runtime.framebufferOpacityOf(image) != nil {
+	if runtime.FramebufferOpacityOf(image) != nil {
 		t.Fatal("the destroyed image kept its transparency mask")
 	}
 }
@@ -240,29 +241,29 @@ func TestImageDestroyPreservesReusedSourceAllocation(t *testing.T) {
 	encoded := encodePalettedPNG(t, 2, 2)
 	result := callocThroughSVC(t, runtime, 4)
 	data := callocThroughSVC(t, runtime, uint32(len(encoded)))
-	if err := client.core.Memory().Write(data+wipicAllocationOverhead, encoded); err != nil {
+	if err := client.Core().Memory().Write(data+wipicrt.WIPICAllocationOverhead, encoded); err != nil {
 		t.Fatal(err)
 	}
 	context := armcore.NewContext()
-	for index, value := range []uint32{result + wipicAllocationOverhead, data, 0, uint32(len(encoded))} {
+	for index, value := range []uint32{result + wipicrt.WIPICAllocationOverhead, data, 0, uint32(len(encoded))} {
 		context.Registers[index] = value
 	}
-	if code, err := runtime.wipicCreateImage(armcore.NewThread(context)); err != nil || code != 1 {
+	if code, err := runtime.WIPICCreateImage(armcore.NewThread(context)); err != nil || code != 1 {
 		t.Fatalf("create image=%d error=%v", code, err)
 	}
-	handles, err := runtime.readAOTWords(result+wipicAllocationOverhead, 1, "image result")
+	handles, err := runtime.ReadAOTWords(result+wipicrt.WIPICAllocationOverhead, 1, "image result")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A caller releases the encoded source itself. Reusing its address must
 	// not transfer ownership of the new allocation to the old image.
-	runtime.freeWIPIC(data)
+	runtime.FreeWIPIC(data)
 	replacement := callocThroughSVC(t, runtime, uint32(len(encoded)))
 	if replacement != data {
 		t.Fatalf("source address was not reused: %#x != %#x", replacement, data)
 	}
 	destroyThroughTable(t, runtime, 33, handles[0])
-	if _, live := runtime.wipicAllocations[replacement]; !live {
+	if _, live := runtime.WIPICAllocations[replacement]; !live {
 		t.Fatal("image destruction freed a replacement source allocation")
 	}
 }

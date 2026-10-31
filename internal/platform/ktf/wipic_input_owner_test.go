@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // Author a position-independent Thumb controller, initializer and mode wrapper
@@ -15,11 +16,11 @@ import (
 // at the native mode call, rather than importing a runtime or archive fixture.
 func inputOwnerCaller(t *testing.T, runtime *initializationRuntime) (*armcore.Thread, uint32, uint32) {
 	t.Helper()
-	base, err := runtime.allocateBytes(make([]byte, 512))
+	base, err := runtime.AllocateBytes(make([]byte, 512))
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := runtime.allocateWords([]uint32{7})
+	state, err := runtime.AllocateWords([]uint32{7})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +30,7 @@ func inputOwnerCaller(t *testing.T, runtime *initializationRuntime) (*armcore.Th
 		for i, word := range words {
 			binary.LittleEndian.PutUint16(data[i*2:], word)
 		}
-		if err := runtime.client.core.Memory().Write(address, data); err != nil {
+		if err := runtime.client.Core().Memory().Write(address, data); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -64,7 +65,7 @@ func inputOwnerCaller(t *testing.T, runtime *initializationRuntime) (*armcore.Th
 	call(wrapper+52, helper)
 	put(wrapper+56, 0xbc08, 0x469a, 0xbd00)
 	put(helper, 0x4770) // bx lr
-	stack, err := runtime.allocateWords([]uint32{staticBase, initializer + 22 | 1, caller + 18 | 1})
+	stack, err := runtime.AllocateWords([]uint32{staticBase, initializer + 22 | 1, caller + 18 | 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,18 +83,18 @@ func TestCInputOwnerSurvivesRejectedConfirmation(t *testing.T) {
 	s := fixture.session
 	runtime := s.Client.runtime
 	thread, state, _ := inputOwnerCaller(t, runtime)
-	runtime.rememberCInputOwner(thread)
-	if runtime.cInput.owner.address != state {
+	runtime.RememberCInputOwner(thread)
+	if runtime.CInput.Owner.Address != state {
 		t.Fatal("authored controller was not recognized")
 	}
 	before, err := s.TextInput(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SendKey(t.Context(), KeyPressed, KeyFire); err != nil {
+	if err := s.SendKey(t.Context(), wipicrt.KeyPressed, wipicrt.KeyFire); err != nil {
 		t.Fatal(err)
 	}
-	s.Client.clock.(*ManualClock).Advance(50 * time.Millisecond)
+	s.Client.Clock.(*wipicrt.ManualClock).Advance(50 * time.Millisecond)
 	if _, err := s.Client.ServiceTimers(t.Context(), 1); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +155,7 @@ func TestCInputOwnerRejectsUnprovenCallers(t *testing.T) {
 			case "state pointer":
 				writeWord(t, runtime, base+384, 0xfffffff0)
 			}
-			if _, ok := runtime.cInputOwnerFromCaller(thread); ok {
+			if _, ok := runtime.CInputOwnerFromCaller(thread); ok {
 				t.Fatal("unproven controller was accepted")
 			}
 		})
@@ -165,7 +166,7 @@ func TestCInputOwnerChangeDuringDeliveryRejectsPendingText(t *testing.T) {
 	fixture := newDeferredCInputFixture(t)
 	runtime := fixture.session.Client.runtime
 	thread, state, _ := inputOwnerCaller(t, runtime)
-	runtime.rememberCInputOwner(thread)
+	runtime.RememberCInputOwner(thread)
 	edit, err := fixture.session.TextInput(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -183,23 +184,23 @@ func TestCInputModeTracksOnlyTheLiveController(t *testing.T) {
 	s, _, _ := cInputFixture(t)
 	runtime := s.Client.runtime
 	thread, state, _ := inputOwnerCaller(t, runtime)
-	if _, err := runtime.handleWIPICInputMethodCall(thread, wipicIMSetCurrentMode); err != nil {
+	if _, err := runtime.HandleWIPICInputMethodCall(thread, wipicrt.WIPICIMSetCurrentMode); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.cInput.owner.address != state || !runtime.cInput.active {
+	if runtime.CInput.Owner.Address != state || !runtime.CInput.Active {
 		t.Fatal("mode activation did not record the controller")
 	}
-	if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 1); err != nil {
+	if _, err := cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 1); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.cInput.owner.address != state {
+	if runtime.CInput.Owner.Address != state {
 		t.Fatal("changing keypad mode dropped the live controller")
 	}
 	writeWord(t, runtime, state, 8)
-	if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 2); err != nil {
+	if _, err := cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 2); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.cInput.owner.address != 0 {
+	if runtime.CInput.Owner.Address != 0 {
 		t.Fatal("another mode activation retained an inactive controller")
 	}
 }

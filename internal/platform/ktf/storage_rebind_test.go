@@ -12,6 +12,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // These cover what a load does with the storage tables a title cannot be made
@@ -58,7 +59,7 @@ func restoreStorage(t *testing.T, plant func(*initializationRuntime) []*jvm.Obje
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	buffer, err := fresh.allocate(64)
+	buffer, err := fresh.Allocate(64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,11 +96,11 @@ func (storage *reboundStorage) set(arguments ...uint32) {
 // text puts a terminated string in guest memory, past the scratch buffer.
 func (storage *reboundStorage) text(text string) uint32 {
 	storage.t.Helper()
-	address, err := storage.runtime.allocate(uint64(len(text) + 1))
+	address, err := storage.runtime.Allocate(uint64(len(text) + 1))
 	if err != nil {
 		storage.t.Fatal(err)
 	}
-	if err := storage.client.core.Memory().Write(address, append([]byte(text), 0)); err != nil {
+	if err := storage.client.Core().Memory().Write(address, append([]byte(text), 0)); err != nil {
 		storage.t.Fatal(err)
 	}
 	return address
@@ -117,11 +118,11 @@ func (storage *reboundStorage) stored(key string) string {
 // writeFile writes text through an open C file handle, at its cursor.
 func (storage *reboundStorage) writeFile(handle uint32, text string) {
 	storage.t.Helper()
-	if err := storage.client.core.Memory().Write(storage.buffer, []byte(text)); err != nil {
+	if err := storage.client.Core().Memory().Write(storage.buffer, []byte(text)); err != nil {
 		storage.t.Fatal(err)
 	}
 	storage.set(handle, storage.buffer, uint32(len(text)))
-	if count, err := storage.runtime.wipicFileStream(storage.thread, true); err != nil || count != uint32(len(text)) {
+	if count, err := storage.runtime.WIPICFileStream(storage.thread, true); err != nil || count != uint32(len(text)) {
 		storage.t.Fatalf("write through %#x = %d, %v", handle, count, err)
 	}
 }
@@ -129,7 +130,7 @@ func (storage *reboundStorage) writeFile(handle uint32, text string) {
 func (storage *reboundStorage) openFile(name string, mode uint32) uint32 {
 	storage.t.Helper()
 	storage.set(storage.text(name), mode)
-	handle, err := storage.runtime.wipicFileOpen(storage.thread)
+	handle, err := storage.runtime.WIPICFileOpen(storage.thread)
 	if err != nil {
 		storage.t.Fatalf("open %q: %v", name, err)
 	}
@@ -139,7 +140,7 @@ func (storage *reboundStorage) openFile(name string, mode uint32) uint32 {
 func (storage *reboundStorage) fileExists(name string) bool {
 	storage.t.Helper()
 	storage.set(storage.text(name))
-	result, err := storage.runtime.handleWIPICFileCall(storage.thread, wipicFileExists)
+	result, err := storage.runtime.HandleWIPICFileCall(storage.thread, wipicrt.WIPICFileExists)
 	if err != nil {
 		storage.t.Fatal(err)
 	}
@@ -153,18 +154,18 @@ func (storage *reboundStorage) fileExists(name string) bool {
 // then shares it, and a rename onto the name takes the kept handles with it.
 func TestStorageRebindKeepsOneStoreForACFileThatIsGone(t *testing.T) {
 	plant := func(source *initializationRuntime) []*jvm.Object {
-		gone := &runtimeCFile{name: "save", data: []byte("captured")}
-		other := &runtimeCFile{name: "other", data: []byte("captured other")}
-		source.cFiles = map[string]*runtimeCFile{"save": gone, "other": other}
-		source.cFileHandles = map[uint32]*runtimeCFileHandle{0x1001: {store: gone, position: 1}}
-		source.nextCDatabaseHandle = 1
+		gone := &wipicrt.RuntimeCFile{Name: "save", Data: []byte("captured")}
+		other := &wipicrt.RuntimeCFile{Name: "other", Data: []byte("captured other")}
+		source.CFiles = map[string]*wipicrt.RuntimeCFile{"save": gone, "other": other}
+		source.CFileHandles = map[uint32]*wipicrt.RuntimeCFileHandle{0x1001: {Store: gone, Position: 1}}
+		source.NextCDatabaseHandle = 1
 		return nil
 	}
 	saves := map[string][]byte{"db/other": []byte("bbb")}
 	detached := func(t *testing.T) *reboundStorage {
 		storage := restoreStorage(t, plant, saves).mustBind()
-		kept := storage.runtime.cFileHandles[0x1001]
-		if kept == nil || len(kept.store.data) != 0 || kept.position != 1 || storage.runtime.cFiles["save"] != nil || storage.runtime.detachedCFiles["save"] != kept.store {
+		kept := storage.runtime.CFileHandles[0x1001]
+		if kept == nil || len(kept.Store.Data) != 0 || kept.Position != 1 || storage.runtime.CFiles["save"] != nil || storage.runtime.DetachedCFiles["save"] != kept.Store {
 			t.Fatalf("the handle on a file that is gone came back as %+v", kept)
 		}
 		if storage.fileExists("save") || storage.stored("db/save") != "<absent>" || storage.probe.writes != 0 {
@@ -175,20 +176,20 @@ func TestStorageRebindKeepsOneStoreForACFileThatIsGone(t *testing.T) {
 	t.Run("a write through the kept handle, then an open", func(t *testing.T) {
 		storage := detached(t)
 		storage.writeFile(0x1001, "XY")
-		kept := storage.runtime.cFileHandles[0x1001].store
-		if storage.stored("db/save") != "\x00XY" || storage.runtime.cFiles["save"] != kept || len(storage.runtime.detachedCFiles) != 0 {
-			t.Fatalf("the write stored %q and left the catalog at %v", storage.stored("db/save"), storage.runtime.cFiles["save"])
+		kept := storage.runtime.CFileHandles[0x1001].Store
+		if storage.stored("db/save") != "\x00XY" || storage.runtime.CFiles["save"] != kept || len(storage.runtime.DetachedCFiles) != 0 {
+			t.Fatalf("the write stored %q and left the catalog at %v", storage.stored("db/save"), storage.runtime.CFiles["save"])
 		}
 		opened := storage.openFile("save", 2)
-		if storage.runtime.cFileHandles[opened].store != kept {
+		if storage.runtime.CFileHandles[opened].Store != kept {
 			t.Fatal("an open after the write made a second store for the name")
 		}
 	})
 	t.Run("an open, then a write through the kept handle", func(t *testing.T) {
 		storage := detached(t)
-		kept := storage.runtime.cFileHandles[0x1001].store
+		kept := storage.runtime.CFileHandles[0x1001].Store
 		opened := storage.openFile("save", 2)
-		if storage.runtime.cFileHandles[opened].store != kept || storage.runtime.cFiles["save"] != kept || len(storage.runtime.detachedCFiles) != 0 {
+		if storage.runtime.CFileHandles[opened].Store != kept || storage.runtime.CFiles["save"] != kept || len(storage.runtime.DetachedCFiles) != 0 {
 			t.Fatal("the open did not take the store the kept handle is on")
 		}
 		storage.writeFile(opened, "ab")
@@ -200,11 +201,11 @@ func TestStorageRebindKeepsOneStoreForACFileThatIsGone(t *testing.T) {
 	t.Run("a rename onto the name", func(t *testing.T) {
 		storage := detached(t)
 		storage.set(storage.text("other"), storage.text("save"))
-		if result, err := storage.runtime.wipicFileRename(storage.thread); err != nil || result != 0 {
+		if result, err := storage.runtime.WIPICFileRename(storage.thread); err != nil || result != 0 {
 			t.Fatalf("rename = %#x, %v", result, err)
 		}
-		renamed := storage.runtime.cFiles["save"]
-		if renamed == nil || storage.runtime.cFileHandles[0x1001].store != renamed || len(storage.runtime.detachedCFiles) != 0 {
+		renamed := storage.runtime.CFiles["save"]
+		if renamed == nil || storage.runtime.CFileHandles[0x1001].Store != renamed || len(storage.runtime.DetachedCFiles) != 0 {
 			t.Fatal("the kept handle did not follow the file that has the name now")
 		}
 		storage.writeFile(0x1001, "Z")
@@ -215,10 +216,10 @@ func TestStorageRebindKeepsOneStoreForACFileThatIsGone(t *testing.T) {
 	t.Run("a remove of the name", func(t *testing.T) {
 		storage := detached(t)
 		storage.set(storage.text("save"))
-		if result, err := storage.runtime.wipicFileDelete(storage.thread); err != nil || result != wipicErrorNotFound {
+		if result, err := storage.runtime.WIPICFileDelete(storage.thread); err != nil || result != wipicrt.WIPICErrorNotFound {
 			t.Fatalf("remove of a name that is gone = %#x, %v", result, err)
 		}
-		if storage.runtime.cFileHandles[0x1001] == nil || storage.probe.writes != 0 {
+		if storage.runtime.CFileHandles[0x1001] == nil || storage.probe.writes != 0 {
 			t.Fatal("removing a name that is gone closed its handle or wrote")
 		}
 	})
@@ -244,11 +245,11 @@ func TestStorageRebindKeepsOneStoreForARecordDatabaseThatIsGone(t *testing.T) {
 	}
 	insert := func(storage *reboundStorage, handle uint32, text string) {
 		t.Helper()
-		if err := storage.client.core.Memory().Write(storage.buffer, []byte(text)); err != nil {
+		if err := storage.client.Core().Memory().Write(storage.buffer, []byte(text)); err != nil {
 			t.Fatal(err)
 		}
 		storage.set(handle, storage.buffer, uint32(len(text)))
-		if id, err := storage.runtime.wipicRecordDatabaseInsert(storage.thread); err != nil || id == wipicErrorInvalid {
+		if id, err := storage.runtime.wipicRecordDatabaseInsert(storage.thread); err != nil || id == wipicrt.WIPICErrorInvalid {
 			t.Fatalf("insert through %#x = %#x, %v", handle, id, err)
 		}
 	}
@@ -264,7 +265,7 @@ func TestStorageRebindKeepsOneStoreForARecordDatabaseThatIsGone(t *testing.T) {
 	t.Run("an update of a record that is gone", func(t *testing.T) {
 		storage := detached(t)
 		storage.set(0x2001, 1, storage.buffer, 4)
-		if result, err := storage.runtime.wipicRecordDatabaseUpdate(storage.thread); err != nil || result != wipicErrorInvalid {
+		if result, err := storage.runtime.wipicRecordDatabaseUpdate(storage.thread); err != nil || result != wipicrt.WIPICErrorInvalid {
 			t.Fatalf("update = %#x, %v", result, err)
 		}
 		if storage.probe.writes != 0 || storage.stored("rdb/slots") != "<absent>" {
@@ -275,7 +276,7 @@ func TestStorageRebindKeepsOneStoreForARecordDatabaseThatIsGone(t *testing.T) {
 		storage := detached(t)
 		insert(storage, 0x2001, "new")
 		kept := storage.runtime.recordDatabaseHandles[0x2001].store
-		if storage.runtime.recordDatabases["slots"] != kept || len(storage.runtime.detachedRecordDatabases) != 0 || storage.stored("rdb/slots") != string(encodeSaveRecords([][]byte{[]byte("new")})) {
+		if storage.runtime.recordDatabases["slots"] != kept || len(storage.runtime.detachedRecordDatabases) != 0 || storage.stored("rdb/slots") != string(wipicrt.EncodeSaveRecords([][]byte{[]byte("new")})) {
 			t.Fatal("the insert did not make the database again under the kept store")
 		}
 		if storage.runtime.recordDatabaseHandles[open(storage)].store != kept {
@@ -291,7 +292,7 @@ func TestStorageRebindKeepsOneStoreForARecordDatabaseThatIsGone(t *testing.T) {
 		}
 		insert(storage, opened, "one")
 		insert(storage, 0x2001, "two")
-		if storage.stored("rdb/slots") != string(encodeSaveRecords([][]byte{[]byte("one"), []byte("two")})) {
+		if storage.stored("rdb/slots") != string(wipicrt.EncodeSaveRecords([][]byte{[]byte("one"), []byte("two")})) {
 			t.Fatal("the two handles did not write one database")
 		}
 	})
@@ -308,7 +309,7 @@ func TestStorageRebindKeepsOneStoreForAJavaDatabaseThatIsGone(t *testing.T) {
 	}
 	// The title deleted its database after the checkpoint: the emptied save
 	// and the name on the list are what a delete leaves.
-	saves := map[string][]byte{"jdb/save": encodeSaveRecords(nil), javaDatabaseRemovedKey: joinRemovalList([]string{"save"})}
+	saves := map[string][]byte{"jdb/save": wipicrt.EncodeSaveRecords(nil), javaDatabaseRemovedKey: wipicrt.JoinRemovalList([]string{"save"})}
 	detached := func(t *testing.T) (*reboundStorage, *runtimeDataBaseStore) {
 		storage := restoreStorage(t, plant, saves).mustBind()
 		kept := storage.roots[0].Native.(*runtimeDataBaseStore)
@@ -346,7 +347,7 @@ func TestStorageRebindKeepsOneStoreForAJavaDatabaseThatIsGone(t *testing.T) {
 	t.Run("an insert through the kept object, then an open", func(t *testing.T) {
 		storage, kept := detached(t)
 		insert(storage, storage.roots[0], "new")
-		if storage.runtime.databases["save"] != kept || len(storage.runtime.detachedDatabases) != 0 || storage.stored("jdb/save") != string(encodeSaveRecords([][]byte{[]byte("new")})) {
+		if storage.runtime.databases["save"] != kept || len(storage.runtime.detachedDatabases) != 0 || storage.stored("jdb/save") != string(wipicrt.EncodeSaveRecords([][]byte{[]byte("new")})) {
 			t.Fatal("the insert did not make the database again under the kept store")
 		}
 		if strings.Contains(storage.stored(javaDatabaseRemovedKey), "save") {
@@ -364,7 +365,7 @@ func TestStorageRebindKeepsOneStoreForAJavaDatabaseThatIsGone(t *testing.T) {
 		}
 		insert(storage, opened, "one")
 		insert(storage, storage.roots[0], "two")
-		if storage.stored("jdb/save") != string(encodeSaveRecords([][]byte{[]byte("one"), []byte("two")})) {
+		if storage.stored("jdb/save") != string(wipicrt.EncodeSaveRecords([][]byte{[]byte("one"), []byte("two")})) {
 			t.Fatal("the two objects did not write one database")
 		}
 	})
@@ -375,9 +376,9 @@ func TestStorageRebindKeepsOneStoreForAJavaDatabaseThatIsGone(t *testing.T) {
 // back the same way: the object is on the one store of the name, and an open
 // after the load takes it.
 func TestStorageRebindKeepsADatabaseDeletedWhileHeld(t *testing.T) {
-	saves := map[string][]byte{"jdb/save": encodeSaveRecords(nil), javaDatabaseRemovedKey: joinRemovalList([]string{"save"})}
+	saves := map[string][]byte{"jdb/save": wipicrt.EncodeSaveRecords(nil), javaDatabaseRemovedKey: wipicrt.JoinRemovalList([]string{"save"})}
 	storage := restoreStorage(t, func(source *initializationRuntime) []*jvm.Object {
-		source.client.saveStore = testSaveStore(t, nil)
+		source.client.SaveStore = testSaveStore(t, nil)
 		vm := source.client.JVM()
 		name := jvm.ReferenceValue(vm.NewString("save"))
 		value, err := runtimeOpenDataBase(source, vm, []jvm.Value{name, jvm.IntValue(8), jvm.IntValue(1)})
@@ -414,17 +415,17 @@ func TestStorageRebindKeepsADatabaseDeletedWhileHeld(t *testing.T) {
 // which can still be opened by name: a listing here never reads the store.
 func TestStorageRebindListsTheNamesTheRestoredRunKnew(t *testing.T) {
 	storage := restoreStorage(t, func(source *initializationRuntime) []*jvm.Object {
-		source.guestFiles = map[string][]byte{"kept.sav": []byte("captured"), "gone.sav": []byte("captured")}
+		source.GuestFiles = map[string][]byte{"kept.sav": []byte("captured"), "gone.sav": []byte("captured")}
 		source.databases = map[string]*runtimeDataBaseStore{"kept": {name: "kept"}, "gone": {name: "gone"}}
 		return nil
 	}, map[string][]byte{
 		"fs/kept.sav":  []byte("now"),
 		"fs/later.sav": []byte("written after the checkpoint"),
-		"jdb/kept":     encodeSaveRecords([][]byte{[]byte("now")}),
-		"jdb/later":    encodeSaveRecords([][]byte{[]byte("after")}),
+		"jdb/kept":     wipicrt.EncodeSaveRecords([][]byte{[]byte("now")}),
+		"jdb/later":    wipicrt.EncodeSaveRecords([][]byte{[]byte("after")}),
 	}).mustBind()
-	files := make([]string, 0, len(storage.runtime.guestFiles))
-	for name := range storage.runtime.guestFiles {
+	files := make([]string, 0, len(storage.runtime.GuestFiles))
+	for name := range storage.runtime.GuestFiles {
 		files = append(files, name)
 	}
 	databases := make([]string, 0, len(storage.runtime.databases))
@@ -436,7 +437,7 @@ func TestStorageRebindListsTheNamesTheRestoredRunKnew(t *testing.T) {
 	if !reflect.DeepEqual(files, []string{"kept.sav"}) || !reflect.DeepEqual(databases, []string{"kept"}) {
 		t.Fatalf("the listings name files %q and databases %q", files, databases)
 	}
-	if data, found := storage.runtime.guestFile("later.sav"); !found || string(data) != "written after the checkpoint" {
+	if data, found := storage.runtime.GuestFile("later.sav"); !found || string(data) != "written after the checkpoint" {
 		t.Fatal("a file written after the checkpoint cannot be opened by name")
 	}
 }
@@ -446,21 +447,21 @@ func TestStorageRebindListsTheNamesTheRestoredRunKnew(t *testing.T) {
 // same record binds once the store can be read.
 func TestStorageRebindRefusesUnreadableAndCorruptSaves(t *testing.T) {
 	plant := func(source *initializationRuntime) []*jvm.Object {
-		file := &runtimeCFile{name: "stream", data: []byte("c")}
-		source.cFiles = map[string]*runtimeCFile{"stream": file}
-		source.cFileHandles = map[uint32]*runtimeCFileHandle{0x1001: {store: file}}
-		source.nextCDatabaseHandle = 1
+		file := &wipicrt.RuntimeCFile{Name: "stream", Data: []byte("c")}
+		source.CFiles = map[string]*wipicrt.RuntimeCFile{"stream": file}
+		source.CFileHandles = map[uint32]*wipicrt.RuntimeCFileHandle{0x1001: {Store: file}}
+		source.NextCDatabaseHandle = 1
 		records := &runtimeRecordDatabase{name: "records", recordSize: 4}
 		source.recordDatabases = map[string]*runtimeRecordDatabase{"records": records}
 		database := &runtimeDataBaseStore{name: "slot"}
 		source.databases = map[string]*runtimeDataBaseStore{"slot": database}
-		source.guestFiles = map[string][]byte{"written": []byte("w")}
+		source.GuestFiles = map[string][]byte{"written": []byte("w")}
 		return []*jvm.Object{{ClassName: "org/kwis/msp/io/File", Native: &runtimeGuestFile{name: "open.bin"}}}
 	}
 	healthy := map[string][]byte{
 		"db/stream":   []byte("stream"),
-		"rdb/records": encodeSaveRecords([][]byte{[]byte("r")}),
-		"jdb/slot":    encodeSaveRecords([][]byte{[]byte("j")}),
+		"rdb/records": wipicrt.EncodeSaveRecords([][]byte{[]byte("r")}),
+		"jdb/slot":    wipicrt.EncodeSaveRecords([][]byte{[]byte("j")}),
 		"fs/written":  []byte("written"),
 		"fs/open.bin": []byte("open"),
 	}
@@ -472,11 +473,11 @@ func TestStorageRebindRefusesUnreadableAndCorruptSaves(t *testing.T) {
 			t.Fatalf("bind = %v", err)
 		}
 		after, _ := storage.store.SnapshotSaves()
-		if storage.runtime.saveReadError != nil || storage.runtime.restoredStorage == nil || storage.client.saveStore != SaveStore(storage.probe) || storage.probe.writes != 0 || !reflect.DeepEqual(before, after) {
-			t.Fatalf("the refused bind left a read failure, a bound runtime or a write behind: %v", storage.runtime.saveReadError)
+		if storage.runtime.SaveReadError != nil || storage.runtime.restoredStorage == nil || storage.client.SaveStore != wipicrt.SaveStore(storage.probe) || storage.probe.writes != 0 || !reflect.DeepEqual(before, after) {
+			t.Fatalf("the refused bind left a read failure, a bound runtime or a write behind: %v", storage.runtime.SaveReadError)
 		}
 	}
-	for _, key := range []string{guestFileRemovedKey, databaseRemovedKey, directoryListKey, recordDatabaseRemovedKey, javaDatabaseRemovedKey,
+	for _, key := range []string{guestFileRemovedKey, wipicrt.DatabaseRemovedKey, wipicrt.DirectoryListKey, recordDatabaseRemovedKey, javaDatabaseRemovedKey,
 		"db/stream", "rdb/records", "jdb/slot", "fs/written", "fs/open.bin"} {
 		t.Run("unreadable "+key, func(t *testing.T) {
 			storage := restoreStorage(t, plant, healthy)
@@ -484,7 +485,7 @@ func TestStorageRebindRefusesUnreadableAndCorruptSaves(t *testing.T) {
 			refused(t, storage)
 			storage.probe.unreadable = ""
 			storage.mustBind()
-			if string(storage.runtime.cFiles["stream"].data) != "stream" || string(storage.runtime.databases["slot"].records[0]) != "j" ||
+			if string(storage.runtime.CFiles["stream"].Data) != "stream" || string(storage.runtime.databases["slot"].records[0]) != "j" ||
 				string(storage.roots[0].Native.(*runtimeGuestFile).data) != "open" {
 				t.Fatal("the bind after the refused one did not fill the storage")
 			}
@@ -573,44 +574,50 @@ func TestStorageFieldsAreAccountedFor(t *testing.T) {
 	accounted := map[string]string{
 		// Which names are open under which handles, at which cursor, and the
 		// sequences the next handle is taken from.
-		"cFileHandles":             identity,
-		"nextCDatabaseHandle":      identity,
+		"CFileHandles":             identity,
+		"NextCDatabaseHandle":      identity,
 		"recordDatabaseHandles":    identity,
 		"nextRecordDatabaseHandle": identity,
 		// The catalogs and the written-file table travel as names; what they
 		// hold, and which of the names still exist, is the store's answer.
-		"cFiles":          rebound,
+		"CFiles":          rebound,
 		"recordDatabases": rebound,
 		"databases":       rebound,
-		"guestFiles":      rebound,
+		"GuestFiles":      rebound,
 		// The lists are never in a slot: each is read from the store.
-		"removedFiles":         rebound,
-		"removedCDatabases":    rebound,
-		"madeDirectories":      rebound,
+		"RemovedFiles":         rebound,
+		"RemovedCDatabases":    rebound,
+		"MadeDirectories":      rebound,
 		"removedDatabaseLists": rebound,
 		"madeGuestDirectories": rebound,
 		"databaseSizes":        rebound,
 		// What the store had nothing for, which is decided at the bind.
-		"detachedCFiles":          rebound,
+		"DetachedCFiles":          rebound,
 		"detachedRecordDatabases": rebound,
 		"detachedDatabases":       rebound,
 		// A session with a failed read is not captured, and a bind that meets
 		// one refuses the load; the names still to be filled exist only
 		// between a restore and its bind.
-		"saveReadError":   absent,
+		"SaveReadError":   absent,
 		"restoredStorage": absent,
 		// Writes held for one guest DataOutputStream call, stored before that
 		// call returns; a checkpoint is never taken inside one.
 		"fileBatch": absent,
 		// Counts of this session's writes per path, which a restored File
 		// starts from nothing; a rebind is not a write.
-		"guestFileWrites": absent,
+		"GuestFileWrites": absent,
 	}
 	words := []string{"file", "database", "removed", "director", "save", "storage", "record", "detached"}
-	fields := reflect.TypeOf(initializationRuntime{})
+	// The engine's fields are the runtime's too, through the embedded
+	// engine runtime.
+	var names []string
+	for _, fields := range []reflect.Type{reflect.TypeOf(initializationRuntime{}), reflect.TypeOf(wipicrt.Runtime{})} {
+		for index := 0; index < fields.NumField(); index++ {
+			names = append(names, fields.Field(index).Name)
+		}
+	}
 	seen := map[string]bool{}
-	for index := 0; index < fields.NumField(); index++ {
-		name := fields.Field(index).Name
+	for _, name := range names {
 		lowered := strings.ToLower(name)
 		for _, word := range words {
 			if strings.Contains(lowered, word) {
@@ -634,13 +641,13 @@ func TestStorageFieldsAreAccountedFor(t *testing.T) {
 	options := continuationFixtureOptions{Runnable: true, Storage: true}
 	source := newContinuationFixture(t, 1700000000, options)
 	source.start(t)
-	source.runtime.guestFiles = map[string][]byte{"fixture.bin": []byte("MARKER-written")}
-	source.runtime.cFiles["fixture-c"].data = []byte("MARKER-c-file")
+	source.runtime.GuestFiles = map[string][]byte{"fixture.bin": []byte("MARKER-written")}
+	source.runtime.CFiles["fixture-c"].Data = []byte("MARKER-c-file")
 	source.runtime.recordDatabases["fixture-r"].records = [][]byte{[]byte("MARKER-record")}
 	source.runtime.databases["fixture"].records = [][]byte{[]byte("MARKER-database")}
-	source.runtime.removedFiles = map[string]bool{"MARKER-removed-file": true}
-	source.runtime.removedCDatabases = map[string]bool{"MARKER-removed-c": true}
-	source.runtime.madeDirectories = map[string]bool{"MARKER-directory": true}
+	source.runtime.RemovedFiles = map[string]bool{"MARKER-removed-file": true}
+	source.runtime.RemovedCDatabases = map[string]bool{"MARKER-removed-c": true}
+	source.runtime.MadeDirectories = map[string]bool{"MARKER-directory": true}
 	source.runtime.removedDatabaseLists = map[string]map[string]bool{javaDatabaseRemovedKey: {"MARKER-removed-java": true}, recordDatabaseRemovedKey: {"MARKER-removed-record": true}}
 	file, _ := source.object.Fields["snapshotFile"].Reference()
 	file.Native.(*runtimeGuestFile).data = []byte("MARKER-file-object")
@@ -658,8 +665,8 @@ func TestStorageFieldsAreAccountedFor(t *testing.T) {
 	source.client.StopThreads()
 	fresh := restoreClientForTest(t, roundTripClientState(t, saved), 1800000000, options)
 	fresh.checkStorage(t)
-	if !reflect.DeepEqual(fresh.runtime.guestFiles, map[string][]byte{"fixture.bin": []byte("cursor")}) || !reflect.DeepEqual(fresh.runtime.removedFiles, map[string]bool{"deleted": true}) ||
-		fresh.runtime.removedCDatabases == nil || fresh.runtime.madeDirectories == nil || len(fresh.runtime.removedDatabaseLists) != 2 || fresh.runtime.restoredStorage != nil || fresh.runtime.saveReadError != nil {
+	if !reflect.DeepEqual(fresh.runtime.GuestFiles, map[string][]byte{"fixture.bin": []byte("cursor")}) || !reflect.DeepEqual(fresh.runtime.RemovedFiles, map[string]bool{"deleted": true}) ||
+		fresh.runtime.RemovedCDatabases == nil || fresh.runtime.MadeDirectories == nil || len(fresh.runtime.removedDatabaseLists) != 2 || fresh.runtime.restoredStorage != nil || fresh.runtime.SaveReadError != nil {
 		t.Fatal("a restored table is not the store's answer")
 	}
 }
@@ -671,21 +678,21 @@ func TestStorageCaptureIsRefusedOverTheBudgetALoadHas(t *testing.T) {
 	half := make([]byte, maxHeapStorageBytes/2)
 	for name, plant := range map[string]func(*initializationRuntime) []*jvm.Object{
 		"two C files": func(source *initializationRuntime) []*jvm.Object {
-			source.cFiles = map[string]*runtimeCFile{"a": {name: "a", data: half}, "b": {name: "b", data: half}}
+			source.CFiles = map[string]*wipicrt.RuntimeCFile{"a": {Name: "a", Data: half}, "b": {Name: "b", Data: half}}
 			return nil
 		},
 		"a C file and a File object": func(source *initializationRuntime) []*jvm.Object {
-			source.cFiles = map[string]*runtimeCFile{"a": {name: "a", data: half}}
+			source.CFiles = map[string]*wipicrt.RuntimeCFile{"a": {Name: "a", Data: half}}
 			return []*jvm.Object{{ClassName: "org/kwis/msp/io/File", Native: &runtimeGuestFile{name: "b", data: half}}}
 		},
 		"a written file and a database": func(source *initializationRuntime) []*jvm.Object {
-			source.guestFiles = map[string][]byte{"a": half}
+			source.GuestFiles = map[string][]byte{"a": half}
 			source.databases = map[string]*runtimeDataBaseStore{"b": {name: "b", records: [][]byte{half}}}
 			return nil
 		},
 		"a record database and a C file": func(source *initializationRuntime) []*jvm.Object {
 			source.recordDatabases = map[string]*runtimeRecordDatabase{"a": {name: "a", records: [][]byte{half}}}
-			source.cFiles = map[string]*runtimeCFile{"b": {name: "b", data: half}}
+			source.CFiles = map[string]*wipicrt.RuntimeCFile{"b": {Name: "b", Data: half}}
 			return nil
 		},
 	} {
@@ -697,7 +704,7 @@ func TestStorageCaptureIsRefusedOverTheBudgetALoadHas(t *testing.T) {
 	}
 	// Half of it is a checkpoint like any other.
 	_, source := newTestRuntime(t)
-	source.cFiles = map[string]*runtimeCFile{"a": {name: "a", data: half}}
+	source.CFiles = map[string]*wipicrt.RuntimeCFile{"a": {Name: "a", Data: half}}
 	if _, err := source.captureHeapState(nil); err != nil {
 		t.Fatalf("a capture inside the budget: %v", err)
 	}

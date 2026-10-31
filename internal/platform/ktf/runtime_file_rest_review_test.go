@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // refusableSaveStore counts the store writes a test makes and can be told to
@@ -71,7 +72,7 @@ func guestDataOutputStream(t *testing.T, client *Client, runtime *initialization
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, _, err = runtime.runAOTMethod(t.Context(), client.thread, class.Name, candidate, typeInfo, append([]uint32{address}, arguments...))
+			_, _, err = runtime.runAOTMethod(t.Context(), client.Thread, class.Name, candidate, typeInfo, append([]uint32{address}, arguments...))
 			return err
 		}
 		t.Fatalf("DataOutputStream has no %s%s", method, descriptor)
@@ -89,7 +90,7 @@ func guestDataOutputStream(t *testing.T, client *Client, runtime *initialization
 func TestDataOutputStreamWriteStoresOncePerCall(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	store := &refusableSaveStore{saves: make(map[string][]byte)}
-	client.saveStore = store
+	client.SaveStore = store
 	state, call := guestDataOutputStream(t, client, runtime, "save.dat")
 
 	if err := call("writeInt", "(I)V", 0x01020304); err != nil {
@@ -108,8 +109,8 @@ func TestDataOutputStreamWriteStoresOncePerCall(t *testing.T) {
 	if got := store.saves["fs/save.dat"]; !bytes.Equal(got, want) {
 		t.Fatalf("stored file = %x, want %x", got, want)
 	}
-	if !bytes.Equal(state.data, want) || state.position != len(want) || !bytes.Equal(runtime.guestFiles["save.dat"], want) {
-		t.Fatalf("file = %x at %d, table %x", state.data, state.position, runtime.guestFiles["save.dat"])
+	if !bytes.Equal(state.data, want) || state.position != len(want) || !bytes.Equal(runtime.GuestFiles["save.dat"], want) {
+		t.Fatalf("file = %x at %d, table %x", state.data, state.position, runtime.GuestFiles["save.dat"])
 	}
 
 	// A single-byte write that is the guest's own call is still stored before
@@ -131,7 +132,7 @@ func TestDataOutputStreamWriteStoresOncePerCall(t *testing.T) {
 func TestDataOutputStreamWriteThatCannotBeStoredThrows(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	store := &refusableSaveStore{saves: make(map[string][]byte)}
-	client.saveStore = store
+	client.SaveStore = store
 	state, call := guestDataOutputStream(t, client, runtime, "save.dat")
 	if err := call("writeShort", "(I)V", 0x0102); err != nil {
 		t.Fatal(err)
@@ -143,8 +144,8 @@ func TestDataOutputStreamWriteThatCannotBeStoredThrows(t *testing.T) {
 		t.Fatalf("refused writeInt error = %v, want an uncaught IOException", err)
 	}
 	want := []byte{1, 2}
-	if !bytes.Equal(state.data, want) || state.position != len(want) || !bytes.Equal(runtime.guestFiles["save.dat"], want) {
-		t.Fatalf("after the refusal the file = %x at %d, table %x; want it as it was", state.data, state.position, runtime.guestFiles["save.dat"])
+	if !bytes.Equal(state.data, want) || state.position != len(want) || !bytes.Equal(runtime.GuestFiles["save.dat"], want) {
+		t.Fatalf("after the refusal the file = %x at %d, table %x; want it as it was", state.data, state.position, runtime.GuestFiles["save.dat"])
 	}
 	if runtime.fileBatch != nil {
 		t.Fatal("the refused call left its batch open")
@@ -159,7 +160,7 @@ func TestDataOutputStreamWriteThatCannotBeStoredThrows(t *testing.T) {
 func TestHeldFileWritesAreStoredBeforeTheThreadsNextCall(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	store := &refusableSaveStore{saves: make(map[string][]byte)}
-	client.saveStore = store
+	client.SaveStore = store
 	batch := &guestFileBatch{owner: client.activeWorker}
 	runtime.fileBatch = batch
 	defer func() { runtime.fileBatch = nil }()
@@ -171,7 +172,7 @@ func TestHeldFileWritesAreStoredBeforeTheThreadsNextCall(t *testing.T) {
 	if store.stores != 0 {
 		t.Fatalf("a write inside the batch made %d store writes before the call returned", store.stores)
 	}
-	finish := runtime.enterGuestFileCall(svcCategoryWIPIC, 0)
+	finish := runtime.enterGuestFileCall(wipicrt.SVCCategoryWIPIC, 0)
 	if store.stores != 1 || !bytes.Equal(store.saves["fs/save.dat"], []byte{9}) {
 		t.Fatalf("another call from the same thread left the write held: %d stores", store.stores)
 	}
@@ -188,7 +189,7 @@ func TestHeldFileWritesAreStoredBeforeTheThreadsNextCall(t *testing.T) {
 func TestHeldFileWritesAreStoredWhenTheThreadStops(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	store := &refusableSaveStore{saves: make(map[string][]byte)}
-	client.saveStore = store
+	client.SaveStore = store
 	worker := &guestWorker{}
 	client.activeWorker = worker
 	defer func() { client.activeWorker = nil }()
@@ -230,10 +231,10 @@ func TestHeldFileWritesAreStoredWhenTheThreadStops(t *testing.T) {
 func TestRefusedHeldWritesAreUnreadThroughEveryFile(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	store := &refusableSaveStore{saves: map[string][]byte{"fs/save.dat": {1}}}
-	client.saveStore = store
+	client.SaveStore = store
 	runtime.setGuestFile("save.dat", []byte{1})
-	writer := &runtimeGuestFile{name: "save.dat", data: []byte{1}, seen: runtime.guestFileWrites["save.dat"]}
-	reader := &runtimeGuestFile{name: "save.dat", data: []byte{1}, seen: runtime.guestFileWrites["save.dat"]}
+	writer := &runtimeGuestFile{name: "save.dat", data: []byte{1}, seen: runtime.GuestFileWrites["save.dat"]}
+	reader := &runtimeGuestFile{name: "save.dat", data: []byte{1}, seen: runtime.GuestFileWrites["save.dat"]}
 	object := func(state *runtimeGuestFile) jvm.Value {
 		return jvm.ReferenceValue(&jvm.Object{ClassName: "org/kwis/msp/io/File", Native: state, Fields: make(map[string]jvm.Value)})
 	}

@@ -13,17 +13,17 @@ import (
 // record, the declared interfaces, and the access flags.
 func writeGuestClass(t *testing.T, runtime *initializationRuntime, name string, parent uint32, interfaces []uint32, accessFlags uint16) uint32 {
 	t.Helper()
-	nameAddress, err := runtime.allocateBytes(append([]byte(name), 0))
+	nameAddress, err := runtime.AllocateBytes(append([]byte(name), 0))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var interfaceTable uint32
 	if len(interfaces) > 0 {
-		if interfaceTable, err = runtime.allocateWords(interfaces); err != nil {
+		if interfaceTable, err = runtime.AllocateWords(interfaces); err != nil {
 			t.Fatal(err)
 		}
 	}
-	descriptorAddress, err := runtime.allocate(javaDescriptorSize)
+	descriptorAddress, err := runtime.Allocate(javaDescriptorSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,17 +34,17 @@ func writeGuestClass(t *testing.T, runtime *initializationRuntime, name string, 
 	binary.LittleEndian.PutUint16(descriptor[26:], 4)
 	binary.LittleEndian.PutUint16(descriptor[28:], accessFlags)
 	binary.LittleEndian.PutUint16(descriptor[30:], uint16(len(interfaces)))
-	if err := runtime.client.core.Memory().Write(descriptorAddress, descriptor); err != nil {
+	if err := runtime.client.Core().Memory().Write(descriptorAddress, descriptor); err != nil {
 		t.Fatal(err)
 	}
-	classAddress, err := runtime.allocate(javaClassSize)
+	classAddress, err := runtime.Allocate(javaClassSize)
 	if err != nil {
 		t.Fatal(err)
 	}
 	class := make([]byte, javaClassSize)
 	binary.LittleEndian.PutUint32(class[0:], classAddress+4)
 	binary.LittleEndian.PutUint32(class[8:], descriptorAddress)
-	if err := runtime.client.core.Memory().Write(classAddress, class); err != nil {
+	if err := runtime.client.Core().Memory().Write(classAddress, class); err != nil {
 		t.Fatal(err)
 	}
 	return classAddress
@@ -151,19 +151,19 @@ func writeModuleNameTable(t *testing.T, runtime *initializationRuntime, names ..
 	t.Helper()
 	pointers := make([]uint32, len(names))
 	for index, name := range names {
-		address, err := runtime.allocateBytes(append([]byte(name), 0))
+		address, err := runtime.AllocateBytes(append([]byte(name), 0))
 		if err != nil {
 			t.Fatal(err)
 		}
 		pointers[index] = address
 	}
-	table, err := runtime.allocateWords(pointers)
+	table, err := runtime.AllocateWords(pointers)
 	if err != nil {
 		t.Fatal(err)
 	}
 	segment := make([]uint32, moduleNameTableOffset/4+1)
 	segment[moduleNameTableOffset/4] = table
-	if runtime.client.moduleSegment, err = runtime.allocateWords(segment); err != nil {
+	if runtime.client.moduleSegment, err = runtime.AllocateWords(segment); err != nil {
 		t.Fatal(err)
 	}
 }

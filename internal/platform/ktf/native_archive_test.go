@@ -18,6 +18,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/gameroot"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // buildNativeInfo assembles a module information file the way a real one is
@@ -116,7 +117,7 @@ func TestParseNativeInfoReadsHeaderFieldsOnTheirStride(t *testing.T) {
 // zip entry's CRC is correct, so refusing it turns a whole title away over two
 // bytes nothing reads.
 func TestParseNativeInfoTolerantOfLineEndingsPastItsTrailer(t *testing.T) {
-	good := buildNativeInfo(t, [][]byte{nativeNumericSpan(1, 2, ImageBase)}, []uint32{0x1234, 18933, 0xff})
+	good := buildNativeInfo(t, [][]byte{nativeNumericSpan(1, 2, wipicrt.ImageBase)}, []uint32{0x1234, 18933, 0xff})
 	info, err := ParseNativeInfo(append(append([]byte{}, good...), '\r', '\n'))
 	if err != nil {
 		t.Fatalf("parse an information file with line endings past its trailer: %v", err)
@@ -139,7 +140,7 @@ func TestApplicationIdentifierReadsTheAppletRecord(t *testing.T) {
 		name string
 		last uint32
 	}{
-		{name: "the 2005 archive's word", last: ImageBase},
+		{name: "the 2005 archive's word", last: wipicrt.ImageBase},
 		{name: "the later archives' word", last: 0x10100000},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -172,7 +173,7 @@ func TestParseNativeInfo(t *testing.T) {
 		nativeTextSpan("A Vendor"),
 		nativeTextSpan("A Vendor"),
 		nativeTextSpan("제목"),
-		nativeNumericSpan(1, 2, ImageBase),
+		nativeNumericSpan(1, 2, wipicrt.ImageBase),
 	}, []uint32{0x1234, 18933, 0xff})
 
 	info, err := ParseNativeInfo(data)
@@ -191,7 +192,7 @@ func TestParseNativeInfo(t *testing.T) {
 	if len(info.Icons) != 1 || info.Icons[0].MIME != "image/bmp" || !bytes.Equal(info.Icons[0].Data, icon) {
 		t.Errorf("icons = %+v, want one image/bmp carrying the payload", info.Icons)
 	}
-	if len(info.Records) != 1 || len(info.Records[0]) != 3 || info.Records[0][2] != ImageBase {
+	if len(info.Records) != 1 || len(info.Records[0]) != 3 || info.Records[0][2] != wipicrt.ImageBase {
 		t.Errorf("records = %+v, want one three-word record ending at the image base", info.Records)
 	}
 }
@@ -411,7 +412,7 @@ func TestLocalKTFNativePackageRuns(t *testing.T) {
 		}
 		// A manual clock makes the frame the title asked for cost nothing:
 		// this measures what the guest computes, not how long it takes.
-		clock := NewManualClock(time.Time{})
+		clock := wipicrt.NewManualClock(time.Time{})
 		platform := NewNativePlatform(client, archive, clock)
 		// The title's music is the only thing a run can check about sound
 		// without a person listening, and a count of nothing is what a silent
@@ -564,7 +565,7 @@ func TestLocalKTFNativePackageScreenshot(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		clock := NewManualClock(time.Time{})
+		clock := wipicrt.NewManualClock(time.Time{})
 		platform := NewNativePlatform(client, archive, clock)
 		if err := platform.Boot(context.Background()); err != nil {
 			t.Fatal(err)
@@ -656,11 +657,11 @@ func logTraceShape(t *testing.T, trace []uint32) {
 		regions[pc&^0xff]++
 	}
 	t.Logf("  trace spans %#x..%#x (module %#x..%#x) over %d distinct 256-byte regions",
-		low, high, low-ImageBase, high-ImageBase, len(regions))
+		low, high, low-wipicrt.ImageBase, high-wipicrt.ImageBase, len(regions))
 	if len(trace) <= 200 {
 		offsets := make([]string, 0, len(trace))
 		for _, pc := range trace {
-			offsets = append(offsets, fmt.Sprintf("%#x", pc-ImageBase))
+			offsets = append(offsets, fmt.Sprintf("%#x", pc-wipicrt.ImageBase))
 		}
 		t.Logf("  path: %s", strings.Join(offsets, " "))
 	}
@@ -677,6 +678,6 @@ func logTraceShape(t *testing.T, trace []uint32) {
 		if index >= 8 {
 			break
 		}
-		t.Logf("    module %#08x : %d instructions", entry.base-ImageBase, entry.count)
+		t.Logf("    module %#08x : %d instructions", entry.base-wipicrt.ImageBase, entry.count)
 	}
 }

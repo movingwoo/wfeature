@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestRuntimeMetadataContinuesDispatchAllocationAndCollection(t *testing.T) {
@@ -31,26 +32,26 @@ func TestRuntimeMetadataContinuesDispatchAllocationAndCollection(t *testing.T) {
 	runtime.classSummaries = map[uint32]aotClassSummary{class: {name: jvm.ObjectClass}}
 	runtime.objects[objectAddress] = objectRecord{size: runtime.objects[objectAddress].size, released: true}
 	client.vm.ReleaseAOTObject(objectAddress)
-	runtime.collectAt = 123456
-	first, err := runtime.allocateWIPIC(17)
+	runtime.CollectAt = 123456
+	first, err := runtime.AllocateWIPIC(17)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := runtime.allocateWIPIC(29)
+	second, err := runtime.AllocateWIPIC(29)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.freeWIPIC(first)
+	runtime.FreeWIPIC(first)
 	// Reuse leaves older order entries in place, including duplicates. The
 	// diagnostic set and its eviction order must be restored independently.
-	if reused, err := runtime.allocateWIPIC(17); err != nil || reused != first {
+	if reused, err := runtime.AllocateWIPIC(17); err != nil || reused != first {
 		t.Fatalf("reuse = %#x, %v", reused, err)
 	}
-	runtime.freeWIPIC(first)
-	runtime.imageSourceBuffers = map[uint32]uint32{second: second}
-	runtime.userMemoryPools = map[uint32]*userMemoryPool{second + 12: {base: second + 12, size: 29, cursor: 3, freeCalls: 7}}
-	runtime.pixelOps = &pixelOpCache{function: stub, param: 81, results: map[uint32]uint16{0x11112222: 0x4321}}
-	runtime.leds = 5
+	runtime.FreeWIPIC(first)
+	runtime.ImageSourceBuffers = map[uint32]uint32{second: second}
+	runtime.UserMemoryPools = map[uint32]*wipicrt.UserMemoryPool{second + 12: {Base: second + 12, Size: 29, Cursor: 3, FreeCalls: 7}}
+	runtime.PixelOps = &wipicrt.PixelOpCache{Function: stub, Param: 81, Results: map[uint32]uint16{0x11112222: 0x4321}}
+	runtime.Leds = 5
 	runtime.menuTextCompatibility = true
 	heap, err := runtime.captureHeapState([]*jvm.Object{object})
 	if err != nil {
@@ -68,12 +69,13 @@ func TestRuntimeMetadataContinuesDispatchAllocationAndCollection(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	coreState, err := client.core.CaptureState()
+	coreState, err := client.Core().CaptureState()
 	if err != nil {
 		t.Fatal(err)
 	}
 	freshClient, fresh := newTestRuntime(t)
-	freshClient.core, err = armcore.NewCoreFromState(coreState, armcore.CoreOptions{})
+	restoredCore, err := armcore.NewCoreFromState(coreState, armcore.CoreOptions{})
+	freshClient.AttachCore(restoredCore, freshClient.Thread)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,11 +97,11 @@ func TestRuntimeMetadataContinuesDispatchAllocationAndCollection(t *testing.T) {
 	if value, err := fresh.handleRuntimeJavaCall(thread, methodID); err != nil || value != 37 {
 		t.Fatalf("restored native dispatch = %d, %v", value, err)
 	}
-	if value, err := fresh.applyPixelOp(wipicPixelOp{function: stub, param: 81}, 0x1111, 0x2222); err != nil || value != 0x4321 || freshClient.core.Steps() != 0 {
+	if value, err := fresh.ApplyPixelOp(wipicrt.WIPICPixelOp{Function: stub, Param: 81}, 0x1111, 0x2222); err != nil || value != 0x4321 || freshClient.Core().Steps() != 0 {
 		t.Fatalf("restored pixel cache = %#x, %v", value, err)
 	}
 	for _, target := range []*initializationRuntime{runtime, fresh} {
-		if got, err := target.allocateWIPIC(17); err != nil || got != first {
+		if got, err := target.AllocateWIPIC(17); err != nil || got != first {
 			t.Fatalf("next WIPI allocation = %#x, %v; want %#x", got, err, first)
 		}
 		if err := thread.SetRegister(0, second+12); err != nil {
@@ -108,7 +110,7 @@ func TestRuntimeMetadataContinuesDispatchAllocationAndCollection(t *testing.T) {
 		if err := thread.SetRegister(1, 5); err != nil {
 			t.Fatal(err)
 		}
-		if got, err := target.handleUserMemoryCall(thread, userMemoryAlloc); err != nil || got != second+20 {
+		if got, err := target.HandleUserMemoryCall(thread, wipicrt.UserMemoryAlloc); err != nil || got != second+20 {
 			t.Fatalf("next pool allocation = %#x, %v", got, err)
 		}
 		if got, err := target.runtimeJavaStub(method, true); err != nil || got != uint32(saved.CodeCursor)|1 || target.nextNativeMethod != saved.NextNativeMethod+1 {
@@ -118,7 +120,7 @@ func TestRuntimeMetadataContinuesDispatchAllocationAndCollection(t *testing.T) {
 	if stats, err := fresh.collectGuestObjects([]uint32{objectAddress}); err != nil || stats.Tracked != 1 || stats.Marked != 1 || stats.Lost != 0 || fresh.objects[objectAddress].released {
 		t.Fatalf("restored collector = %+v, %v", stats, err)
 	}
-	if !runtime.objects[objectAddress].released || runtime.pixelOps == fresh.pixelOps || runtime.userMemoryPools[second+12] == fresh.userMemoryPools[second+12] {
+	if !runtime.objects[objectAddress].released || runtime.PixelOps == fresh.PixelOps || runtime.UserMemoryPools[second+12] == fresh.UserMemoryPools[second+12] {
 		t.Fatal("restored metadata shares mutable source state")
 	}
 	goruntime.KeepAlive(roots)
@@ -150,7 +152,7 @@ func TestRuntimeMetadataRestoresModuleClassLinksWithoutEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	coreState, err := client.core.CaptureState()
+	coreState, err := client.Core().CaptureState()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,11 +161,12 @@ func TestRuntimeMetadataRestoresModuleClassLinksWithoutEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	freshClient.runtime = fresh
-	freshClient.core, err = armcore.NewCoreFromState(coreState, armcore.CoreOptions{MaxSteps: 1000})
+	freshClient.setRuntimes(fresh, freshClient.prepared)
+	restoredCore, err := armcore.NewCoreFromState(coreState, armcore.CoreOptions{MaxSteps: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
+	freshClient.AttachCore(restoredCore, freshClient.Thread)
 	if err := fresh.restoreMetadataState(saved); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +176,7 @@ func TestRuntimeMetadataRestoresModuleClassLinksWithoutEntry(t *testing.T) {
 	if got, err := fresh.resolveModuleClass("saved/Child", 0); err != nil || got != child {
 		t.Fatalf("restored module class = %#x, %v", got, err)
 	}
-	if got := freshClient.core.Steps(); got != client.core.Steps() {
+	if got := freshClient.Core().Steps(); got != client.Core().Steps() {
 		t.Fatalf("module restore or lookup executed additional guest instructions: %d", got)
 	}
 	if after, err := fresh.captureMetadataState(); err != nil || !reflect.DeepEqual(saved, after) {
@@ -186,7 +189,7 @@ func TestRuntimeMetadataRejectsMalformedStateBeforeAdoption(t *testing.T) {
 	if _, err := runtime.runtimeJavaStub(runtimeJavaMethod{class: "java/lang/Math", name: "abs", descriptor: "(I)I", accessFlags: 9}, false); err != nil {
 		t.Fatal(err)
 	}
-	allocation, err := runtime.allocateWIPIC(17)
+	allocation, err := runtime.AllocateWIPIC(17)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +204,7 @@ func TestRuntimeMetadataRejectsMalformedStateBeforeAdoption(t *testing.T) {
 	for name, change := range map[string]func(*runtimeMetadataState){
 		"arena policy":       func(s *runtimeMetadataState) { s.Arena.Limit++ },
 		"class arena policy": func(s *runtimeMetadataState) { s.ClassArena.Base += 4 },
-		"code cursor":        func(s *runtimeMetadataState) { s.CodeCursor = uint64(platformCodeBase) - 4 },
+		"code cursor":        func(s *runtimeMetadataState) { s.CodeCursor = uint64(wipicrt.PlatformCodeBase) - 4 },
 		"stub address":       func(s *runtimeMetadataState) { s.Stubs[0].Address = 1 },
 		"duplicate stub":     func(s *runtimeMetadataState) { s.Stubs = append(s.Stubs, s.Stubs[0]) },
 		"native id":          func(s *runtimeMetadataState) { s.NativeMethods[0].ID = s.NextNativeMethod + 1 },
@@ -224,12 +227,12 @@ func TestRuntimeMetadataRejectsMalformedStateBeforeAdoption(t *testing.T) {
 				t.Fatal(err)
 			}
 			change(&bad)
-			arena := runtime.arena
+			arena := runtime.Arena
 			if err := runtime.restoreMetadataState(bad); err == nil {
 				t.Fatal("malformed metadata was accepted")
 			}
 			after, err := runtime.captureMetadataState()
-			if err != nil || runtime.arena != arena || !reflect.DeepEqual(saved, after) {
+			if err != nil || runtime.Arena != arena || !reflect.DeepEqual(saved, after) {
 				t.Fatalf("refused state changed the target: %v", err)
 			}
 		})

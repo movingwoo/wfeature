@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // java/util/Timer and java/util/TimerTask are due on the platform's own timer
@@ -86,14 +87,14 @@ func runtimeTimerSchedule(runtime *initializationRuntime, _ *jvm.VM, arguments [
 			return jvm.VoidValue(), err
 		}
 	}
-	if len(runtime.pendingTimers) >= maxPendingTimers {
-		return jvm.VoidValue(), fmt.Errorf("KTF pending timer count exceeds %d", maxPendingTimers)
+	if len(runtime.PendingTimers) >= wipicrt.MaxPendingTimers {
+		return jvm.VoidValue(), fmt.Errorf("KTF pending timer count exceeds %d", wipicrt.MaxPendingTimers)
 	}
-	runtime.pendingTimers = append(runtime.pendingTimers, wipicTimer{
-		task:   task,
-		owner:  owner,
-		period: timerDuration(period),
-		due:    runtime.client.framePeriodDeadline(timerDuration(delay)),
+	runtime.PendingTimers = append(runtime.PendingTimers, wipicrt.WIPICTimer{
+		Task:   guestValue(task),
+		Owner:  guestValue(owner),
+		Period: timerDuration(period),
+		Due:    runtime.client.FramePeriodDeadline(timerDuration(delay)),
 	})
 	return jvm.VoidValue(), nil
 }
@@ -104,7 +105,7 @@ func timerDuration(milliseconds int64) time.Duration {
 	if milliseconds <= 0 {
 		return 0
 	}
-	return time.Duration(min(milliseconds, maxTimerDelayMillis)) * time.Millisecond
+	return time.Duration(min(milliseconds, wipicrt.MaxTimerDelayMillis)) * time.Millisecond
 }
 
 // runtimeTimerCancel drops every task this Timer scheduled. A task already
@@ -117,7 +118,7 @@ func runtimeTimerCancel(runtime *initializationRuntime, _ *jvm.VM, arguments []j
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	runtime.dropTimerTasks(func(timer wipicTimer) bool { return timer.owner == owner })
+	runtime.dropTimerTasks(func(timer wipicrt.WIPICTimer) bool { return guestObject(timer.Owner) == owner })
 	return jvm.VoidValue(), nil
 }
 
@@ -131,7 +132,7 @@ func runtimeTimerTaskCancel(runtime *initializationRuntime, _ *jvm.VM, arguments
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	dropped := runtime.dropTimerTasks(func(timer wipicTimer) bool { return timer.task == task })
+	dropped := runtime.dropTimerTasks(func(timer wipicrt.WIPICTimer) bool { return guestObject(timer.Task) == task })
 	if dropped == 0 {
 		return jvm.IntValue(0), nil
 	}
@@ -144,24 +145,24 @@ func runtimeTimerTaskScheduledTime(runtime *initializationRuntime, _ *jvm.VM, ar
 	if len(arguments) != 1 {
 		return jvm.VoidValue(), fmt.Errorf("TimerTask.scheduledExecutionTime expected receiver")
 	}
-	return jvm.LongValue(runtime.guestMillis()), nil
+	return jvm.LongValue(runtime.GuestMillis()), nil
 }
 
 // dropTimerTasks removes the pending Java timers a predicate selects and
 // reports how many went.
-func (runtime *initializationRuntime) dropTimerTasks(match func(wipicTimer) bool) int {
-	remaining := runtime.pendingTimers[:0]
+func (runtime *initializationRuntime) dropTimerTasks(match func(wipicrt.WIPICTimer) bool) int {
+	remaining := runtime.PendingTimers[:0]
 	dropped := 0
-	for _, timer := range runtime.pendingTimers {
-		if timer.task != nil && match(timer) {
+	for _, timer := range runtime.PendingTimers {
+		if timer.Task != nil && match(timer) {
 			dropped++
 			continue
 		}
 		remaining = append(remaining, timer)
 	}
-	runtime.pendingTimers = remaining
+	runtime.PendingTimers = remaining
 	// A cancel made from a C timer callback also reaches the tasks later in
 	// that round's batch, which are out of the queue while it runs.
-	dropped += runtime.cancelRoundTimers(func(timer wipicTimer) bool { return timer.task != nil && match(timer) })
+	dropped += runtime.CancelRoundTimers(func(timer wipicrt.WIPICTimer) bool { return timer.Task != nil && match(timer) })
 	return dropped
 }

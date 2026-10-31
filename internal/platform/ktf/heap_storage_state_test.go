@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The heap record keeps which objects share which database and which File
@@ -49,8 +50,8 @@ func TestHeapStorageKeepsSharingAndReadsContentFromTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := testSaveStore(t, map[string][]byte{
-		"jdb/slot":         encodeSaveRecords([][]byte{[]byte("live"), nil, []byte("third")}),
-		"jdb/closed":       encodeSaveRecords([][]byte{[]byte("kept by catalog")}),
+		"jdb/slot":         wipicrt.EncodeSaveRecords([][]byte{[]byte("live"), nil, []byte("third")}),
+		"jdb/closed":       wipicrt.EncodeSaveRecords([][]byte{[]byte("kept by catalog")}),
 		"fs/slot.bin":      []byte("abcd"),
 		"fs/rewritten.bin": []byte("0123456789"),
 	})

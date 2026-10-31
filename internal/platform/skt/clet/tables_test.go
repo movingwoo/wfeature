@@ -1,6 +1,10 @@
 package clet
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+)
 
 // The SKT root table and its divergences from the KTF function numbering are
 // the whole of what is SKT-specific in the dispatch; see clet_tables.go and
@@ -9,11 +13,11 @@ import "testing"
 func TestSKTFilesystemFunctionSwapsExistAndTell(t *testing.T) {
 	// SKT's filesystem table is the specification's order with MC_fsIsExist and
 	// MC_fsTell at 15 and 16 exchanged from the KTF table.
-	if got := sktFilesystemFunction(15); got != wipicFileExists {
-		t.Errorf("SKT fs 15 = %d, want MC_fsIsExist (%d)", got, wipicFileExists)
+	if got := sktFilesystemFunction(15); got != wipicrt.WIPICFileExists {
+		t.Errorf("SKT fs 15 = %d, want MC_fsIsExist (%d)", got, wipicrt.WIPICFileExists)
 	}
-	if got := sktFilesystemFunction(16); got != wipicFileTell {
-		t.Errorf("SKT fs 16 = %d, want MC_fsTell (%d)", got, wipicFileTell)
+	if got := sktFilesystemFunction(16); got != wipicrt.WIPICFileTell {
+		t.Errorf("SKT fs 16 = %d, want MC_fsTell (%d)", got, wipicrt.WIPICFileTell)
 	}
 	// Every other slot is the specification's own number.
 	for _, function := range []uint32{0, 1, 2, 3, 4, 5, 6, 8, 12} {
@@ -25,16 +29,16 @@ func TestSKTFilesystemFunctionSwapsExistAndTell(t *testing.T) {
 
 func TestSKTMediaFunctionsMapToRuntime(t *testing.T) {
 	want := map[uint32]uint32{
-		0:  wipicMediaClipCreate,
-		1:  wipicMediaClipFree,
-		4:  wipicMediaClipPutData,
-		10: wipicMediaClipClearData,
-		13: wipicMediaClipSetVolume,
-		14: wipicMediaPlay,
-		17: wipicMediaStop,
-		21: wipicMediaVibrator,
-		24: wipicMediaSetMuteState,
-		25: wipicMediaGetMuteState,
+		0:  wipicrt.WIPICMediaClipCreate,
+		1:  wipicrt.WIPICMediaClipFree,
+		4:  wipicrt.WIPICMediaClipPutData,
+		10: wipicrt.WIPICMediaClipClearData,
+		13: wipicrt.WIPICMediaClipSetVolume,
+		14: wipicrt.WIPICMediaPlay,
+		17: wipicrt.WIPICMediaStop,
+		21: wipicrt.WIPICMediaVibrator,
+		24: wipicrt.WIPICMediaSetMuteState,
+		25: wipicrt.WIPICMediaGetMuteState,
 	}
 	for slot, expected := range want {
 		if got, ok := sktMediaFunctions[slot]; !ok || got != expected {

@@ -24,13 +24,13 @@ func TestHookedRoutinesCheckTheRangeBeforeAllocating(t *testing.T) {
 	} {
 		t.Run(call.name, func(t *testing.T) {
 			for register, value := range call.arguments {
-				if err := client.thread.SetRegister(register, value); err != nil {
+				if err := client.Thread.SetRegister(register, value); err != nil {
 					t.Fatal(err)
 				}
 			}
 			var before, after goruntime.MemStats
 			goruntime.ReadMemStats(&before)
-			_, err := runtime.handleBinaryHookCall(client.thread, uint32(call.kind))
+			_, err := runtime.handleBinaryHookCall(client.Thread, uint32(call.kind))
 			goruntime.ReadMemStats(&after)
 			if err == nil {
 				t.Fatal("a range past the mapping was accepted")

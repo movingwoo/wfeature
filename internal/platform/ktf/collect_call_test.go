@@ -23,7 +23,7 @@ func TestCollectorKeepsNestedCallRegistersUntilUnwind(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				client, runtime := newCollectorRuntime(t)
-				parent := client.thread
+				parent := client.Thread
 				if worker {
 					parent = armcore.NewThread(armcore.NewContext())
 					client.workers = append(client.workers, &guestWorker{armThread: parent})
@@ -44,18 +44,18 @@ func TestCollectorKeepsNestedCallRegistersUntilUnwind(t *testing.T) {
 				for index, word := range words {
 					binary.LittleEndian.PutUint32(data[index*4:], word)
 				}
-				if err := client.core.Memory().Map(code, uint64(len(data)), armcore.PermissionReadExecute); err != nil {
+				if err := client.Core().Memory().Map(code, uint64(len(data)), armcore.PermissionReadExecute); err != nil {
 					t.Fatal(err)
 				}
-				if err := client.core.Memory().Load(code, data); err != nil {
+				if err := client.Core().Memory().Load(code, data); err != nil {
 					t.Fatal(err)
 				}
 				outer := allocateTestArray(t, runtime, 2)
 				inner := allocateTestArray(t, runtime, 4)
 				stopped := errors.New("stop nested call")
-				_, err := client.core.Call(context.Background(), parent, code, code+0x100, []uint32{outer},
+				_, err := client.Core().Call(context.Background(), parent, code, code+0x100, []uint32{outer},
 					func(ctx context.Context, thread *armcore.Thread, _ armcore.SupervisorCall) error {
-						_, err := client.core.Call(ctx, thread, code+16, code+0x100, []uint32{0, inner},
+						_, err := client.Core().Call(ctx, thread, code+16, code+0x100, []uint32{0, inner},
 							func(context.Context, *armcore.Thread, armcore.SupervisorCall) error {
 								collectTwice(t, runtime)
 								for _, address := range []uint32{outer, inner} {

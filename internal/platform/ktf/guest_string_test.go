@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // readGuestStringByByte is how a guest string was read before it was read a
@@ -85,13 +86,13 @@ func TestAGuestStringReadsAsItDidAByteAtATime(t *testing.T) {
 	for _, start := range starts {
 		for _, limit := range []uint32{0, 1, 63, 64, 65, 97, 128, 200, 4096} {
 			want, wantTerminated, wantErr := readGuestStringByByte(memory, start, limit)
-			got, gotTerminated, gotErr := readGuestString(memory, start, limit, 1)
+			got, gotTerminated, gotErr := wipicrt.ReadGuestString(memory, start, limit, 1)
 			if fmt.Sprint(gotErr) != fmt.Sprint(wantErr) || gotTerminated != wantTerminated || !bytes.Equal(got, want) {
 				t.Fatalf("at %#x for %d bytes: read %q, %t, %v; a byte at a time read %q, %t, %v",
 					start, limit, got, gotTerminated, gotErr, want, wantTerminated, wantErr)
 			}
-			var buffer [guestStringBuffer]byte
-			length, terminated, err := scanGuestString(memory, start, limit, 1, &buffer)
+			var buffer [wipicrt.GuestStringBuffer]byte
+			length, terminated, err := wipicrt.ScanGuestString(memory, start, limit, 1, &buffer)
 			if fmt.Sprint(err) != fmt.Sprint(wantErr) || err == nil && (terminated != wantTerminated || int(length) != len(want)) {
 				t.Fatalf("at %#x for %d bytes: walked %d, %t, %v; a byte at a time read %q, %t, %v",
 					start, limit, length, terminated, err, want, wantTerminated, wantErr)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"testing"
 )
 
@@ -31,7 +32,7 @@ func TestSlotRelayConversationAndRegisteredName(t *testing.T) {
 	if len(offer) < 3 || offer[0] != 1 || int(offer[1]) != len(offer)-2 || offer[1] > 127 {
 		t.Fatalf("invalid offer %x", offer)
 	}
-	if got := decodeEUCKR(offer[2:]); got != "\uC774 \uAE30\uAE30\uC5D0 \uC2AC\uB86F\uC744 \uC0DD\uC131\uD569\uB2C8\uB2E4." {
+	if got := wipicrt.DecodeEUCKR(offer[2:]); got != "\uC774 \uAE30\uAE30\uC5D0 \uC2AC\uB86F\uC744 \uC0DD\uC131\uD569\uB2C8\uB2E4." {
 		t.Fatalf("unexpected offer encoding %x", offer)
 	}
 	quote := exchange(5, 1420, nil)

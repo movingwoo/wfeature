@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // newTestNativePlatform builds a client over a synthetic package. The module is
@@ -22,11 +23,11 @@ import (
 // reach.
 func newTestNativePlatform(t *testing.T, files map[string][]byte) *NativePlatform {
 	t.Helper()
-	return newTestNativePlatformOn(t, files, NewManualClock(time.Time{}))
+	return newTestNativePlatformOn(t, files, wipicrt.NewManualClock(time.Time{}))
 }
 
 // newTestNativePlatformOn is the same with a clock the test drives.
-func newTestNativePlatformOn(t *testing.T, files map[string][]byte, clock Clock) *NativePlatform {
+func newTestNativePlatformOn(t *testing.T, files map[string][]byte, clock wipicrt.Clock) *NativePlatform {
 	t.Helper()
 	module := make([]byte, 4)
 	// bx lr, in ARM.
@@ -505,12 +506,12 @@ func TestNativeKeyCodesAreTheOnesTheTitleActsOn(t *testing.T) {
 		to   uint32
 		what string
 	}{
-		{KeyUp, 0xe031, "up"},
-		{KeyDown, 0xe032, "down"},
-		{KeyLeft, 0xe033, "left"},
-		{KeyRight, 0xe034, "right"},
-		{KeyFire, 0xe035, "select"},
-		{KeyClear, 0xe030, "clear"},
+		{wipicrt.KeyUp, 0xe031, "up"},
+		{wipicrt.KeyDown, 0xe032, "down"},
+		{wipicrt.KeyLeft, 0xe033, "left"},
+		{wipicrt.KeyRight, 0xe034, "right"},
+		{wipicrt.KeyFire, 0xe035, "select"},
+		{wipicrt.KeyClear, 0xe030, "clear"},
 		{'0', 0xe021, "the zero key"},
 		{'1', 0xe022, "the one key"},
 		{'9', 0xe02a, "the nine key"},
@@ -524,7 +525,7 @@ func TestNativeKeyCodesAreTheOnesTheTitleActsOn(t *testing.T) {
 	}
 	// A key the handset has no code for is refused rather than sent as itself:
 	// an unmapped value is indistinguishable from a mapping that is wrong.
-	for _, key := range []int32{KeyLeftSoft, KeyCall, KeyVolumeUp} {
+	for _, key := range []int32{wipicrt.KeyLeftSoft, wipicrt.KeyCall, wipicrt.KeyVolumeUp} {
 		if _, ok := nativeKeyCode(key); ok {
 			t.Errorf("code %d was translated; it has no established code here", key)
 		}
@@ -630,7 +631,7 @@ func TestNativeSoundRefusesWhatItCannotPlay(t *testing.T) {
 // a duration and then waits on: the flag it sets is cleared only by what its
 // listener hears, so a platform that never reports the end leaves it waiting.
 func TestNativeTimedServiceReportsItsEnd(t *testing.T) {
-	clock := NewManualClock(time.Time{})
+	clock := wipicrt.NewManualClock(time.Time{})
 	platform := newTestNativePlatformOn(t, nil, clock)
 	// A listener the module would have registered on the timed source.
 	platform.listeners = append(platform.listeners, NativeListener{Source: nativeInterfaceTimed})
@@ -666,7 +667,7 @@ func TestNativeTimedServiceReportsItsEnd(t *testing.T) {
 // come back down by the same factor, or the game would be called at the rate
 // it was written for however fast its clock ran.
 func TestNativeSpeedMovesTheTitlesOwnClock(t *testing.T) {
-	source := NewManualClock(time.Time{})
+	source := wipicrt.NewManualClock(time.Time{})
 	platform := newTestNativePlatformOn(t, nil, source)
 	// The title registers its frame: an interval, a function and a context.
 	nativeCall(t, platform.schedule, 0, 50, 0x1000, 0)
@@ -711,7 +712,7 @@ func TestNativeSpeedMovesTheTitlesOwnClock(t *testing.T) {
 // another: a setting a person picks and does not get is worse than no setting.
 func TestNativeSpeedTakesEverySettingAHostOffers(t *testing.T) {
 	for _, multiplier := range []float64{0.25, 0.5, 0.75, 1, 1.5, 2, 4} {
-		source := NewManualClock(time.Time{})
+		source := wipicrt.NewManualClock(time.Time{})
 		platform := newTestNativePlatformOn(t, nil, source)
 		platform.SetSpeed(multiplier)
 		if speed := platform.Speed(); speed != multiplier {
@@ -1128,7 +1129,7 @@ func TestNativeLoaderPlantsWhatAModuleLooksForBelowItself(t *testing.T) {
 	memory := platform.client.core.Memory()
 
 	below := make([]byte, 8)
-	if err := memory.Read(ImageBase-8, below); err != nil {
+	if err := memory.Read(wipicrt.ImageBase-8, below); err != nil {
 		t.Fatalf("read the words below the image: %v", err)
 	}
 	if got := binary.LittleEndian.Uint32(below); got != nativeInterfaceVersion {
@@ -1142,7 +1143,7 @@ func TestNativeLoaderPlantsWhatAModuleLooksForBelowItself(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := ThreadStackBase + uint32(ThreadStackSize) - stack; got != nativeStackHeadroom {
+	if got := wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize) - stack; got != nativeStackHeadroom {
 		t.Errorf("the entry stack pointer leaves %#x above it, want %#x", got, nativeStackHeadroom)
 	}
 	// The room has to be mapped as well as reserved: what a module does with it
@@ -1253,7 +1254,7 @@ func TestNativePostedEventsComeBackOnTheNextTick(t *testing.T) {
 	thread := armcore.NewThread(armcore.NewContext())
 	// The first four arguments are in registers and the last two on the stack,
 	// which is where the calling standard puts them.
-	stack := ThreadStackBase + uint32(ThreadStackSize) - 0x100
+	stack := wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize) - 0x100
 	for index, value := range []uint32{0, 0, 0x103267f, 0x7009} {
 		if err := thread.SetRegister(index, value); err != nil {
 			t.Fatal(err)
@@ -1301,9 +1302,9 @@ func TestNativePostedEventsComeBackOnTheNextTick(t *testing.T) {
 // timer came due.
 func TestNativeCancelTimerCancelsTheTimerItNames(t *testing.T) {
 	platform := newTestNativePlatform(t, nil)
-	nativeCall(t, platform.schedule, 0, 50, ImageBase, 0x1234)
+	nativeCall(t, platform.schedule, 0, 50, wipicrt.ImageBase, 0x1234)
 	// Another function or another context names another timer.
-	for _, other := range [][2]uint32{{ImageBase + 4, 0x1234}, {ImageBase, 0x9999}} {
+	for _, other := range [][2]uint32{{wipicrt.ImageBase + 4, 0x1234}, {wipicrt.ImageBase, 0x9999}} {
 		if got := nativeCall(t, platform.cancelTimer, 0, other[0], other[1]); got != 0 {
 			t.Fatalf("cancel answered %d, want BREW's SUCCESS", got)
 		}
@@ -1311,7 +1312,7 @@ func TestNativeCancelTimerCancelsTheTimerItNames(t *testing.T) {
 			t.Fatalf("cancelling %#x/%#x cancelled the frame", other[0], other[1])
 		}
 	}
-	nativeCall(t, platform.cancelTimer, 0, ImageBase, 0x1234)
+	nativeCall(t, platform.cancelTimer, 0, wipicrt.ImageBase, 0x1234)
 	if platform.frame != nil {
 		t.Fatal("the frame survived the cancel that named it")
 	}
@@ -1319,13 +1320,13 @@ func TestNativeCancelTimerCancelsTheTimerItNames(t *testing.T) {
 		t.Fatalf("a tick after the cancel ran %t, %v; want nothing to run", ran, err)
 	}
 	// No function cancels every timer of the context.
-	nativeCall(t, platform.schedule, 0, 50, ImageBase, 0x1234)
+	nativeCall(t, platform.schedule, 0, 50, wipicrt.ImageBase, 0x1234)
 	nativeCall(t, platform.cancelTimer, 0, 0, 0x1234)
 	if platform.frame != nil {
 		t.Fatal("cancelling the context's timers left the frame")
 	}
 	// Cancelling a timer that was never set is harmless.
-	if got := nativeCall(t, platform.cancelTimer, 0, ImageBase, 0x1234); got != 0 {
+	if got := nativeCall(t, platform.cancelTimer, 0, wipicrt.ImageBase, 0x1234); got != 0 {
 		t.Fatalf("cancelling nothing answered %d", got)
 	}
 }
@@ -1360,7 +1361,7 @@ func nativeRecordingApplication(t *testing.T, platform *NativePlatform) uint32 {
 		binary.LittleEndian.PutUint32(word, instruction)
 		handler = append(handler, word...)
 	}
-	body := ImageBase + 0x100
+	body := wipicrt.ImageBase + 0x100
 	if err := memory.Write(body, handler); err != nil {
 		t.Fatalf("plant the handler: %v", err)
 	}
@@ -1712,8 +1713,8 @@ func TestNativeLibraryWidensText(t *testing.T) {
 	// The display reads the wide run back as the text it came from.
 	clear()
 	nativeCall(t, widen, source, 5, destination, 32)
-	if raw, err := platform.readText(destination, -1); err != nil || decodeEUCKR(raw) != "1 가!" {
-		t.Errorf("the widened run reads as %q (%v), want %q", decodeEUCKR(raw), err, "1 가!")
+	if raw, err := platform.readText(destination, -1); err != nil || wipicrt.DecodeEUCKR(raw) != "1 가!" {
+		t.Errorf("the widened run reads as %q (%v), want %q", wipicrt.DecodeEUCKR(raw), err, "1 가!")
 	}
 }
 
@@ -1765,7 +1766,7 @@ func nativeFloatCall(t *testing.T, platform *NativePlatform, handler NativeSlotH
 			t.Fatal(err)
 		}
 	}
-	stack := ThreadStackBase + uint32(ThreadStackSize) - 0x200
+	stack := wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize) - 0x200
 	if err := thread.SetRegister(armcore.RegisterSP, stack); err != nil {
 		t.Fatal(err)
 	}
@@ -1830,7 +1831,7 @@ func TestNativeLibraryComputesDoubles(t *testing.T) {
 // seconds read back, its week starting on Monday.
 func TestNativeClockAnswersTheDate(t *testing.T) {
 	start := time.Date(2007, time.March, 4, 5, 6, 7, 0, time.Local)
-	platform := newTestNativePlatformOn(t, nil, NewManualClock(start))
+	platform := newTestNativePlatformOn(t, nil, wipicrt.NewManualClock(start))
 	platform.archive.Module = nativeGateModule()
 	_, offset := start.Zone()
 	want := uint32(start.Unix() - nativeEpoch.Unix() + int64(offset))
@@ -1869,7 +1870,7 @@ func TestNativeClockAnswersTheDate(t *testing.T) {
 // screens and starts the next when its sound or its timed service ends. The
 // tick still answers both, and the Host is told when to look again.
 func TestNativeTickEndsSoundAndTimedServiceWithoutAFrame(t *testing.T) {
-	clock := NewManualClock(time.Time{})
+	clock := wipicrt.NewManualClock(time.Time{})
 	platform := newTestNativePlatformOn(t, nil, clock)
 	platform.listeners = append(platform.listeners, NativeListener{Source: nativeInterfaceTimed})
 	if _, pending := platform.NextFrame(); pending {

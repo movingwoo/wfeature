@@ -129,7 +129,7 @@ func TestByteSinkPublishesItsBuffer(t *testing.T) {
 	if err := runtime.publishGuestFields(object, write); err != nil {
 		t.Fatal(err)
 	}
-	words, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte sink buffer")
+	words, err := runtime.ReadAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte sink buffer")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestByteSinkPublishesItsBuffer(t *testing.T) {
 	if !ok {
 		t.Fatal("the grown buffer was not bound to guest memory")
 	}
-	words, err = runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte sink buffer")
+	words, err = runtime.ReadAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte sink buffer")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestByteSourcePublishesItsBuffer(t *testing.T) {
 	if err := runtime.publishGuestFields(object, construct); err != nil {
 		t.Fatal(err)
 	}
-	words, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte source buffer")
+	words, err := runtime.ReadAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte source buffer")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestByteSourcePublishesItsBuffer(t *testing.T) {
 	if _, err := client.JVM().InvokeVirtual(object, "read", "()I"); err != nil {
 		t.Fatal(err)
 	}
-	after, err := runtime.readAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte source buffer")
+	after, err := runtime.ReadAOTWords(address+javaInstanceSize+javaInstanceHeader, 1, "byte source buffer")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestByteSourcePublishesItsCursors(t *testing.T) {
 		t.Fatal("the source array was not bound to guest memory")
 	}
 	base := address + javaInstanceSize + javaInstanceHeader
-	words, err := runtime.readAOTWords(base, 4, "byte source words")
+	words, err := runtime.ReadAOTWords(base, 4, "byte source words")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestByteSourcePublishesItsCursors(t *testing.T) {
 	if err := runtime.publishGuestFields(object, read); err != nil {
 		t.Fatal(err)
 	}
-	words, err = runtime.readAOTWords(base, 4, "byte source words")
+	words, err = runtime.ReadAOTWords(base, 4, "byte source words")
 	if err != nil {
 		t.Fatal(err)
 	}

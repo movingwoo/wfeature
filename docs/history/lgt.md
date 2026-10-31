@@ -56,6 +56,7 @@ This consolidation adds no execution or acceptance evidence.
 - [The collector reads every call in flight — 2026-10-28](#lgt-collector-nested-calls-2026-10-28)
 - [The graphics block's three gaps and the rest of the net block — 2026-10-28](#lgt-graphics-net-gaps-2026-10-28)
 - [A record table the title's own search runs off — 2026-10-28](#lgt-qa-2026-10-28-unterminated-record-table)
+- [A Clet's localtime is local time — 2026-10-31](#lgt-localtime-zone-2026-10-31)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -8371,3 +8372,18 @@ are appended.
 - That a handset survived this read is inferred, not observed.
 - The exception covers this exact module; another revision needs its own
   evidence and entry.
+
+<a id="lgt-localtime-zone-2026-10-31"></a>
+
+## A Clet's localtime is local time — 2026-10-31
+
+The C library's `localtime` broke the time down in UTC, while this platform's
+own Java `TimeZone` and `Calendar` answer in the Host's zone, as the JVM's
+calendar, the earlier KTF native package and the SKT Clet C library do. In
+Korea an LGT Clet therefore read a clock nine hours behind the one its Java side
+and every other platform read. It now answers in the Host's zone, still with no
+daylight saving reported, which is what the SKT Clet library reports. Run for
+500 ticks from a fresh save, every local LGT title ended on the same frame as
+before, so none of them shows the time that early. `TestLocaltimeAnswersAStructRatherThanNull`
+now builds its instant in the local zone, and in a zone other than UTC it fails
+on the old code.

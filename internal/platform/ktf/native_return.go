@@ -31,7 +31,7 @@ func (runtime *initializationRuntime) beginNativeReturn(thread *armcore.Thread) 
 	if runtime.client.module || runtime.exceptionContext == 0 {
 		return nil, nil
 	}
-	core := runtime.client.core
+	core := runtime.client.Core()
 	tag, err := core.ThreadLocalWord(thread, runtime.exceptionContext+nativeReturnTagOffset)
 	if err != nil {
 		return nil, err
@@ -83,7 +83,7 @@ func (scope *nativeReturnScope) result(fallback uint32) (uint32, error) {
 	if scope == nil {
 		return fallback, nil
 	}
-	core, base := scope.runtime.client.core, scope.runtime.exceptionContext
+	core, base := scope.runtime.client.Core(), scope.runtime.exceptionContext
 	tag, err := core.ThreadLocalWord(scope.thread, base+nativeReturnTagOffset)
 	if err != nil {
 		return 0, err
@@ -104,7 +104,7 @@ func (scope *nativeReturnScope) restore() {
 	// These words are registered, permanently mapped runtime storage. Restore
 	// the caller's result even on exceptions; nested calls must not publish
 	// their own result as the enclosing native's answer.
-	core, base := scope.runtime.client.core, scope.runtime.exceptionContext
+	core, base := scope.runtime.client.Core(), scope.runtime.exceptionContext
 	_ = core.SetThreadLocalWord(scope.thread, base+nativeReturnTagOffset, scope.tag)
 	_ = core.SetThreadLocalWord(scope.thread, base+nativeReturnValueOffset, scope.value)
 	if scope.previous == nil {

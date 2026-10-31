@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // Each worker contributes three caller roots, in queue order: its Thread or
@@ -45,7 +46,7 @@ func (client *Client) captureWorkerStates(now time.Time) ([]guestWorkerState, []
 			return nil, nil, fmt.Errorf("KTF worker has already finished")
 		default:
 		}
-		root, err := client.core.CaptureRootThread(worker.armThread)
+		root, err := client.Core().CaptureRootThread(worker.armThread)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -83,11 +84,11 @@ func (client *Client) validateWorkerStacks(workers []guestWorkerState, count int
 	}
 	seen := make(map[uint32]bool, count)
 	check := func(base uint32) error {
-		if base < workerStackBase || uint64(base-workerStackBase)%ThreadStackSize != 0 || uint64(base-workerStackBase)/ThreadStackSize >= uint64(count) || seen[base] {
+		if base < workerStackBase || uint64(base-workerStackBase)%wipicrt.ThreadStackSize != 0 || uint64(base-workerStackBase)/wipicrt.ThreadStackSize >= uint64(count) || seen[base] {
 			return fmt.Errorf("KTF worker stack address is duplicate or outside its pool")
 		}
 		seen[base] = true
-		return client.core.Memory().ValidateRange(base, ThreadStackSize, armcore.PermissionReadWrite)
+		return client.Core().Memory().ValidateRange(base, wipicrt.ThreadStackSize, armcore.PermissionReadWrite)
 	}
 	for _, worker := range workers {
 		if err := check(worker.StackBase); err != nil {
@@ -98,7 +99,7 @@ func (client *Client) validateWorkerStacks(workers []guestWorkerState, count int
 			return fmt.Errorf("KTF worker root stack pointer or deadline is invalid")
 		}
 		if saved := worker.Continuation; saved != nil {
-			if len(saved.Calls) == 0 || len(saved.Calls) > int(maxAOTCallDepth) || saved.Calls[0].ARM.EntryStack != sp {
+			if len(saved.Calls) == 0 || len(saved.Calls) > int(wipicrt.MaxAOTCallDepth) || saved.Calls[0].ARM.EntryStack != sp {
 				return fmt.Errorf("KTF worker continuation has a different root stack")
 			}
 			for _, call := range saved.Calls {
@@ -117,12 +118,12 @@ func (client *Client) validateWorkerStacks(workers []guestWorkerState, count int
 }
 
 func stackContains(base, address uint32) bool {
-	return address >= base && uint64(address)-uint64(base) <= ThreadStackSize && address&3 == 0
+	return address >= base && uint64(address)-uint64(base) <= wipicrt.ThreadStackSize && address&3 == 0
 }
 
 func (client *Client) workerSliceBudget() uint64 {
-	if client.threadSliceSteps != 0 {
-		return client.threadSliceSteps
+	if client.ThreadSliceSteps != 0 {
+		return client.ThreadSliceSteps
 	}
 	return defaultThreadSliceSteps
 }
@@ -141,7 +142,7 @@ func (client *Client) decodeWorkerStates(saved []guestWorkerState, roots []*jvm.
 		if javaThread == nil || owner != nil && timers[owner] != nil {
 			return nil, nil, fmt.Errorf("KTF worker has no Java owner or duplicates a Timer")
 		}
-		root, err := client.core.RestoreRootThread(record.Root, client.workerSliceBudget())
+		root, err := client.Core().RestoreRootThread(record.Root, client.workerSliceBudget())
 		if err != nil {
 			return nil, nil, err
 		}

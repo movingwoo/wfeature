@@ -1,6 +1,7 @@
 package ktf
 
 import (
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -46,7 +47,7 @@ func TestImportExternalSavesTranslatesLayout(t *testing.T) {
 
 	// Both scopes land under the PID, including the guest files the source keyed
 	// by AID.
-	store := NewDirectorySaveStore(filepath.Join(saveRoot, "PD004517"))
+	store := wipicrt.NewDirectorySaveStore(filepath.Join(saveRoot, "PD004517"))
 	for key, want := range map[string]string{
 		"fs/g1":               "guest file",
 		"db/save0.dat":        "c database",
@@ -67,7 +68,7 @@ func TestImportExternalSavesTranslatesLayout(t *testing.T) {
 	if !ok {
 		t.Fatal("jdb/NOM2 is missing")
 	}
-	records, err := decodeSaveRecords(encoded)
+	records, err := wipicrt.DecodeSaveRecords(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +170,7 @@ func TestImportExternalSavesDryRunWritesNothing(t *testing.T) {
 // would say it succeeded.
 func TestAnImportedSaveIsNotHiddenByAnEarlierDelete(t *testing.T) {
 	root := t.TempDir()
-	store := NewDirectorySaveStore(filepath.Join(root, "PD0001"))
+	store := wipicrt.NewDirectorySaveStore(filepath.Join(root, "PD0001"))
 	if err := store.StoreSave("jdb/.removed", []byte("KEEP\nNOM2")); err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestAnEntryTheImporterRefusesIsNotReportedAsImported(t *testing.T) {
 			t.Fatalf("dry=%t: reported %d skipped, want the refusal named", dry, len(report.Skipped))
 		}
 	}
-	if _, exists := NewDirectorySaveStore(filepath.Join(root, "PD0001")).LoadSave("fs/.removed"); exists {
+	if _, exists := wipicrt.NewDirectorySaveStore(filepath.Join(root, "PD0001")).LoadSave("fs/.removed"); exists {
 		t.Fatal("the refused entry was written anyway")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/curve"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // nativeInterfaceGraphics is the shape interface a later module asks the
@@ -269,7 +270,7 @@ func (platform *NativePlatform) drawLine(thread *armcore.Thread) (uint32, error)
 	}
 	bounds := platform.shapeBounds()
 	frame, pen := platform.screen.frame, platform.shapes.pen()
-	err = clippedLine(line[0], line[1], line[2], line[3],
+	err = wipicrt.ClippedLine(line[0], line[1], line[2], line[3],
 		int64(bounds.Min.X), int64(bounds.Min.Y), int64(bounds.Max.X), int64(bounds.Max.Y),
 		func(x, y int32) error {
 			if image.Pt(int(x), int(y)).In(bounds) {

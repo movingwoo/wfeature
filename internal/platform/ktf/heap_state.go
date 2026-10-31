@@ -6,6 +6,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 type arenaState struct {
@@ -15,28 +16,28 @@ type arenaState struct {
 }
 type arenaBlockState struct{ Start, End uint64 }
 
-func (arena *guestArena) captureState() (arenaState, error) {
-	if arena == nil || len(arena.free) > 1<<20 {
+func captureArenaState(arena *wipicrt.GuestArena) (arenaState, error) {
+	if arena == nil || len(arena.Free) > 1<<20 {
 		return arenaState{}, fmt.Errorf("KTF arena is missing or exceeds the free-block limit")
 	}
-	saved := arenaState{Base: arena.base, Limit: arena.limit, Cursor: arena.cursor, HighWater: arena.highWater, Freed: arena.freed}
-	for _, block := range arena.free {
-		saved.Free = append(saved.Free, arenaBlockState{Start: block.start, End: block.end})
+	saved := arenaState{Base: arena.Base, Limit: arena.Limit, Cursor: arena.Cursor, HighWater: arena.HighWater, Freed: arena.Freed}
+	for _, block := range arena.Free {
+		saved.Free = append(saved.Free, arenaBlockState{Start: block.Start, End: block.End})
 	}
-	if _, err := restoreArenaState(saved, arena.base, arena.limit-uint64(arena.base)); err != nil {
+	if _, err := restoreArenaState(saved, arena.Base, arena.Limit-uint64(arena.Base)); err != nil {
 		return arenaState{}, err
 	}
 	return saved, nil
 }
 
-func restoreArenaState(saved arenaState, base uint32, size uint64) (*guestArena, error) {
+func restoreArenaState(saved arenaState, base uint32, size uint64) (*wipicrt.GuestArena, error) {
 	end := uint64(base) + size
-	if size == 0 || end > 1<<32 || saved.Base != base || saved.Limit != end || saved.Cursor < uint64(base) || saved.Cursor > saved.HighWater || saved.HighWater > end || saved.Cursor%arenaAlignment != 0 || saved.HighWater%arenaAlignment != 0 || len(saved.Free) > 1<<20 {
+	if size == 0 || end > 1<<32 || saved.Base != base || saved.Limit != end || saved.Cursor < uint64(base) || saved.Cursor > saved.HighWater || saved.HighWater > end || saved.Cursor%wipicrt.ArenaAlignment != 0 || saved.HighWater%wipicrt.ArenaAlignment != 0 || len(saved.Free) > 1<<20 {
 		return nil, fmt.Errorf("KTF arena state has invalid bounds or policy")
 	}
 	var freed uint64
 	for i, block := range saved.Free {
-		if block.Start < uint64(base) || block.Start >= block.End || block.End >= saved.Cursor || block.Start%arenaAlignment != 0 || block.End%arenaAlignment != 0 || i > 0 && saved.Free[i-1].End >= block.Start {
+		if block.Start < uint64(base) || block.Start >= block.End || block.End >= saved.Cursor || block.Start%wipicrt.ArenaAlignment != 0 || block.End%wipicrt.ArenaAlignment != 0 || i > 0 && saved.Free[i-1].End >= block.Start {
 			return nil, fmt.Errorf("KTF arena free list is not bounded and coalesced")
 		}
 		freed += block.End - block.Start
@@ -44,26 +45,11 @@ func restoreArenaState(saved arenaState, base uint32, size uint64) (*guestArena,
 	if freed != saved.Freed {
 		return nil, fmt.Errorf("KTF arena free-byte count differs from its blocks")
 	}
-	arena := &guestArena{base: base, limit: end, cursor: saved.Cursor, highWater: saved.HighWater, freed: freed}
+	arena := &wipicrt.GuestArena{Base: base, Limit: end, Cursor: saved.Cursor, HighWater: saved.HighWater, Freed: freed}
 	for _, block := range saved.Free {
-		arena.free = append(arena.free, arenaBlock{start: block.Start, end: block.End})
+		arena.Free = append(arena.Free, wipicrt.ArenaBlock{Start: block.Start, End: block.End})
 	}
 	return arena, nil
-}
-
-// rebaseArenaShadow starts debug diagnostics at the restored instant. Historical
-// free-block evidence belongs to the old runtime and does not change guest state.
-func (runtime *initializationRuntime) rebaseArenaShadow() {
-	runtime.installArenaShadow()
-	if runtime.arena.recordReleased == nil {
-		return
-	}
-	for _, block := range runtime.arena.free {
-		runtime.arena.recordReleased(uint32(block.start), block.end-block.start)
-	}
-	if runtime.arena.cursor < runtime.arena.highWater {
-		runtime.arena.recordReleased(uint32(runtime.arena.cursor), runtime.arena.highWater-runtime.arena.cursor)
-	}
 }
 
 func (runtime *initializationRuntime) heapCodec() jvm.HeapCodec {
@@ -92,13 +78,13 @@ func (runtime *initializationRuntime) heapCodec() jvm.HeapCodec {
 				return nil, err
 			}
 			total := uint64(headerSize) + uint64(length)*uint64(size)
-			if total > maxPlatformAllocation {
+			if total > wipicrt.MaxPlatformAllocation {
 				return nil, fmt.Errorf("KTF heap array exceeds allocation limit")
 			}
-			if err := runtime.client.core.Memory().ValidateRange(address, total, armcore.PermissionReadWrite); err != nil {
+			if err := runtime.client.Core().Memory().ValidateRange(address, total, armcore.PermissionReadWrite); err != nil {
 				return nil, err
 			}
-			header, err := runtime.readAOTWords(address, headerSize/4, "restored array header")
+			header, err := runtime.ReadAOTWords(address, headerSize/4, "restored array header")
 			if err != nil {
 				return nil, err
 			}

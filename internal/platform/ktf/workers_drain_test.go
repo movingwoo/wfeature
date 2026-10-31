@@ -7,6 +7,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // fakeWorker queues a worker whose goroutine answers a grant the way a real
@@ -42,7 +43,7 @@ func fakeWorker(client *Client, name string, finishes bool) *guestWorker {
 // competing for the next round, so retiring it is not what the limit shares
 // out.
 func TestFinishedThreadsDoNotQueueBehindTheRoundLimit(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, _ := newPacedTestRuntime(t, clock, 1)
 	const started = 8
 	for index := 0; index < started; index++ {
@@ -69,7 +70,7 @@ func TestFinishedThreadsDoNotQueueBehindTheRoundLimit(t *testing.T) {
 // running, so it takes one of the round's grants and the queue behind it waits
 // for the next round.
 func TestRunningThreadsStillShareTheRoundLimit(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, _ := newPacedTestRuntime(t, clock, 1)
 	for index := 0; index < 4; index++ {
 		fakeWorker(client, "LoopThread", false)

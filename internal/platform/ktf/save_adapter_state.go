@@ -3,6 +3,7 @@ package ktf
 import (
 	"bytes"
 	"fmt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"slices"
 )
 
@@ -34,7 +35,7 @@ type saveAdapterLayer struct {
 
 // captureSaveAdapters records the adapter chain and answers the store under
 // it. It reads the adapters' own memory and makes no store call.
-func captureSaveAdapters(store SaveStore) (saveAdapterState, SaveStore, error) {
+func captureSaveAdapters(store wipicrt.SaveStore) (saveAdapterState, wipicrt.SaveStore, error) {
 	saved := saveAdapterState{Version: saveAdapterVersion}
 	for {
 		var layer saveAdapterLayer
@@ -49,7 +50,7 @@ func captureSaveAdapters(store SaveStore) (saveAdapterState, SaveStore, error) {
 				return saveAdapterState{}, nil, fmt.Errorf("KTF certificate adapter has a failed read or exceeds size limits")
 			}
 			layer = saveAdapterLayer{Kind: "certificate", Certificate: current.certificate,
-				CertificateRemoved: slices.Contains(splitRemovalList(current.removed), certificateName)}
+				CertificateRemoved: slices.Contains(wipicrt.SplitRemovalList(current.removed), certificateName)}
 			if err := (saveAdapterState{Version: saveAdapterVersion, Layers: append(saved.Layers, layer)}).validate(); err != nil {
 				current.mu.Unlock()
 				return saveAdapterState{}, nil, err
@@ -131,7 +132,7 @@ func (saved saveAdapterState) validate() error {
 // The certificate itself is the record's. It is the one answer to a storage
 // read that a load does not take from the store, because it was never there:
 // the adapter issues it for the run and keeps it in memory.
-func bindSaveAdapters(saved saveAdapterState, base SaveStore) (SaveStore, error) {
+func bindSaveAdapters(saved saveAdapterState, base wipicrt.SaveStore) (wipicrt.SaveStore, error) {
 	if err := saved.validate(); err != nil {
 		return nil, err
 	}
@@ -160,7 +161,7 @@ func bindSaveAdapters(saved saveAdapterState, base SaveStore) (SaveStore, error)
 // reads and writes nothing and cannot fail, which is why a load uses it for
 // both of its swaps: the restored chain moves from the reader it was bound
 // through onto the store, and the displaced session's chain moves onto a sink.
-func rebaseSaveAdapters(store, base SaveStore) SaveStore {
+func rebaseSaveAdapters(store, base wipicrt.SaveStore) wipicrt.SaveStore {
 	var certificate *certificateSaveStore
 	var receipt *subscriberReceiptStore
 	current := store

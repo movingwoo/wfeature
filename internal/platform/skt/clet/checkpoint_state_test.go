@@ -9,6 +9,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -38,7 +39,7 @@ func fixtureProgram(t *testing.T, options testfixture.SKTCletOptions) CletProgra
 
 func fixtureSession(t *testing.T, program CletProgram, store backend.SaveStore) *Session {
 	t.Helper()
-	session, err := StartCletSession(t.Context(), program, SessionOptions{SaveStore: store, Clock: NewManualClock(time.Time{})})
+	session, err := StartCletSession(t.Context(), program, SessionOptions{SaveStore: store, Clock: wipicrt.NewManualClock(time.Time{})})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,66 +82,57 @@ func TestCheckpointAccountsForEveryField(t *testing.T) {
 	)
 	policy := map[reflect.Type]map[string]string{
 		reflect.TypeFor[Client](): {
-			"subscriberNumber": recorded, "authentication": recorded, "core": recorded, "thread": recorded,
-			"image": rebuilt, "mapped": rebuilt, "entry": rebuilt, "clet": recorded,
-			"run": host, "initializationStarted": boundary, "workersStopped": boundary, "runtime": recorded, "prepared": boundary,
-			"resources": rebuilt, "files": rebuilt, "saveStore": store, "programName": rebuilt,
-			"frame": recorded, "frameWidth": recorded, "frameHeight": recorded, "flushCount": recorded,
-			"framePending": recorded, "partialFrame": recorded, "frameSink": host,
-			"frameSampleAt": host, "frameSampleClock": host, "lastSample": host,
-			"screenWidth": recorded, "screenHeight": recorded, "threadSliceSteps": boundary,
-			"costs": diagnostic, "timePhases": host, "nextRoundPaint": recorded,
-			"paintsDrop": diagnostic, "paintLoad": recorded, "paintCost": recorded, "entryCost": recorded,
-			"workBaseline": recorded, "servingDue": boundary, "activeTimer": boundary,
-			"serviceSteps": boundary, "serviceWait": boundary,
-			// A service call sets these when it begins and reads them only
-			// against each other until it ends.
-			"serviceRemaining": boundary, "serviceDepth": boundary, "serviceStartedAt": boundary,
-			"serviceWindowAt": boundary, "serviceWindowReads": boundary, "serviceStepMark": boundary,
-			"guestClockReads": reset,
-			"clock":           host, "speed": recorded, "clientWakeAt": recorded, "traceLimit": host, "logger": host,
-			"audio": recorded, "vibrator": recorded,
+			"Client": recorded, "authentication": recorded, "image": rebuilt, "clet": recorded, "initializationStarted": boundary,
+			"workersStopped": boundary, "runtime": recorded, "prepared": boundary,
+		},
+		reflect.TypeFor[wipicrt.Client](): {
+			"Platform": rebuilt, "Hooks": rebuilt, "Runtime": recorded, "Prepared": boundary, "SubscriberNumber": recorded, "core": recorded, "Thread": recorded,
+			"Run": host, "Resources": rebuilt, "Files": rebuilt, "SaveStore": store, "ProgramName": rebuilt,
+			"FrameRGBA": recorded, "FrameWidth": recorded, "FrameHeight": recorded, "FlushCount": recorded,
+			"FramePending": recorded, "PartialFrame": recorded, "FrameSink": host, "FrameSampleAt": host,
+			"FrameSampleClock": host, "LastSample": host, "ScreenWidth": recorded, "ScreenHeight": recorded,
+			"ThreadSliceSteps": boundary, "Costs": diagnostic, "timePhases": host, "NextRoundPaint": recorded,
+			"PaintsDrop": diagnostic, "PaintLoad": recorded, "PaintCost": recorded, "EntryCost": recorded,
+			"WorkBaseline": recorded, "ServingDue": boundary, "ActiveTimer": boundary, "ServiceSteps": boundary,
+			"ServiceWait": boundary, "ServiceRemaining": boundary, "ServiceDepth": boundary, "serviceStartedAt": boundary,
+			"serviceWindowAt": boundary, "serviceWindowReads": boundary, "serviceStepMark": boundary, "GuestClockReads": reset,
+			"Clock": host, "SpeedMultiplier": recorded, "ClientWakeAt": recorded, "TraceLimit": host, "Logger": host,
+			"Audio": recorded, "Vibrator": recorded, "imageSize": rebuilt,
 		},
 		reflect.TypeFor[initializationRuntime](): {
-			"client": rebuilt, "arena": recorded,
-			"arenaShadow": diagnostic, "shadowWindow": diagnostic, "shadowedBlocks": diagnostic, "checkedBlocks": diagnostic,
-			"hookWindow": host, "codeCursor": recorded, "stubs": recorded, "stubKeys": rebuilt,
-			"currentThread": boundary, "currentContext": boundary,
-			"virtualBaseMillis": recorded, "clockBase": recorded, "trace": diagnostic, "callCounts": diagnostic,
-			"saveReadError":    boundary,
-			"wipicAllocations": recorded, "imageSourceBuffers": recorded, "releasedWIPIC": recorded, "releasedWIPICOrder": recorded,
-			"screenFramebuffer": recorded, "framebufferOpacity": recorded, "pixelOps": recorded,
-			"pendingTimers": recorded, "roundTimers": boundary,
-			// The file table is recorded by name and cursor; what a file holds
-			// is the store's.
-			"cFiles": recorded, "cFileHandles": recorded, "nextCDatabaseHandle": recorded,
-			"guestFiles": boundary, "guestFileWrites": boundary,
-			"removedFiles": store, "madeDirectories": store, "removedCDatabases": store,
-			"wipicClips": recorded, "wipicClipOrder": recorded, "wipicMutedSources": recorded,
-			"userMemoryInterface": recorded, "userMemoryPools": recorded,
-			"inputModeTableAddress": recorded, "cInput": recorded,
-			"events": recorded, "guestEventLoop": recorded, "leds": recorded,
-			"aotCallDepth": boundary, "detachedCFiles": rebuilt, "pendingNetCallbacks": recorded,
-			"repaintPending": recorded, "repaintServicing": boundary, "guestFlushedOwnFrame": recorded,
-			// A Clet has no collector, so the trigger never leaves its floor.
-			"collectAt": rebuilt,
+			"Runtime": recorded, "client": rebuilt,
+		},
+		reflect.TypeFor[wipicrt.Runtime](): {
+			"Hooks": rebuilt, "Client": rebuilt, "noteScratch": host, "Arena": recorded, "arenaShadow": diagnostic, "shadowWindow": diagnostic,
+			"ShadowedBlocks": diagnostic, "CheckedBlocks": diagnostic, "hookWindow": host, "CodeCursor": recorded,
+			"Stubs": recorded, "StubKeys": rebuilt, "CurrentThread": boundary, "CurrentContext": boundary,
+			"VirtualBaseMillis": recorded, "ClockBase": recorded, "Trace": diagnostic, "CallCounts": diagnostic,
+			"SaveReadError": boundary, "WIPICAllocations": recorded, "ImageSourceBuffers": recorded, "ReleasedWIPIC": recorded,
+			"ReleasedWIPICOrder": recorded, "ScreenFramebuffer": recorded, "FramebufferOpacity": recorded,
+			"PixelOps": recorded, "PendingTimers": recorded, "RoundTimers": boundary, "CFiles": recorded,
+			"CFileHandles": recorded, "NextCDatabaseHandle": recorded, "GuestFiles": boundary, "GuestFileWrites": boundary,
+			"RemovedFiles": store, "MadeDirectories": store, "RemovedCDatabases": store, "WIPICClips": recorded,
+			"WIPICClipOrder": recorded, "WIPICMutedSources": recorded, "UserMemoryInterface": recorded, "UserMemoryPools": recorded,
+			"InputModeTableAddress": recorded, "CInput": recorded, "Events": recorded, "GuestEventLoop": recorded,
+			"Leds": recorded, "AOTCallDepth": boundary, "DetachedCFiles": rebuilt, "PendingNetCallbacks": recorded,
+			"RepaintPending": recorded, "RepaintServicing": boundary, "GuestFlushedOwnFrame": recorded, "CollectAt": rebuilt,
 		},
 		reflect.TypeFor[cletState](): {
 			"program": rebuilt, "root": recorded, "destroyStarted": boundary, "repaint": recorded,
 			"timeRecord": recorded, "tokenNext": recorded,
 		},
-		reflect.TypeFor[cInputState](): {
-			"owner": recorded, "active": recorded, "mode": recorded, "revision": recorded, "calls": recorded,
-			"activations": recorded, "pending": recorded, "discardCarrier": recorded, "clearPending": recorded,
-			"timerPointer": recorded, "timerCallback": recorded,
-			"pendingValid": boundary, "delivering": boundary,
+		reflect.TypeFor[wipicrt.CInputState](): {
+			"Owner": recorded, "Active": recorded, "Mode": recorded, "Revision": recorded, "Calls": recorded,
+			"Activations": recorded, "Pending": recorded, "DiscardCarrier": recorded, "ClearPending": recorded,
+			"TimerPointer": recorded, "TimerCallback": recorded,
+			"PendingValid": boundary, "Delivering": boundary,
 			// cInputUsed reads the use off the calls, the activations and the
 			// mode table, which are recorded.
-			"used": rebuilt, "unreached": reset,
+			"Used": rebuilt, "Unreached": reset,
 		},
-		reflect.TypeFor[guestArena](): {
-			"base": recorded, "limit": recorded, "cursor": recorded, "free": recorded, "freed": recorded, "highWater": recorded,
-			"recordReleased": diagnostic, "checkReused": diagnostic,
+		reflect.TypeFor[wipicrt.GuestArena](): {
+			"Base": recorded, "Limit": recorded, "Cursor": recorded, "Free": recorded, "Freed": recorded, "HighWater": recorded,
+			"RecordReleased": diagnostic, "CheckReused": diagnostic,
 		},
 	}
 	for kind, fields := range policy {
@@ -168,7 +160,7 @@ func fixtureCheckpoint(t *testing.T) (CletProgram, backend.Checkpoint, *backend.
 	defer session.Close()
 	fixtureTicks(t, session, 3)
 	for _, key := range []int32{'6', '7', '1'} {
-		if err := session.SendKey(t.Context(), KeyPressed, key); err != nil {
+		if err := session.SendKey(t.Context(), wipicrt.KeyPressed, key); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -184,7 +176,7 @@ func fixtureCheckpoint(t *testing.T) (CletProgram, backend.Checkpoint, *backend.
 // anything of it is used.
 func TestCheckpointRefusesAnotherProgramOrSetting(t *testing.T) {
 	program, checkpoint, _ := fixtureCheckpoint(t)
-	options := SessionOptions{Clock: NewManualClock(time.Time{})}
+	options := SessionOptions{Clock: wipicrt.NewManualClock(time.Time{})}
 	other := program
 	other.Identity = [32]byte{9}
 	if _, err := PrepareCheckpoint(other, checkpoint, options); !errors.Is(err, backend.ErrCheckpointIdentity) {
@@ -237,8 +229,8 @@ func TestCheckpointRefusesAnInconsistentRecord(t *testing.T) {
 		"deadline":      func(state *checkpointState) { state.Client.ClientWake = deadlineState{Remaining: 5} },
 		"audio":         func(state *checkpointState) { state.Client.Audio = nil },
 		"stub order":    func(state *checkpointState) { state.Runtime.Stubs[1].Key = state.Runtime.Stubs[0].Key },
-		"stub address":  func(state *checkpointState) { state.Runtime.Stubs[0].Address = platformDataBase | 1 },
-		"stub cursor":   func(state *checkpointState) { state.Runtime.CodeCursor = uint64(platformCodeBase) },
+		"stub address":  func(state *checkpointState) { state.Runtime.Stubs[0].Address = wipicrt.PlatformDataBase | 1 },
+		"stub cursor":   func(state *checkpointState) { state.Runtime.CodeCursor = uint64(wipicrt.PlatformCodeBase) },
 		"block over free": func(state *checkpointState) {
 			state.Runtime.WIPICAllocations[0].Address = uint32(state.Runtime.Arena.Cursor)
 		},
@@ -247,7 +239,7 @@ func TestCheckpointRefusesAnInconsistentRecord(t *testing.T) {
 			state.Runtime.ReleasedWIPIC = []uint32{state.Runtime.WIPICAllocations[0].Address}
 		},
 		"clock anchor":      func(state *checkpointState) { state.Runtime.ClockAge = 2 * maxDeadlineOffset },
-		"timer callback":    func(state *checkpointState) { state.Runtime.Timers[0].Callback = platformDataBase | 1 },
+		"timer callback":    func(state *checkpointState) { state.Runtime.Timers[0].Callback = wipicrt.PlatformDataBase | 1 },
 		"timer deadline":    func(state *checkpointState) { state.Runtime.Timers[0].Due = deadlineState{} },
 		"input mode":        func(state *checkpointState) { state.Runtime.CInput.Mode = 9 },
 		"network callback":  func(state *checkpointState) { state.Runtime.Network = []netCallbackState{{}} },
@@ -277,7 +269,7 @@ func TestCheckpointRefusesAnInconsistentRecord(t *testing.T) {
 		}
 		changed := checkpoint
 		changed.Runtime = record
-		prepared, err := PrepareCheckpoint(program, changed, SessionOptions{Clock: NewManualClock(time.Time{})})
+		prepared, err := PrepareCheckpoint(program, changed, SessionOptions{Clock: wipicrt.NewManualClock(time.Time{})})
 		if err == nil {
 			prepared.Discard()
 		}
@@ -297,16 +289,16 @@ func TestCheckpointCaptureRefusesABusySession(t *testing.T) {
 	fixtureTicks(t, session, 2)
 	client := session.Client
 	for name, busy := range map[string]func() func(){
-		"service": func() func() { client.serviceDepth = 1; return func() { client.serviceDepth = 0 } },
-		"timer":   func() func() { client.activeTimer = &wipicTimer{}; return func() { client.activeTimer = nil } },
+		"service": func() func() { client.ServiceDepth = 1; return func() { client.ServiceDepth = 0 } },
+		"timer":   func() func() { client.ActiveTimer = &wipicrt.WIPICTimer{}; return func() { client.ActiveTimer = nil } },
 		"text": func() func() {
-			client.runtime.cInput.delivering = true
-			return func() { client.runtime.cInput.delivering = false }
+			client.runtime.CInput.Delivering = true
+			return func() { client.runtime.CInput.Delivering = false }
 		},
 		"destroyed": func() func() { client.clet.destroyStarted = true; return func() { client.clet.destroyStarted = false } },
 		"save read": func() func() {
-			client.runtime.saveReadError = errors.New("unreadable")
-			return func() { client.runtime.saveReadError = nil }
+			client.runtime.SaveReadError = errors.New("unreadable")
+			return func() { client.runtime.SaveReadError = nil }
 		},
 	} {
 		restore := busy()
@@ -315,9 +307,9 @@ func TestCheckpointCaptureRefusesABusySession(t *testing.T) {
 		}
 		restore()
 	}
-	client.run.Lock()
+	client.Run.Lock()
 	_, err := session.CaptureCheckpoint(t.Context())
-	client.run.Unlock()
+	client.Run.Unlock()
 	if !errors.Is(err, ErrCheckpointBusy) {
 		t.Fatalf("a session whose run lock is held: %v", err)
 	}
@@ -331,7 +323,7 @@ func TestCheckpointCaptureRefusesABusySession(t *testing.T) {
 // and a store that cannot be read refuses the load with the saves untouched.
 func TestCheckpointLoadReadsTheStoreOnlyAtCommit(t *testing.T) {
 	program, checkpoint, store := fixtureCheckpoint(t)
-	prepared, err := PrepareCheckpoint(program, checkpoint, SessionOptions{Clock: NewManualClock(time.Time{}), SaveStore: store})
+	prepared, err := PrepareCheckpoint(program, checkpoint, SessionOptions{Clock: wipicrt.NewManualClock(time.Time{}), SaveStore: store})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,4 +364,98 @@ func keysOf(t *testing.T, store *backend.MemorySaveStore) []string {
 		keys = append(keys, entry.Key)
 	}
 	return keys
+}
+
+// A removal or a directory an earlier session stored is what a new session
+// starts from. The Clet engine used to build its runtime with the removal and
+// directory lists already made, empty, so they were never read from the store:
+// a packaged file the program had deleted came back the next time it ran.
+func TestASessionReadsTheRemovalsAnEarlierOneStored(t *testing.T) {
+	program := fixtureProgram(t, testfixture.SKTCletOptions{})
+	program.Files = map[string][]byte{"save.dat": []byte("packaged")}
+	store, err := backend.NewMemorySaveStore([]backend.SaveEntry{
+		{Key: "db/.removed", Data: []byte("save.dat\n")},
+		{Key: "db/.dirs", Data: []byte("made\n")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := fixtureSession(t, program, store)
+	defer session.Close()
+	runtime := session.Client.runtime
+	if !runtime.RemovedDatabases()["save.dat"] {
+		t.Error("a file removed in an earlier session is not in the removal list")
+	}
+	if !runtime.CreatedDirectories()["made"] {
+		t.Error("a directory made in an earlier session is not in the directory list")
+	}
+}
+
+// The engine before the shared one wrote the removal list and never read it
+// back, so a program that deleted its save in one session and wrote it again in
+// a later one left the name listed over the bytes, and that engine answered the
+// save from them. A session now answers the same save, and the next write of
+// the list leaves the name off. A name over the empty file a removal stores is
+// still removed.
+func TestASessionKeepsASaveTheEarlierEngineLeftListed(t *testing.T) {
+	program := fixtureProgram(t, testfixture.SKTCletOptions{})
+	store, err := backend.NewMemorySaveStore([]backend.SaveEntry{
+		{Key: "db/.removed", Data: []byte("save.dat\ngone.dat\n")},
+		{Key: "db/save.dat", Data: []byte("progress")},
+		{Key: "db/gone.dat", Data: []byte{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := fixtureSession(t, program, store)
+	defer session.Close()
+	runtime := session.Client.runtime
+	call := func(function uint32, registers ...uint32) uint32 {
+		t.Helper()
+		thread := armcore.NewThread(armcore.NewContext())
+		for index, value := range registers {
+			if err := thread.SetRegister(index, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := runtime.HandleWIPICCall(thread, wipicrt.WIPICTableFilesystem<<16|function)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	name := func(text string) uint32 {
+		t.Helper()
+		address, err := runtime.AllocateBytes([]byte(text + "\x00"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return address
+	}
+	save, gone := name("save.dat"), name("gone.dat")
+	if result := call(wipicrt.WIPICFileExists, save); result != 0 {
+		t.Errorf("MC_fsIsExist of the save = %#x, want 0", result)
+	}
+	if handle := call(wipicrt.WIPICFileOpen, save, 1); handle == wipicrt.WIPICErrorNotFound {
+		t.Error("the save does not open for reading")
+	}
+	if seed, found := runtime.DatabaseSeed("save.dat"); !found || string(seed) != "progress" {
+		t.Errorf("the save reads %q, %v; want the stored progress", seed, found)
+	}
+	if result := call(wipicrt.WIPICFileExists, gone); result != wipicrt.WIPICErrorNotFound {
+		t.Errorf("MC_fsIsExist of the removed file = %#x, want M_E_NOENT", result)
+	}
+	if result := call(wipicrt.WIPICFileDelete, gone); result != wipicrt.WIPICErrorNotFound {
+		t.Errorf("MC_fsRemove of the removed file = %#x, want M_E_NOENT", result)
+	}
+	if err := runtime.MarkDatabaseRemoved("other.dat", true); err != nil {
+		t.Fatal(err)
+	}
+	listed, _ := store.LoadSave("db/.removed")
+	if got := strings.Join(wipicrt.SplitRemovalList(listed), ","); got != "gone.dat,other.dat" {
+		t.Errorf("the list stored next is %q, want gone.dat,other.dat", got)
+	}
+	if saved, _ := store.LoadSave("db/save.dat"); string(saved) != "progress" {
+		t.Errorf("db/save.dat = %q, want the progress kept", saved)
+	}
 }

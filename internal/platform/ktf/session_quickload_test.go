@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -140,7 +141,7 @@ func TestSessionQuickLoadNeverHandsAnEmptiedFileANewerTail(t *testing.T) {
 
 // panickingSaves is a store whose reads panic, which a save store handed in by
 // a Host is free to do.
-type panickingSaves struct{ SaveStore }
+type panickingSaves struct{ wipicrt.SaveStore }
 
 func (panickingSaves) LoadSave(string) ([]byte, bool) { panic("the test store panics on a read") }
 
@@ -171,10 +172,10 @@ func TestSessionQuickLoadReleasesTheRunningClientWhenTheStorePanics(t *testing.T
 			if recovered == nil {
 				t.Fatal("the load did not read the store it was given")
 			}
-			if !fixture.session.Client.run.TryLock() {
+			if !fixture.session.Client.Run.TryLock() {
 				t.Fatal("the running client's lock was not given back")
 			}
-			fixture.session.Client.run.Unlock()
+			fixture.session.Client.Run.Unlock()
 			// The running title is still the title, on its own store.
 			fixture.press(testfixture.KTFSaveActionRead, 0)
 			fixture.expectRead("a read after the panic", testfixture.KTFSaveFound, 8, 0x11111111, 0x11111111^testfixture.KTFSaveMask)
@@ -308,7 +309,7 @@ func TestSessionQuickSaveRightAfterAQuickLoad(t *testing.T) {
 func TestSessionQuickLoadIsRefusedWhenASaveCannotBeRead(t *testing.T) {
 	const first, second = 0x11111111, 0x22222222
 	for _, variant := range saveFixtureVariants() {
-		for _, key := range []string{testfixture.KTFSaveStoreKey, guestFileRemovedKey, databaseRemovedKey, directoryListKey, recordDatabaseRemovedKey, javaDatabaseRemovedKey} {
+		for _, key := range []string{testfixture.KTFSaveStoreKey, guestFileRemovedKey, wipicrt.DatabaseRemovedKey, wipicrt.DirectoryListKey, recordDatabaseRemovedKey, javaDatabaseRemovedKey} {
 			t.Run(variant.name+", "+key, func(t *testing.T) {
 				fixture := startSaveFixture(t, variant)
 				fixture.press(testfixture.KTFSaveActionSave, first)
@@ -373,10 +374,10 @@ func TestSessionQuickLoadCancelledAfterTheSavesWereRead(t *testing.T) {
 	if _, err := prepared.Commit(&lateCancel{Context: t.Context()}, fixture.session, fixture.probe); !errors.Is(err, context.Canceled) {
 		t.Fatalf("a load cancelled late = %v", err)
 	}
-	if restoredClient.saveStore != SaveStore(prepared.placeholder) || restoredClient.runtime.restoredStorage == nil {
+	if restoredClient.SaveStore != wipicrt.SaveStore(prepared.placeholder) || restoredClient.runtime.restoredStorage == nil {
 		t.Fatal("the cancelled load left the restored runtime on the store")
 	}
-	if fixture.session.Client != source || source.workersStopped || source.saveStore != SaveStore(fixture.probe) {
+	if fixture.session.Client != source || source.workersStopped || source.SaveStore != wipicrt.SaveStore(fixture.probe) {
 		t.Fatal("the cancelled load changed the running session")
 	}
 	restored, err := prepared.Commit(t.Context(), fixture.session, fixture.probe)
@@ -471,7 +472,7 @@ func TestSessionCaptureNeedsOnlyAPlainSaveStore(t *testing.T) {
 	}
 	defer session.Close()
 	writeTestWords(t, session.Client, testfixture.KTFSaveProgress, []uint32{0x11111111})
-	if err := session.SendKey(t.Context(), KeyPressed, testfixture.KTFSaveActionSave); err != nil {
+	if err := session.SendKey(t.Context(), wipicrt.KeyPressed, testfixture.KTFSaveActionSave); err != nil {
 		t.Fatal(err)
 	}
 	reads, writes := store.reads, store.writes

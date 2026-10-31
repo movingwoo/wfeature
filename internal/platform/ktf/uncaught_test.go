@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // TestAnUncaughtGuestExceptionEndsTheCallbackAndNotTheSession pins the rule the
@@ -76,7 +77,7 @@ func TestAnUncaughtExceptionInKeyNotifyEndsOnlyThatKey(t *testing.T) {
 	presses := 0
 	if err := client.JVM().RegisterNative("test/ParsingCard", "keyNotify", "(II)Z", func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		presses++
-		if key, _ := arguments[2].Int32(); key == KeyFire {
+		if key, _ := arguments[2].Int32(); key == wipicrt.KeyFire {
 			return jvm.VoidValue(), &jvm.GuestException{
 				Object:  &jvm.Object{ClassName: "java/lang/NumberFormatException"},
 				Message: "not a digit",
@@ -87,13 +88,13 @@ func TestAnUncaughtExceptionInKeyNotifyEndsOnlyThatKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime.displayCards = []*jvm.Object{{ClassName: "test/ParsingCard"}}
-	if err := client.SendKey(t.Context(), KeyPressed, KeyFire); err != nil {
+	if err := client.SendKey(t.Context(), wipicrt.KeyPressed, wipicrt.KeyFire); err != nil {
 		t.Fatalf("an uncaught exception in keyNotify ended the session: %v", err)
 	}
 	if count, first := client.UncaughtCallbacks(); count != 1 || !strings.HasPrefix(first, "key: ") || !strings.Contains(first, "NumberFormatException") {
 		t.Fatalf("uncaught callbacks = %d, first = %q", count, first)
 	}
-	if err := client.SendKey(t.Context(), KeyPressed, KeyNum0+5); err != nil {
+	if err := client.SendKey(t.Context(), wipicrt.KeyPressed, wipicrt.KeyNum0+5); err != nil {
 		t.Fatal(err)
 	}
 	if presses != 2 {

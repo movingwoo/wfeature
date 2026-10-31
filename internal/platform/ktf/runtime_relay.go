@@ -331,11 +331,11 @@ func runtimeRelayWrite(runtime *initializationRuntime, _ *jvm.VM, args []jvm.Val
 	}
 	phase := socket.service.phase
 	if err := socket.write(data); err != nil {
-		runtime.countDiagnostic("local relay refused: " + err.Error())
+		runtime.CountDiagnostic("local relay refused: " + err.Error())
 		return jvm.VoidValue(), relayIOException(err)
 	}
 	if socket.service.phase != phase {
-		runtime.countDiagnostic(fmt.Sprintf("local slot relay phase %d", socket.service.phase))
+		runtime.CountDiagnostic(fmt.Sprintf("local slot relay phase %d", socket.service.phase))
 	}
 	return jvm.VoidValue(), nil
 }

@@ -1,8 +1,9 @@
 package ktf
 
 import (
-	"github.com/movingwoo/wfeature/internal/jvm"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
 func TestGFormVisibilityThroughPublishedMethods(t *testing.T) {

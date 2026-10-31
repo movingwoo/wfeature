@@ -32,7 +32,7 @@ func TestOrphanImageSurfaceIsReclaimedAndGraphicsRetainsImage(t *testing.T) {
 	}
 	value = jvm.VoidValue()
 	runtime.GC()
-	rt.collectHostResources()
+	rt.collectHostObjects()
 	if len(rt.imageSurfaces) != 1 {
 		t.Fatal("live Graphics lost its Image")
 	}
@@ -40,8 +40,8 @@ func TestOrphanImageSurfaceIsReclaimedAndGraphicsRetainsImage(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		handle := makeOrphanImage(t, rt)
 		runtime.GC()
-		rt.collectHostResources()
-		if _, exists := rt.wipicAllocations[handle]; exists {
+		rt.collectHostObjects()
+		if _, exists := rt.WIPICAllocations[handle]; exists {
 			t.Fatal("orphan Image retained its surface")
 		}
 	}
@@ -51,13 +51,13 @@ func makeOrphanClip(t *testing.T, rt *initializationRuntime, play bool) backend.
 	t.Helper()
 	object := &jvm.Object{ClassName: "org/kwis/msp/media/Clip"}
 	state := rt.clip(object)
-	handle, err := rt.client.audio.Load(oneNoteSMAF())
+	handle, err := rt.client.Audio.Load(oneNoteSMAF())
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.handle, state.loaded = handle, true
+	state.Handle, state.Loaded = handle, true
 	if play {
-		if err := rt.client.audio.Play(handle, 0, false); err != nil {
+		if err := rt.client.Audio.Play(handle, 0, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -66,20 +66,20 @@ func makeOrphanClip(t *testing.T, rt *initializationRuntime, play bool) backend.
 
 func TestOrphanClipWaitsForPlaybackThenCloses(t *testing.T) {
 	client, rt := newTestRuntime(t)
-	client.audio = backend.NewAudio(nil)
+	client.Audio = backend.NewAudio(nil)
 	makeOrphanClip(t, rt, false)
 	playing := makeOrphanClip(t, rt, true)
 	runtime.GC()
-	rt.collectHostResources()
-	if len(rt.clips) != 1 || !client.audio.Playing(playing) {
+	rt.collectHostObjects()
+	if len(rt.clips) != 1 || !client.Audio.Playing(playing) {
 		t.Fatal("playing orphan was lost or stopped orphan retained")
 	}
-	client.audio.Advance(time.Hour)
-	rt.collectHostResources()
+	client.Audio.Advance(time.Hour)
+	rt.collectHostObjects()
 	if len(rt.clips) != 0 {
 		t.Fatal("finished orphan retained")
 	}
-	if err := client.audio.Play(playing, time.Hour, false); err == nil {
+	if err := client.Audio.Play(playing, time.Hour, false); err == nil {
 		t.Fatal("finished orphan handle was not closed")
 	}
 }
@@ -111,7 +111,7 @@ func TestGuestImageCollectionAndReusedSurfaceOwnership(t *testing.T) {
 		if _, exists := rt.objects[address]; exists {
 			t.Fatal("orphan guest Image remains rooted")
 		}
-		if _, exists := rt.wipicAllocations[handle]; exists {
+		if _, exists := rt.WIPICAllocations[handle]; exists {
 			t.Fatal("collected guest Image retains its surface")
 		}
 	}
@@ -119,7 +119,7 @@ func TestGuestImageCollectionAndReusedSurfaceOwnership(t *testing.T) {
 		t.Fatal("fixture did not exercise guest address reuse")
 	}
 	old := makeOrphanImage(t, rt)
-	rt.destroyWIPICFramebufferRecord(old)
+	rt.DestroyWIPICFramebufferRecord(old)
 	value, err := runtimeImageCreateSized(rt, rt.client.vm, []jvm.Value{jvm.IntValue(2), jvm.IntValue(2)})
 	if err != nil {
 		t.Fatal(err)
@@ -130,8 +130,8 @@ func TestGuestImageCollectionAndReusedSurfaceOwnership(t *testing.T) {
 		t.Fatal("fixture did not reuse the framebuffer address")
 	}
 	runtime.GC()
-	rt.collectHostResources()
-	if _, exists := rt.wipicAllocations[uint32(handle)]; !exists {
+	rt.collectHostObjects()
+	if _, exists := rt.WIPICAllocations[uint32(handle)]; !exists {
 		t.Fatal("old owner freed the replacement surface")
 	}
 	runtime.KeepAlive(object)

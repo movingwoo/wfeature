@@ -103,7 +103,7 @@ whole at every registration. On a light title the rereading, a byte per
 memory read, was most of what the server did for it. Every KTF reader of a
 terminated guest string — the names in class records, text drawn with no
 length, the native C library's strings, the `strlen` and `strcpy` hooks —
-shares one scan that reads a chunk at a time (`scanGuestString`) and answers
+shares one scan that reads a chunk at a time (`wipicrt.ScanGuestString`) and answers
 what reading a byte, or a UTF-16 unit, at a time answered; a string that runs
 off the top of the address space is refused rather than carried on at address
 zero, which no KTF client maps. The runtime Java method behind a

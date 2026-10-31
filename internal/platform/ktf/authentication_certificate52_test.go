@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A generated image with an independently chosen layout, token and cipher.
@@ -35,8 +36,8 @@ func certificate52Fixture(shift int) (*Archive, []byte) {
 	put(0x1c4, 0)
 	put(0x340, 0x800-0x310)
 	put(0x344, 4)
-	put(0x800, ImageBase+uint32(shift+0x900))
-	put(0x804, ImageBase+uint32(shift+0xa00))
+	put(0x800, wipicrt.ImageBase+uint32(shift+0x900))
+	put(0x804, wipicrt.ImageBase+uint32(shift+0xa00))
 	copy(image[shift+0x900:], "cert.c2s\x00PHONENUMBER\x00")
 	copy(image[shift+0x940:], "fixture-token-01")
 	plain := make([]byte, 52)
@@ -71,25 +72,25 @@ func TestAuthenticationCertificate52RelocationAndGuestDecode(t *testing.T) {
 				t.Fatal("adaptation changed another field or the archive")
 			}
 			core := armcore.NewCore(armcore.CoreOptions{MaxSteps: 200000})
-			if err := core.Memory().Map(ImageBase, uint64(len(image)), armcore.PermissionReadWriteExecute); err != nil {
+			if err := core.Memory().Map(wipicrt.ImageBase, uint64(len(image)), armcore.PermissionReadWriteExecute); err != nil {
 				t.Fatal(err)
 			}
 			copy(image[shift+0xc00:], adapted)
-			if err := core.Memory().Load(ImageBase, image); err != nil {
+			if err := core.Memory().Load(wipicrt.ImageBase, image); err != nil {
 				t.Fatal(err)
 			}
 			initial := armcore.NewContext()
-			if err := initial.SetPC(ImageBase + uint32(shift+0x301)); err != nil {
+			if err := initial.SetPC(wipicrt.ImageBase + uint32(shift+0x301)); err != nil {
 				t.Fatal(err)
 			}
-			initial.Registers[0], initial.Registers[1] = ImageBase+uint32(shift+0xc00), 48
-			initial.Registers[armcore.RegisterSP] = ImageBase + uint32(len(image))
-			initial.Registers[armcore.RegisterLR] = ImageBase + uint32(shift+0xe01)
-			if _, err := core.Run(context.Background(), armcore.NewThread(initial), ImageBase+uint32(shift+0xe00), nil); err != nil {
+			initial.Registers[0], initial.Registers[1] = wipicrt.ImageBase+uint32(shift+0xc00), 48
+			initial.Registers[armcore.RegisterSP] = wipicrt.ImageBase + uint32(len(image))
+			initial.Registers[armcore.RegisterLR] = wipicrt.ImageBase + uint32(shift+0xe01)
+			if _, err := core.Run(context.Background(), armcore.NewThread(initial), wipicrt.ImageBase+uint32(shift+0xe00), nil); err != nil {
 				t.Fatal(err)
 			}
 			plain := make([]byte, 52)
-			if err := core.Memory().Read(ImageBase+uint32(shift+0xc00), plain); err != nil {
+			if err := core.Memory().Read(wipicrt.ImageBase+uint32(shift+0xc00), plain); err != nil {
 				t.Fatal(err)
 			}
 			if string(plain[10:18]) != "ABCDEF12" || string(bytes.TrimRight(plain[36:48], "\x00")) != number ||

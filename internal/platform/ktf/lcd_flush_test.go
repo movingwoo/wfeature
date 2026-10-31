@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestPartialLCDFlushRetainsOutsideAndDoesNotMutateSource(t *testing.T) {
@@ -14,18 +15,18 @@ func TestPartialLCDFlushRetainsOutsideAndDoesNotMutateSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	screen := graphics.Native.(*runtimeGraphicsState).target
-	if err := runtime.fillFramebufferRect(screen, wipicClip{}, wipicPixelOp{}, 0xf800, 0, 0, 4, 4); err != nil {
+	if err := runtime.FillFramebufferRect(screen, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{}, 0xf800, 0, 0, 4, 4); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.presentScreen(); err != nil {
+	if err := runtime.PresentScreen(); err != nil {
 		t.Fatal(err)
 	}
 	before, width, _, _ := client.Frame()
-	if err := runtime.fillFramebufferRect(screen, wipicClip{}, wipicPixelOp{}, 0x07e0, 0, 0, 4, 4); err != nil {
+	if err := runtime.FillFramebufferRect(screen, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{}, 0x07e0, 0, 0, 4, 4); err != nil {
 		t.Fatal(err)
 	}
 	source := screen
-	if err := runtime.flushLCDRegion(source, 1, 1, 2, 2); err != nil {
+	if err := runtime.FlushLCDRegion(source, 1, 1, 2, 2); err != nil {
 		t.Fatal(err)
 	}
 	after, _, _, _ := client.Frame()
@@ -46,7 +47,7 @@ func TestPartialLCDFlushRetainsOutsideAndDoesNotMutateSource(t *testing.T) {
 	}
 	runtime.displayCards = []*jvm.Object{{ClassName: "test/EmptyCard"}}
 	for i := 0; i < 3; i++ {
-		runtime.repaintPending = true
+		runtime.RepaintPending = true
 		if _, err := runtime.paintTopCard(); err != nil {
 			t.Fatal(err)
 		}
@@ -59,7 +60,7 @@ func TestPartialLCDFlushRetainsOutsideAndDoesNotMutateSource(t *testing.T) {
 
 func TestNULPaddingHasNoAdvance(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	if got, want := runtime.graphicsTextWidth([]rune("A\x00B\x00")), runtime.graphicsTextWidth([]rune("AB")); got != want {
+	if got, want := runtime.GraphicsTextWidth([]rune("A\x00B\x00")), runtime.GraphicsTextWidth([]rune("AB")); got != want {
 		t.Fatalf("padded width = %d, want %d", got, want)
 	}
 	graphics, err := runtime.newScreenGraphics()
@@ -69,14 +70,14 @@ func TestNULPaddingHasNoAdvance(t *testing.T) {
 	state := graphics.Native.(*runtimeGraphicsState)
 	var frames [][]byte
 	for _, text := range []string{"AB", "A\x00B\x00"} {
-		if err := runtime.fillFramebufferRect(state.target, wipicClip{}, wipicPixelOp{}, 0xffff, 0, 0, int32(state.target.width), int32(state.target.height)); err != nil {
+		if err := runtime.FillFramebufferRect(state.target, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{}, 0xffff, 0, 0, int32(state.target.Width), int32(state.target.Height)); err != nil {
 			t.Fatal(err)
 		}
 		if err := runtime.graphicsDrawText(state, []rune(text), 0, 0, 0); err != nil {
 			t.Fatal(err)
 		}
-		frame := make([]byte, int(state.target.bpl)*int(state.target.height))
-		if err := runtime.client.core.Memory().Read(state.target.pixels, frame); err != nil {
+		frame := make([]byte, int(state.target.Bpl)*int(state.target.Height))
+		if err := runtime.client.Core().Memory().Read(state.target.Pixels, frame); err != nil {
 			t.Fatal(err)
 		}
 		frames = append(frames, frame)

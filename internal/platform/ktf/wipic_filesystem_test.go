@@ -5,13 +5,14 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // databaseCall drives one WIPI C database slot with a name in r0.
 func databaseCall(t *testing.T, runtime *initializationRuntime, function uint32, name string, extra ...uint32) uint32 {
 	t.Helper()
-	const nameAddress = platformDataBase + 0xa000
-	if err := runtime.client.core.Memory().Write(nameAddress, append([]byte(name), 0)); err != nil {
+	const nameAddress = wipicrt.PlatformDataBase + 0xa000
+	if err := runtime.client.Core().Memory().Write(nameAddress, append([]byte(name), 0)); err != nil {
 		t.Fatal(err)
 	}
 	thread := armcore.NewThread(armcore.Context{})
@@ -23,7 +24,7 @@ func databaseCall(t *testing.T, runtime *initializationRuntime, function uint32,
 			t.Fatal(err)
 		}
 	}
-	result, err := runtime.handleWIPICFileCall(thread, function)
+	result, err := runtime.HandleWIPICFileCall(thread, function)
 	if err != nil {
 		t.Fatalf("database function %d: %v", function, err)
 	}
@@ -38,37 +39,37 @@ func databaseCall(t *testing.T, runtime *initializationRuntime, function uint32,
 func TestDeletedDatabaseStaysDeleted(t *testing.T) {
 	const notFound = int32(-12) // M_E_NOENT, which wipicErrorNotFound spells unsigned.
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 
 	const name = "cert.dat"
 	// Open for creation, write through the stream, and persist it.
-	handle := databaseCall(t, runtime, wipicFileOpen, name, 4)
+	handle := databaseCall(t, runtime, wipicrt.WIPICFileOpen, name, 4)
 	if int32(handle) < 0 {
 		t.Fatalf("open for creation = %d", int32(handle))
 	}
-	store := runtime.cFiles[name]
+	store := runtime.CFiles[name]
 	if store == nil {
 		t.Fatal("the open created no store")
 	}
-	store.data = []byte("certificate")
-	store.persist(runtime)
+	store.Data = []byte("certificate")
+	store.Persist(runtime.Runtime)
 
-	if got := int32(databaseCall(t, runtime, wipicFileExists, name)); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileExists, name)); got != 0 {
 		t.Fatalf("exists before the delete = %d, want 0", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicFileDelete, name, 1)); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileDelete, name, 1)); got != 0 {
 		t.Fatalf("delete = %d, want 0", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicFileExists, name)); got != notFound {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileExists, name)); got != notFound {
 		t.Fatalf("exists after the delete = %d, want the not-found code", got)
 	}
 	// Opening for reading has to fail too: it is the other question a title
 	// asks, and it seeds from the same persisted copy.
-	if got := int32(databaseCall(t, runtime, wipicFileOpen, name, 1)); got != notFound {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileOpen, name, 1)); got != notFound {
 		t.Fatalf("read-open after the delete = %d, want the not-found code", got)
 	}
 	// Deleting what is not there is reported rather than accepted.
-	if got := int32(databaseCall(t, runtime, wipicFileDelete, name, 1)); got != notFound {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileDelete, name, 1)); got != notFound {
 		t.Fatalf("deleting twice = %d, want the not-found code", got)
 	}
 }
@@ -78,26 +79,26 @@ func TestDeletedDatabaseStaysDeleted(t *testing.T) {
 // one. A removal list that outlived the create would hide every later write.
 func TestCreatingADeletedDatabaseBringsItBack(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 
 	const name = "slot.dat"
-	databaseCall(t, runtime, wipicFileOpen, name, 4)
-	runtime.cFiles[name].data = []byte("old")
-	runtime.cFiles[name].persist(runtime)
-	databaseCall(t, runtime, wipicFileDelete, name, 1)
+	databaseCall(t, runtime, wipicrt.WIPICFileOpen, name, 4)
+	runtime.CFiles[name].Data = []byte("old")
+	runtime.CFiles[name].Persist(runtime.Runtime)
+	databaseCall(t, runtime, wipicrt.WIPICFileDelete, name, 1)
 
-	if handle := int32(databaseCall(t, runtime, wipicFileOpen, name, 4)); handle < 0 {
+	if handle := int32(databaseCall(t, runtime, wipicrt.WIPICFileOpen, name, 4)); handle < 0 {
 		t.Fatalf("create after a delete = %d", handle)
 	}
-	if got := len(runtime.cFiles[name].data); got != 0 {
+	if got := len(runtime.CFiles[name].Data); got != 0 {
 		t.Fatalf("the recreated database holds %d bytes of the deleted one", got)
 	}
-	runtime.cFiles[name].data = []byte("new")
-	runtime.cFiles[name].persist(runtime)
-	if got := int32(databaseCall(t, runtime, wipicFileExists, name)); got != 0 {
+	runtime.CFiles[name].Data = []byte("new")
+	runtime.CFiles[name].Persist(runtime.Runtime)
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileExists, name)); got != 0 {
 		t.Fatalf("exists after recreating = %d, want 0", got)
 	}
-	if data, ok := runtime.databaseSeed(name); !ok || string(data) != "new" {
+	if data, ok := runtime.DatabaseSeed(name); !ok || string(data) != "new" {
 		t.Fatalf("the seed after recreating = %q ok=%t, want the new contents", data, ok)
 	}
 }
@@ -110,27 +111,27 @@ func TestMadeDirectoryIsRememberedAcrossSessions(t *testing.T) {
 	const alreadyThere = int32(-5) // M_E_EXIST, which wipicErrorExists spells unsigned.
 	saves := t.TempDir()
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(saves)
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
 
 	const name = "ga"
-	if got := int32(databaseCall(t, runtime, wipicFileMakeDirectory, name, 1)); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileMakeDirectory, name, 1)); got != 0 {
 		t.Fatalf("the first mkdir = %d, want 0", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicFileMakeDirectory, name, 1)); got != alreadyThere {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileMakeDirectory, name, 1)); got != alreadyThere {
 		t.Fatalf("the second mkdir = %d, want %d", got, alreadyThere)
 	}
-	if got := int32(databaseCall(t, runtime, wipicFileExists, name)); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileExists, name)); got != 0 {
 		t.Fatalf("a made directory answers exists = %d, want 0", got)
 	}
 
 	// A second session over the same save tree is where the list earns its
 	// keep: nothing is in memory and the store is the only record.
 	_, second := newTestRuntime(t)
-	second.client.saveStore = NewDirectorySaveStore(saves)
-	if got := int32(databaseCall(t, second, wipicFileMakeDirectory, name, 1)); got != alreadyThere {
+	second.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
+	if got := int32(databaseCall(t, second, wipicrt.WIPICFileMakeDirectory, name, 1)); got != alreadyThere {
 		t.Fatalf("mkdir in a second session = %d, want %d", got, alreadyThere)
 	}
-	if got := int32(databaseCall(t, second, wipicFileMakeDirectory, "other", 1)); got != 0 {
+	if got := int32(databaseCall(t, second, wipicrt.WIPICFileMakeDirectory, "other", 1)); got != 0 {
 		t.Fatalf("mkdir of a name nothing made = %d, want 0", got)
 	}
 }
@@ -142,29 +143,29 @@ func TestMadeDirectoryIsRememberedAcrossSessions(t *testing.T) {
 // title that plays and one that quits inside `startApp`.
 func TestAMadeDirectoryIsThereToBothQuestions(t *testing.T) {
 	const noSuchName = int32(-12) // M_E_NOENT, which wipicErrorNotFound spells unsigned.
-	const record = platformDataBase + 0xc000
+	const record = wipicrt.PlatformDataBase + 0xc000
 	saves := t.TempDir()
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(saves)
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
 
 	const name = "shared"
-	if got := int32(databaseCall(t, runtime, wipicFileStatByName, name, record)); got != noSuchName {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileStatByName, name, record)); got != noSuchName {
 		t.Fatalf("stat of a name nothing made = %d, want %d", got, noSuchName)
 	}
-	if got := int32(databaseCall(t, runtime, wipicFileMakeDirectory, name, 1)); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileMakeDirectory, name, 1)); got != 0 {
 		t.Fatalf("mkdir = %d, want 0", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicFileExists, name)); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileExists, name)); got != 0 {
 		t.Fatalf("a made directory answers exists = %d, want 0", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicFileStatByName, name, record)); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileStatByName, name, record)); got != 0 {
 		t.Fatalf("stat of the directory just made = %d, want 0", got)
 	}
 	// MH_FileInfo is { attrib, creationTime, size }. A directory holds no
 	// bytes and keeps no time, and its attribute word carries MC_FILE_IS_DIR,
 	// 0x01 in the specification's HAL page.
 	info := make([]byte, 12)
-	if err := runtime.client.core.Memory().Read(record, info); err != nil {
+	if err := runtime.client.Core().Memory().Read(record, info); err != nil {
 		t.Fatal(err)
 	}
 	for index, field := range []string{"attributes", "creation time", "size"} {
@@ -181,11 +182,11 @@ func TestAMadeDirectoryIsThereToBothQuestions(t *testing.T) {
 	// names earns its keep: nothing is in memory and the store is the only
 	// record, and both questions still have to answer the same way.
 	_, second := newTestRuntime(t)
-	second.client.saveStore = NewDirectorySaveStore(saves)
-	if got := int32(databaseCall(t, second, wipicFileStatByName, name, record)); got != 0 {
+	second.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
+	if got := int32(databaseCall(t, second, wipicrt.WIPICFileStatByName, name, record)); got != 0 {
 		t.Fatalf("stat in a second session = %d, want 0", got)
 	}
-	if got := int32(databaseCall(t, second, wipicFileStatByName, "other", record)); got != noSuchName {
+	if got := int32(databaseCall(t, second, wipicrt.WIPICFileStatByName, "other", record)); got != noSuchName {
 		t.Fatalf("stat of a name nothing made, in a second session = %d, want %d", got, noSuchName)
 	}
 }
@@ -194,12 +195,12 @@ func TestAMadeDirectoryIsThereToBothQuestions(t *testing.T) {
 // in this table that takes two names.
 func renameCall(t *testing.T, runtime *initializationRuntime, oldName, newName string) int32 {
 	t.Helper()
-	const oldAddress = platformDataBase + 0xb000
-	const newAddress = platformDataBase + 0xb400
-	if err := runtime.client.core.Memory().Write(oldAddress, append([]byte(oldName), 0)); err != nil {
+	const oldAddress = wipicrt.PlatformDataBase + 0xb000
+	const newAddress = wipicrt.PlatformDataBase + 0xb400
+	if err := runtime.client.Core().Memory().Write(oldAddress, append([]byte(oldName), 0)); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.client.core.Memory().Write(newAddress, append([]byte(newName), 0)); err != nil {
+	if err := runtime.client.Core().Memory().Write(newAddress, append([]byte(newName), 0)); err != nil {
 		t.Fatal(err)
 	}
 	thread := armcore.NewThread(armcore.Context{})
@@ -208,7 +209,7 @@ func renameCall(t *testing.T, runtime *initializationRuntime, oldName, newName s
 			t.Fatal(err)
 		}
 	}
-	result, err := runtime.handleWIPICFileCall(thread, wipicFileRename)
+	result, err := runtime.HandleWIPICFileCall(thread, wipicrt.WIPICFileRename)
 	if err != nil {
 		t.Fatalf("MC_fsRename(%q, %q): %v", oldName, newName, err)
 	}
@@ -223,31 +224,31 @@ func TestRenameMovesAFileAndItsPersistedCopy(t *testing.T) {
 	const notFound = int32(-12) // M_E_NOENT
 	saves := t.TempDir()
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(saves)
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
 
 	const scratch, final = "save.z_", "save.dsk"
-	databaseCall(t, runtime, wipicFileOpen, scratch, 4)
-	runtime.cFiles[scratch].data = []byte("a season")
-	runtime.cFiles[scratch].persist(runtime)
+	databaseCall(t, runtime, wipicrt.WIPICFileOpen, scratch, 4)
+	runtime.CFiles[scratch].Data = []byte("a season")
+	runtime.CFiles[scratch].Persist(runtime.Runtime)
 
 	if got := renameCall(t, runtime, scratch, final); got != 0 {
 		t.Fatalf("rename = %d, want 0", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicFileExists, final)); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileExists, final)); got != 0 {
 		t.Fatalf("exists(%q) = %d, want 0", final, got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicFileExists, scratch)); got != notFound {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileExists, scratch)); got != notFound {
 		t.Fatalf("exists(%q) after the rename = %d, want the not-found code", scratch, got)
 	}
 
 	// A second session over the same save tree has nothing in memory, which is
 	// where a rename that moved only the live store would show.
 	_, second := newTestRuntime(t)
-	second.client.saveStore = NewDirectorySaveStore(saves)
-	if data, ok := second.databaseSeed(final); !ok || string(data) != "a season" {
+	second.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
+	if data, ok := second.DatabaseSeed(final); !ok || string(data) != "a season" {
 		t.Fatalf("the renamed file in a second session = %q ok=%t", data, ok)
 	}
-	if _, ok := second.databaseSeed(scratch); ok {
+	if _, ok := second.DatabaseSeed(scratch); ok {
 		t.Fatal("the scratch name came back in a second session")
 	}
 }
@@ -258,20 +259,20 @@ func TestRenameRefusesANameThatIsTaken(t *testing.T) {
 	const alreadyThere = int32(-5) // M_E_EXIST
 	const failed = int32(-1)       // M_E_ERROR
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 
-	databaseCall(t, runtime, wipicFileOpen, "one", 4)
-	runtime.cFiles["one"].data = []byte("first")
-	databaseCall(t, runtime, wipicFileOpen, "two", 4)
-	runtime.cFiles["two"].data = []byte("second")
+	databaseCall(t, runtime, wipicrt.WIPICFileOpen, "one", 4)
+	runtime.CFiles["one"].Data = []byte("first")
+	databaseCall(t, runtime, wipicrt.WIPICFileOpen, "two", 4)
+	runtime.CFiles["two"].Data = []byte("second")
 
 	if got := renameCall(t, runtime, "one", "two"); got != alreadyThere {
 		t.Fatalf("rename onto a taken name = %d, want %d", got, alreadyThere)
 	}
-	if got := string(runtime.cFiles["two"].data); got != "second" {
+	if got := string(runtime.CFiles["two"].Data); got != "second" {
 		t.Fatalf("the refused rename wrote %q over the file that was there", got)
 	}
-	if got := string(runtime.cFiles["one"].data); got != "first" {
+	if got := string(runtime.CFiles["one"].Data); got != "first" {
 		t.Fatalf("the refused rename lost the source: %q", got)
 	}
 	// A source that is not there is the catch-all failure; the specification's
@@ -294,22 +295,22 @@ func TestRenameRefusesANameThatIsTaken(t *testing.T) {
 // separator. Two keys would mean it never found what it wrote.
 func TestFileNamesIgnoreTheLeadingSeparator(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 
-	databaseCall(t, runtime, wipicFileOpen, "lo.z_", 4)
-	runtime.cFiles["lo.z_"].data = []byte("installed")
+	databaseCall(t, runtime, wipicrt.WIPICFileOpen, "lo.z_", 4)
+	runtime.CFiles["lo.z_"].Data = []byte("installed")
 	if got := renameCall(t, runtime, "lo.z_", "/lo.dsk"); got != 0 {
 		t.Fatalf("rename to an absolute name = %d, want 0", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicFileExists, "lo.dsk")); got != 0 {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileExists, "lo.dsk")); got != 0 {
 		t.Fatalf("exists(%q) = %d, want 0", "lo.dsk", got)
 	}
-	if handle := int32(databaseCall(t, runtime, wipicFileOpen, "/lo.dsk", 1)); handle < 0 {
+	if handle := int32(databaseCall(t, runtime, wipicrt.WIPICFileOpen, "/lo.dsk", 1)); handle < 0 {
 		t.Fatalf("opening the absolute spelling = %d", handle)
 	}
 	// What follows the leading separator is part of the name: a title that
 	// keeps its files under a directory of its own is naming different files.
-	if got := int32(databaseCall(t, runtime, wipicFileExists, "/res/lo.dsk")); got == 0 {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileExists, "/res/lo.dsk")); got == 0 {
 		t.Fatal("a name under a directory resolved to the one at the root")
 	}
 }

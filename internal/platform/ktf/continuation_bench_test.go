@@ -23,7 +23,7 @@ func BenchmarkNativeReturnScope(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		scope, err := runtime.beginNativeReturn(client.thread)
+		scope, err := runtime.beginNativeReturn(client.Thread)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -51,10 +51,10 @@ func BenchmarkRuntimeJavaCrossing(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := client.thread.SetRegister(1, ^uint32(41)); err != nil {
+		if err := client.Thread.SetRegister(1, ^uint32(41)); err != nil {
 			b.Fatal(err)
 		}
-		value, err := runtime.handleRuntimeJavaCall(client.thread, 1)
+		value, err := runtime.handleRuntimeJavaCall(client.Thread, 1)
 		if err != nil || value != 42 {
 			b.Fatalf("native result = %d, %v", value, err)
 		}

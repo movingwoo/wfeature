@@ -11,6 +11,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -85,7 +86,7 @@ type nativeSaveFixture struct {
 	archive []byte
 	session *NativeSession
 	store   *nativeSaveFixtureStore
-	clock   *ManualClock
+	clock   *wipicrt.ManualClock
 }
 
 // nativeSaveFixtureReading is what READ left in the module's four words.
@@ -99,7 +100,7 @@ func startNativeSaveFixture(t *testing.T, build func() ([]byte, error), store *n
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock := NewManualClock(time.Unix(1, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1, 0))
 	session, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: clock, SaveStore: store, Width: 32, Height: 48})
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +112,7 @@ func startNativeSaveFixture(t *testing.T, build func() ([]byte, error), store *n
 // press sends one key down and up again, the way a Host does.
 func (fixture *nativeSaveFixture) press(key int32) {
 	fixture.t.Helper()
-	for _, event := range []int32{KeyPressed, KeyReleased} {
+	for _, event := range []int32{wipicrt.KeyPressed, wipicrt.KeyReleased} {
 		if err := fixture.session.SendKey(fixture.t.Context(), event, key); err != nil {
 			fixture.t.Fatalf("key %q: %v", key, err)
 		}
@@ -210,7 +211,7 @@ func (fixture *nativeSaveFixture) quickSave() backend.Checkpoint {
 // the fixture's own.
 func (fixture *nativeSaveFixture) tryQuickLoad(checkpoint backend.Checkpoint) (*nativeSaveFixture, error) {
 	fixture.t.Helper()
-	clock := NewManualClock(time.Unix(500, 0))
+	clock := wipicrt.NewManualClock(time.Unix(500, 0))
 	prepared, err := PrepareNativeSessionCheckpoint(fixture.archive, checkpoint, NativeSessionOptions{Clock: clock, SaveStore: fixture.store})
 	if err != nil {
 		return nil, err
@@ -403,7 +404,7 @@ func TestNativeSaveFixtureActsOncePerPress(t *testing.T) {
 			fixture := startNativeSaveFixture(t, form.build, newNativeSaveFixtureStore(t))
 			// The action is done when the press returns, and the release adds
 			// nothing to it.
-			for _, event := range []int32{KeyPressed, KeyReleased} {
+			for _, event := range []int32{wipicrt.KeyPressed, wipicrt.KeyReleased} {
 				if err := fixture.session.SendKey(t.Context(), event, testfixture.KTFNativeSaveKeySave); err != nil {
 					t.Fatal(err)
 				}
@@ -414,7 +415,7 @@ func TestNativeSaveFixtureActsOncePerPress(t *testing.T) {
 			for _, key := range []int32{
 				testfixture.KTFNativeSaveKeyPatch,
 				testfixture.KTFNativeSaveKeyRead,
-				'4', '0', '8', '9', KeyFire, KeyUp, KeyClear,
+				'4', '0', '8', '9', wipicrt.KeyFire, wipicrt.KeyUp, wipicrt.KeyClear,
 				testfixture.KTFNativeSaveKeyFinish, // nothing is kept yet
 				testfixture.KTFNativeSaveKeyHold,
 				testfixture.KTFNativeSaveKeyHold,     // one object is kept at a time
@@ -668,7 +669,7 @@ func TestNativeSaveFixtureStoreFailureIsTheKeysError(t *testing.T) {
 	store := newNativeSaveFixtureStore(t)
 	store.unreadable = testfixture.KTFNativeSaveStoreKey
 	fixture := startNativeSaveFixture(t, testfixture.KTFNativeSaveArchiveWithoutFrame, store)
-	err := fixture.session.SendKey(t.Context(), KeyPressed, testfixture.KTFNativeSaveKeyRead)
+	err := fixture.session.SendKey(t.Context(), wipicrt.KeyPressed, testfixture.KTFNativeSaveKeyRead)
 	if err == nil || !strings.Contains(err.Error(), "cannot read the entry") {
 		t.Fatalf("READ over an unreadable store = %v, want the store's error", err)
 	}
@@ -719,7 +720,7 @@ func TestNativeSaveFixtureIsACheckpointSubject(t *testing.T) {
 
 				// The running module moves on in memory only.
 				source.progress(0x7f7f7f7f)
-				clock := NewManualClock(time.Unix(500, 0))
+				clock := wipicrt.NewManualClock(time.Unix(500, 0))
 				prepared, err := PrepareNativeSessionCheckpoint(source.archive, checkpoint, NativeSessionOptions{Clock: clock, SaveStore: source.store})
 				if err != nil {
 					t.Fatalf("the fixture's checkpoint cannot be prepared: %v", err)

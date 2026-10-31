@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // Guest object collection.
@@ -66,9 +67,6 @@ type CollectionStats struct {
 }
 
 const (
-	// collectionFloor is the arena growth that triggers the first cycle and
-	// the smallest growth that triggers a later one.
-	collectionFloor uint64 = 256 << 10
 	// scanChunk bounds how much guest memory is read at once while scanning.
 	scanChunk = 64 << 10
 )
@@ -85,7 +83,7 @@ func (runtime *initializationRuntime) trackObject(address uint32, size uint64) {
 // collectionDue reports whether the arena has grown enough since the last
 // cycle to be worth another one.
 func (runtime *initializationRuntime) collectionDue() bool {
-	return runtime.arena.used() >= runtime.collectAt
+	return runtime.Arena.Used() >= runtime.CollectAt
 }
 
 // scheduleNextCollection arms the next cycle a fixed amount of growth ahead of
@@ -93,7 +91,7 @@ func (runtime *initializationRuntime) collectionDue() bool {
 // the arena keep climbing, because an object is only freed a cycle after it
 // stops being reachable and a doubling trigger outruns that lag.
 func (runtime *initializationRuntime) scheduleNextCollection() {
-	runtime.collectAt = runtime.arena.used() + collectionFloor
+	runtime.CollectAt = runtime.Arena.Used() + wipicrt.CollectionFloor
 }
 
 // extentIndex is the tracked objects in address order, used to decide whether
@@ -166,8 +164,8 @@ func (runtime *initializationRuntime) collectGuestObjects(extraRoots []uint32) (
 	stats := CollectionStats{Tracked: len(runtime.objects)}
 	// Completion callbacks may become roots. Publish them before marking;
 	// orphan output cancellation then shares the same command boundary.
-	if runtime.client != nil && runtime.client.audio != nil {
-		if err := runtime.syncClipCompletions(runtime.guestElapsed()); err != nil {
+	if runtime.client != nil && runtime.client.Audio != nil {
+		if err := runtime.SyncClipCompletions(runtime.GuestElapsed()); err != nil {
 			return stats, err
 		}
 	}
@@ -205,7 +203,7 @@ func (runtime *initializationRuntime) collectGuestObjects(extraRoots []uint32) (
 				mark(register)
 			}
 		}
-		for _, word := range runtime.client.core.ThreadLocalWords(thread) {
+		for _, word := range runtime.client.Core().ThreadLocalWords(thread) {
 			mark(word)
 		}
 	}
@@ -235,7 +233,7 @@ func (runtime *initializationRuntime) collectGuestObjects(extraRoots []uint32) (
 			buffer = make([]byte, size)
 		}
 		body := buffer[:size]
-		if err := runtime.client.core.Memory().Read(address, body); err != nil {
+		if err := runtime.client.Core().Memory().Read(address, body); err != nil {
 			return stats, fmt.Errorf("scan KTF object at %#x: %w", address, err)
 		}
 		scanWords(body, mark)
@@ -306,7 +304,7 @@ func (runtime *initializationRuntime) collectGuestObjects(extraRoots []uint32) (
 		stats.Freed++
 		stats.Bytes += uint64(record.size)
 	}
-	runtime.collectHostResources()
+	runtime.collectHostObjects()
 	runtime.scheduleNextCollection()
 	return stats, nil
 }
@@ -327,7 +325,7 @@ func (runtime *initializationRuntime) collectGuestObjects(extraRoots []uint32) (
 // grace cycle covers the rest, because nothing is freed in the cycle that first
 // finds it unreachable. The caller already holds the run lock, so the cycle is
 // entered directly rather than through CollectGuestObjects.
-func (runtime *initializationRuntime) collectForAllocation() bool {
+func (runtime *initializationRuntime) collectOnFailedAllocation() bool {
 	if runtime == nil || runtime.collecting {
 		return false
 	}
@@ -338,10 +336,10 @@ func (runtime *initializationRuntime) collectForAllocation() bool {
 		// The allocation reports its own failure. This one is worth a line of
 		// its own, because a scan that cannot read guest memory is a fault in
 		// itself rather than a full arena.
-		runtime.client.log("KTF collection on allocation failure failed", "error", err)
+		runtime.client.Log("KTF collection on allocation failure failed", "error", err)
 		return false
 	}
-	runtime.client.log("KTF collected on allocation failure",
+	runtime.client.Log("KTF collected on allocation failure",
 		"tracked", stats.Tracked, "freed", stats.Freed, "bytes", stats.Bytes)
 	return stats.Freed > 0
 }
@@ -373,7 +371,7 @@ func (runtime *initializationRuntime) referencedObjects(index extentIndex, addre
 		*buffer = make([]byte, size)
 	}
 	body := (*buffer)[:size]
-	if err := runtime.client.core.Memory().Read(address, body); err != nil {
+	if err := runtime.client.Core().Memory().Read(address, body); err != nil {
 		return nil, fmt.Errorf("read KTF object at %#x: %w", address, err)
 	}
 	var retain []*jvm.Object
@@ -401,8 +399,8 @@ func (runtime *initializationRuntime) referencedObjects(index extentIndex, addre
 // while an object it holds is only in its registers.
 func (runtime *initializationRuntime) collectionThreads() []*armcore.Thread {
 	threads := make([]*armcore.Thread, 0, len(runtime.client.workers)+2)
-	if runtime.client.thread != nil {
-		threads = append(threads, runtime.client.thread)
+	if runtime.client.Thread != nil {
+		threads = append(threads, runtime.client.Thread)
 	}
 	if worker := runtime.client.activeWorker; worker != nil && worker.armThread != nil {
 		threads = append(threads, worker.armThread)
@@ -418,7 +416,7 @@ func (runtime *initializationRuntime) collectionThreads() []*armcore.Thread {
 // scanRootMemory walks the committed read-write memory that is not part of a
 // tracked object and reports every word in it.
 func (runtime *initializationRuntime) scanRootMemory(index extentIndex, mark func(uint32)) error {
-	memory := runtime.client.core.Memory()
+	memory := runtime.client.Core().Memory()
 	buffer := make([]byte, scanChunk)
 	for _, region := range memory.CommittedRegions(armcore.PermissionReadWrite) {
 		start := uint64(region.Base)
@@ -482,10 +480,10 @@ func scanWords(data []byte, mark func(uint32)) {
 // reference to the next cycle's scan and keep another dead object alive.
 func (runtime *initializationRuntime) releaseObjectMemory(address uint32, size uint32) error {
 	zero := make([]byte, size)
-	if err := runtime.client.core.Memory().Write(address, zero); err != nil {
+	if err := runtime.client.Core().Memory().Write(address, zero); err != nil {
 		return fmt.Errorf("clear KTF object at %#x: %w", address, err)
 	}
-	runtime.arena.release(address, uint64(size))
+	runtime.Arena.Release(address, uint64(size))
 	return nil
 }
 
@@ -502,8 +500,8 @@ func (client *Client) CollectGuestObjects(extraRoots []uint32) (CollectionStats,
 	if client == nil {
 		return CollectionStats{}, nil
 	}
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	if client.runtime == nil || !client.runtime.collectionDue() {
 		return CollectionStats{}, nil
 	}
@@ -513,10 +511,10 @@ func (client *Client) CollectGuestObjects(extraRoots []uint32) (CollectionStats,
 		return stats, err
 	}
 	if stats.Freed > 0 || stats.Released > 0 || stats.Lost > 0 {
-		client.log("KTF collected guest objects",
+		client.Log("KTF collected guest objects",
 			"tracked", stats.Tracked, "marked", stats.Marked,
 			"released", stats.Released, "freed", stats.Freed, "lost", stats.Lost,
-			"bytes", stats.Bytes, "arena", client.runtime.arena.used(),
+			"bytes", stats.Bytes, "arena", client.runtime.Arena.Used(),
 			"micros", time.Since(started).Microseconds())
 	}
 	return stats, nil
@@ -524,10 +522,10 @@ func (client *Client) CollectGuestObjects(extraRoots []uint32) (CollectionStats,
 
 // collectHostResources follows Go liveness without rooting guest objects in
 // bookkeeping maps. Playing orphan clips keep their mixer handle until done.
-func (runtime *initializationRuntime) collectHostResources() {
+func (runtime *initializationRuntime) collectHostObjects() {
 	for owner, handle := range runtime.imageSurfaces {
 		if owner.Value() == nil {
-			runtime.destroyWIPICFramebufferRecord(handle)
+			runtime.DestroyWIPICFramebufferRecord(handle)
 			delete(runtime.imageSurfaces, owner)
 		}
 	}
@@ -535,11 +533,11 @@ func (runtime *initializationRuntime) collectHostResources() {
 		if owner.Value() != nil {
 			continue
 		}
-		if state.loaded && runtime.client.audio != nil {
-			if runtime.client.audio.Playing(state.handle) {
+		if state.Loaded && runtime.client.Audio != nil {
+			if runtime.client.Audio.Playing(state.Handle) {
 				continue
 			}
-			_ = runtime.client.audio.Close(state.handle)
+			_ = runtime.client.Audio.Close(state.Handle)
 		}
 		delete(runtime.clips, owner)
 	}

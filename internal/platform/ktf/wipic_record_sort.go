@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // recordDatabaseExists answers whether a record database of this name is
@@ -16,7 +17,7 @@ import (
 func (runtime *initializationRuntime) recordDatabaseExists(name string) bool {
 	_, exists := runtime.recordDatabases[name]
 	deleted := runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
-	_, hasSaved := runtime.loadSave("rdb/" + name)
+	_, hasSaved := runtime.LoadSave("rdb/" + name)
 	hasPackaged := false
 	if !runtime.databaseDeleted(name) {
 		// The archive is what the two tables share, so the same answer the
@@ -43,14 +44,14 @@ func (runtime *initializationRuntime) wipicRecordDatabaseAccessMode(thread *armc
 		return 0, err
 	}
 	if nameAddress == 0 {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
-	name, err := runtime.readCString(nameAddress, maxFileNameRead)
+	name, err := runtime.ReadCString(nameAddress, wipicrt.MaxFileNameRead)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF record database name: %w", err)
 	}
-	if !storableName(recordDatabaseScope, name) || len(name) > maxRecordDatabaseName || !runtime.recordDatabaseExists(name) {
-		return wipicErrorNotFound, nil
+	if !wipicrt.StorableName(wipicrt.RecordDatabaseScope, name) || len(name) > maxRecordDatabaseName || !runtime.recordDatabaseExists(name) {
+		return wipicrt.WIPICErrorNotFound, nil
 	}
 	return privateAccess, nil
 }
@@ -76,7 +77,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseAccessMode(thread *armc
 func (runtime *initializationRuntime) wipicRecordDatabaseSort(thread *armcore.Thread) (uint32, error) {
 	state, ok := runtime.recordDatabaseHandle(thread)
 	if !ok {
-		return wipicErrorBadFD, nil
+		return wipicrt.WIPICErrorBadFD, nil
 	}
 	buffer, err := thread.Register(1)
 	if err != nil {
@@ -90,12 +91,12 @@ func (runtime *initializationRuntime) wipicRecordDatabaseSort(thread *armcore.Th
 	if err != nil {
 		return 0, err
 	}
-	filter, err := runtime.wipicArgument(thread, 4)
+	filter, err := runtime.WIPICArgument(thread, 4)
 	if err != nil {
 		return 0, err
 	}
 	if buffer == 0 || int32(capacity) <= 0 {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	ids := make([]uint32, 0, len(state.store.records))
 	for index, record := range state.store.records {
@@ -148,13 +149,13 @@ func (runtime *initializationRuntime) wipicRecordDatabaseSort(thread *armcore.Th
 		})
 	}
 	if uint32(len(ids)) > capacity {
-		return wipicErrorShortBuf, nil
+		return wipicrt.WIPICErrorShortBuf, nil
 	}
 	encoded := make([]byte, 4*len(ids))
 	for index, id := range ids {
 		binary.LittleEndian.PutUint32(encoded[index*4:], id)
 	}
-	if err := runtime.client.core.Memory().Write(buffer, encoded); err != nil {
+	if err := runtime.client.Core().Memory().Write(buffer, encoded); err != nil {
 		return 0, fmt.Errorf("write KTF sorted record ids: %w", err)
 	}
 	return uint32(len(ids)), nil
@@ -167,16 +168,16 @@ func (runtime *initializationRuntime) recordCopies(store *runtimeRecordDatabase,
 	for _, id := range ids {
 		total += len(store.records[id-1])
 	}
-	block, err := runtime.allocateWIPIC(uint32(max(total, 1)))
+	block, err := runtime.AllocateWIPIC(uint32(max(total, 1)))
 	if err != nil {
 		return nil, nil, fmt.Errorf("allocate KTF record copies: %w", err)
 	}
-	release := func() { runtime.freeWIPIC(block) }
+	release := func() { runtime.FreeWIPIC(block) }
 	copies := make(map[uint32]uint32, len(ids))
-	address := block + wipicAllocationOverhead
+	address := block + wipicrt.WIPICAllocationOverhead
 	for _, id := range ids {
 		data := store.records[id-1]
-		if err := runtime.client.core.Memory().Write(address, data); err != nil {
+		if err := runtime.client.Core().Memory().Write(address, data); err != nil {
 			release()
 			return nil, nil, fmt.Errorf("write KTF record copy: %w", err)
 		}
@@ -190,14 +191,14 @@ func (runtime *initializationRuntime) recordCopies(store *runtimeRecordDatabase,
 // that made the call, the way a pixel operation runs (see applyPixelOp), and
 // answers its result as the signed integer the specification makes it.
 func (runtime *initializationRuntime) callRecordFunction(thread *armcore.Thread, function uint32, arguments ...uint32) (int32, error) {
-	if err := runtime.enterAOTCall(); err != nil {
+	if err := runtime.EnterAOTCall(); err != nil {
 		return 0, err
 	}
-	defer runtime.leaveAOTCall(runtime.aotCallOwner())
-	summary, err := runtime.client.core.Call(runtime.currentContext, thread, function, ReturnAddress, arguments, runtime.handleSupervisorCall)
+	defer runtime.LeaveAOTCall(runtime.AOTCallOwner())
+	summary, err := runtime.client.Core().Call(runtime.CurrentContext, thread, function, wipicrt.ReturnAddress, arguments, runtime.handleSupervisorCall)
 	if err != nil {
 		return 0, err
 	}
-	runtime.countDiagnostic("record database guest call")
+	runtime.CountDiagnostic("record database guest call")
 	return int32(summary.Context.Registers[0]), nil
 }

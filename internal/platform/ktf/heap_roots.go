@@ -10,6 +10,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 const maxHeapRootRecords = 1 << 18
@@ -153,7 +154,7 @@ func (runtime *initializationRuntime) capturePlatformRoots(callers []*jvm.Object
 	if cost > maxHeapStorageBytes {
 		return runtimeHeapRoots{}, nil, fmt.Errorf("KTF platform root records exceed data limit")
 	}
-	if len(runtime.pendingTimers) > maxPendingTimers || len(runtime.events) > maxQueuedEvents {
+	if len(runtime.PendingTimers) > wipicrt.MaxPendingTimers || len(runtime.Events) > wipicrt.MaxQueuedEvents {
 		return runtimeHeapRoots{}, nil, fmt.Errorf("KTF platform timer or event queue exceeds limit")
 	}
 	roots := &heapRootCapture{objects: slices.Clone(callers), ids: make(map[*jvm.Object]uint32)}
@@ -162,7 +163,7 @@ func (runtime *initializationRuntime) capturePlatformRoots(callers []*jvm.Object
 			roots.ids[object] = uint32(i + 1)
 		}
 	}
-	saved := runtimeHeapRoots{CallerCount: uint32(len(callers)), DockedCard: roots.add(runtime.dockedCard), ActiveJlet: roots.add(runtime.activeJlet), CInputCard: roots.add(runtime.cInput.card),
+	saved := runtimeHeapRoots{CallerCount: uint32(len(callers)), DockedCard: roots.add(runtime.dockedCard), ActiveJlet: roots.add(runtime.activeJlet), CInputCard: roots.add(runtime.cInputCardOwner),
 		DisplayCards: roots.list(runtime.displayCards), PendingThreads: roots.list(runtime.pendingThreads), PendingSerial: roots.list(runtime.pendingSerial), JletListeners: roots.list(runtime.jletListeners), SerialDue: captureHeapDeadline(runtime.serialDueAt, now)}
 	saved.RelayOnline = runtime.relayOnline
 	if runtime.relaySocket != nil {
@@ -206,24 +207,24 @@ func (runtime *initializationRuntime) capturePlatformRoots(callers []*jvm.Object
 		saved.KFCKeys = append(saved.KFCKeys, heapKFCKey{Key: key, Form: roots.add(owner.form), Field: roots.add(owner.field), Listener: roots.add(owner.event.listener), Data: roots.add(owner.event.data),
 			Visibility: roots.value(owner.visibilityRevision), Children: roots.value(owner.childrenRevision), Revision: roots.value(owner.event.revision), ListenerValue: roots.value(owner.event.listenerValue), DataValue: roots.value(owner.event.dataValue), HasListener: owner.event.hasListener, HasData: owner.event.hasData})
 	}
-	for _, timer := range runtime.pendingTimers {
-		saved.Timers = append(saved.Timers, heapTimer{Card: roots.add(timer.paintedCard), Task: roots.add(timer.task), Owner: roots.add(timer.owner), Pointer: timer.pointer, Callback: timer.callback, Param: timer.param, Delay: timer.delay, Due: captureHeapDeadline(timer.due, now), Period: timer.period})
+	for _, timer := range runtime.PendingTimers {
+		saved.Timers = append(saved.Timers, heapTimer{Card: roots.add(guestObject(timer.PaintedCard)), Task: roots.add(guestObject(timer.Task)), Owner: roots.add(guestObject(timer.Owner)), Pointer: timer.Pointer, Callback: timer.Callback, Param: timer.Param, Delay: timer.Delay, Due: captureHeapDeadline(timer.Due, now), Period: timer.Period})
 	}
-	for _, event := range runtime.events {
-		saved.Events = append(saved.Events, [4]int32{event.kind, event.param1, event.param2, event.param3})
+	for _, event := range runtime.Events {
+		saved.Events = append(saved.Events, [4]int32{event.Kind, event.Param1, event.Param2, event.Param3})
 	}
-	seenClips := make(map[*clipState]bool)
+	seenClips := make(map[*javaClipState]bool)
 	for owner, clip := range runtime.clips {
 		object := owner.Value()
 		if object == nil || clip == nil || seenClips[clip] {
 			return runtimeHeapRoots{}, nil, fmt.Errorf("KTF clip ownership requires collection or has unsupported sharing")
 		}
 		seenClips[clip] = true
-		cost += uint64(len(clip.data))
-		if len(clip.data) > maxClipBufferBytes || cost > maxHeapStorageBytes {
+		cost += uint64(len(clip.Data))
+		if len(clip.Data) > wipicrt.MaxClipBufferBytes || cost > maxHeapStorageBytes {
 			return runtimeHeapRoots{}, nil, fmt.Errorf("KTF clip data exceeds heap limits")
 		}
-		saved.Clips = append(saved.Clips, heapClip{Owner: roots.add(object), Data: bytes.Clone(clip.data), Handle: clip.handle, Loaded: clip.loaded, Played: clip.played})
+		saved.Clips = append(saved.Clips, heapClip{Owner: roots.add(object), Data: bytes.Clone(clip.Data), Handle: clip.Handle, Loaded: clip.Loaded, Played: clip.Played})
 	}
 	for owner, handle := range runtime.imageSurfaces {
 		object := owner.Value()
@@ -248,7 +249,7 @@ func (runtime *initializationRuntime) capturePlatformRoots(callers []*jvm.Object
 
 func (saved runtimeHeapRoots) validate(rootIDs []uint32) error {
 	rootCount := len(rootIDs)
-	if rootCount > maxHeapRootRecords || uint64(saved.CallerCount) > uint64(rootCount) || len(saved.Timers) > maxPendingTimers || len(saved.Events) > maxQueuedEvents {
+	if rootCount > maxHeapRootRecords || uint64(saved.CallerCount) > uint64(rootCount) || len(saved.Timers) > wipicrt.MaxPendingTimers || len(saved.Events) > wipicrt.MaxQueuedEvents {
 		return fmt.Errorf("KTF platform root count is invalid")
 	}
 	var cost uint64
@@ -322,7 +323,7 @@ func (saved runtimeHeapRoots) validate(rootIDs []uint32) error {
 		refs = append(refs, binding.Owner, binding.Target)
 	}
 	for _, timer := range saved.Timers {
-		if timer.Delay > maxTimerDelayMillis || timer.Period < 0 || timer.Period > time.Hour || !timer.Due.Set && timer.Due.Remaining != 0 {
+		if timer.Delay > wipicrt.MaxTimerDelayMillis || timer.Period < 0 || timer.Period > time.Hour || !timer.Due.Set && timer.Due.Remaining != 0 {
 			return fmt.Errorf("KTF timer delay is invalid")
 		}
 		refs = append(refs, timer.Card, timer.Task, timer.Owner)
@@ -330,7 +331,7 @@ func (saved runtimeHeapRoots) validate(rootIDs []uint32) error {
 	owners = make(map[uint32]bool)
 	for _, clip := range saved.Clips {
 		owner := identity(clip.Owner)
-		if owner == 0 || owners[owner] || len(clip.Data) > maxClipBufferBytes || clip.Loaded && clip.Handle == 0 {
+		if owner == 0 || owners[owner] || len(clip.Data) > wipicrt.MaxClipBufferBytes || clip.Loaded && clip.Handle == 0 {
 			return fmt.Errorf("KTF clip owner or data is invalid")
 		}
 		owners[owner] = true
@@ -388,7 +389,7 @@ func (runtime *initializationRuntime) adoptPlatformRoots(saved runtimeHeapRoots,
 			return jvm.VoidValue()
 		}
 	}
-	runtime.dockedCard, runtime.activeJlet, runtime.cInput.card = object(saved.DockedCard), object(saved.ActiveJlet), object(saved.CInputCard)
+	runtime.dockedCard, runtime.activeJlet, runtime.cInputCardOwner = object(saved.DockedCard), object(saved.ActiveJlet), object(saved.CInputCard)
 	runtime.relayOnline, runtime.relaySocket = saved.RelayOnline, nil
 	if saved.RelaySocket != 0 {
 		runtime.relaySocket = object(saved.RelaySocket).Native.(*relaySocket)
@@ -420,17 +421,17 @@ func (runtime *initializationRuntime) adoptPlatformRoots(saved runtimeHeapRoots,
 		runtime.kfcOwnedKeys[binding.Key] = kfcKeyOwner{form: object(binding.Form), field: object(binding.Field), visibilityRevision: value(binding.Visibility), childrenRevision: value(binding.Children),
 			event: runtimeComponentEventState{revision: value(binding.Revision), listenerValue: value(binding.ListenerValue), hasListener: binding.HasListener, listener: object(binding.Listener), dataValue: value(binding.DataValue), hasData: binding.HasData, data: object(binding.Data)}}
 	}
-	runtime.pendingTimers = make([]wipicTimer, len(saved.Timers))
+	runtime.PendingTimers = make([]wipicrt.WIPICTimer, len(saved.Timers))
 	for i, timer := range saved.Timers {
-		runtime.pendingTimers[i] = wipicTimer{paintedCard: object(timer.Card), task: object(timer.Task), owner: object(timer.Owner), pointer: timer.Pointer, callback: timer.Callback, param: timer.Param, delay: timer.Delay, due: timer.Due.restore(now), period: timer.Period}
+		runtime.PendingTimers[i] = wipicrt.WIPICTimer{PaintedCard: guestValue(object(timer.Card)), Task: guestValue(object(timer.Task)), Owner: guestValue(object(timer.Owner)), Pointer: timer.Pointer, Callback: timer.Callback, Param: timer.Param, Delay: timer.Delay, Due: timer.Due.restore(now), Period: timer.Period}
 	}
-	runtime.events = make([]guestEvent, len(saved.Events))
+	runtime.Events = make([]wipicrt.GuestEvent, len(saved.Events))
 	for i, event := range saved.Events {
-		runtime.events[i] = guestEvent{kind: event[0], param1: event[1], param2: event[2], param3: event[3]}
+		runtime.Events[i] = wipicrt.GuestEvent{Kind: event[0], Param1: event[1], Param2: event[2], Param3: event[3]}
 	}
-	runtime.clips = make(map[weak.Pointer[jvm.Object]]*clipState, len(saved.Clips))
+	runtime.clips = make(map[weak.Pointer[jvm.Object]]*javaClipState, len(saved.Clips))
 	for _, clip := range saved.Clips {
-		runtime.clips[weak.Make(object(clip.Owner))] = &clipState{data: bytes.Clone(clip.Data), handle: clip.Handle, loaded: clip.Loaded, played: clip.Played}
+		runtime.clips[weak.Make(object(clip.Owner))] = &javaClipState{Data: bytes.Clone(clip.Data), Handle: clip.Handle, Loaded: clip.Loaded, Played: clip.Played}
 	}
 	runtime.imageSurfaces = make(map[weak.Pointer[jvm.Object]]uint32, len(saved.ImageSurfaces))
 	for _, surface := range saved.ImageSurfaces {

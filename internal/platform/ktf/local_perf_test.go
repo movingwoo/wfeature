@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"context"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"os"
 	"strconv"
 	"testing"
@@ -28,7 +29,7 @@ func TestPerfProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	clock := NewManualClock(time.Time{})
+	clock := wipicrt.NewManualClock(time.Time{})
 	session, err := StartSession(ctx, data, SessionOptions{Clock: clock})
 	if err != nil {
 		t.Fatal(err)
@@ -316,7 +317,7 @@ func TestLoadCostProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	clock := NewManualClock(time.Time{})
+	clock := wipicrt.NewManualClock(time.Time{})
 	opened := time.Now()
 	session, err := StartSession(ctx, data, SessionOptions{Clock: clock})
 	if err != nil {
@@ -339,12 +340,12 @@ func TestLoadCostProbe(t *testing.T) {
 
 	// See the LGT probe: the decode cache costs one array per code page, so a
 	// wider entry multiplies this rather than the working set.
-	cacheTables, cacheBytes := session.Client.core.Memory().DecodeCacheStats()
+	cacheTables, cacheBytes := session.Client.Core().Memory().DecodeCacheStats()
 	t.Logf("decode_cache_tables=%d decode_cache_bytes=%d (%.1f MiB)",
 		cacheTables, cacheBytes, float64(cacheBytes)/(1<<20))
 	// See the LGT probe: the cache above is Thumb-only, so the ARM share says
 	// whether an ARM change can move this title at all.
-	armSteps := session.Client.core.Memory().ARMSteps()
+	armSteps := session.Client.Core().Memory().ARMSteps()
 	t.Logf("arm_steps=%d thumb_steps=%d arm_share=%.1f%%",
 		armSteps, profile.Steps-min(armSteps, profile.Steps),
 		100*float64(armSteps)/float64(max(profile.Steps, 1)))

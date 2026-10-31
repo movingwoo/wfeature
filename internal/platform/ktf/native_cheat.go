@@ -5,6 +5,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/cheat"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The earlier package runs on a core of its own, and a core is an address
@@ -55,9 +56,9 @@ func (target nativeCheatTarget) Regions() []cheat.Region {
 // patch into a check needs.
 func (target nativeCheatTarget) label(base uint32) (string, bool) {
 	switch {
-	case base == nativeHeaderBase || (base >= ImageBase && uint64(base) < uint64(ImageBase)+uint64(target.client.mapped)):
+	case base == nativeHeaderBase || (base >= wipicrt.ImageBase && uint64(base) < uint64(wipicrt.ImageBase)+uint64(target.client.mapped)):
 		return "module", false
-	case uint64(base) >= uint64(ThreadStackBase) && uint64(base) < uint64(ThreadStackBase)+ThreadStackSize:
+	case uint64(base) >= uint64(wipicrt.ThreadStackBase) && uint64(base) < uint64(wipicrt.ThreadStackBase)+wipicrt.ThreadStackSize:
 		return "stack", false
 	case base >= nativeStubBase && base < nativeStubBase+maxNativeSurfaces*nativePageSize:
 		return "stubs", true

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The WIPI event queue is the second way a game receives input and redraw
@@ -31,59 +31,13 @@ const (
 // Event kinds and keyboard event types match the values the original runtime
 // puts in the guest's int[4]; games compare against their own copies of them.
 const (
-	eventKindKey     int32 = 1
-	eventKindPointer int32 = 2
-	eventKindRepaint int32 = 41
-	eventKindNotify  int32 = 1000
 
 	// eventQueueSlots is the int[] length one event occupies.
 	eventQueueSlots = 4
-	// maxQueuedEvents bounds queue growth when a game stops draining it.
-	maxQueuedEvents = 256
 	// eventLoopFrameMillis is how long an idle getNextEvent waits, matching the
 	// original runtime's frame-paced event wait.
 	eventLoopFrameMillis = 16
 )
-
-type guestEvent struct {
-	kind   int32
-	param1 int32
-	param2 int32
-	param3 int32
-}
-
-// postGuestEvent appends one event. A full queue drops its oldest entry: a game
-// that stopped reading events must not grow Host memory without bound.
-func (runtime *initializationRuntime) postGuestEvent(event guestEvent) {
-	if len(runtime.events) >= maxQueuedEvents {
-		copy(runtime.events, runtime.events[1:])
-		runtime.events = runtime.events[:len(runtime.events)-1]
-	}
-	runtime.events = append(runtime.events, event)
-}
-
-func (runtime *initializationRuntime) nextGuestEvent() (guestEvent, bool) {
-	if len(runtime.events) == 0 {
-		return guestEvent{}, false
-	}
-	event := runtime.events[0]
-	runtime.events = runtime.events[1:]
-	return event, true
-}
-
-// postRepaintEvent queues a redraw request for a guest-driven event loop,
-// coalescing it with one already waiting the way a frame-paced platform does.
-func (runtime *initializationRuntime) postRepaintEvent() {
-	if !runtime.guestEventLoop {
-		return
-	}
-	for _, pending := range runtime.events {
-		if pending.kind == eventKindRepaint {
-			return
-		}
-	}
-	runtime.postGuestEvent(guestEvent{kind: eventKindRepaint})
-}
 
 func runtimeEventQueueClassDefinition() runtimeJavaClass {
 	const class = runtimeEventQueueClass
@@ -223,8 +177,8 @@ func runtimeEventQueueGetNextEvent(runtime *initializationRuntime, _ *jvm.VM, ar
 	if array == nil {
 		return jvm.VoidValue(), fmt.Errorf("EventQueue.getNextEvent event array is null")
 	}
-	runtime.guestEventLoop = true
-	event, ok := runtime.nextGuestEvent()
+	runtime.GuestEventLoop = true
+	event, ok := runtime.NextGuestEvent()
 	if !ok {
 		// An empty queue is the frame-paced wait the original runtime blocks
 		// in, so the worker parks for one frame rather than returning a redraw
@@ -232,22 +186,22 @@ func runtimeEventQueueGetNextEvent(runtime *initializationRuntime, _ *jvm.VM, ar
 		if err := runtime.sleepCurrentWorker(eventLoopFrameMillis * time.Millisecond); err != nil {
 			return jvm.VoidValue(), err
 		}
-		if event, ok = runtime.nextGuestEvent(); !ok {
-			event = guestEvent{kind: eventKindRepaint}
+		if event, ok = runtime.NextGuestEvent(); !ok {
+			event = wipicrt.GuestEvent{Kind: wipicrt.EventKindRepaint}
 		}
 	}
 	// Counted by kind rather than under a name composed here: this runs once
 	// per event the game receives, which is the frequency diagEvent exists for.
-	runtime.recordDiagnostic(diagEvent{kind: diagGuestEvent, nums: [5]uint32{uint32(event.kind)}})
+	runtime.RecordDiagnostic(wipicrt.DiagEvent{Kind: wipicrt.DiagGuestEvent, Nums: [5]uint32{uint32(event.Kind)}})
 	return jvm.VoidValue(), storeGuestEvent(array, event)
 }
 
-func storeGuestEvent(array *jvm.Object, event guestEvent) error {
+func storeGuestEvent(array *jvm.Object, event wipicrt.GuestEvent) error {
 	values := []jvm.Value{
-		jvm.IntValue(event.kind),
-		jvm.IntValue(event.param1),
-		jvm.IntValue(event.param2),
-		jvm.IntValue(event.param3),
+		jvm.IntValue(event.Kind),
+		jvm.IntValue(event.Param1),
+		jvm.IntValue(event.Param2),
+		jvm.IntValue(event.Param3),
 	}
 	if _, length, ok := jvm.ArrayComponent(array); ok && length < len(values) {
 		values = values[:length]
@@ -255,20 +209,20 @@ func storeGuestEvent(array *jvm.Object, event guestEvent) error {
 	return jvm.SetArrayRange(array, 0, values)
 }
 
-func loadGuestEvent(array *jvm.Object) (guestEvent, error) {
+func loadGuestEvent(array *jvm.Object) (wipicrt.GuestEvent, error) {
 	_, values, err := jvm.ArraySnapshot(array)
 	if err != nil {
-		return guestEvent{}, err
+		return wipicrt.GuestEvent{}, err
 	}
 	if len(values) < eventQueueSlots {
-		return guestEvent{}, fmt.Errorf("KTF event array holds %d slots, need %d", len(values), eventQueueSlots)
+		return wipicrt.GuestEvent{}, fmt.Errorf("KTF event array holds %d slots, need %d", len(values), eventQueueSlots)
 	}
-	var event guestEvent
-	fields := []*int32{&event.kind, &event.param1, &event.param2, &event.param3}
+	var event wipicrt.GuestEvent
+	fields := []*int32{&event.Kind, &event.Param1, &event.Param2, &event.Param3}
 	for index, field := range fields {
 		value, err := values[index].Int32()
 		if err != nil {
-			return guestEvent{}, err
+			return wipicrt.GuestEvent{}, err
 		}
 		*field = value
 	}
@@ -297,73 +251,31 @@ func runtimeEventQueueDispatchEvent(runtime *initializationRuntime, vm *jvm.VM, 
 	return jvm.VoidValue(), runtime.dispatchGuestEvent(vm, event)
 }
 
-// wipicPostEvent serves MC_grpPostEvent(id, type, param1, param2): it puts one
-// event on the program's own queue, where the specification says a handset
-// delivers it to `handleCletEvent` with the three remaining arguments. A title
-// that is a Jlet rather than a bare Clet receives the same three through
-// `notifyEvent`, which is the shape the queue already carries, so the event is
-// queued as a notify event and takes the ordinary dispatch.
-//
-// **The identifier is not checked**, for the reason the Java `postEvent(int,
-// int[])` beside it does not check one: this platform runs exactly one program,
-// so every identifier a title can hold names this queue. The local callers ask
-// MC_knlGetCurProgramID for it and hand back what they were given.
-//
-// Queuing rather than calling the handler here is what the specification
-// describes and is also what keeps the call safe: a title posts from inside its
-// own paint, and delivering inline would re-enter the card while it is drawing.
-func (runtime *initializationRuntime) wipicPostEvent(thread *armcore.Thread) (uint32, error) {
-	kind, err := thread.Register(1)
-	if err != nil {
-		return 0, err
-	}
-	first, err := thread.Register(2)
-	if err != nil {
-		return 0, err
-	}
-	second, err := thread.Register(3)
-	if err != nil {
-		return 0, err
-	}
-	runtime.countDiagnostic(fmt.Sprintf("postEvent %#x", kind))
-	runtime.postGuestEvent(guestEvent{
-		kind:   eventKindNotify,
-		param1: int32(kind),
-		param2: int32(first),
-		param3: int32(second),
-	})
-	return wipicPostEventQueued, nil
-}
-
-// wipicPostEventQueued is MC_grpPostEvent's success answer: the specification
-// gives it 1 for a queued event and 0 for a refused one.
-const wipicPostEventQueued uint32 = 1
-
 // dispatchGuestEvent delivers one queued event, whoever took it off the queue.
 // A game that drives its own loop reaches it through EventQueue.dispatchEvent
 // and a Host-driven one through Client.ServiceEvents; both owe the event the
 // same delivery.
-func (runtime *initializationRuntime) dispatchGuestEvent(vm *jvm.VM, event guestEvent) error {
-	switch event.kind {
-	case eventKindKey:
-		return runtime.dispatchKeyToCards(event.param1, event.param2)
-	case eventKindPointer:
+func (runtime *initializationRuntime) dispatchGuestEvent(vm *jvm.VM, event wipicrt.GuestEvent) error {
+	switch event.Kind {
+	case wipicrt.EventKindKey:
+		return runtime.dispatchKeyToCards(event.Param1, event.Param2)
+	case wipicrt.EventKindPointer:
 		// The specification's table: event[1] is the pointer event type and
 		// event[2] and event[3] are its screen coordinates.
-		return runtime.dispatchPointerToCards(event.param1, event.param2, event.param3)
-	case eventKindRepaint:
+		return runtime.dispatchPointerToCards(event.Param1, event.Param2, event.Param3)
+	case wipicrt.EventKindRepaint:
 		// The redraw request has been taken off the queue, so the dirty flag
 		// the Host-driven path uses is satisfied by this paint.
-		runtime.repaintPending = false
+		runtime.RepaintPending = false
 		_, err := runtime.paintTopCard()
 		return err
-	case eventKindNotify:
+	case wipicrt.EventKindNotify:
 		return runtime.dispatchNotifyEvent(vm, event)
 	default:
-		if event.kind >= 0x5000 {
-			return runtime.dispatchNotifyEvent(vm, guestEvent{kind: eventKindNotify, param1: event.kind, param2: event.param1, param3: event.param2})
+		if event.Kind >= 0x5000 {
+			return runtime.dispatchNotifyEvent(vm, wipicrt.GuestEvent{Kind: wipicrt.EventKindNotify, Param1: event.Kind, Param2: event.Param1, Param3: event.Param2})
 		}
-		message := fmt.Sprintf("invalid event queue event type %d", event.kind)
+		message := fmt.Sprintf("invalid event queue event type %d", event.Kind)
 		return &jvm.GuestException{
 			Object:  &jvm.Object{ClassName: "java/lang/IllegalArgumentException", Native: message},
 			Message: message,
@@ -371,7 +283,7 @@ func (runtime *initializationRuntime) dispatchGuestEvent(vm *jvm.VM, event guest
 	}
 }
 
-func (runtime *initializationRuntime) dispatchNotifyEvent(vm *jvm.VM, event guestEvent) error {
+func (runtime *initializationRuntime) dispatchNotifyEvent(vm *jvm.VM, event wipicrt.GuestEvent) error {
 	// A listener may add or remove listeners while it is notified, and a
 	// removal shifts the list in place, so the event goes to the listeners
 	// registered when it was dispatched.
@@ -380,7 +292,7 @@ func (runtime *initializationRuntime) dispatchNotifyEvent(vm *jvm.VM, event gues
 			continue
 		}
 		if _, err := vm.InvokeVirtual(listener, "notifyEvent", "(III)V",
-			jvm.IntValue(event.param1), jvm.IntValue(event.param2), jvm.IntValue(event.param3)); err != nil {
+			jvm.IntValue(event.Param1), jvm.IntValue(event.Param2), jvm.IntValue(event.Param3)); err != nil {
 			return fmt.Errorf("notify KTF Jlet listener %s: %w", listener.ClassName, err)
 		}
 	}
@@ -405,7 +317,7 @@ func runtimeEventQueuePostEvent(runtime *initializationRuntime, _ *jvm.VM, argum
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	runtime.postGuestEvent(event)
+	runtime.PostGuestEvent(event)
 	return jvm.IntValue(1), nil
 }
 
@@ -426,7 +338,7 @@ func runtimeEventQueuePostEventStatic(runtime *initializationRuntime, _ *jvm.VM,
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	runtime.postGuestEvent(event)
+	runtime.PostGuestEvent(event)
 	return jvm.VoidValue(), nil
 }
 
@@ -437,10 +349,10 @@ func (runtime *initializationRuntime) dispatchKeyToCards(eventType, key int32) e
 	// A title's own field is open while the title hands it the presses it
 	// receives. A press it does not see — fire that confirms, clear on an empty
 	// field — closed it. The Host's own carriers are judged by their senders.
-	if eventType == KeyPressed && len(runtime.cInput.pending) == 0 && runtime.javaInput.pending == nil {
+	if eventType == wipicrt.KeyPressed && len(runtime.CInput.Pending) == 0 && runtime.javaInput.pending == nil {
 		// A press the player made can bring a field up; see
 		// cInputState.unreached.
-		runtime.cInput.unreached = false
+		runtime.CInput.Unreached = false
 		runtime.javaInput.touched, runtime.javaInput.keyTaken = false, false
 		defer func() {
 			if !runtime.javaInput.touched {
@@ -451,25 +363,25 @@ func (runtime *initializationRuntime) dispatchKeyToCards(eventType, key int32) e
 	}
 	// External key actions invalidate snapshots even if the C widget does not
 	// call its input method (for example, dismissing the name dialog).
-	if len(runtime.cInput.pending) == 0 && eventType != KeyReleased {
-		runtime.cInput.discardCarrier = false
-		runtime.cInput.clearPending = key == KeyClear && (runtime.cInput.active || runtime.cInput.clearPending) && runtime.cInput.timerCallback != 0
-		runtime.cInput.revision++
-		activations, calls := runtime.cInput.activations, runtime.cInput.calls
+	if len(runtime.CInput.Pending) == 0 && eventType != wipicrt.KeyReleased {
+		runtime.CInput.DiscardCarrier = false
+		runtime.CInput.ClearPending = key == wipicrt.KeyClear && (runtime.CInput.Active || runtime.CInput.ClearPending) && runtime.CInput.TimerCallback != 0
+		runtime.CInput.Revision++
+		activations, calls := runtime.CInput.Activations, runtime.CInput.Calls
 		defer func() {
 			// CLR edits the current field even when its only IM call flushes
 			// composition. A recognized controller can also prove that an
 			// ignored confirmation left the editor open. Other callers still
 			// need input-method activity to establish continued editing.
-			if runtime.cInput.activations == activations && !(key == KeyClear && runtime.cInput.calls > calls) {
-				runtime.cInput.active = runtime.cInput.owner.current(runtime)
+			if runtime.CInput.Activations == activations && !(key == wipicrt.KeyClear && runtime.CInput.Calls > calls) {
+				runtime.CInput.Active = runtime.CInput.Owner.Current(runtime.Runtime)
 			}
 		}()
 	}
 
 	if listener := runtime.grabbedKeys[key]; listener != nil {
 		if _, err := runtime.client.vm.InvokeVirtual(listener, "notifyEvent", "(III)V",
-			jvm.IntValue(eventKindKey), jvm.IntValue(eventType), jvm.IntValue(key)); err != nil {
+			jvm.IntValue(wipicrt.EventKindKey), jvm.IntValue(eventType), jvm.IntValue(key)); err != nil {
 			return fmt.Errorf("notify KTF grabbed key listener %s: %w", listener.ClassName, err)
 		}
 		return nil
@@ -532,7 +444,7 @@ func (runtime *initializationRuntime) dispatchPointerToCards(eventType, x, y int
 // Host still owes it. A serial Runnable defers to one, because on the original
 // event loop the two share a queue and the repaint was posted first.
 func (runtime *initializationRuntime) repaintQueued() bool {
-	return runtime != nil && runtime.repaintPending && len(runtime.displayCards) > 0
+	return runtime != nil && runtime.RepaintPending && len(runtime.displayCards) > 0
 }
 
 // guestPaintOwnershipRounds delays automatic painting after a guest paint
@@ -546,7 +458,7 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	if len(runtime.displayCards) == 0 {
 		return false, nil
 	}
-	if runtime.repaintServicing {
+	if runtime.RepaintServicing {
 		return false, nil
 	}
 	// **A title that published its own frame keeps it for that round.** One
@@ -562,8 +474,8 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	// title that flushed once during its start loses one paint and gets the
 	// next. Nothing has to be classified in advance, which is what makes this a
 	// rule rather than a switch.
-	if !runtime.repaintPending && runtime.guestFlushedOwnFrame {
-		runtime.guestFlushedOwnFrame = false
+	if !runtime.RepaintPending && runtime.GuestFlushedOwnFrame {
+		runtime.GuestFlushedOwnFrame = false
 		return false, nil
 	}
 	// **A title painting its own frames gets the frames it asked for and no
@@ -580,15 +492,15 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	// can clear the dirty flag before the worker advances the next scene stage.
 	// Explicit repaint requests remain eligible, as do other cards and cards
 	// whose worker has returned.
-	if !runtime.repaintPending {
+	if !runtime.RepaintPending {
 		card := runtime.topCard()
 		for _, runnable := range runtime.pendingSerial {
 			if runtime.serialPaintOwners[runnable] == card {
 				return false, nil
 			}
 		}
-		for _, timer := range runtime.pendingTimers {
-			if timer.paintedCard == card {
+		for _, timer := range runtime.PendingTimers {
+			if guestObject(timer.PaintedCard) == card {
 				return false, nil
 			}
 		}
@@ -604,7 +516,7 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	// automatic painting. Keep their existing eight-round grace period here;
 	// a long gap alone must not revoke a live worker's ownership above.
 	runtime.roundsSinceGuestPaint++
-	if !runtime.repaintPending && runtime.guestHasPainted &&
+	if !runtime.RepaintPending && runtime.guestHasPainted &&
 		runtime.roundsSinceGuestPaint <= guestPaintOwnershipRounds {
 		return false, nil
 	}
@@ -612,7 +524,7 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	// path asked for it. Leaving the flag set would hold the serial queue for
 	// ever, because the only other things that clear it are the guest's own
 	// event drain and serviceRepaints.
-	runtime.repaintPending = false
+	runtime.RepaintPending = false
 	card := runtime.displayCards[len(runtime.displayCards)-1]
 	graphics, err := runtime.newScreenGraphics()
 	if err != nil {
@@ -621,9 +533,9 @@ func (runtime *initializationRuntime) paintTopCard() (bool, error) {
 	if err := runtime.ensureResultBound(graphics); err != nil {
 		return false, err
 	}
-	runtime.repaintServicing = true
-	defer func() { runtime.repaintServicing = false }()
-	finish, err := runtime.beginCardPaint()
+	runtime.RepaintServicing = true
+	defer func() { runtime.RepaintServicing = false }()
+	finish, err := runtime.BeginCardPaint()
 	if err != nil {
 		return false, err
 	}
@@ -725,10 +637,10 @@ func runtimeMainStart(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm
 	if err := validateClassName(className); err != nil {
 		return jvm.VoidValue(), err
 	}
-	if runtime.currentContext == nil {
+	if runtime.CurrentContext == nil {
 		return jvm.VoidValue(), fmt.Errorf("Main.main has no active guest context")
 	}
-	loaded, err := runtime.client.loadClassLocked(runtime.currentContext, className)
+	loaded, err := runtime.client.loadClassLocked(runtime.CurrentContext, className)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -788,7 +700,7 @@ func runtimeJletGetAppProperty(runtime *initializationRuntime, vm *jvm.VM, argum
 // the application declared itself finished, which is a normal Host shutdown
 // rather than a failure.
 func runtimeJletNotifyDestroyed(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	runtime.countDiagnostic("Jlet.notifyDestroyed")
+	runtime.CountDiagnostic("Jlet.notifyDestroyed")
 	// Which of the two endings this was is worth carrying: a Java title
 	// declaring itself finished and a native one calling MC_knlExit reach a
 	// Host as the same error, and the two are looked into differently.
@@ -907,32 +819,32 @@ func runtimeDisplayKeyName(_ *initializationRuntime, vm *jvm.VM, arguments []jvm
 	}
 	name := ""
 	switch key {
-	case KeyUp:
+	case wipicrt.KeyUp:
 		name = "UP"
-	case KeyDown:
+	case wipicrt.KeyDown:
 		name = "DOWN"
-	case KeyLeft:
+	case wipicrt.KeyLeft:
 		name = "LEFT"
-	case KeyRight:
+	case wipicrt.KeyRight:
 		name = "RIGHT"
-	case KeyFire:
+	case wipicrt.KeyFire:
 		name = "FIRE"
-	case KeyLeftSoft:
+	case wipicrt.KeyLeftSoft:
 		name = "SOFT1"
-	case KeyRightSoft:
+	case wipicrt.KeyRightSoft:
 		name = "SOFT2"
-	case KeyCall:
+	case wipicrt.KeyCall:
 		name = "SEND"
-	case KeyHangup:
+	case wipicrt.KeyHangup:
 		name = "END"
-	case KeyClear:
+	case wipicrt.KeyClear:
 		name = "CLEAR"
-	case KeyVolumeUp:
+	case wipicrt.KeyVolumeUp:
 		name = "VOLUP"
-	case KeyVolumeDown:
+	case wipicrt.KeyVolumeDown:
 		name = "VOLDOWN"
 	default:
-		if key >= KeyNum0 && key <= KeyNum9 || key == KeyHash || key == KeyStar {
+		if key >= wipicrt.KeyNum0 && key <= wipicrt.KeyNum9 || key == wipicrt.KeyHash || key == wipicrt.KeyStar {
 			name = string(rune(key))
 		}
 	}

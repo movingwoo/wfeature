@@ -26,8 +26,8 @@ func runtimeKernelGetExecNames(runtime *initializationRuntime, vm *jvm.VM, argum
 		properties [3]string
 	}
 	var entries []entry
-	if runtime.client.programName != "" {
-		entries = append(entries, entry{runtime.client.programName, [3]string{runtime.client.appProperties["NAME"], runtime.client.appProperties["VER"], runtime.client.appProperties["VDR"]}})
+	if runtime.client.ProgramName != "" {
+		entries = append(entries, entry{runtime.client.ProgramName, [3]string{runtime.client.appProperties["NAME"], runtime.client.appProperties["VER"], runtime.client.appProperties["VDR"]}})
 	}
 	if runtime.hasSlotRelay() {
 		entries = append(entries, entry{relayDependency, [3]string{relayDependency, relayDependencyVersion, ""}})
@@ -54,7 +54,7 @@ func runtimeKernelGetExecNames(runtime *initializationRuntime, vm *jvm.VM, argum
 		}
 		entries = matching
 	}
-	runtime.countDiagnostic(fmt.Sprintf("kernel executable lookup name=%s version=%s vendor=%s matches=%d", filters[0], filters[1], filters[2], len(entries)))
+	runtime.CountDiagnostic(fmt.Sprintf("kernel executable lookup name=%s version=%s vendor=%s matches=%d", filters[0], filters[1], filters[2], len(entries)))
 	array, err := vm.NewArray(jvm.Type{Kind: jvm.TypeReference, ClassName: "java/lang/String"}, int32(len(entries)))
 	if err != nil {
 		return jvm.VoidValue(), err
@@ -94,7 +94,7 @@ func runtimeKernelLoad(runtime *initializationRuntime, _ *jvm.VM, args []jvm.Val
 		}
 	}
 	if name == relayDependency && runtime.hasSlotRelay() {
-		runtime.countDiagnostic("local slot relay loaded")
+		runtime.CountDiagnostic("local slot relay loaded")
 		return jvm.IntValue(2), nil
 	}
 	return jvm.IntValue(-1), nil

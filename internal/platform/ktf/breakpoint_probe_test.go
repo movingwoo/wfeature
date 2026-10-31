@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/route"
 )
 
@@ -64,7 +65,7 @@ func TestLocalBreakpointProbe(t *testing.T) {
 	// same pacing `runktf` uses without -play. It is not only faster: a title
 	// that seeds itself from the clock takes a different branch on every
 	// wall-clock run, and a fault reached once in three runs cannot be read.
-	clock := NewManualClock(time.Time{})
+	clock := wipicrt.NewManualClock(time.Time{})
 	options := SessionOptions{
 		TraceLimit: 4096,
 		SaveRoot:   os.Getenv("WFEATURE_BREAKPOINT_SAVE"),
@@ -122,16 +123,16 @@ func runProbeRoute(t *testing.T, session *Session, path string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script, err := route.Parse(string(text), KeyCodeByName)
+	script, err := route.Parse(string(text), wipicrt.KeyCodeByName)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runner := &route.Runner{
 		Digest: session.FrameDigest,
 		SendKey: func(ctx context.Context, pressed bool, key int32) error {
-			event := KeyPressed
+			event := wipicrt.KeyPressed
 			if !pressed {
-				event = KeyReleased
+				event = wipicrt.KeyReleased
 			}
 			return session.SendKey(ctx, event, key)
 		},
@@ -172,7 +173,7 @@ func armProbe(t *testing.T, core *armcore.Core, hits *int, limit int, client **C
 			value, _ := thread.Register(register)
 			described := ""
 			if *client != nil {
-				described = (*client).runtime.describeGuestWord(value)
+				described = (*client).runtime.describeAOTWord(value)
 			}
 			fmt.Fprintf(&line, "\n    r%-2d = %#010x  %s", register, value, described)
 			var word [4]byte
@@ -210,7 +211,7 @@ func armProbe(t *testing.T, core *armcore.Core, hits *int, limit int, client **C
 // dumpProbeState prints the memory range and the classes the environment asked
 // about, once the session exists to name them.
 func dumpProbeState(t *testing.T, session *Session) {
-	core := session.Client.core
+	core := session.Client.Core()
 	if spec := os.Getenv("WFEATURE_BREAKPOINT_DUMP"); spec != "" {
 		low, high, err := parseProbeRange(spec)
 		if err != nil {

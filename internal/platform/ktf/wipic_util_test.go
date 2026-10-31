@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func utilCall(t *testing.T, runtime *initializationRuntime, function uint32, arguments ...uint32) uint32 {
@@ -12,7 +13,7 @@ func utilCall(t *testing.T, runtime *initializationRuntime, function uint32, arg
 	for index, value := range arguments {
 		callContext.Registers[index] = value
 	}
-	result, err := runtime.handleWIPICTableCall(armcore.NewThread(callContext), wipicTableUtil, function)
+	result, err := runtime.HandleWIPICTableCall(armcore.NewThread(callContext), wipicrt.WIPICTableUtil, function)
 	if err != nil {
 		t.Fatalf("utility function %d: %v", function, err)
 	}
@@ -26,21 +27,21 @@ func utilCall(t *testing.T, runtime *initializationRuntime, function uint32, arg
 func TestUtilityConvertsByteOrderByWidth(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
-	if got := utilCall(t, runtime, wipicUtilHtonl, 0x01020304); got != 0x04030201 {
+	if got := utilCall(t, runtime, wipicrt.WIPICUtilHtonl, 0x01020304); got != 0x04030201 {
 		t.Fatalf("MC_utilHtonl(0x01020304) = %#x, want 0x04030201", got)
 	}
-	if got := utilCall(t, runtime, wipicUtilNtohl, 0x04030201); got != 0x01020304 {
+	if got := utilCall(t, runtime, wipicrt.WIPICUtilNtohl, 0x04030201); got != 0x01020304 {
 		t.Fatalf("MC_utilNtohl(0x04030201) = %#x, want 0x01020304", got)
 	}
 	// 80 is the port a download prompt would be converting.
-	if got := utilCall(t, runtime, wipicUtilHtons, 80); got != 0x5000 {
+	if got := utilCall(t, runtime, wipicrt.WIPICUtilHtons, 80); got != 0x5000 {
 		t.Fatalf("MC_utilHtons(80) = %#x, want 0x5000", got)
 	}
-	if got := utilCall(t, runtime, wipicUtilNtohs, 0x5000); got != 80 {
+	if got := utilCall(t, runtime, wipicrt.WIPICUtilNtohs, 0x5000); got != 80 {
 		t.Fatalf("MC_utilNtohs(0x5000) = %#x, want 80", got)
 	}
 	// A sign-extended argument is the shape the call site actually passes.
-	if got := utilCall(t, runtime, wipicUtilHtons, 0xffff8000); got != 0x0080 {
+	if got := utilCall(t, runtime, wipicrt.WIPICUtilHtons, 0xffff8000); got != 0x0080 {
 		t.Fatalf("MC_utilHtons(-32768) = %#x, want 0x0080", got)
 	}
 }
@@ -51,25 +52,25 @@ func TestUtilityConvertsByteOrderByWidth(t *testing.T) {
 func TestUtilityConvertsAnAddressBothWays(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 
-	buffer, err := runtime.allocate(32)
+	buffer, err := runtime.Allocate(32)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := append([]byte("211.234.1.90"), 0)
-	if err := client.core.Memory().Write(buffer, text); err != nil {
+	if err := client.Core().Memory().Write(buffer, text); err != nil {
 		t.Fatal(err)
 	}
-	address := utilCall(t, runtime, wipicUtilInetAddrInt, buffer)
+	address := utilCall(t, runtime, wipicrt.WIPICUtilInetAddrInt, buffer)
 	if address != 0x5a01ead3 {
 		t.Fatalf("MC_utilInetAddrInt = %#x, want 0x5a01ead3", address)
 	}
 
-	back, err := runtime.allocate(32)
+	back, err := runtime.Allocate(32)
 	if err != nil {
 		t.Fatal(err)
 	}
-	utilCall(t, runtime, wipicUtilInetAddrStr, address, back)
-	written, err := runtime.readGuestCString(back, maxInetAddrText)
+	utilCall(t, runtime, wipicrt.WIPICUtilInetAddrStr, address, back)
+	written, err := runtime.ReadGuestCString(back, wipicrt.MaxInetAddrText)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,16 +85,16 @@ func TestUtilityConvertsAnAddressBothWays(t *testing.T) {
 func TestUtilityRefusesAnAddressItCannotRead(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 
-	buffer, err := runtime.allocate(32)
+	buffer, err := runtime.Allocate(32)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, text := range []string{"", "1.2.3", "1.2.3.4.5", "1.2.3.999", "1.2.3.x"} {
-		if err := client.core.Memory().Write(buffer, append([]byte(text), 0)); err != nil {
+		if err := client.Core().Memory().Write(buffer, append([]byte(text), 0)); err != nil {
 			t.Fatal(err)
 		}
-		if got := utilCall(t, runtime, wipicUtilInetAddrInt, buffer); got != wipiErrorCode {
-			t.Fatalf("MC_utilInetAddrInt(%q) = %#x, want %#x", text, got, wipiErrorCode)
+		if got := utilCall(t, runtime, wipicrt.WIPICUtilInetAddrInt, buffer); got != wipicrt.WipiErrorCode {
+			t.Fatalf("MC_utilInetAddrInt(%q) = %#x, want %#x", text, got, wipicrt.WipiErrorCode)
 		}
 	}
 }
@@ -104,7 +105,7 @@ func TestUtilityRefusesAnAddressItCannotRead(t *testing.T) {
 func TestUtilityLeavesTheUnspecifiedEntryFailing(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
-	_, err := runtime.handleWIPICTableCall(armcore.NewThread(armcore.NewContext()), wipicTableUtil, 6)
+	_, err := runtime.HandleWIPICTableCall(armcore.NewThread(armcore.NewContext()), wipicrt.WIPICTableUtil, 6)
 	if err == nil {
 		t.Fatal("utility function 6 answered instead of naming its call site")
 	}

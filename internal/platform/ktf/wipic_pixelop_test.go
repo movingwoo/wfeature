@@ -3,6 +3,7 @@ package ktf
 import (
 	"context"
 	"encoding/binary"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"testing"
 )
 
@@ -14,7 +15,7 @@ func writeGuestWords(t *testing.T, runtime *initializationRuntime, address uint3
 	for index, word := range words {
 		binary.LittleEndian.PutUint32(data[index*4:], word)
 	}
-	if err := runtime.client.core.Memory().Write(address, data); err != nil {
+	if err := runtime.client.Core().Memory().Write(address, data); err != nil {
 		t.Fatalf("write guest words at %#x: %v", address, err)
 	}
 }
@@ -37,7 +38,7 @@ func installPixelOperation(t *testing.T, runtime *initializationRuntime, address
 	for index, instruction := range body {
 		binary.LittleEndian.PutUint16(data[index*2:], instruction)
 	}
-	if err := runtime.client.core.Memory().Write(address, data); err != nil {
+	if err := runtime.client.Core().Memory().Write(address, data); err != nil {
 		t.Fatalf("write pixel operation at %#x: %v", address, err)
 	}
 	return address | 1
@@ -48,28 +49,28 @@ func installPixelOperation(t *testing.T, runtime *initializationRuntime, address
 // its handle would execute an address that is not code.
 func TestPixelOperationIsOnlyReadFromACodeAddress(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	record, err := runtime.allocateWIPIC(64)
+	record, err := runtime.AllocateWIPIC(64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	context := record + wipicAllocationOverhead
+	context := record + wipicrt.WIPICAllocationOverhead
 
-	writeGuestWords(t, runtime, context+wipicContextPixelOpOffset, 8, 0x2484)
-	op, err := runtime.wipicReadContextPixelOp(context)
+	writeGuestWords(t, runtime, context+wipicrt.WIPICContextPixelOpOffset, 8, 0x2484)
+	op, err := runtime.WIPICReadContextPixelOp(context)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op.active() {
+	if op.Active() {
 		t.Fatalf("a font handle was read as a pixel operation: %+v", op)
 	}
 
-	function := installPixelOperation(t, runtime, ImageBase+0x40)
-	writeGuestWords(t, runtime, context+wipicContextPixelOpOffset, function, 0x2484)
-	op, err = runtime.wipicReadContextPixelOp(context)
+	function := installPixelOperation(t, runtime, wipicrt.ImageBase+0x40)
+	writeGuestWords(t, runtime, context+wipicrt.WIPICContextPixelOpOffset, function, 0x2484)
+	op, err = runtime.WIPICReadContextPixelOp(context)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op.function != function || op.param != 0x2484 {
+	if op.Function != function || op.Param != 0x2484 {
 		t.Fatalf("pixel operation = %+v, want function %#x param %#x", op, function, 0x2484)
 	}
 }
@@ -78,22 +79,22 @@ func TestPixelOperationIsOnlyReadFromACodeAddress(t *testing.T) {
 // transparency: the pixels its parameter names keep the target.
 func TestBlitRunsTheGuestPixelOperation(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.currentThread, runtime.currentContext = client.thread, context.Background()
+	runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
 
 	const key = uint16(0x2484)
-	source, err := runtime.newWIPICFramebufferRecord(2, 1)
+	source, err := runtime.NewWIPICFramebufferRecord(2, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	destination, err := runtime.newWIPICFramebufferRecord(2, 1)
+	destination, err := runtime.NewWIPICFramebufferRecord(2, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sourceBuffer, err := runtime.readWIPICFramebuffer(source)
+	sourceBuffer, err := runtime.ReadWIPICFramebuffer(source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	destinationBuffer, err := runtime.readWIPICFramebuffer(destination)
+	destinationBuffer, err := runtime.ReadWIPICFramebuffer(destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,25 +103,25 @@ func TestBlitRunsTheGuestPixelOperation(t *testing.T) {
 	pixels := make([]byte, 4)
 	binary.LittleEndian.PutUint16(pixels[0:], key)
 	binary.LittleEndian.PutUint16(pixels[2:], 0xf800)
-	if err := runtime.client.core.Memory().Write(sourceBuffer.pixels, pixels); err != nil {
+	if err := runtime.client.Core().Memory().Write(sourceBuffer.Pixels, pixels); err != nil {
 		t.Fatal(err)
 	}
 	binary.LittleEndian.PutUint16(pixels[0:], 0x001f)
 	binary.LittleEndian.PutUint16(pixels[2:], 0x001f)
-	if err := runtime.client.core.Memory().Write(destinationBuffer.pixels, pixels); err != nil {
+	if err := runtime.client.Core().Memory().Write(destinationBuffer.Pixels, pixels); err != nil {
 		t.Fatal(err)
 	}
 
-	function := installPixelOperation(t, runtime, ImageBase+0x40)
-	if err := runtime.wipicBlitClipped(
-		destinationBuffer, wipicClip{}, wipicPixelOp{function: function, param: uint32(key)},
-		0, 0, 2, 1, sourceBuffer, 0, 0, blitOpacity{},
+	function := installPixelOperation(t, runtime, wipicrt.ImageBase+0x40)
+	if err := runtime.WIPICBlitClipped(
+		destinationBuffer, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{Function: function, Param: uint32(key)},
+		0, 0, 2, 1, sourceBuffer, 0, 0, wipicrt.BlitOpacity{},
 	); err != nil {
 		t.Fatal(err)
 	}
 
 	drawn := make([]byte, 4)
-	if err := runtime.client.core.Memory().Read(destinationBuffer.pixels, drawn); err != nil {
+	if err := runtime.client.Core().Memory().Read(destinationBuffer.Pixels, drawn); err != nil {
 		t.Fatal(err)
 	}
 	if got := binary.LittleEndian.Uint16(drawn[0:]); got != 0x001f {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The screen a KTF game is told it runs on reaches it by two routes, and they
@@ -25,43 +26,43 @@ func TestScreenIsOneAnswerForBothSurfaces(t *testing.T) {
 		width, height int
 		wantW, wantH  uint32
 	}{
-		{"the platform's own", 0, 0, runtimeDisplayPixelWidth, runtimeDisplayPixelHeight},
+		{"the platform's own", 0, 0, wipicrt.RuntimeDisplayPixelWidth, wipicrt.RuntimeDisplayPixelHeight},
 		{"a smaller handset", 176, 220, 176, 220},
 		{"a larger handset", 320, 480, 320, 480},
 	} {
 		t.Run(screen.name, func(t *testing.T) {
 			client, runtime := newTestRuntime(t)
 			client.SetScreen(screen.width, screen.height)
-			runtime.currentThread, runtime.currentContext = client.thread, context.Background()
+			runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
 
-			handle, err := runtime.wipicGetScreenFramebuffer()
+			handle, err := runtime.WIPICGetScreenFramebuffer()
 			if err != nil {
 				t.Fatalf("build the screen framebuffer: %v", err)
 			}
-			framebuffer, err := runtime.readWIPICFramebuffer(handle)
+			framebuffer, err := runtime.ReadWIPICFramebuffer(handle)
 			if err != nil {
 				t.Fatalf("read the screen framebuffer: %v", err)
 			}
 
 			info := readDisplayInfo(t, client, runtime)
 
-			if framebuffer.width != screen.wantW || framebuffer.height != screen.wantH {
+			if framebuffer.Width != screen.wantW || framebuffer.Height != screen.wantH {
 				t.Errorf("framebuffer is %dx%d, want %dx%d",
-					framebuffer.width, framebuffer.height, screen.wantW, screen.wantH)
+					framebuffer.Width, framebuffer.Height, screen.wantW, screen.wantH)
 			}
-			if info.width != screen.wantW || info.height != screen.wantH {
+			if info.Width != screen.wantW || info.Height != screen.wantH {
 				t.Errorf("MC_grpGetDisplayInfo says %dx%d, want %dx%d",
-					info.width, info.height, screen.wantW, screen.wantH)
+					info.Width, info.Height, screen.wantW, screen.wantH)
 			}
 			// The stride is the half that tore. A game reads it from the info
 			// struct and writes into the record's buffer, so the record's rows
 			// have to be at least as far apart as the info struct claims.
-			if info.bpl != 2*screen.wantW {
-				t.Errorf("MC_grpGetDisplayInfo stride is %d, want %d", info.bpl, 2*screen.wantW)
+			if info.Bpl != 2*screen.wantW {
+				t.Errorf("MC_grpGetDisplayInfo stride is %d, want %d", info.Bpl, 2*screen.wantW)
 			}
-			if framebuffer.bpl != info.bpl {
+			if framebuffer.Bpl != info.Bpl {
 				t.Errorf("framebuffer stride %d and display-info stride %d disagree; rows would land at the wrong offsets",
-					framebuffer.bpl, info.bpl)
+					framebuffer.Bpl, info.Bpl)
 			}
 		})
 	}
@@ -104,21 +105,21 @@ func TestHalfAScreenSelectsThePlatformHandset(t *testing.T) {
 	for _, half := range []struct{ width, height int }{{176, 0}, {0, 220}, {0, 0}, {-1, -1}} {
 		client := &Client{}
 		client.SetScreen(half.width, half.height)
-		width, height := client.screenSize()
-		if width != runtimeDisplayPixelWidth || height != runtimeDisplayPixelHeight {
+		width, height := client.ScreenSize()
+		if width != wipicrt.RuntimeDisplayPixelWidth || height != wipicrt.RuntimeDisplayPixelHeight {
 			t.Errorf("SetScreen(%d, %d) gave %dx%d, want the platform's %dx%d",
 				half.width, half.height, width, height,
-				runtimeDisplayPixelWidth, runtimeDisplayPixelHeight)
+				wipicrt.RuntimeDisplayPixelWidth, wipicrt.RuntimeDisplayPixelHeight)
 		}
 	}
 }
 
 // readDisplayInfo calls MC_grpGetDisplayInfo the way a game does and reads the
 // struct back out of guest memory.
-func readDisplayInfo(t *testing.T, client *Client, runtime *initializationRuntime) wipicFramebuffer {
+func readDisplayInfo(t *testing.T, client *Client, runtime *initializationRuntime) wipicrt.WIPICFramebuffer {
 	t.Helper()
 	const words = 9
-	address, ok := runtime.arena.allocate(words * 4)
+	address, ok := runtime.Arena.Allocate(words * 4)
 	if !ok {
 		t.Fatal("the arena would not hold the display info struct")
 	}
@@ -126,20 +127,20 @@ func readDisplayInfo(t *testing.T, client *Client, runtime *initializationRuntim
 	if err := thread.SetRegister(1, address); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.wipicGetDisplayInfo(thread); err != nil {
+	if _, err := runtime.WIPICGetDisplayInfo(thread); err != nil {
 		t.Fatalf("MC_grpGetDisplayInfo: %v", err)
 	}
 	data := make([]byte, words*4)
-	if err := client.core.Memory().Read(address, data); err != nil {
+	if err := client.Core().Memory().Read(address, data); err != nil {
 		t.Fatal(err)
 	}
 	// The struct is {bpp, depth, width, height, bytes per line, ...}; the
 	// framebuffer shape is reused here to compare the two side by side.
-	return wipicFramebuffer{
-		bpp:    binary.LittleEndian.Uint32(data[0:]),
-		width:  binary.LittleEndian.Uint32(data[8:]),
-		height: binary.LittleEndian.Uint32(data[12:]),
-		bpl:    binary.LittleEndian.Uint32(data[16:]),
+	return wipicrt.WIPICFramebuffer{
+		Bpp:    binary.LittleEndian.Uint32(data[0:]),
+		Width:  binary.LittleEndian.Uint32(data[8:]),
+		Height: binary.LittleEndian.Uint32(data[12:]),
+		Bpl:    binary.LittleEndian.Uint32(data[16:]),
 	}
 }
 
@@ -154,7 +155,7 @@ func TestNativeScreenIsOneAnswerForBothSurfaces(t *testing.T) {
 		width, height int
 		wantW, wantH  int
 	}{
-		{"the platform's own", 0, 0, runtimeDisplayPixelWidth, runtimeDisplayPixelHeight},
+		{"the platform's own", 0, 0, wipicrt.RuntimeDisplayPixelWidth, wipicrt.RuntimeDisplayPixelHeight},
 		{"a smaller handset", 176, 220, 176, 220},
 	} {
 		t.Run(screen.name, func(t *testing.T) {
@@ -213,7 +214,7 @@ func newNativeScreenPlatform(t *testing.T, width, height int) *NativePlatform {
 	if err != nil {
 		t.Fatalf("load synthetic native client: %v", err)
 	}
-	platform := NewNativePlatform(client, archive, NewManualClock(time.Time{}))
+	platform := NewNativePlatform(client, archive, wipicrt.NewManualClock(time.Time{}))
 	platform.SetScreen(width, height)
 	if err := platform.Install(); err != nil {
 		t.Fatalf("install: %v", err)

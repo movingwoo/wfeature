@@ -10,6 +10,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -25,7 +26,7 @@ func TestDrawRectOutlinesTheRectangleFillWouldCover(t *testing.T) {
 	framebuffer := graphics.Native.(*runtimeGraphicsState).target
 
 	const pixel = 0xf81f
-	if err := runtime.outlineFramebufferRect(framebuffer, wipicClip{}, wipicPixelOp{}, pixel, 4, 6, 5, 4); err != nil {
+	if err := runtime.OutlineFramebufferRect(framebuffer, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{}, pixel, 4, 6, 5, 4); err != nil {
 		t.Fatalf("outlineFramebufferRect() error = %v", err)
 	}
 	for y := int32(5); y <= 10; y++ {
@@ -54,7 +55,7 @@ func TestDrawRectFillsRectanglesWithoutAnInterior(t *testing.T) {
 	framebuffer := graphics.Native.(*runtimeGraphicsState).target
 
 	const pixel = 0x07e0
-	if err := runtime.outlineFramebufferRect(framebuffer, wipicClip{}, wipicPixelOp{}, pixel, 2, 2, 2, 3); err != nil {
+	if err := runtime.OutlineFramebufferRect(framebuffer, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{}, pixel, 2, 2, 2, 3); err != nil {
 		t.Fatalf("outlineFramebufferRect() error = %v", err)
 	}
 	for y := int32(2); y < 5; y++ {
@@ -65,7 +66,7 @@ func TestDrawRectFillsRectanglesWithoutAnInterior(t *testing.T) {
 		}
 	}
 	// An empty rectangle draws nothing rather than a single stray pixel.
-	if err := runtime.outlineFramebufferRect(framebuffer, wipicClip{}, wipicPixelOp{}, pixel, 20, 20, 0, 5); err != nil {
+	if err := runtime.OutlineFramebufferRect(framebuffer, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{}, pixel, 20, 20, 0, 5); err != nil {
 		t.Fatalf("outlineFramebufferRect() error = %v", err)
 	}
 	if got := readFramebufferPixel(t, runtime, framebuffer, 20, 20); got != 0 {
@@ -73,11 +74,11 @@ func TestDrawRectFillsRectanglesWithoutAnInterior(t *testing.T) {
 	}
 }
 
-func readFramebufferPixel(t *testing.T, runtime *initializationRuntime, framebuffer wipicFramebuffer, x, y int32) uint16 {
+func readFramebufferPixel(t *testing.T, runtime *initializationRuntime, framebuffer wipicrt.WIPICFramebuffer, x, y int32) uint16 {
 	t.Helper()
 	var data [2]byte
-	address := framebuffer.pixels + uint32(y)*framebuffer.bpl + uint32(x)*2
-	if err := runtime.client.core.Memory().Read(address, data[:]); err != nil {
+	address := framebuffer.Pixels + uint32(y)*framebuffer.Bpl + uint32(x)*2
+	if err := runtime.client.Core().Memory().Read(address, data[:]); err != nil {
 		t.Fatal(err)
 	}
 	return uint16(data[0]) | uint16(data[1])<<8
@@ -88,36 +89,36 @@ func readFramebufferPixel(t *testing.T, runtime *initializationRuntime, framebuf
 // cursor without moving it, and an unknown handle answers M_E_BADFD.
 func TestFileTellAnswersTheCursor(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	store := &runtimeCFile{name: "OptionSave", data: []byte("options")}
-	runtime.cFiles = map[string]*runtimeCFile{store.name: store}
-	runtime.cFileHandles = map[uint32]*runtimeCFileHandle{
-		cFileHandleBit | 1: {store: store, position: 3},
+	store := &wipicrt.RuntimeCFile{Name: "OptionSave", Data: []byte("options")}
+	runtime.CFiles = map[string]*wipicrt.RuntimeCFile{store.Name: store}
+	runtime.CFileHandles = map[uint32]*wipicrt.RuntimeCFileHandle{
+		wipicrt.CFileHandleBit | 1: {Store: store, Position: 3},
 	}
 	thread := armcore.NewThread(armcore.Context{})
 
-	if err := thread.SetRegister(0, cFileHandleBit|1); err != nil {
+	if err := thread.SetRegister(0, wipicrt.CFileHandleBit|1); err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.handleWIPICFileCall(thread, wipicFileTell)
+	result, err := runtime.HandleWIPICFileCall(thread, wipicrt.WIPICFileTell)
 	if err != nil {
 		t.Fatalf("MC_fsTell error = %v", err)
 	}
 	if result != 3 {
 		t.Fatalf("MC_fsTell = %#x, want 3", result)
 	}
-	if handle := runtime.cFileHandles[cFileHandleBit|1]; handle.position != 3 || string(handle.store.data) != "options" {
-		t.Fatalf("MC_fsTell disturbed the stream: position %d data %q", handle.position, handle.store.data)
+	if handle := runtime.CFileHandles[wipicrt.CFileHandleBit|1]; handle.Position != 3 || string(handle.Store.Data) != "options" {
+		t.Fatalf("MC_fsTell disturbed the stream: position %d data %q", handle.Position, handle.Store.Data)
 	}
 
-	if err := thread.SetRegister(0, cFileHandleBit|9); err != nil {
+	if err := thread.SetRegister(0, wipicrt.CFileHandleBit|9); err != nil {
 		t.Fatal(err)
 	}
-	result, err = runtime.handleWIPICFileCall(thread, wipicFileTell)
+	result, err = runtime.HandleWIPICFileCall(thread, wipicrt.WIPICFileTell)
 	if err != nil {
 		t.Fatalf("MC_fsTell with an unknown handle error = %v", err)
 	}
-	if result != wipicErrorBadFD {
-		t.Fatalf("MC_fsTell with an unknown handle = %#x, want %#x", result, wipicErrorBadFD)
+	if result != wipicrt.WIPICErrorBadFD {
+		t.Fatalf("MC_fsTell with an unknown handle = %#x, want %#x", result, wipicrt.WIPICErrorBadFD)
 	}
 }
 
@@ -127,30 +128,30 @@ func TestFileTellAnswersTheCursor(t *testing.T) {
 // it is.
 func TestHostServiceRenewsWindowsUntilItsAllowance(t *testing.T) {
 	client, _ := newTestRuntime(t)
-	window := client.core.MaxSteps()
-	client.serviceSteps = window * 3
+	window := client.Core().MaxSteps()
+	client.ServiceSteps = window * 3
 
 	ctx, cancel := context.WithCancel(context.Background())
-	end := client.beginHostService(ctx)
+	end := client.BeginHostService(ctx)
 	// Two renewals fit inside a three-window allowance; the third would leave
 	// nothing to grant, so it reports the allowance instead of continuing.
 	for renewal := 0; renewal < 2; renewal++ {
-		if err := client.continueHostService(ctx, client.serviceSteps); err != nil {
+		if err := client.ContinueHostService(ctx, client.ServiceSteps); err != nil {
 			t.Fatalf("renewal %d error = %v", renewal, err)
 		}
 	}
-	err := client.continueHostService(ctx, client.serviceSteps)
-	if !errors.Is(err, ErrServiceStepLimit) {
+	err := client.ContinueHostService(ctx, client.ServiceSteps)
+	if !errors.Is(err, wipicrt.ErrServiceStepLimit) {
 		t.Fatalf("exhausted allowance error = %v, want ErrServiceStepLimit", err)
 	}
 	end()
 
 	// A fresh call gets a fresh allowance, and the Host's cancellation beats
 	// any budget that is left.
-	end = client.beginHostService(ctx)
+	end = client.BeginHostService(ctx)
 	defer end()
 	cancel()
-	if err := client.continueHostService(ctx, client.serviceSteps); !errors.Is(err, context.Canceled) {
+	if err := client.ContinueHostService(ctx, client.ServiceSteps); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled service error = %v, want context.Canceled", err)
 	}
 }
@@ -162,21 +163,21 @@ func TestKeyDeliveryRunsInsideAServiceScope(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	depth := -1
 	if err := client.JVM().RegisterNative("test/Card", "keyNotify", "(II)Z", func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
-		depth = client.serviceDepth
+		depth = client.ServiceDepth
 		return jvm.IntValue(0), nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	runtime.displayCards = append(runtime.displayCards, &jvm.Object{ClassName: "test/Card", Fields: make(map[string]jvm.Value)})
 
-	if err := client.SendKey(t.Context(), KeyPressed, KeyFire); err != nil {
+	if err := client.SendKey(t.Context(), wipicrt.KeyPressed, wipicrt.KeyFire); err != nil {
 		t.Fatalf("SendKey() error = %v", err)
 	}
 	if depth != 1 {
 		t.Fatalf("service depth during key delivery = %d, want 1", depth)
 	}
-	if client.serviceDepth != 0 {
-		t.Fatalf("service depth after key delivery = %d, want 0", client.serviceDepth)
+	if client.ServiceDepth != 0 {
+		t.Fatalf("service depth after key delivery = %d, want 0", client.ServiceDepth)
 	}
 }
 
@@ -202,8 +203,8 @@ func TestStartAppRunsUnderTheServiceAllowance(t *testing.T) {
 	if got := binary.LittleEndian.Uint32(readTestBytes(t, session.Client, testfixture.KTFCheckpointStartupCounter, 4)); got != 1 {
 		t.Fatalf("startApp ran %d times, want 1", got)
 	}
-	if session.Client.serviceDepth != 0 {
-		t.Fatalf("service depth after the start = %d, want 0", session.Client.serviceDepth)
+	if session.Client.ServiceDepth != 0 {
+		t.Fatalf("service depth after the start = %d, want 0", session.Client.ServiceDepth)
 	}
 }
 
@@ -213,28 +214,28 @@ func TestStartAppRunsUnderTheServiceAllowance(t *testing.T) {
 func TestNestedHostServiceKeepsTheOuterAllowance(t *testing.T) {
 	client, _ := newTestRuntime(t)
 	ctx := context.Background()
-	client.serviceSteps = client.core.MaxSteps() * 2
+	client.ServiceSteps = client.Core().MaxSteps() * 2
 
-	outer := client.beginHostService(ctx)
-	if err := client.continueHostService(ctx, client.serviceSteps); err != nil {
+	outer := client.BeginHostService(ctx)
+	if err := client.ContinueHostService(ctx, client.ServiceSteps); err != nil {
 		t.Fatal(err)
 	}
-	inner := client.beginHostService(ctx)
-	if client.serviceRemaining != client.core.MaxSteps() {
-		t.Fatalf("nested scope reset the allowance to %d", client.serviceRemaining)
+	inner := client.BeginHostService(ctx)
+	if client.ServiceRemaining != client.Core().MaxSteps() {
+		t.Fatalf("nested scope reset the allowance to %d", client.ServiceRemaining)
 	}
 	inner()
-	if client.serviceDepth != 1 {
-		t.Fatalf("service depth after closing the inner scope = %d, want 1", client.serviceDepth)
+	if client.ServiceDepth != 1 {
+		t.Fatalf("service depth after closing the inner scope = %d, want 1", client.ServiceDepth)
 	}
 	// The outer scope is still open, so the ceiling is still reachable from
 	// where the inner scope left it.
-	if err := client.continueHostService(ctx, client.serviceSteps); !errors.Is(err, ErrServiceStepLimit) {
+	if err := client.ContinueHostService(ctx, client.ServiceSteps); !errors.Is(err, wipicrt.ErrServiceStepLimit) {
 		t.Fatalf("renewal after the inner scope = %v, want ErrServiceStepLimit", err)
 	}
 	outer()
-	if client.serviceDepth != 0 {
-		t.Fatalf("service depth after closing the outer scope = %d, want 0", client.serviceDepth)
+	if client.ServiceDepth != 0 {
+		t.Fatalf("service depth after closing the outer scope = %d, want 0", client.ServiceDepth)
 	}
 }
 
@@ -247,8 +248,8 @@ func TestNestedHostServiceKeepsTheOuterAllowance(t *testing.T) {
 // ends at the queue's limit.
 func TestSerialRunnablesDispatchOnePerIdlePass(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	clock := NewManualClock(time.Unix(0, 0))
-	client.clock = clock
+	clock := wipicrt.NewManualClock(time.Unix(0, 0))
+	client.Clock = clock
 
 	// The Runnables run on the client thread, so they need a body to run.
 	// Counting the calls is also how the order they ran in is checked.
@@ -332,8 +333,8 @@ func TestSerialRunnablesDispatchOnePerIdlePass(t *testing.T) {
 // its only other thread had asked to sleep.
 func TestStartedThreadsAreDueImmediately(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	clock := NewManualClock(time.Unix(0, 0))
-	client.clock = clock
+	clock := wipicrt.NewManualClock(time.Unix(0, 0))
+	client.Clock = clock
 	client.workers = append(client.workers, &guestWorker{wakeAt: clock.Now().Add(100 * time.Second)})
 
 	if deadline, parked := client.NextDeadline(); !parked || !deadline.After(clock.Now()) {
@@ -358,12 +359,12 @@ func TestStartedThreadsAreDueImmediately(t *testing.T) {
 // waiting and spins on.
 func TestAnEmptyRoundPaintsEvenWhenTheHostIsBehind(t *testing.T) {
 	client, _ := newTestRuntime(t)
-	clock := NewManualClock(time.Unix(0, 0))
-	client.clock = clock
+	clock := wipicrt.NewManualClock(time.Unix(0, 0))
+	client.Clock = clock
 	session := &Session{Client: client}
 
 	// A saturated host with a recent paint: every condition for a skip.
-	client.paintLoad = 4
+	client.PaintLoad = 4
 	client.lastPaint = clock.Now()
 	if !session.behindOnPaint() {
 		t.Fatal("behindOnPaint() is false with a saturated host and a recent paint")
@@ -388,26 +389,26 @@ func TestAnEmptyRoundPaintsEvenWhenTheHostIsBehind(t *testing.T) {
 // for 0.1% of a round each.
 func TestACheapPaintIsNotWorthDropping(t *testing.T) {
 	client, _ := newTestRuntime(t)
-	clock := NewManualClock(time.Unix(0, 0))
-	client.clock = clock
+	clock := wipicrt.NewManualClock(time.Unix(0, 0))
+	client.Clock = clock
 	session := &Session{Client: client}
 
 	// Saturated, with a paint recent enough that dropping one more would not
 	// read as a freeze: everything the decision used to ask.
-	client.paintLoad = 4
+	client.PaintLoad = 4
 	client.lastPaint = clock.Now()
 
 	// A round that is nearly all paint is a round the drop can rescue.
-	client.entryCost, client.paintCost = 35*time.Millisecond, 34*time.Millisecond
+	client.EntryCost, client.PaintCost = 35*time.Millisecond, 34*time.Millisecond
 	if !session.behindOnPaint() {
 		t.Fatal("behindOnPaint() is false where the paint is the whole round")
 	}
 
 	// The same saturation, with the time going somewhere the drop cannot reach.
-	client.paintCost = 48 * time.Microsecond
+	client.PaintCost = 48 * time.Microsecond
 	if session.behindOnPaint() {
 		t.Fatalf("behindOnPaint() dropped a %v paint out of a %v round, which buys back %.1f%% of it",
-			client.paintCost, client.entryCost,
-			100*client.paintCost.Seconds()/client.entryCost.Seconds())
+			client.PaintCost, client.EntryCost,
+			100*client.PaintCost.Seconds()/client.EntryCost.Seconds())
 	}
 }

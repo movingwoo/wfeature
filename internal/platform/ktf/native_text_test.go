@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // nativeTextCall runs the text handler with the arguments the display's own
@@ -14,7 +15,7 @@ import (
 func nativeTextCall(t *testing.T, platform *NativePlatform, font, address uint32, count int32, x, y int32) uint32 {
 	t.Helper()
 	thread := armcore.NewThread(armcore.NewContext())
-	stack := ThreadStackBase + uint32(ThreadStackSize) - 0x200
+	stack := wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize) - 0x200
 	for index, value := range []uint32{1, font, address, uint32(count)} {
 		if err := thread.SetRegister(index, value); err != nil {
 			t.Fatal(err)
@@ -89,7 +90,7 @@ func TestNativeTextReadsBothShapesOfARun(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read text: %v", err)
 			}
-			if got := decodeEUCKR(raw); got != testCase.want {
+			if got := wipicrt.DecodeEUCKR(raw); got != testCase.want {
 				t.Errorf("read %q, want %q", got, testCase.want)
 			}
 		})

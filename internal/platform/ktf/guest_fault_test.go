@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A guest fault comes back as an address and an opcode, and the address is
@@ -17,11 +18,11 @@ func TestGuestFaultReportNamesTheObjectsInTheFrame(t *testing.T) {
 
 	var context armcore.Context
 	context.Registers[2] = address
-	context.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize) - 64
+	context.Registers[armcore.RegisterSP] = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize) - 64
 	context.Registers[armcore.RegisterLR] = 0x1234
 	fault := &armcore.InstructionError{PC: 0x17f086, Instruction: 0x58d4, Thumb: true, Cause: armcore.ErrUnmapped}
 
-	report := runtime.describeGuestFault(context, fault)
+	report := runtime.describeAOTFault(context, fault)
 	if !strings.Contains(report, "regs=") || !strings.Contains(report, "lr=0x1234") {
 		t.Fatalf("report does not carry the registers: %s", report)
 	}

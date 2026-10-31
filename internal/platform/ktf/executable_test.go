@@ -10,6 +10,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestSyntheticClientReturnsValidatedExecutable(t *testing.T) {
@@ -21,22 +22,22 @@ func TestSyntheticClientReturnsValidatedExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Steps != 3 || summary.Context.Registers[0] != ImageBase+0x40 {
-		t.Fatalf("entry steps=%d result=%#x, want 3/%#x", summary.Steps, summary.Context.Registers[0], ImageBase+0x40)
+	if summary.Steps != 3 || summary.Context.Registers[0] != wipicrt.ImageBase+0x40 {
+		t.Fatalf("entry steps=%d result=%#x, want 3/%#x", summary.Steps, summary.Context.Registers[0], wipicrt.ImageBase+0x40)
 	}
 
 	executable, err := client.ReadExecutable(summary.Context.Registers[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if executable.Address != ImageBase+0x40 || executable.Name != "WIPI_exe" || executable.Init != ImageBase+0x29 {
+	if executable.Address != wipicrt.ImageBase+0x40 || executable.Name != "WIPI_exe" || executable.Init != wipicrt.ImageBase+0x29 {
 		t.Fatalf("executable = %+v", executable)
 	}
-	if executable.Interface.Address != ImageBase+0x80 || executable.Interface.Name != "ExeInterface" {
+	if executable.Interface.Address != wipicrt.ImageBase+0x80 || executable.Interface.Name != "ExeInterface" {
 		t.Fatalf("interface = %+v", executable.Interface)
 	}
 	functions := executable.Interface.Functions
-	if functions.Address != ImageBase+0xa0 || functions.Init != ImageBase+0x21 || functions.GetDefaultDLL != 0 || functions.GetClass != ImageBase+0x25 {
+	if functions.Address != wipicrt.ImageBase+0xa0 || functions.Init != wipicrt.ImageBase+0x21 || functions.GetDefaultDLL != 0 || functions.GetClass != wipicrt.ImageBase+0x25 {
 		t.Fatalf("functions = %+v", functions)
 	}
 }
@@ -79,7 +80,7 @@ func TestInitializationRejectsOversizedGuestAllocation(t *testing.T) {
 	} {
 		binary.LittleEndian.PutUint16(data[0x20+index*2:], instruction)
 	}
-	binary.LittleEndian.PutUint32(data[0x30:], uint32(maxPlatformAllocation+1))
+	binary.LittleEndian.PutUint32(data[0x30:], uint32(wipicrt.MaxPlatformAllocation+1))
 	client, err := LoadClient(ClientImage{Name: "client.bin0", Data: data}, armcore.CoreOptions{MaxSteps: 100})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +108,7 @@ func TestInitializationBindsJavaObjectsToJVM(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stringData, err := runtime.allocateBytes([]byte{'K', 0, 'T', 0, 'F', 0})
+	stringData, err := runtime.AllocateBytes([]byte{'K', 0, 'T', 0, 'F', 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,11 +132,11 @@ func TestInitializationBindsJavaObjectsToJVM(t *testing.T) {
 		t.Fatalf("registered String.length = %d/%v, want 3", length, err)
 	}
 
-	classTarget, err := runtime.allocate(4)
+	classTarget, err := runtime.Allocate(4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	className, err := runtime.allocateBytes([]byte("java/lang/String\x00"))
+	className, err := runtime.AllocateBytes([]byte("java/lang/String\x00"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,11 +212,11 @@ func TestInitializationCreatesBoundAOTObjectsAndArrays(t *testing.T) {
 	if _, err := runtime.prepare(); err != nil {
 		t.Fatal(err)
 	}
-	firstVTable, err := runtime.allocateWords([]uint32{ImageBase + 0x101})
+	firstVTable, err := runtime.AllocateWords([]uint32{wipicrt.ImageBase + 0x101})
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondVTable, err := runtime.allocateWords([]uint32{ImageBase + 0x105})
+	secondVTable, err := runtime.AllocateWords([]uint32{wipicrt.ImageBase + 0x105})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +225,7 @@ func TestInitializationCreatesBoundAOTObjectsAndArrays(t *testing.T) {
 		record := make([]byte, javaClassSize)
 		binary.LittleEndian.PutUint32(record[12:], vtable)
 		binary.LittleEndian.PutUint16(record[16:], 1)
-		address, err := runtime.allocateBytes(record)
+		address, err := runtime.AllocateBytes(record)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -236,8 +237,8 @@ func TestInitializationCreatesBoundAOTObjectsAndArrays(t *testing.T) {
 		return address
 	}
 	classes := []jvm.AOTClassMetadata{
-		{Address: makeClassRecord(firstVTable), Name: "game/First", InstanceSize: 8, VTableAddress: firstVTable, VTable: []uint32{ImageBase + 0x101}},
-		{Address: makeClassRecord(secondVTable), Name: "game/Second", InstanceSize: 4, VTableAddress: secondVTable, VTable: []uint32{ImageBase + 0x105}},
+		{Address: makeClassRecord(firstVTable), Name: "game/First", InstanceSize: 8, VTableAddress: firstVTable, VTable: []uint32{wipicrt.ImageBase + 0x101}},
+		{Address: makeClassRecord(secondVTable), Name: "game/Second", InstanceSize: 4, VTableAddress: secondVTable, VTable: []uint32{wipicrt.ImageBase + 0x105}},
 	}
 	for _, metadata := range classes {
 		if err := client.JVM().RegisterAOTClass(metadata); err != nil {
@@ -434,9 +435,9 @@ func TestInitializationJavaJumpCallsAOTMethodBodies(t *testing.T) {
 		regs [4]uint32
 		want uint32
 	}{
-		{name: "jump1", id: javaSVCJump1, regs: [4]uint32{37, ImageBase + 0x11}, want: 42},
-		{name: "jump2", id: javaSVCJump2, regs: [4]uint32{20, 22, ImageBase + 0x15}, want: 42},
-		{name: "jump3", id: javaSVCJump3, regs: [4]uint32{10, 12, 20, ImageBase + 0x19}, want: 42},
+		{name: "jump1", id: javaSVCJump1, regs: [4]uint32{37, wipicrt.ImageBase + 0x11}, want: 42},
+		{name: "jump2", id: javaSVCJump2, regs: [4]uint32{20, 22, wipicrt.ImageBase + 0x15}, want: 42},
+		{name: "jump3", id: javaSVCJump3, regs: [4]uint32{10, 12, 20, wipicrt.ImageBase + 0x19}, want: 42},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -445,7 +446,7 @@ func TestInitializationJavaJumpCallsAOTMethodBodies(t *testing.T) {
 			callContext.Registers[1] = test.regs[1]
 			callContext.Registers[2] = test.regs[2]
 			callContext.Registers[3] = test.regs[3]
-			callContext.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize)
+			callContext.Registers[armcore.RegisterSP] = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize)
 			result, err := runtime.handleJavaCall(context.Background(), armcore.NewThread(callContext), test.id)
 			if err != nil || result != test.want {
 				t.Fatalf("handleJavaCall() = %#x/%v, want %#x", result, err, test.want)
@@ -472,14 +473,14 @@ func TestInitializationCallNativeRunsGuestBodyAndWritesResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	container, err := runtime.allocateWords([]uint32{20, 22})
+	container, err := runtime.AllocateWords([]uint32{20, 22})
 	if err != nil {
 		t.Fatal(err)
 	}
 	callContext := armcore.NewContext()
-	callContext.Registers[0] = ImageBase + 0x11
+	callContext.Registers[0] = wipicrt.ImageBase + 0x11
 	callContext.Registers[1] = container
-	callContext.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize)
+	callContext.Registers[armcore.RegisterSP] = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize)
 	thread := armcore.NewThread(callContext)
 
 	result, err := runtime.handleJavaCall(context.Background(), thread, javaSVCCallNative)
@@ -504,7 +505,7 @@ func TestInitializationCallNativeRejectsInvalidPointers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	container, err := runtime.allocateWords([]uint32{20, 22})
+	container, err := runtime.AllocateWords([]uint32{20, 22})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,16 +523,16 @@ func TestInitializationCallNativeRejectsInvalidPointers(t *testing.T) {
 		wantErr string
 	}{
 		{name: "null target", target: 0, data: container, wantErr: "target is null"},
-		{name: "unaligned data", target: ImageBase + 0x11, data: container + 1, wantErr: "not word-aligned"},
-		{name: "unmapped data", target: ImageBase + 0x11, data: 0x40000000, wantErr: "native call data"},
-		{name: "read-only data", target: ImageBase + 0x11, data: readOnlyData, wantErr: "writable"},
+		{name: "unaligned data", target: wipicrt.ImageBase + 0x11, data: container + 1, wantErr: "not word-aligned"},
+		{name: "unmapped data", target: wipicrt.ImageBase + 0x11, data: 0x40000000, wantErr: "native call data"},
+		{name: "read-only data", target: wipicrt.ImageBase + 0x11, data: readOnlyData, wantErr: "writable"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			callContext := armcore.NewContext()
 			callContext.Registers[0] = test.target
 			callContext.Registers[1] = test.data
-			callContext.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize)
+			callContext.Registers[armcore.RegisterSP] = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize)
 			_, err := runtime.handleJavaCall(context.Background(), armcore.NewThread(callContext), javaSVCCallNative)
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("CallNative() error = %v, want %q", err, test.wantErr)
@@ -549,24 +550,24 @@ func TestInitializationAOTCallsRejectExcessiveNesting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	container, err := runtime.allocateWords([]uint32{20, 22})
+	container, err := runtime.AllocateWords([]uint32{20, 22})
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.aotCallDepth = map[*armcore.Thread]uint32{runtime.aotCallOwner(): maxAOTCallDepth}
+	runtime.AOTCallDepth = map[*armcore.Thread]uint32{runtime.AOTCallOwner(): wipicrt.MaxAOTCallDepth}
 
 	callContext := armcore.NewContext()
-	callContext.Registers[0] = ImageBase + 0x11
+	callContext.Registers[0] = wipicrt.ImageBase + 0x11
 	callContext.Registers[1] = container
-	callContext.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize)
+	callContext.Registers[armcore.RegisterSP] = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize)
 	if _, err := runtime.handleJavaCall(context.Background(), armcore.NewThread(callContext), javaSVCCallNative); err == nil || !strings.Contains(err.Error(), "nesting") {
 		t.Fatalf("CallNative() error = %v, want nesting limit", err)
 	}
 
 	jumpContext := armcore.NewContext()
 	jumpContext.Registers[0] = 1
-	jumpContext.Registers[1] = ImageBase + 0x11
-	jumpContext.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize)
+	jumpContext.Registers[1] = wipicrt.ImageBase + 0x11
+	jumpContext.Registers[armcore.RegisterSP] = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize)
 	if _, err := runtime.handleJavaCall(context.Background(), armcore.NewThread(jumpContext), javaSVCJump1); err == nil || !strings.Contains(err.Error(), "nesting") {
 		t.Fatalf("JavaJump1() error = %v, want nesting limit", err)
 	}
@@ -611,7 +612,7 @@ func TestInitializationJavaThrowResumesMatchingAOTHandler(t *testing.T) {
 	if _, err := runtime.prepare(); err != nil {
 		t.Fatal(err)
 	}
-	exceptionName, err := runtime.allocateBytes([]byte("java/lang/Error\x00"))
+	exceptionName, err := runtime.AllocateBytes([]byte("java/lang/Error\x00"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,27 +628,27 @@ func TestInitializationJavaThrowResumesMatchingAOTHandler(t *testing.T) {
 		currentPC = uint32(0x105)
 		fromPC    = uint32(0x100)
 		toPC      = uint32(0x110)
-		target    = ImageBase + 0x31
-		restorePC = ImageBase + 0x1b
+		target    = wipicrt.ImageBase + 0x31
+		restorePC = wipicrt.ImageBase + 0x1b
 	)
 	makeHandler := func(oldHandler, catchClass uint32) uint32 {
 		t.Helper()
-		entry, err := runtime.allocateWords([]uint32{fromPC, toPC, target, catchClass})
+		entry, err := runtime.AllocateWords([]uint32{fromPC, toPC, target, catchClass})
 		if err != nil {
 			t.Fatal(err)
 		}
-		table, err := runtime.allocateWords([]uint32{entry})
+		table, err := runtime.AllocateWords([]uint32{entry})
 		if err != nil {
 			t.Fatal(err)
 		}
 		methodData := make([]byte, javaMethodSize)
 		binary.LittleEndian.PutUint32(methodData[8:], table)
 		binary.LittleEndian.PutUint16(methodData[16:], 1)
-		method, err := runtime.allocateBytes(methodData)
+		method, err := runtime.AllocateBytes(methodData)
 		if err != nil {
 			t.Fatal(err)
 		}
-		functions, err := runtime.allocateWords([]uint32{0, restorePC})
+		functions, err := runtime.AllocateWords([]uint32{0, restorePC})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -656,7 +657,7 @@ func TestInitializationJavaThrowResumesMatchingAOTHandler(t *testing.T) {
 		handler[2] = oldHandler
 		handler[3] = currentPC
 		handler[5] = functions
-		address, err := runtime.allocateWords(handler)
+		address, err := runtime.AllocateWords(handler)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -675,10 +676,10 @@ func TestInitializationJavaThrowResumesMatchingAOTHandler(t *testing.T) {
 	}
 	// Nothing has been released yet, so the next allocation comes off the
 	// arena's bump cursor.
-	exceptionAddress := uint32(runtime.arena.cursor)
+	exceptionAddress := uint32(runtime.Arena.Cursor)
 
 	parentContext := armcore.NewContext()
-	parentContext.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize)
+	parentContext.Registers[armcore.RegisterSP] = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize)
 	parent := armcore.NewThread(parentContext)
 	if err := client.Core().SetThreadLocalWord(parent, runtime.exceptionContext+javaExceptionHead, innerHandler); err != nil {
 		t.Fatal(err)
@@ -686,9 +687,9 @@ func TestInitializationJavaThrowResumesMatchingAOTHandler(t *testing.T) {
 	summary, err := client.Core().Call(
 		context.Background(),
 		parent,
-		ImageBase+0x11,
-		ReturnAddress,
-		[]uint32{exceptionName, ImageBase + 0x21},
+		wipicrt.ImageBase+0x11,
+		wipicrt.ReturnAddress,
+		[]uint32{exceptionName, wipicrt.ImageBase + 0x21},
 		runtime.handleSupervisorCall,
 	)
 	if err != nil {
@@ -748,15 +749,15 @@ func TestInitializationJavaThrowRejectsCyclicHandlerChain(t *testing.T) {
 	if _, err := runtime.prepare(); err != nil {
 		t.Fatal(err)
 	}
-	exceptionName, err := runtime.allocateBytes([]byte("java/lang/Error\x00"))
+	exceptionName, err := runtime.AllocateBytes([]byte("java/lang/Error\x00"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	method, err := runtime.allocateBytes(make([]byte, javaMethodSize))
+	method, err := runtime.AllocateBytes(make([]byte, javaMethodSize))
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := runtime.allocate(javaExceptionHandler)
+	handler, err := runtime.Allocate(javaExceptionHandler)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -789,7 +790,7 @@ func TestInitializationJavaThrowPinsAndPropagatesUncaughtException(t *testing.T)
 	if _, err := runtime.prepare(); err != nil {
 		t.Fatal(err)
 	}
-	exceptionName, err := runtime.allocateBytes([]byte("java/lang/RuntimeException\x00"))
+	exceptionName, err := runtime.AllocateBytes([]byte("java/lang/RuntimeException\x00"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -870,7 +871,7 @@ func TestReadExecutableRejectsInvalidGuestPointers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = client.ReadExecutable(ImageBase + 0x40)
+			_, err = client.ReadExecutable(wipicrt.ImageBase + 0x40)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("ReadExecutable() error = %v, want %q", err, test.want)
 			}
@@ -883,7 +884,7 @@ func TestReadExecutableRejectsUnalignedDescriptor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.ReadExecutable(ImageBase + 0x41)
+	_, err = client.ReadExecutable(wipicrt.ImageBase + 0x41)
 	if err == nil || !strings.Contains(err.Error(), "not word-aligned") {
 		t.Fatalf("ReadExecutable() error = %v, want alignment failure", err)
 	}
@@ -896,25 +897,25 @@ func syntheticExecutableClient() []byte {
 	binary.LittleEndian.PutUint16(data[0x02:], 0x4801)
 	binary.LittleEndian.PutUint16(data[0x04:], 0xbd00)
 	binary.LittleEndian.PutUint16(data[0x06:], 0x46c0)
-	binary.LittleEndian.PutUint32(data[0x08:], ImageBase+0x40)
+	binary.LittleEndian.PutUint32(data[0x08:], wipicrt.ImageBase+0x40)
 
 	putExecutableWords(data[0x40:], []uint32{
-		ImageBase + 0x80,
-		ImageBase + 0xc0,
+		wipicrt.ImageBase + 0x80,
+		wipicrt.ImageBase + 0xc0,
 		0, 0, 0,
-		ImageBase + 0x29,
+		wipicrt.ImageBase + 0x29,
 		0, 0, 0, 0,
 	})
 	putExecutableWords(data[0x80:], []uint32{
-		ImageBase + 0xa0,
-		ImageBase + 0xd0,
+		wipicrt.ImageBase + 0xa0,
+		wipicrt.ImageBase + 0xd0,
 		0, 0, 0, 0, 0, 0,
 	})
 	putExecutableWords(data[0xa0:], []uint32{
 		0, 0,
-		ImageBase + 0x21,
+		wipicrt.ImageBase + 0x21,
 		0,
-		ImageBase + 0x25,
+		wipicrt.ImageBase + 0x25,
 		0, 0,
 	})
 	copy(data[0xc0:], "WIPI_exe\x00")
@@ -948,9 +949,9 @@ func syntheticInitializableClient() []byte {
 	// WIPI init and the unused get-class function both return zero.
 	binary.LittleEndian.PutUint16(data[0x3c:], 0x2000)
 	binary.LittleEndian.PutUint16(data[0x3e:], 0x4770)
-	binary.LittleEndian.PutUint32(data[0x40+5*4:], ImageBase+0x3d)
-	binary.LittleEndian.PutUint32(data[0xa0+2*4:], ImageBase+0x21)
-	binary.LittleEndian.PutUint32(data[0xa0+4*4:], ImageBase+0x3d)
+	binary.LittleEndian.PutUint32(data[0x40+5*4:], wipicrt.ImageBase+0x3d)
+	binary.LittleEndian.PutUint32(data[0xa0+2*4:], wipicrt.ImageBase+0x21)
+	binary.LittleEndian.PutUint32(data[0xa0+4*4:], wipicrt.ImageBase+0x3d)
 	return data
 }
 
@@ -1007,7 +1008,7 @@ func TestInitializationJavaThrowLeavesACallWhoseHandlerIsOutsideIt(t *testing.T)
 	if _, err := runtime.prepare(); err != nil {
 		t.Fatal(err)
 	}
-	exceptionName, err := runtime.allocateBytes([]byte("java/lang/Error\x00"))
+	exceptionName, err := runtime.AllocateBytes([]byte("java/lang/Error\x00"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1019,37 +1020,37 @@ func TestInitializationJavaThrowLeavesACallWhoseHandlerIsOutsideIt(t *testing.T)
 		currentPC = uint32(0x105)
 		fromPC    = uint32(0x100)
 		toPC      = uint32(0x110)
-		target    = ImageBase + 0x31
-		restorePC = ImageBase + 0x1b
+		target    = wipicrt.ImageBase + 0x31
+		restorePC = wipicrt.ImageBase + 0x1b
 	)
-	entry, err := runtime.allocateWords([]uint32{fromPC, toPC, target, matchingClass})
+	entry, err := runtime.AllocateWords([]uint32{fromPC, toPC, target, matchingClass})
 	if err != nil {
 		t.Fatal(err)
 	}
-	table, err := runtime.allocateWords([]uint32{entry})
+	table, err := runtime.AllocateWords([]uint32{entry})
 	if err != nil {
 		t.Fatal(err)
 	}
 	methodData := make([]byte, javaMethodSize)
 	binary.LittleEndian.PutUint32(methodData[8:], table)
 	binary.LittleEndian.PutUint16(methodData[16:], 1)
-	method, err := runtime.allocateBytes(methodData)
+	method, err := runtime.AllocateBytes(methodData)
 	if err != nil {
 		t.Fatal(err)
 	}
-	functions, err := runtime.allocateWords([]uint32{0, restorePC})
+	functions, err := runtime.AllocateWords([]uint32{0, restorePC})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The call below starts one word below the top of the stack, and the
 	// handler saved the frame above it: the catch block belongs to the caller.
-	callEntry := ThreadStackBase + uint32(ThreadStackSize) - 4
+	callEntry := wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize) - 4
 	handlerWords := make([]uint32, javaExceptionHandler/4)
 	handlerWords[0] = method
 	handlerWords[3] = currentPC
 	handlerWords[5] = functions
 	handlerWords[javaExceptionFrameStack/4] = callEntry + 4
-	handler, err := runtime.allocateWords(handlerWords)
+	handler, err := runtime.AllocateWords(handlerWords)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1063,8 +1064,8 @@ func TestInitializationJavaThrowLeavesACallWhoseHandlerIsOutsideIt(t *testing.T)
 	_, err = client.Core().Call(
 		context.Background(),
 		parent,
-		ImageBase+0x21,
-		ReturnAddress,
+		wipicrt.ImageBase+0x21,
+		wipicrt.ReturnAddress,
 		[]uint32{exceptionName},
 		runtime.handleSupervisorCall,
 	)

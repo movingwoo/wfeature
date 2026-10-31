@@ -19,7 +19,7 @@ func TestFallbackClassRecordPublishesObjectsVTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensureJavaClass() error = %v", err)
 	}
-	record, err := runtime.readAOTBytes(address, javaClassSize, "class record")
+	record, err := runtime.ReadAOTBytes(address, javaClassSize, "class record")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,18 +37,18 @@ func TestFallbackClassRecordPublishesObjectsVTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inherited, err := runtime.readAOTBytes(object, javaClassSize, "Object class record")
+	inherited, err := runtime.ReadAOTBytes(object, javaClassSize, "Object class record")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := binary.LittleEndian.Uint16(inherited[16:]); slots != want {
 		t.Fatalf("vtable holds %d slots, want Object's %d", slots, want)
 	}
-	entries, err := runtime.readAOTWords(vtable, uint32(slots), "vtable")
+	entries, err := runtime.ReadAOTWords(vtable, uint32(slots), "vtable")
 	if err != nil {
 		t.Fatal(err)
 	}
-	objectEntries, err := runtime.readAOTWords(binary.LittleEndian.Uint32(inherited[12:]), uint32(slots), "Object vtable")
+	objectEntries, err := runtime.ReadAOTWords(binary.LittleEndian.Uint32(inherited[12:]), uint32(slots), "Object vtable")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,11 +84,11 @@ func TestArrayClassRecordCarriesItsElementClass(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ensureJavaClass(%q) error = %v", name, err)
 		}
-		record, err := runtime.readAOTBytes(address, javaClassSize, "class record")
+		record, err := runtime.ReadAOTBytes(address, javaClassSize, "class record")
 		if err != nil {
 			t.Fatal(err)
 		}
-		descriptor, err := runtime.readAOTBytes(binary.LittleEndian.Uint32(record[8:]), javaDescriptorSize, "class descriptor")
+		descriptor, err := runtime.ReadAOTBytes(binary.LittleEndian.Uint32(record[8:]), javaDescriptorSize, "class descriptor")
 		if err != nil {
 			t.Fatal(err)
 		}

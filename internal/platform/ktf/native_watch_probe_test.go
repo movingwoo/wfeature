@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // TestLocalNativeWatchProbe answers "what writes this" for a native package.
@@ -60,7 +61,7 @@ func TestLocalNativeWatchProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock := NewManualClock(time.Time{})
+	clock := wipicrt.NewManualClock(time.Time{})
 	platform := NewNativePlatform(client, archive, clock)
 	platform.AttachAudio(nil)
 
