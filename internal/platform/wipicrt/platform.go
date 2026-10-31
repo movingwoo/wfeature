@@ -32,6 +32,11 @@ type Platform struct {
 	// one SKT title copies a resource out of `*id` and reads a framebuffer's
 	// fields at `**id`.
 	HandleFirstWord, HandleData uint32
+	// StaleRemovals says the platform's earlier engine wrote the removal list
+	// of its C files without reading it back in a later session, so a save
+	// written there may still be named on the list over bytes a later session
+	// wrote. RemovedDatabases reads such a name as the file it holds.
+	StaleRemovals bool
 }
 
 // ClientHooks are the platform's parts of a service round. A hook left nil is

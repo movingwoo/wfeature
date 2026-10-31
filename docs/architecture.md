@@ -299,7 +299,9 @@ copies of the handlers:
   sentinel `MC_knlExit` ends the program with, and how a memory identifier is
   laid out. On KTF an identifier's first word points at the size word and
   `MC_GETDPTR` is eight bytes past it; on SKT the first word points at the data
-  itself.
+  itself. SKT's also says its earlier engine never read its removal list back,
+  so a save that engine wrote is read as it was then
+  ([SKT native](skt-native.md#skt-native-earlier-saves)).
 - `RuntimeHooks` and `ClientHooks` are the calls a handler makes into the rest
   of the platform: KTF's Java clips, cards, worker threads, timer tasks,
   record-database table and collector. A hook a platform leaves nil is work it

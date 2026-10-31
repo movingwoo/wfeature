@@ -26,6 +26,7 @@ var cletPlatform = wipicrt.Platform{
 	ExitError:       ErrGuestExited,
 	HandleFirstWord: wipicrt.WIPICAllocationOverhead,
 	HandleData:      0,
+	StaleRemovals:   true,
 }
 
 // ImageBase is where a Clet's code is linked and loaded.

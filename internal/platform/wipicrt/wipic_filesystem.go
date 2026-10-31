@@ -406,6 +406,16 @@ const DatabaseRemovedKey = "db/.removed"
 
 // RemovedDatabases is the set of deleted names, read from the store once per
 // session and kept in memory after that.
+//
+// On a platform with StaleRemovals a listed name whose save holds bytes is not
+// deleted. A removal stores the file empty in the same write that lists the
+// name, and every write of the file since takes the name off in that write, so
+// a name over bytes is a save the earlier engine wrote: the program deleted the
+// file in one session and wrote it again in a later one, the list was never
+// read back, and that engine answered the file from its bytes. Hiding it would
+// hide the save, and a program that then creates its save afresh would empty
+// it. An empty file stays removed, because that is what a removal leaves. The
+// next write of the list stores it without the name.
 func (runtime *Runtime) RemovedDatabases() map[string]bool {
 	if runtime.RemovedCDatabases != nil {
 		return runtime.RemovedCDatabases
@@ -413,10 +423,24 @@ func (runtime *Runtime) RemovedDatabases() map[string]bool {
 	runtime.RemovedCDatabases = make(map[string]bool)
 	if data, exists := runtime.LoadSave(DatabaseRemovedKey); exists {
 		for _, line := range SplitRemovalList(data) {
+			if runtime.Client.Platform.StaleRemovals && runtime.databaseHoldsBytes(line) {
+				continue
+			}
 			runtime.RemovedCDatabases[line] = true
 		}
 	}
 	return runtime.RemovedCDatabases
+}
+
+// databaseHoldsBytes answers whether a database's save holds content. A name no
+// save key can be made from holds none, and is not read: a failed read stops
+// every later write.
+func (runtime *Runtime) databaseHoldsBytes(name string) bool {
+	if _, err := NormalizeSaveKey("db/" + name); err != nil {
+		return false
+	}
+	data, exists := runtime.LoadSave("db/" + name)
+	return exists && len(data) > 0
 }
 
 // MarkDatabaseRemoved records or clears one name and writes the list back.
