@@ -7,6 +7,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // polygonPoints writes a coordinate array and answers where it went.
@@ -21,11 +22,11 @@ func polygonPoints(t *testing.T, runtime *initializationRuntime, address uint32,
 // x 0 to 3-y on rows 0 to 2, and its bottom vertex row has no crossings.
 func TestWIPICFillPolygonFillsTheTriangleItNames(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.currentThread, runtime.currentContext = client.thread, context.Background()
+	runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
 	const colour = uint16(0x07e0)
 	handle, buffer, contextAddress := arcFixture(t, runtime, colour)
-	xs := polygonPoints(t, runtime, platformDataBase+0xa000, 0, 3, 0)
-	ys := polygonPoints(t, runtime, platformDataBase+0xa100, 0, 0, 3)
+	xs := polygonPoints(t, runtime, wipicrt.PlatformDataBase+0xa000, 0, 3, 0)
+	ys := polygonPoints(t, runtime, wipicrt.PlatformDataBase+0xa100, 0, 0, 3)
 
 	callArcFunction(t, runtime, 38, handle, xs, ys, 3, contextAddress)
 
@@ -46,11 +47,11 @@ func TestWIPICFillPolygonFillsTheTriangleItNames(t *testing.T) {
 // the inside alone; fewer than two vertices draw nothing.
 func TestWIPICDrawPolygonDrawsTheOutline(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.currentThread, runtime.currentContext = client.thread, context.Background()
+	runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
 	const colour = uint16(0xf800)
 	handle, buffer, contextAddress := arcFixture(t, runtime, colour)
-	xs := polygonPoints(t, runtime, platformDataBase+0xa000, 1, 5, 5, 1)
-	ys := polygonPoints(t, runtime, platformDataBase+0xa100, 1, 1, 5, 5)
+	xs := polygonPoints(t, runtime, wipicrt.PlatformDataBase+0xa000, 1, 5, 5, 1)
+	ys := polygonPoints(t, runtime, wipicrt.PlatformDataBase+0xa100, 1, 1, 5, 5)
 
 	callArcFunction(t, runtime, 37, handle, xs, ys, 1, contextAddress)
 	if got := arcPixel(t, runtime, buffer, 1, 1); got != 0 {
@@ -69,16 +70,16 @@ func TestWIPICDrawPolygonDrawsTheOutline(t *testing.T) {
 
 	// A count past the bound is refused rather than read.
 	thread := armcore.NewThread(armcore.NewContext())
-	for index, value := range []uint32{handle, xs, ys, maxWIPICPolygonPoints + 1} {
+	for index, value := range []uint32{handle, xs, ys, wipicrt.MaxWIPICPolygonPoints + 1} {
 		if err := thread.SetRegister(index, value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := thread.SetRegister(armcore.RegisterSP, platformDataBase+0x8000); err != nil {
+	if err := thread.SetRegister(armcore.RegisterSP, wipicrt.PlatformDataBase+0x8000); err != nil {
 		t.Fatal(err)
 	}
-	writeGuestWords(t, runtime, platformDataBase+0x8000, contextAddress)
-	if _, err := runtime.handleWIPICTableCall(thread, wipicTableGraphics, 38); err == nil {
+	writeGuestWords(t, runtime, wipicrt.PlatformDataBase+0x8000, contextAddress)
+	if _, err := runtime.HandleWIPICTableCall(thread, wipicrt.WIPICTableGraphics, 38); err == nil {
 		t.Fatal("a polygon of more points than the bound was read")
 	}
 }
@@ -92,14 +93,14 @@ func TestWIPICGetUnicodeStringWidth(t *testing.T) {
 	for index, unit := range units {
 		binary.LittleEndian.PutUint16(data[index*2:], unit)
 	}
-	address := platformDataBase + 0xa000
-	if err := runtime.client.core.Memory().Write(address, data); err != nil {
+	address := wipicrt.PlatformDataBase + 0xa000
+	if err := runtime.client.Core().Memory().Write(address, data); err != nil {
 		t.Fatal(err)
 	}
-	want := uint32(runtime.graphicsTextWidth([]rune("A가")))
+	want := uint32(runtime.GraphicsTextWidth([]rune("A가")))
 	for _, length := range []uint32{2, 0xffffffff} {
 		if length == 0xffffffff {
-			want = uint32(runtime.graphicsTextWidth([]rune("A가나")))
+			want = uint32(runtime.GraphicsTextWidth([]rune("A가나")))
 		}
 		thread := armcore.NewThread(armcore.NewContext())
 		for index, value := range []uint32{0, address, length} {
@@ -107,7 +108,7 @@ func TestWIPICGetUnicodeStringWidth(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		got, err := runtime.handleWIPICTableCall(thread, wipicTableGraphics, 31)
+		got, err := runtime.HandleWIPICTableCall(thread, wipicrt.WIPICTableGraphics, 31)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,18 +122,18 @@ func TestWIPICGetUnicodeStringWidth(t *testing.T) {
 // further frame, and a handle that is no surface is a bad format.
 func TestWIPICDecodeNextImage(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	handle, err := runtime.newWIPICFramebufferRecord(4, 4)
+	handle, err := runtime.NewWIPICFramebufferRecord(4, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, probe := range []struct {
 		handle, want uint32
-	}{{handle, wipicImageDone}, {0, wipicErrorBadFormat}} {
+	}{{handle, wipicrt.WIPICImageDone}, {0, wipicrt.WIPICErrorBadFormat}} {
 		thread := armcore.NewThread(armcore.NewContext())
 		if err := thread.SetRegister(0, probe.handle); err != nil {
 			t.Fatal(err)
 		}
-		got, err := runtime.handleWIPICTableCall(thread, wipicTableGraphics, 34)
+		got, err := runtime.HandleWIPICTableCall(thread, wipicrt.WIPICTableGraphics, 34)
 		if err != nil {
 			t.Fatal(err)
 		}

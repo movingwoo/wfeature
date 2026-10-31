@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/cheat"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestSessionCheatScansAndFreezesGuestMemory(t *testing.T) {
@@ -14,7 +15,7 @@ func TestSessionCheatScansAndFreezesGuestMemory(t *testing.T) {
 
 	// A distinctive value inside the mapped client image, where game state
 	// would live in a real title.
-	const address = ImageBase + 0x1f0
+	const address = wipicrt.ImageBase + 0x1f0
 	var word [4]byte
 	binary.LittleEndian.PutUint32(word[:], 123456)
 	if err := client.Core().Memory().Write(address, word[:]); err != nil {
@@ -78,7 +79,7 @@ func TestWatchSeesPlatformWritesButNotTheCheatsOwn(t *testing.T) {
 	session := &Session{Client: client}
 	engine := session.Cheat()
 
-	const address = ImageBase + 0x1f0
+	const address = wipicrt.ImageBase + 0x1f0
 	if err := engine.Watch(address); err != nil {
 		t.Fatal(err)
 	}

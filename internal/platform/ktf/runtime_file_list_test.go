@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // What an earlier session saved is in the save store and nowhere else, so a
@@ -13,7 +14,7 @@ import (
 func TestFileSystemListIncludesEarlierSessionsFiles(t *testing.T) {
 	saves := t.TempDir()
 	_, first := newTestRuntime(t)
-	first.client.saveStore = NewDirectorySaveStore(saves)
+	first.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
 	for _, name := range []string{"save/one.dat", "save/two.dat"} {
 		if err := first.storeGuestFile(name, []byte(name)); err != nil {
 			t.Fatal(err)
@@ -24,7 +25,7 @@ func TestFileSystemListIncludesEarlierSessionsFiles(t *testing.T) {
 	}
 
 	client, second := newTestRuntime(t)
-	second.client.saveStore = NewDirectorySaveStore(saves)
+	second.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
 	if count := listedCount(t, client, second, "save"); count != 1 {
 		t.Fatalf("list(save) in a new session = %d entries, want the one saved and not removed", count)
 	}

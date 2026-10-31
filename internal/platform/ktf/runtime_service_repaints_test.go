@@ -38,7 +38,7 @@ func TestServiceRepaintsOnlyPaintsTheCardTheDisplayShows(t *testing.T) {
 	}
 	// The request is still owed: refusing to paint must not swallow it, or the
 	// frame that does come never repaints either.
-	if !runtime.repaintPending {
+	if !runtime.RepaintPending {
 		t.Error("the pending repaint was consumed by a card that is not shown")
 	}
 
@@ -55,7 +55,7 @@ func TestServiceRepaintsOnlyPaintsTheCardTheDisplayShows(t *testing.T) {
 	// `Card.isShown` has always answered.
 	top := &jvm.Object{ClassName: "test/Card", Fields: make(map[string]jvm.Value)}
 	runtime.displayCards = append(runtime.displayCards, top)
-	runtime.repaintPending = true
+	runtime.RepaintPending = true
 	if _, err := runtimeCardServiceRepaints(runtime, client.JVM(),
 		[]jvm.Value{jvm.ReferenceValue(card)}); err != nil {
 		t.Fatal(err)

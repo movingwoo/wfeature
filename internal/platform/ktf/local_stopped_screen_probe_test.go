@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/ladder"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A stopped screen is read by trying every key, and by not pressing one.
@@ -103,7 +104,7 @@ func TestLocalKTFStoppedScreenAnswersEveryKey(t *testing.T) {
 		had := ladder.Footprint(saves)
 		session, err := StartSession(context.Background(), data, SessionOptions{
 			MaxSteps:   localAcceptanceMaxSteps(t),
-			Clock:      NewManualClock(time.Time{}),
+			Clock:      wipicrt.NewManualClock(time.Time{}),
 			SaveRoot:   saves,
 			Logger:     probeLogger(t),
 			TraceLimit: localLadderTicks(t, "WFEATURE_KTF_STOPPED_TRACE", 1) - 1,
@@ -122,7 +123,7 @@ func TestLocalKTFStoppedScreenAnswersEveryKey(t *testing.T) {
 		}
 		t.Logf("launch %d: painted after %d ticks, flushes %d", launched, ticks, session.Flushes())
 		answered := probeLaunch(t, session, launched, rounds, hold, release, opening, quiet, idle, sweepAt, keys, frames)
-		t.Logf("launch %d: diagnostics %s", launched, topCounts(session.Client.runtime.diagnosticCounts(), 60))
+		t.Logf("launch %d: diagnostics %s", launched, topCounts(session.Client.runtime.DiagnosticCounts(), 60))
 		if trace := session.Diagnostics().Trace; len(trace) > 0 {
 			t.Logf("launch %d: the last %d boundary crossings, oldest first:", launched, len(trace))
 			for _, entry := range trace {
@@ -230,7 +231,7 @@ func probeLaunch(t *testing.T, session *Session, launched, rounds, hold, release
 func sweepEveryKey(t *testing.T, session *Session, screen *ladder.Watcher, keys []string, hold, release, launched, round int, frames string) (moved string, drifted, stopped bool) {
 	t.Helper()
 	for _, name := range keys {
-		code, known := KeyCodeByName(name)
+		code, known := wipicrt.KeyCodeByName(name)
 		if !known {
 			t.Fatalf("no key called %q", name)
 		}

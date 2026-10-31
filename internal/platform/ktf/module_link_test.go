@@ -13,11 +13,11 @@ import (
 func writeModuleClass(t *testing.T, runtime *initializationRuntime, name string, parent uint32, method, descriptor string, slot uint16) uint32 {
 	t.Helper()
 	class := writeGuestClass(t, runtime, name, parent, nil, 0x21)
-	fullName, err := runtime.allocateBytes(append([]byte{0}, append([]byte(descriptor+"+"+method), 0)...))
+	fullName, err := runtime.AllocateBytes(append([]byte{0}, append([]byte(descriptor+"+"+method), 0)...))
 	if err != nil {
 		t.Fatal(err)
 	}
-	methodAddress, err := runtime.allocate(javaMethodSize)
+	methodAddress, err := runtime.Allocate(javaMethodSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,20 +27,20 @@ func writeModuleClass(t *testing.T, runtime *initializationRuntime, name string,
 	binary.LittleEndian.PutUint32(record[12:], fullName)
 	binary.LittleEndian.PutUint16(record[20:], slot)
 	binary.LittleEndian.PutUint16(record[22:], 0x0001)
-	if err := runtime.client.core.Memory().Write(methodAddress, record); err != nil {
+	if err := runtime.client.Core().Memory().Write(methodAddress, record); err != nil {
 		t.Fatal(err)
 	}
-	table, err := runtime.allocateWords([]uint32{methodAddress, 0})
+	table, err := runtime.AllocateWords([]uint32{methodAddress, 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptorAddress, err := runtime.readAOTWords(class+8, 1, "class descriptor")
+	descriptorAddress, err := runtime.ReadAOTWords(class+8, 1, "class descriptor")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var pointer [4]byte
 	binary.LittleEndian.PutUint32(pointer[:], table)
-	if err := runtime.client.core.Memory().Write(descriptorAddress[0]+12, pointer[:]); err != nil {
+	if err := runtime.client.Core().Memory().Write(descriptorAddress[0]+12, pointer[:]); err != nil {
 		t.Fatal(err)
 	}
 	return class
@@ -133,11 +133,11 @@ func TestAnEmptyInheritedVTableSlotIsNotAMethod(t *testing.T) {
 func writeModuleClassFields(t *testing.T, runtime *initializationRuntime, name string, parent uint32, field, descriptor string, offset uint32, instanceSize uint16) uint32 {
 	t.Helper()
 	class := writeGuestClass(t, runtime, name, parent, nil, 0x21)
-	fullName, err := runtime.allocateBytes(append([]byte{0}, append([]byte(descriptor+"+"+field), 0)...))
+	fullName, err := runtime.AllocateBytes(append([]byte{0}, append([]byte(descriptor+"+"+field), 0)...))
 	if err != nil {
 		t.Fatal(err)
 	}
-	fieldAddress, err := runtime.allocate(javaFieldSize)
+	fieldAddress, err := runtime.Allocate(javaFieldSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,25 +145,25 @@ func writeModuleClassFields(t *testing.T, runtime *initializationRuntime, name s
 	binary.LittleEndian.PutUint32(record[4:], class)
 	binary.LittleEndian.PutUint32(record[8:], fullName)
 	binary.LittleEndian.PutUint32(record[12:], offset)
-	if err := runtime.client.core.Memory().Write(fieldAddress, record); err != nil {
+	if err := runtime.client.Core().Memory().Write(fieldAddress, record); err != nil {
 		t.Fatal(err)
 	}
-	table, err := runtime.allocateWords([]uint32{fieldAddress, 0})
+	table, err := runtime.AllocateWords([]uint32{fieldAddress, 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptorAddress, err := runtime.readAOTWords(class+8, 1, "class descriptor")
+	descriptorAddress, err := runtime.ReadAOTWords(class+8, 1, "class descriptor")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var pointer [4]byte
 	binary.LittleEndian.PutUint32(pointer[:], table)
-	if err := runtime.client.core.Memory().Write(descriptorAddress[0]+moduleDescriptorFieldTable, pointer[:]); err != nil {
+	if err := runtime.client.Core().Memory().Write(descriptorAddress[0]+moduleDescriptorFieldTable, pointer[:]); err != nil {
 		t.Fatal(err)
 	}
 	var size [2]byte
 	binary.LittleEndian.PutUint16(size[:], instanceSize)
-	if err := runtime.client.core.Memory().Write(descriptorAddress[0]+moduleDescriptorInstanceSize, size[:]); err != nil {
+	if err := runtime.client.Core().Memory().Write(descriptorAddress[0]+moduleDescriptorInstanceSize, size[:]); err != nil {
 		t.Fatal(err)
 	}
 	return class
@@ -225,19 +225,19 @@ func TestAModuleSubclassStaticKeepsItsValue(t *testing.T) {
 
 	// The subclass's table gains a static beside its instance field, null
 	// as the archive ships every static.
-	descriptor, err := runtime.readAOTWords(child+8, 1, "class descriptor")
+	descriptor, err := runtime.ReadAOTWords(child+8, 1, "class descriptor")
 	if err != nil {
 		t.Fatal(err)
 	}
-	table, err := runtime.readAOTWords(descriptor[0]+moduleDescriptorFieldTable, 1, "field table")
+	table, err := runtime.ReadAOTWords(descriptor[0]+moduleDescriptorFieldTable, 1, "field table")
 	if err != nil {
 		t.Fatal(err)
 	}
-	instanceField, err := runtime.readAOTWords(table[0], 1, "instance field")
+	instanceField, err := runtime.ReadAOTWords(table[0], 1, "instance field")
 	if err != nil {
 		t.Fatal(err)
 	}
-	fullName, err := runtime.allocateBytes(append([]byte{0}, append([]byte("[I+shared"), 0)...))
+	fullName, err := runtime.AllocateBytes(append([]byte{0}, append([]byte("[I+shared"), 0)...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,17 +245,17 @@ func TestAModuleSubclassStaticKeepsItsValue(t *testing.T) {
 	binary.LittleEndian.PutUint32(record[0:], 0x0009)
 	binary.LittleEndian.PutUint32(record[4:], child)
 	binary.LittleEndian.PutUint32(record[8:], fullName)
-	static, err := runtime.allocateBytes(record)
+	static, err := runtime.AllocateBytes(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fields, err := runtime.allocateWords([]uint32{instanceField[0], static, 0})
+	fields, err := runtime.AllocateWords([]uint32{instanceField[0], static, 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var pointer [4]byte
 	binary.LittleEndian.PutUint32(pointer[:], fields)
-	if err := runtime.client.core.Memory().Write(descriptor[0]+moduleDescriptorFieldTable, pointer[:]); err != nil {
+	if err := runtime.client.Core().Memory().Write(descriptor[0]+moduleDescriptorFieldTable, pointer[:]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -263,14 +263,14 @@ func TestAModuleSubclassStaticKeepsItsValue(t *testing.T) {
 	if err := runtime.linkModuleClasses(); err != nil {
 		t.Fatalf("linkModuleClasses() error = %v", err)
 	}
-	value, err := runtime.readWord(static + 12)
+	value, err := runtime.ReadWord(static + 12)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if value != 0 {
 		t.Fatalf("subclass static = %#x after linking, want the null it shipped with", value)
 	}
-	moved, err := runtime.readWord(instanceField[0] + 12)
+	moved, err := runtime.ReadWord(instanceField[0] + 12)
 	if err != nil {
 		t.Fatal(err)
 	}

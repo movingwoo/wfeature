@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // These tests hold KTF to docs/wipi-storage.md, the contract all three
@@ -35,25 +36,25 @@ func javaBool(value jvm.Value, err error) bool {
 
 func TestContractNamesLongerThan255AreRefused(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
-	long := strings.Repeat("n", maxWIPIFileName+1)
-	fits := strings.Repeat("n", maxWIPIFileName)
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
+	long := strings.Repeat("n", wipicrt.MaxWIPIFileName+1)
+	fits := strings.Repeat("n", wipicrt.MaxWIPIFileName)
 
-	for _, slot := range []uint32{wipicFileExists, wipicFileMakeDirectory, wipicFileRemoveDirectory, wipicFileGetCounts, wipicFileDelete} {
-		if got := databaseCall(t, runtime, slot, long, 1); got != wipicErrorLongName {
+	for _, slot := range []uint32{wipicrt.WIPICFileExists, wipicrt.WIPICFileMakeDirectory, wipicrt.WIPICFileRemoveDirectory, wipicrt.WIPICFileGetCounts, wipicrt.WIPICFileDelete} {
+		if got := databaseCall(t, runtime, slot, long, 1); got != wipicrt.WIPICErrorLongName {
 			t.Errorf("slot %d with a 256-byte name = %#x, want M_E_LONGNAME", slot, got)
 		}
 	}
-	if got := databaseCall(t, runtime, wipicFileOpen, long, 4); got != wipicErrorLongName {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileOpen, long, 4); got != wipicrt.WIPICErrorLongName {
 		t.Errorf("open with a 256-byte name = %#x, want M_E_LONGNAME", got)
 	}
-	if got := databaseCall(t, runtime, wipicFileStatByName, long, 0); got != wipicErrorLongName {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileStatByName, long, 0); got != wipicrt.WIPICErrorLongName {
 		t.Errorf("stat with a 256-byte name = %#x, want M_E_LONGNAME", got)
 	}
-	if got := databaseCall(t, runtime, wipicFileSetMode, long, 1, 1); got != wipicErrorLongName {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileSetMode, long, 1, 1); got != wipicrt.WIPICErrorLongName {
 		t.Errorf("setmode with a 256-byte name = %#x, want M_E_LONGNAME", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicFileOpen, fits, 4)); got < 0 {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileOpen, fits, 4)); got < 0 {
 		t.Errorf("open with a 255-byte name = %d, want a handle", got)
 	}
 
@@ -78,45 +79,45 @@ func mustInt(value jvm.Value) int32 {
 func TestContractDirectoriesAnswerAlikeInCAndJava(t *testing.T) {
 	saves := t.TempDir()
 	client, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(saves)
-	databaseCall(t, runtime, wipicFileOpen, "slots/one", 4)
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
+	databaseCall(t, runtime, wipicrt.WIPICFileOpen, "slots/one", 4)
 
 	// C: the implied directory "slots" exists, is a directory, cannot be made
 	// again and is not empty; the file cannot be made a directory.
-	if got := databaseCall(t, runtime, wipicFileExists, "slots"); got != 0 {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileExists, "slots"); got != 0 {
 		t.Errorf("C exists(slots) = %#x, want 0", got)
 	}
-	const record = platformDataBase + 0xd000
-	if got := databaseCall(t, runtime, wipicFileStatByName, "slots", record); got != 0 {
+	const record = wipicrt.PlatformDataBase + 0xd000
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileStatByName, "slots", record); got != 0 {
 		t.Errorf("C stat(slots) = %#x, want 0", got)
 	}
 	info := make([]byte, 12)
-	if err := runtime.client.core.Memory().Read(record, info); err != nil {
+	if err := runtime.client.Core().Memory().Read(record, info); err != nil {
 		t.Fatal(err)
 	}
 	if attributes := binary.LittleEndian.Uint32(info); attributes != 0x01 {
 		t.Errorf("C stat(slots) attributes = %#x, want MC_FILE_IS_DIR", attributes)
 	}
 	for _, name := range []string{"slots", "slots/one", "/"} {
-		if got := databaseCall(t, runtime, wipicFileMakeDirectory, name, 1); got != wipicErrorExists {
+		if got := databaseCall(t, runtime, wipicrt.WIPICFileMakeDirectory, name, 1); got != wipicrt.WIPICErrorExists {
 			t.Errorf("C mkdir(%q) = %#x, want M_E_EXIST", name, got)
 		}
 	}
-	if got := databaseCall(t, runtime, wipicFileRemoveDirectory, "slots", 1); got != wipicErrorNotEmpty {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileRemoveDirectory, "slots", 1); got != wipicrt.WIPICErrorNotEmpty {
 		t.Errorf("C rmdir(slots) = %#x, want M_E_NOTEMPTY", got)
 	}
-	if got := databaseCall(t, runtime, wipicFileStatByName, "missing", record); got != wipicErrorNotFound {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileStatByName, "missing", record); got != wipicrt.WIPICErrorNotFound {
 		t.Errorf("C stat(missing) = %#x, want M_E_NOENT", got)
 	}
-	if got := databaseCall(t, runtime, wipicFileDelete, "missing", 1); got != wipicErrorNotFound {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileDelete, "missing", 1); got != wipicrt.WIPICErrorNotFound {
 		t.Errorf("C remove(missing) = %#x, want M_E_NOENT", got)
 	}
 	for _, mode := range []uint32{1, 3, 0x10, 0x30} {
-		if got := databaseCall(t, runtime, wipicFileSetMode, "slots", mode, 1); got != 0 {
+		if got := databaseCall(t, runtime, wipicrt.WIPICFileSetMode, "slots", mode, 1); got != 0 {
 			t.Errorf("C setmode(slots, %#x) = %#x, want 0", mode, got)
 		}
 	}
-	if got := databaseCall(t, runtime, wipicFileSetMode, "slots/one", 0x40, 1); got != wipicErrorInvalid {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileSetMode, "slots/one", 0x40, 1); got != wipicrt.WIPICErrorInvalid {
 		t.Errorf("C setmode with mode 0x40 = %#x, want M_E_INVALID", got)
 	}
 
@@ -166,7 +167,7 @@ func TestContractDirectoriesAnswerAlikeInCAndJava(t *testing.T) {
 
 	// The made directory and the listing outlast the session.
 	client2, second := newTestRuntime(t)
-	second.client.saveStore = NewDirectorySaveStore(saves)
+	second.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
 	if !javaBool(javaCall(t, second, client2, runtimeFileSystemIsDirectory, javaName(client2, "empty"))) {
 		t.Error("a directory mkdir made and left empty is gone after a restart")
 	}
@@ -191,14 +192,14 @@ func TestContractDirectoriesAnswerAlikeInCAndJava(t *testing.T) {
 // only uses what it added, and nothing is refused for space.
 func TestContractSpace(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 	client.AttachFilesystem(map[string][]byte{"level.dat": bytes.Repeat([]byte{1}, 500)})
 
-	total := databaseCall(t, runtime, wipicFileTotalSpace, "")
+	total := databaseCall(t, runtime, wipicrt.WIPICFileTotalSpace, "")
 	if total != 1<<20 {
 		t.Fatalf("MC_fsTotalSpace = %d, want 1 MiB", total)
 	}
-	if got := databaseCall(t, runtime, wipicFileAvailable, ""); got != total {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileAvailable, ""); got != total {
 		t.Fatalf("MC_fsAvailable before any save = %d, want %d", got, total)
 	}
 	if err := runtime.storeGuestFile("save.dat", bytes.Repeat([]byte{2}, 1000)); err != nil {
@@ -209,7 +210,7 @@ func TestContractSpace(t *testing.T) {
 	}
 	want := total - 1000 - 300
 	for name, got := range map[string]uint32{
-		"MC_fsAvailable":                  databaseCall(t, runtime, wipicFileAvailable, ""),
+		"MC_fsAvailable":                  databaseCall(t, runtime, wipicrt.WIPICFileAvailable, ""),
 		"the record table's slot 12":      databaseRecordCall(t, runtime, wipicRecordDatabaseListNames),
 		"FileSystem.available":            uint32(mustInt(must(javaCall(t, runtime, client, runtimeFileSystemAvailable)))),
 		"DataBase.getSizeAvailable":       uint32(mustInt(must(javaCall(t, runtime, client, runtimeDataBaseSizeAvailable)))),
@@ -242,20 +243,20 @@ func databaseRecordCall(t *testing.T, runtime *initializationRuntime, function u
 // A write past 4 MiB fails as a write does.
 func TestContractBoundOnOneFile(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
-	handle := databaseCall(t, runtime, wipicFileOpen, "big", 4)
-	runtime.cFileHandles[handle].position = maxStoredBytes - 1
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
+	handle := databaseCall(t, runtime, wipicrt.WIPICFileOpen, "big", 4)
+	runtime.CFileHandles[handle].Position = maxStoredBytes - 1
 	thread := armcore.NewThread(armcore.Context{})
-	for index, value := range []uint32{handle, platformDataBase + 0xa000, 2} {
+	for index, value := range []uint32{handle, wipicrt.PlatformDataBase + 0xa000, 2} {
 		if err := thread.SetRegister(index, value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	got, err := runtime.handleWIPICFileCall(thread, wipicFileStreamWrite)
+	got, err := runtime.HandleWIPICFileCall(thread, wipicrt.WIPICFileStreamWrite)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != wipicErrorNoSpace {
+	if got != wipicrt.WIPICErrorNoSpace {
 		t.Fatalf("a write past 4 MiB = %#x, want M_E_NOSPACE", got)
 	}
 }
@@ -272,7 +273,7 @@ func openJavaDatabase(t *testing.T, runtime *initializationRuntime, client *Clie
 func TestContractDatabases(t *testing.T) {
 	saves := t.TempDir()
 	client, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(saves)
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
 
 	if runtimeJavaClasses[runtimeDataBaseRecordClass].superName != "java/lang/Exception" {
 		t.Errorf("DataBaseRecordException extends %s, want java/lang/Exception", runtimeJavaClasses[runtimeDataBaseRecordClass].superName)
@@ -345,7 +346,7 @@ func TestContractDatabases(t *testing.T) {
 
 	// A second session finds the database, its record size and its name.
 	client2, second := newTestRuntime(t)
-	second.client.saveStore = NewDirectorySaveStore(saves)
+	second.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
 	list := must(javaCall(t, second, client2, runtimeDataBaseListNames))
 	if isNull(list) {
 		t.Fatal("listDataBases in a new session is null")
@@ -397,13 +398,13 @@ func isNull(value jvm.Value) bool {
 func TestContractNameReadings(t *testing.T) {
 	saves := t.TempDir()
 	client, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(saves)
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
 
-	databaseCall(t, runtime, wipicFileOpen, `data\save.dat`, 4)
-	if got := databaseCall(t, runtime, wipicFileExists, "data/save.dat"); got != 0 {
+	databaseCall(t, runtime, wipicrt.WIPICFileOpen, `data\save.dat`, 4)
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileExists, "data/save.dat"); got != 0 {
 		t.Errorf(`C exists(data/save.dat) after open(data\save.dat) = %#x, want 0`, got)
 	}
-	if got := databaseCall(t, runtime, wipicFileExists, "data"); got != 0 {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileExists, "data"); got != 0 {
 		t.Errorf("C exists(data), the directory a backslashed name implied = %#x, want 0", got)
 	}
 	// The Java half keeps its own files; a backslash names the same path there.
@@ -413,10 +414,10 @@ func TestContractNameReadings(t *testing.T) {
 	if !javaBool(javaCall(t, runtime, client, runtimeFileSystemExists, javaName(client, `slots\one`))) {
 		t.Error(`Java exists(slots\one) is false for slots/one`)
 	}
-	if got := int32(databaseCall(t, runtime, wipicFileOpen, "/"+strings.Repeat("n", maxWIPIFileName), 4)); got < 0 {
+	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileOpen, "/"+strings.Repeat("n", wipicrt.MaxWIPIFileName), 4)); got < 0 {
 		t.Errorf("a leading slash counted against the 255 bytes: open = %d", got)
 	}
-	if _, err := javaCall(t, runtime, client, runtimeFileSystemExists, javaName(client, `./`+strings.Repeat("n", maxWIPIFileName))); err != nil {
+	if _, err := javaCall(t, runtime, client, runtimeFileSystemExists, javaName(client, `./`+strings.Repeat("n", wipicrt.MaxWIPIFileName))); err != nil {
 		t.Errorf("a leading ./ counted against the 255 bytes: %v", err)
 	}
 
@@ -452,15 +453,15 @@ func TestContractNameReadings(t *testing.T) {
 // database the name stands for.
 func TestContractEarlierRemovalSpellingStillHides(t *testing.T) {
 	saves := t.TempDir()
-	store := NewDirectorySaveStore(saves)
-	if err := store.StoreSave("jdb/scores", encodeSaveRecords([][]byte{[]byte("old")})); err != nil {
+	store := wipicrt.NewDirectorySaveStore(saves)
+	if err := store.StoreSave("jdb/scores", wipicrt.EncodeSaveRecords([][]byte{[]byte("old")})); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.StoreSave(javaDatabaseRemovedKey, []byte("/scores")); err != nil {
 		t.Fatal(err)
 	}
 	client, runtime := newTestRuntime(t)
-	runtime.client.saveStore = store
+	runtime.client.SaveStore = store
 	if _, err := openJavaDatabase(t, runtime, client, "scores", 4, false); !isGuestException(err, runtimeDataBaseExceptionClass) {
 		t.Errorf("a database listed as /scores came back as scores: %v", err)
 	}
@@ -471,7 +472,7 @@ func TestContractEarlierRemovalSpellingStillHides(t *testing.T) {
 // string that never ended.
 func TestContractUnkeepableNames(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 	for _, name := range []string{"..", "a/../b", `a\..\b`, ".removed", ".dirs"} {
 		if _, err := javaCall(t, runtime, client, runtimeFileSystemExists, javaName(client, name)); !isGuestException(err, "java/io/IOException") {
 			t.Errorf("exists(%q) = %v, want IOException", name, err)
@@ -480,7 +481,7 @@ func TestContractUnkeepableNames(t *testing.T) {
 			t.Errorf("remove(%q, flag) = %v, want IOException", name, err)
 		}
 	}
-	if got := databaseCall(t, runtime, wipicFileOpen, strings.Repeat("n", 600), 4); got != wipicErrorLongName {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileOpen, strings.Repeat("n", 600), 4); got != wipicrt.WIPICErrorLongName {
 		t.Errorf("open with a 600-byte name = %#x, want M_E_LONGNAME", got)
 	}
 }

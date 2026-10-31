@@ -5,15 +5,16 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestImageClassHeaderPreservesCanonicalIdentity(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	source := writeGuestClass(t, runtime, "test/Child", 0, nil, 0x21)
 	record := readTestBytes(t, client, source, javaClassSize)
-	address := ImageBase + 0x80
+	address := wipicrt.ImageBase + 0x80
 	binary.LittleEndian.PutUint32(record, address+4)
-	if err := client.core.Memory().Write(address, record); err != nil {
+	if err := client.Core().Memory().Write(address, record); err != nil {
 		t.Fatal(err)
 	}
 	metadata, err := runtime.readAOTClass(address)
@@ -68,7 +69,7 @@ func TestTextComponentPublishesConstructedHandler(t *testing.T) {
 	if err := runtime.publishGuestFields(object, runtimeJavaMethod{class: runtimeTextFieldComponentClass, name: "<init>"}); err != nil {
 		t.Fatal(err)
 	}
-	handler, err := runtime.readWord(address + javaInstanceSize + javaInstanceHeader)
+	handler, err := runtime.ReadWord(address + javaInstanceSize + javaInstanceHeader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,11 +84,11 @@ func TestTextComponentPublishesConstructedHandler(t *testing.T) {
 
 func TestClassContextRejectsOverlapAndExhaustion(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	client.mapped = uint64(ThreadStackBase - ImageBase)
+	client.mapped = uint64(wipicrt.ThreadStackBase - wipicrt.ImageBase)
 	if _, err := runtime.prepareClassContext(); err == nil {
 		t.Fatal("context overlapping the stack accepted")
 	}
-	runtime.classArena = newGuestArena(runtime.jvmContext, 4)
+	runtime.classArena = wipicrt.NewGuestArena(runtime.jvmContext, 4)
 	if _, err := runtime.allocateClassAlias(make([]byte, 8)); err == nil {
 		t.Fatal("class arena overflow accepted")
 	}

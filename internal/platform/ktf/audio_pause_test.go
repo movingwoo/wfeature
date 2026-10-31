@@ -8,6 +8,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/audio/smaf"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 type audioPauseProbe struct {
@@ -99,10 +100,10 @@ func TestJavaAudioPauseResumeTransitions(t *testing.T) {
 	for _, parameter := range []string{"Clip", "BaseClip"} {
 		t.Run(parameter, func(t *testing.T) {
 			client, runtime := newTestRuntime(t)
-			clock := NewManualClock(runtime.clockBase)
-			client.clock = clock
+			clock := wipicrt.NewManualClock(runtime.ClockBase)
+			client.Clock = clock
 			sink := &audioPauseProbe{}
-			client.audio = backend.NewAudioWithClock(sink, clock.Now)
+			client.Audio = backend.NewAudioWithClock(sink, clock.Now)
 			clip := newJavaAudioPauseClip(t, client, runtime)
 			call := func(method string, want int32, repeat ...int32) {
 				t.Helper()
@@ -114,34 +115,34 @@ func TestJavaAudioPauseResumeTransitions(t *testing.T) {
 			}
 			call("play", 1, 0)
 			clock.Advance(25 * time.Millisecond)
-			client.serviceAudio()
+			client.ServiceAudio()
 			call("resume", 0)
 			call("pause", 1)
 			call("pause", 0)
-			handle := runtime.clip(clip).handle
-			if !client.audio.Paused(handle) || client.audio.Playing(handle) {
+			handle := runtime.clip(clip).Handle
+			if !client.Audio.Paused(handle) || client.Audio.Playing(handle) {
 				t.Fatal("pause did not retain a stopped cursor")
 			}
 			clock.Advance(time.Second)
-			client.serviceAudio()
+			client.ServiceAudio()
 			call("resume", 1)
 			call("resume", 0)
 			call("pause", 1)
 			call("stop", 1)
 			call("resume", 0)
 			call("pause", 0)
-			if client.audio.Paused(handle) || client.audio.Playing(handle) {
+			if client.Audio.Paused(handle) || client.Audio.Playing(handle) {
 				t.Fatal("stop retained paused or active playback")
 			}
 			sink.events, sink.resumed = nil, nil
 			clock.Advance(time.Second)
-			client.serviceAudio()
+			client.ServiceAudio()
 			if len(sink.events) != 0 || len(sink.resumed) != 0 {
 				t.Fatal("cancelled pause emitted output")
 			}
 			call("play", 1, 0)
 			clock.Advance(100 * time.Millisecond)
-			client.serviceAudio()
+			client.ServiceAudio()
 			call("pause", 0)
 			call("resume", 0)
 		})
@@ -150,13 +151,13 @@ func TestJavaAudioPauseResumeTransitions(t *testing.T) {
 
 func TestJavaAudioPauseRetainsCursorPCMAndRepeat(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	clock := NewManualClock(runtime.clockBase)
-	client.clock = clock
+	clock := wipicrt.NewManualClock(runtime.ClockBase)
+	client.Clock = clock
 	sink := &audioPauseProbe{}
-	client.audio = backend.NewAudioWithClock(sink, clock.Now)
+	client.Audio = backend.NewAudioWithClock(sink, clock.Now)
 	clip := newJavaAudioPauseClip(t, client, runtime)
 	// An authored decoded score isolates the native bridge from SMAF encoding.
-	handle, err := client.audio.LoadEvents([]smaf.Event{
+	handle, err := client.Audio.LoadEvents([]smaf.Event{
 		{Type: smaf.EventNoteOn, Channel: 2, Note: 60, Velocity: 100},
 		{Type: smaf.EventWave, WaveChannels: 2, SamplingRate: 4, Wave: []int16{10, -10, 20, -20, 30, -30, 40, -40}},
 		{Time: 500, Type: smaf.EventNoteOff, Channel: 2, Note: 60},
@@ -168,13 +169,13 @@ func TestJavaAudioPauseRetainsCursorPCMAndRepeat(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := runtime.clip(clip)
-	state.handle, state.loaded = handle, true
+	state.Handle, state.Loaded = handle, true
 	call := func(method string, want int32, repeat ...int32) {
 		t.Helper()
 		javaAudioPauseCall(t, client, clip, "Clip", method, want, repeat...)
 	}
 	call("play", 1, 1)
-	client.serviceAudio()
+	client.ServiceAudio()
 	clock.Advance(250 * time.Millisecond)
 	call("pause", 1)
 	if len(sink.stopped) == 0 || sink.stopped[len(sink.stopped)-1] != handle {
@@ -182,7 +183,7 @@ func TestJavaAudioPauseRetainsCursorPCMAndRepeat(t *testing.T) {
 	}
 	sink.events = nil
 	clock.Advance(10 * time.Second)
-	client.serviceAudio()
+	client.ServiceAudio()
 	if len(sink.events) != 0 || len(sink.resumed) != 0 {
 		t.Fatal("paused score emitted output")
 	}
@@ -201,23 +202,23 @@ func TestJavaAudioPauseRetainsCursorPCMAndRepeat(t *testing.T) {
 	}
 	sink.events = nil
 	clock.Advance(249 * time.Millisecond)
-	client.serviceAudio()
+	client.ServiceAudio()
 	if len(sink.ofType(smaf.EventNoteOff)) != 0 {
 		t.Fatal("remaining note gate ended early")
 	}
 	clock.Advance(time.Millisecond)
-	client.serviceAudio()
+	client.ServiceAudio()
 	if offs := sink.ofType(smaf.EventNoteOff); len(offs) != 1 || offs[0].Note != 60 {
 		t.Fatalf("remaining note gate = %+v, want one note-off at 500ms", offs)
 	}
 	clock.Advance(500 * time.Millisecond)
-	client.serviceAudio()
+	client.ServiceAudio()
 	notes, waves := sink.ofType(smaf.EventNoteOn), sink.ofType(smaf.EventWave)
 	if len(notes) != 2 || notes[0].Note != 62 || notes[1].Note != 60 || len(waves) != 1 ||
-		!slices.Equal(waves[0].Wave, []int16{10, -10, 20, -20, 30, -30, 40, -40}) || !client.audio.Playing(handle) {
+		!slices.Equal(waves[0].Wave, []int16{10, -10, 20, -20, 30, -30, 40, -40}) || !client.Audio.Playing(handle) {
 		t.Fatalf("repeat lost its original boundary: notes=%+v waves=%+v", notes, waves)
 	}
-	if runtime.clip(clip).handle != handle {
+	if runtime.clip(clip).Handle != handle {
 		t.Fatal("pause or resume replaced the loaded clip")
 	}
 }

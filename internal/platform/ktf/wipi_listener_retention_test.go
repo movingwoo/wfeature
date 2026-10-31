@@ -45,7 +45,7 @@ func detachKTFWIPIListenerReferences(fixture *ktfWIPIListenerFixture) ktfWIPILis
 	references := ktfWIPIListenerWeakReferences{
 		clip: weak.Make(fixture.clip), listener: weak.Make(listener),
 		clipAddress: clipAddress, listenerAddress: listenerAddress,
-		handle: fixture.runtime.clip(fixture.clip).handle,
+		handle: fixture.runtime.clip(fixture.clip).Handle,
 	}
 	clearKTFWIPIListenerHistory(fixture)
 	fixture.clip, fixture.listeners = nil, [2]*jvm.Object{}
@@ -82,7 +82,7 @@ func requireKTFWIPIListenerRetention(fixture *ktfWIPIListenerFixture, references
 	fixture.t.Helper()
 	defer runtime.KeepAlive(fixture.runtime)
 	for attempt := 0; attempt < 32; attempt++ {
-		fixture.runtime.collectAt = 0
+		fixture.runtime.CollectAt = 0
 		if _, err := fixture.runtime.collectGuestObjects(nil); err != nil {
 			fixture.t.Fatal(err)
 		}
@@ -108,7 +108,7 @@ func requireKTFWIPIListenerRetention(fixture *ktfWIPIListenerFixture, references
 				}
 			}
 			if references.handle != 0 {
-				if _, loaded := fixture.client.audio.Length(references.handle); loaded {
+				if _, loaded := fixture.client.Audio.Length(references.handle); loaded {
 					fixture.t.Fatal("collected Clip retained its backend audio handle")
 				}
 			}
@@ -157,7 +157,7 @@ func TestKTFWIPIListenerUnreferencedActiveCycleSurvivesCheckpoint(t *testing.T) 
 			requireKTFWIPIListenerRetention(fixture, references, true)
 			if paused {
 				fixture.advance(time.Hour)
-				if got := fixture.drain(); got != 0 || !fixture.client.audio.Paused(references.handle) {
+				if got := fixture.drain(); got != 0 || !fixture.client.Audio.Paused(references.handle) {
 					t.Fatalf("restored paused cycle progressed: callbacks=%d", got)
 				}
 				resumeUnreferencedKTFWIPIClip(fixture, references)

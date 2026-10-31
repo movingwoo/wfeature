@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func netCall(t *testing.T, runtime *initializationRuntime, function uint32, arguments ...uint32) uint32 {
@@ -13,7 +14,7 @@ func netCall(t *testing.T, runtime *initializationRuntime, function uint32, argu
 	for index, value := range arguments {
 		callContext.Registers[index] = value
 	}
-	result, err := runtime.handleWIPICTableCall(armcore.NewThread(callContext), wipicTableNet, function)
+	result, err := runtime.HandleWIPICTableCall(armcore.NewThread(callContext), wipicrt.WIPICTableNet, function)
 	if err != nil {
 		t.Fatalf("net function %d: %v", function, err)
 	}
@@ -27,13 +28,13 @@ func netCall(t *testing.T, runtime *initializationRuntime, function uint32, argu
 func TestNetConnectFailsThroughTheCallbackItWasGiven(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
-	if code := netCall(t, runtime, wipicNetConnect, ImageBase|1, 0x1234); code != 0 {
+	if code := netCall(t, runtime, wipicrt.WIPICNetConnect, wipicrt.ImageBase|1, 0x1234); code != 0 {
 		t.Fatalf("MC_netConnect with a callback answered %#x, want 0", code)
 	}
-	if len(runtime.pendingNetCallbacks) != 1 {
-		t.Fatalf("%d callbacks queued, want 1", len(runtime.pendingNetCallbacks))
+	if len(runtime.PendingNetCallbacks) != 1 {
+		t.Fatalf("%d callbacks queued, want 1", len(runtime.PendingNetCallbacks))
 	}
-	if got := runtime.pendingNetCallbacks[0]; got.callback != ImageBase|1 || got.param != 0x1234 {
+	if got := runtime.PendingNetCallbacks[0]; got.Callback != wipicrt.ImageBase|1 || got.Param != 0x1234 {
 		t.Fatalf("queued %+v, want the callback and parameter the game passed", got)
 	}
 }
@@ -44,10 +45,10 @@ func TestNetConnectFailsThroughTheCallbackItWasGiven(t *testing.T) {
 func TestNetConnectWithoutACallbackStillRefuses(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
-	if code := netCall(t, runtime, wipicNetConnect, 0, 0); code != wipiErrorCode {
-		t.Fatalf("MC_netConnect without a callback answered %#x, want %#x", code, wipiErrorCode)
+	if code := netCall(t, runtime, wipicrt.WIPICNetConnect, 0, 0); code != wipicrt.WipiErrorCode {
+		t.Fatalf("MC_netConnect without a callback answered %#x, want %#x", code, wipicrt.WipiErrorCode)
 	}
-	if len(runtime.pendingNetCallbacks) != 0 {
+	if len(runtime.PendingNetCallbacks) != 0 {
 		t.Fatal("a call with no callback queued one anyway")
 	}
 }
@@ -58,11 +59,11 @@ func TestNetConnectWithoutACallbackStillRefuses(t *testing.T) {
 func TestNetCloseDropsThePendingCallbacks(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
-	netCall(t, runtime, wipicNetConnect, ImageBase|1, 0x1234)
-	if code := netCall(t, runtime, wipicNetClose); code != 0 {
+	netCall(t, runtime, wipicrt.WIPICNetConnect, wipicrt.ImageBase|1, 0x1234)
+	if code := netCall(t, runtime, wipicrt.WIPICNetClose); code != 0 {
 		t.Fatalf("MC_netClose answered %#x, want 0", code)
 	}
-	if len(runtime.pendingNetCallbacks) != 0 {
+	if len(runtime.PendingNetCallbacks) != 0 {
 		t.Fatal("close left a callback queued")
 	}
 }
@@ -73,17 +74,17 @@ func TestNetCloseDropsThePendingCallbacks(t *testing.T) {
 func TestNetConnectQueueIsBounded(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
-	for round := 0; round < maxPendingNetCallbacks; round++ {
-		if code := netCall(t, runtime, wipicNetConnect, ImageBase|1, uint32(round)); code != 0 {
+	for round := 0; round < wipicrt.MaxPendingNetCallbacks; round++ {
+		if code := netCall(t, runtime, wipicrt.WIPICNetConnect, wipicrt.ImageBase|1, uint32(round)); code != 0 {
 			t.Fatalf("round %d answered %#x, want 0", round, code)
 		}
 	}
-	if code := netCall(t, runtime, wipicNetConnect, ImageBase|1, 0); code != wipiErrorCode {
+	if code := netCall(t, runtime, wipicrt.WIPICNetConnect, wipicrt.ImageBase|1, 0); code != wipicrt.WipiErrorCode {
 		t.Fatalf("past the bound MC_netConnect answered %#x, want a refusal", code)
 	}
-	if len(runtime.pendingNetCallbacks) != maxPendingNetCallbacks {
+	if len(runtime.PendingNetCallbacks) != wipicrt.MaxPendingNetCallbacks {
 		t.Fatalf("queue holds %d, want the bound %d",
-			len(runtime.pendingNetCallbacks), maxPendingNetCallbacks)
+			len(runtime.PendingNetCallbacks), wipicrt.MaxPendingNetCallbacks)
 	}
 }
 
@@ -93,8 +94,8 @@ func TestTheRestOfTheNetTableStillRefuses(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
 	for _, function := range []uint32{2, 3, 4, 9} {
-		if code := netCall(t, runtime, function); code != wipiErrorCode {
-			t.Fatalf("net function %d answered %#x, want %#x", function, code, wipiErrorCode)
+		if code := netCall(t, runtime, function); code != wipicrt.WipiErrorCode {
+			t.Fatalf("net function %d answered %#x, want %#x", function, code, wipicrt.WipiErrorCode)
 		}
 	}
 }
@@ -105,7 +106,7 @@ func TestServiceDeliversTheNetworkFailureToTheGuest(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 
 	// A callback that stores its two arguments where the test can read them.
-	slot, err := runtime.allocate(8)
+	slot, err := runtime.Allocate(8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,30 +124,30 @@ func TestServiceDeliversTheNetworkFailureToTheGuest(t *testing.T) {
 		data[index*2] = byte(instruction)
 		data[index*2+1] = byte(instruction >> 8)
 	}
-	const code = ImageBase + 0x40
-	if err := client.core.Memory().Write(code, data); err != nil {
+	const code = wipicrt.ImageBase + 0x40
+	if err := client.Core().Memory().Write(code, data); err != nil {
 		t.Fatal(err)
 	}
 
-	netCall(t, runtime, wipicNetConnect, code|1, 0x5678)
-	delivered, err := client.serviceNetCallbacks(context.Background())
+	netCall(t, runtime, wipicrt.WIPICNetConnect, code|1, 0x5678)
+	delivered, err := client.ServiceNetCallbacks(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if delivered != 1 {
 		t.Fatalf("delivered %d callbacks, want 1", delivered)
 	}
-	words, err := runtime.readAOTWords(slot, 2, "net callback arguments")
+	words, err := runtime.ReadAOTWords(slot, 2, "net callback arguments")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if words[0] != wipiErrorCode {
-		t.Fatalf("callback received error %#x, want M_E_ERROR %#x", words[0], wipiErrorCode)
+	if words[0] != wipicrt.WipiErrorCode {
+		t.Fatalf("callback received error %#x, want M_E_ERROR %#x", words[0], wipicrt.WipiErrorCode)
 	}
 	if words[1] != 0x5678 {
 		t.Fatalf("callback received param %#x, want the registered %#x", words[1], 0x5678)
 	}
-	if len(runtime.pendingNetCallbacks) != 0 {
+	if len(runtime.PendingNetCallbacks) != 0 {
 		t.Fatal("a delivered callback stayed queued")
 	}
 }

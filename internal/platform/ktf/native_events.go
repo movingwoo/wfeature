@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The title does not run in a loop of its own. Its start event ends by handing
@@ -232,25 +233,25 @@ func (platform *NativePlatform) Key(ctx context.Context, code uint32, pressed bo
 // itself; see NativeSession.SendKey.
 func nativeKeyCode(key int32) (uint32, bool) {
 	switch key {
-	case KeyUp:
+	case wipicrt.KeyUp:
 		return NativeKeyUp, true
-	case KeyDown:
+	case wipicrt.KeyDown:
 		return NativeKeyDown, true
-	case KeyLeft:
+	case wipicrt.KeyLeft:
 		return NativeKeyLeft, true
-	case KeyRight:
+	case wipicrt.KeyRight:
 		return NativeKeyRight, true
-	case KeyFire:
+	case wipicrt.KeyFire:
 		return NativeKeySelect, true
-	case KeyClear:
+	case wipicrt.KeyClear:
 		return NativeKeyClear, true
-	case KeyStar:
+	case wipicrt.KeyStar:
 		return NativeKeyStar, true
-	case KeyHash:
+	case wipicrt.KeyHash:
 		return NativeKeyPound, true
 	}
-	if key >= KeyNum0 && key <= KeyNum9 {
-		return nativeKeyDigitBase + uint32(key-KeyNum0), true
+	if key >= wipicrt.KeyNum0 && key <= wipicrt.KeyNum9 {
+		return nativeKeyDigitBase + uint32(key-wipicrt.KeyNum0), true
 	}
 	return 0, false
 }

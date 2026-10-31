@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"encoding/binary"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"testing"
 )
 
@@ -21,7 +22,7 @@ func TestGuestImageDecoderReadsTheHandsetBitmap(t *testing.T) {
 	binary.LittleEndian.PutUint32(encoded[16:], uint32(len(body)))
 	copy(encoded[24:], body)
 
-	decoded, err := decodeGuestImage(encoded)
+	decoded, err := wipicrt.DecodeGuestImage(encoded)
 	if err != nil {
 		t.Fatalf("decodeGuestImage() error = %v", err)
 	}

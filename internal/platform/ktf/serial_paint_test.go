@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A Runnable handed to callSerially runs on the client thread, so a wait the
@@ -14,23 +15,23 @@ import (
 // not run and a clock it therefore never advanced.
 func TestSerialRunnableIsNotDueBeforeTheClientWaitEnds(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	clock := NewManualClock(time.Time{})
-	client.clock = clock
+	clock := wipicrt.NewManualClock(time.Time{})
+	client.Clock = clock
 
 	runtime.pendingSerial = []*jvm.Object{{ClassName: "Frame"}}
-	runtime.serialDueAt = client.now()
-	client.deferClientWait(50 * time.Millisecond)
+	runtime.serialDueAt = client.Now()
+	client.DeferClientWait(50 * time.Millisecond)
 
 	deadline, parked := client.NextDeadline()
 	if !parked {
 		t.Fatal("NextDeadline reported nothing parked with a Runnable queued")
 	}
-	if want := client.clientWakeAt; !deadline.Equal(want) {
+	if want := client.ClientWakeAt; !deadline.Equal(want) {
 		t.Fatalf("NextDeadline() = %v, want the client wait's end %v", deadline, want)
 	}
 
 	clock.Advance(50 * time.Millisecond)
-	if !client.clientThreadDue() {
+	if !client.ClientThreadDue() {
 		t.Fatal("the client thread is still not due after its own wait elapsed")
 	}
 }
@@ -44,7 +45,7 @@ func TestRepaintQueuedHoldsTheSerialQueue(t *testing.T) {
 	if runtime.repaintQueued() {
 		t.Fatal("a repaint is queued before anything asked for one")
 	}
-	runtime.repaintPending = true
+	runtime.RepaintPending = true
 	if runtime.repaintQueued() {
 		t.Fatal("a repaint with no card to paint holds the queue, which never ends")
 	}
@@ -59,16 +60,16 @@ func TestRepaintQueuedHoldsTheSerialQueue(t *testing.T) {
 // investigated in opposite directions, so the report says which it is.
 func TestGuestStackOverflowIsNamed(t *testing.T) {
 	client, _ := newTestRuntime(t)
-	if note := client.describeStackOverflow(ThreadStackBase-8, ThreadStackBase-8); note == "" {
+	if note := client.describeStackOverflow(wipicrt.ThreadStackBase-8, wipicrt.ThreadStackBase-8); note == "" {
 		t.Fatal("an access below the client stack is not reported as an overflow")
 	}
 	// A push that has already moved the stack pointer past the end faults on
 	// the store rather than on the pointer, so the stack pointer is checked
 	// as well as the address.
-	if note := client.describeStackOverflow(ThreadStackBase+16, ThreadStackBase-4); note == "" {
+	if note := client.describeStackOverflow(wipicrt.ThreadStackBase+16, wipicrt.ThreadStackBase-4); note == "" {
 		t.Fatal("a store from a stack pointer below the client stack is not reported as an overflow")
 	}
-	if note := client.describeStackOverflow(ImageBase, ThreadStackBase+64); note != "" {
+	if note := client.describeStackOverflow(wipicrt.ImageBase, wipicrt.ThreadStackBase+64); note != "" {
 		t.Fatalf("an ordinary image address is reported as an overflow: %s", note)
 	}
 }

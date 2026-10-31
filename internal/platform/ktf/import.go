@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // Importing an external emulator's save data
@@ -290,7 +291,7 @@ func importDatabaseScope(options ImportOptions, report *ImportReport) error {
 				records[index] = data
 			}
 			source := filepath.ToSlash(filepath.Join("db", pid)) + "/" + name + "<record>"
-			if err := writeImported(options, report, source, pid, "jdb/"+name, encodeSaveRecords(records)); err != nil {
+			if err := writeImported(options, report, source, pid, "jdb/"+name, wipicrt.EncodeSaveRecords(records)); err != nil {
 				return err
 			}
 			if len(records) == 1 && records[0] != nil {
@@ -310,7 +311,7 @@ func writeImported(options ImportOptions, report *ImportReport, source, owner, k
 	// entry that has already been added reads as an import that happened, and
 	// a dry run would promise one the real run will not perform.
 	scope, name, split := strings.Cut(key, "/")
-	if split && reservedStorageName(scope, name) {
+	if split && wipicrt.ReservedStorageName(scope, name) {
 		// A source tree is somebody else's directory, and a file in it can be
 		// named anything. Writing one over a table's own list would replace it
 		// with the file's bytes — and the mark-clearing below would then read
@@ -328,7 +329,7 @@ func writeImported(options ImportOptions, report *ImportReport, source, owner, k
 		return fmt.Errorf("claim %s: %w", owner, err)
 	}
 	defer release()
-	store := NewDirectorySaveStore(directory)
+	store := wipicrt.NewDirectorySaveStore(directory)
 	if err := store.StoreSave(key, data); err != nil {
 		return fmt.Errorf("write %s/%s: %w", owner, key, err)
 	}
@@ -344,7 +345,7 @@ func writeImported(options ImportOptions, report *ImportReport, source, owner, k
 // open, with nothing in the report to say why. The tables' own writes clear
 // the mark the same way; this is the one path into the store that does not go
 // through them.
-func clearImportedRemoval(store *DirectorySaveStore, key string) {
+func clearImportedRemoval(store *wipicrt.DirectorySaveStore, key string) {
 	scope, name, found := strings.Cut(key, "/")
 	if !found || name == "" {
 		return
@@ -359,7 +360,7 @@ func clearImportedRemoval(store *DirectorySaveStore, key string) {
 	// Through the list's own encoding, so this cannot drift from it: the two
 	// halves disagreeing about trimming is what put a name back that a title
 	// had deleted.
-	for _, line := range splitRemovalList(data) {
+	for _, line := range wipicrt.SplitRemovalList(data) {
 		if line == name {
 			dropped = true
 			continue
@@ -369,7 +370,7 @@ func clearImportedRemoval(store *DirectorySaveStore, key string) {
 	if !dropped {
 		return
 	}
-	_ = store.StoreSave(listKey, joinRemovalList(kept))
+	_ = store.StoreSave(listKey, wipicrt.JoinRemovalList(kept))
 }
 
 // recordSplit is one reading of an external store key as a database name and

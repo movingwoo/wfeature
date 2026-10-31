@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // callocThroughSVC and freeThroughSVC drive MC_knlCalloc and MC_knlFree the way
@@ -14,7 +15,7 @@ func callocThroughSVC(t *testing.T, runtime *initializationRuntime, size uint32)
 	t.Helper()
 	callContext := armcore.NewContext()
 	callContext.Registers[0] = size
-	address, err := runtime.handleWIPICCall(armcore.NewThread(callContext), wipicKernelCalloc)
+	address, err := runtime.HandleWIPICCall(armcore.NewThread(callContext), wipicrt.WIPICKernelCalloc)
 	if err != nil {
 		t.Fatalf("MC_knlCalloc(%d) error = %v", size, err)
 	}
@@ -25,7 +26,7 @@ func freeThroughSVC(t *testing.T, runtime *initializationRuntime, id uint32) {
 	t.Helper()
 	callContext := armcore.NewContext()
 	callContext.Registers[0] = id
-	if _, err := runtime.handleWIPICCall(armcore.NewThread(callContext), wipicKernelFree); err != nil {
+	if _, err := runtime.HandleWIPICCall(armcore.NewThread(callContext), wipicrt.WIPICKernelFree); err != nil {
 		t.Fatalf("MC_knlFree(%#x) error = %v", id, err)
 	}
 }
@@ -40,7 +41,7 @@ func TestWIPICFreeReturnsTheBlockToTheArena(t *testing.T) {
 
 	first := callocThroughSVC(t, runtime, 2048)
 	freeThroughSVC(t, runtime, first)
-	settled := runtime.arena.used()
+	settled := runtime.Arena.Used()
 
 	for round := 0; round < 4096; round++ {
 		address := callocThroughSVC(t, runtime, 2048)
@@ -48,11 +49,11 @@ func TestWIPICFreeReturnsTheBlockToTheArena(t *testing.T) {
 			t.Fatalf("round %d allocated %#x, want the released block %#x", round, address, first)
 		}
 		freeThroughSVC(t, runtime, address)
-		if used := runtime.arena.used(); used != settled {
+		if used := runtime.Arena.Used(); used != settled {
 			t.Fatalf("round %d left %d bytes handed out, want %d", round, used, settled)
 		}
 	}
-	if live := len(runtime.wipicAllocations); live != 0 {
+	if live := len(runtime.WIPICAllocations); live != 0 {
 		t.Fatalf("%d allocations are still recorded as live", live)
 	}
 }
@@ -66,7 +67,7 @@ func TestWIPICCallocClearsAReusedBlock(t *testing.T) {
 	const size = 64
 	first := callocThroughSVC(t, runtime, size)
 	dirty := bytes.Repeat([]byte{0xa5}, size)
-	if err := client.core.Memory().Write(first+wipicAllocationOverhead, dirty); err != nil {
+	if err := client.Core().Memory().Write(first+wipicrt.WIPICAllocationOverhead, dirty); err != nil {
 		t.Fatal(err)
 	}
 	freeThroughSVC(t, runtime, first)
@@ -75,7 +76,7 @@ func TestWIPICCallocClearsAReusedBlock(t *testing.T) {
 	if again != first {
 		t.Fatalf("second allocation at %#x, want the released block %#x", again, first)
 	}
-	payload := readTestBytes(t, client, again+wipicAllocationOverhead, size)
+	payload := readTestBytes(t, client, again+wipicrt.WIPICAllocationOverhead, size)
 	for index, value := range payload {
 		if value != 0 {
 			t.Fatalf("reused payload byte %d = %#x, want a zero fill", index, value)
@@ -90,22 +91,22 @@ func TestWIPICFreeIgnoresAnIdentifierItDidNotIssue(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
 	live := callocThroughSVC(t, runtime, 256)
-	before := runtime.arena.used()
+	before := runtime.Arena.Used()
 
 	freeThroughSVC(t, runtime, 0)
 	freeThroughSVC(t, runtime, live+4)
-	freeThroughSVC(t, runtime, platformDataBase+uint32(platformDataSize)-4)
-	if used := runtime.arena.used(); used != before {
+	freeThroughSVC(t, runtime, wipicrt.PlatformDataBase+uint32(wipicrt.PlatformDataSize)-4)
+	if used := runtime.Arena.Used(); used != before {
 		t.Fatalf("used() = %d after refused frees, want %d", used, before)
 	}
-	if _, ok := runtime.wipicAllocations[live]; !ok {
+	if _, ok := runtime.WIPICAllocations[live]; !ok {
 		t.Fatal("a refused free dropped the live allocation")
 	}
 
 	freeThroughSVC(t, runtime, live)
-	released := runtime.arena.used()
+	released := runtime.Arena.Used()
 	freeThroughSVC(t, runtime, live)
-	if used := runtime.arena.used(); used != released {
+	if used := runtime.Arena.Used(); used != released {
 		t.Fatalf("a double free released the block twice: used() = %d, want %d", used, released)
 	}
 }
@@ -118,9 +119,9 @@ func TestWIPICFreeDropsTheBlocksTransparency(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
 	handle := callocThroughSVC(t, runtime, 128)
-	runtime.setFramebufferOpacity(handle, &imageOpacity{width: 1, height: 1, opaque: []bool{false}})
+	runtime.SetFramebufferOpacity(handle, &wipicrt.ImageOpacity{Width: 1, Height: 1, Opaque: []bool{false}})
 	freeThroughSVC(t, runtime, handle)
-	if opacity := runtime.framebufferOpacityOf(handle); opacity != nil {
+	if opacity := runtime.FramebufferOpacityOf(handle); opacity != nil {
 		t.Fatal("a released block kept its transparency mask")
 	}
 
@@ -128,7 +129,7 @@ func TestWIPICFreeDropsTheBlocksTransparency(t *testing.T) {
 	if again != handle {
 		t.Fatalf("second allocation at %#x, want the released block %#x", again, handle)
 	}
-	if opacity := runtime.framebufferOpacityOf(again); opacity != nil {
+	if opacity := runtime.FramebufferOpacityOf(again); opacity != nil {
 		t.Fatal("a reused block inherited the previous tenant's transparency")
 	}
 }
@@ -140,12 +141,12 @@ func TestWIPICFreeShowsInTheGuestsFreeMemory(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
 	callContext := armcore.NewContext()
-	before, err := runtime.handleWIPICCall(armcore.NewThread(callContext), wipicKernelGetFreeMemory)
+	before, err := runtime.HandleWIPICCall(armcore.NewThread(callContext), wipicrt.WIPICKernelGetFreeMemory)
 	if err != nil {
 		t.Fatal(err)
 	}
 	address := callocThroughSVC(t, runtime, 4096)
-	during, err := runtime.handleWIPICCall(armcore.NewThread(armcore.NewContext()), wipicKernelGetFreeMemory)
+	during, err := runtime.HandleWIPICCall(armcore.NewThread(armcore.NewContext()), wipicrt.WIPICKernelGetFreeMemory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestWIPICFreeShowsInTheGuestsFreeMemory(t *testing.T) {
 		t.Fatalf("free memory %d did not fall after a 4 KiB allocation from %d", during, before)
 	}
 	freeThroughSVC(t, runtime, address)
-	after, err := runtime.handleWIPICCall(armcore.NewThread(armcore.NewContext()), wipicKernelGetFreeMemory)
+	after, err := runtime.HandleWIPICCall(armcore.NewThread(armcore.NewContext()), wipicrt.WIPICKernelGetFreeMemory)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,7 +40,7 @@ func TestSetBufferReplacesTheClipRatherThanAppending(t *testing.T) {
 	if _, err := runtimeClipSetBuffer(runtime, client.JVM(), arguments); err != nil {
 		t.Fatalf("setBuffer error = %v", err)
 	}
-	if got := string(runtime.clip(receiver).data); got != "\x09\x09" {
+	if got := string(runtime.clip(receiver).Data); got != "\x09\x09" {
 		t.Fatalf("clip holds %q after the second setBuffer, want only the second buffer", got)
 	}
 }
@@ -62,7 +62,7 @@ func TestSetBufferReportsWhetherTheDataWasTaken(t *testing.T) {
 	if taken, _ := result.Int32(); taken != 1 {
 		t.Fatalf("setBuffer of four bytes = %d, want true", taken)
 	}
-	if got := len(runtime.clip(receiver).data); got != 4 {
+	if got := len(runtime.clip(receiver).Data); got != 4 {
 		t.Fatalf("clip holds %d bytes, want 4", got)
 	}
 
@@ -75,7 +75,7 @@ func TestSetBufferReportsWhetherTheDataWasTaken(t *testing.T) {
 	if taken, _ := result.Int32(); taken != 0 {
 		t.Fatalf("setBuffer of nothing = %d, want false", taken)
 	}
-	if got := len(runtime.clip(receiver).data); got != 0 {
+	if got := len(runtime.clip(receiver).Data); got != 0 {
 		t.Fatalf("clip holds %d bytes after an empty setBuffer, want 0", got)
 	}
 }
@@ -99,7 +99,7 @@ func TestAClipNamingAResourceTheArchiveLacksIsEmptyRatherThanFatal(t *testing.T)
 	if _, err := runtimeClipConstructor(runtime, client.JVM(), arguments); err != nil {
 		t.Fatalf("a packaged clip failed: %v", err)
 	}
-	if got := string(runtime.clip(packaged).data); got != "MMMDsound" {
+	if got := string(runtime.clip(packaged).Data); got != "MMMDsound" {
 		t.Fatalf("the packaged clip holds %q, want the resource's bytes", got)
 	}
 
@@ -112,7 +112,7 @@ func TestAClipNamingAResourceTheArchiveLacksIsEmptyRatherThanFatal(t *testing.T)
 	if _, err := runtimeClipConstructor(runtime, client.JVM(), arguments); err != nil {
 		t.Fatalf("a clip naming an absent resource failed: %v", err)
 	}
-	if data := runtime.clip(missing).data; len(data) != 0 {
+	if data := runtime.clip(missing).Data; len(data) != 0 {
 		t.Fatalf("the clip holds %d bytes, want none", len(data))
 	}
 

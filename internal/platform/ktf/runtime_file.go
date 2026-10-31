@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // runtimeGuestFile is the state behind one org/kwis/msp/io/File object. Reads
@@ -109,7 +110,7 @@ func (runtime *initializationRuntime) holdGuestFileWrite(state *runtimeGuestFile
 			return true
 		}
 	}
-	shared, exists := runtime.guestFiles[guestFileKey(state.name)]
+	shared, exists := runtime.GuestFiles[guestFileKey(state.name)]
 	batch.pending = append(batch.pending, heldGuestFile{state: state, data: state.data, position: state.position, shared: shared, sharedExists: exists})
 	return true
 }
@@ -132,15 +133,15 @@ func (runtime *initializationRuntime) storeGuestFileBatch(batch *guestFileBatch)
 		key := guestFileKey(held.state.name)
 		held.state.data, held.state.position = held.data, held.position
 		if held.sharedExists {
-			runtime.guestFiles[key] = held.shared
+			runtime.GuestFiles[key] = held.shared
 		} else {
-			delete(runtime.guestFiles, key)
+			delete(runtime.GuestFiles, key)
 		}
-		if runtime.guestFileWrites == nil {
-			runtime.guestFileWrites = make(map[string]uint64)
+		if runtime.GuestFileWrites == nil {
+			runtime.GuestFileWrites = make(map[string]uint64)
 		}
-		runtime.guestFileWrites[key]++
-		held.state.seen = runtime.guestFileWrites[key]
+		runtime.GuestFileWrites[key]++
+		held.state.seen = runtime.GuestFileWrites[key]
 	}
 	batch.pending = batch.pending[:0]
 }
@@ -238,49 +239,9 @@ func runtimeFileSystemClassDefinition() runtimeJavaClass {
 // from the other platform's evidence rather than from a failure of its own.
 const guestFileRemovedKey = "fs/.removed"
 
-// guestFile resolves a File path against in-memory writes first, persisted
-// save writes second, and the mounted outer-archive filesystem last. Guest
-// names may carry a leading slash that the mounted names do not. A removed
-// path resolves to none of the three.
-func (runtime *initializationRuntime) guestFile(name string) ([]byte, bool) {
-	if runtime.removedGuestFiles()[strings.TrimPrefix(name, "/")] {
-		return nil, false
-	}
-	for _, candidate := range []string{name, strings.TrimPrefix(name, "/")} {
-		if data, exists := runtime.guestFiles[candidate]; exists {
-			return data, true
-		}
-	}
-	if data, exists := runtime.loadSave("fs/" + strings.TrimPrefix(name, "/")); exists {
-		return data, true
-	}
-	for _, candidate := range []string{name, strings.TrimPrefix(name, "/")} {
-		if data, exists := runtime.client.files[candidate]; exists {
-			return data, true
-		}
-	}
-	return nil, false
-}
-
-// removedGuestFiles is the set of deleted paths, read from the store once per
-// session and kept in memory after that. Names are kept without their leading
-// slash, which is the form the resolution above compares.
-func (runtime *initializationRuntime) removedGuestFiles() map[string]bool {
-	if runtime.removedFiles != nil {
-		return runtime.removedFiles
-	}
-	runtime.removedFiles = make(map[string]bool)
-	if data, exists := runtime.loadSave(guestFileRemovedKey); exists {
-		for _, line := range splitRemovalList(data) {
-			runtime.removedFiles[line] = true
-		}
-	}
-	return runtime.removedFiles
-}
-
 // markGuestFileRemoved records or clears one path and writes the list back.
 func (runtime *initializationRuntime) markGuestFileRemoved(name string, removed bool) error {
-	return runtime.saveChanges(nil, guestFileRemovedKey, runtime.removedGuestFiles(), map[string]bool{strings.TrimPrefix(name, "/"): removed})
+	return runtime.SaveChanges(nil, guestFileRemovedKey, runtime.RemovedGuestFiles(), map[string]bool{strings.TrimPrefix(name, "/"): removed})
 }
 
 // storeGuestFile persists one guest file. Writing a path brings it back, so
@@ -288,16 +249,16 @@ func (runtime *initializationRuntime) markGuestFileRemoved(name string, removed 
 // path on the removal list would be stored and then be unreadable.
 func (runtime *initializationRuntime) storeGuestFile(name string, data []byte) error {
 	trimmed := strings.TrimPrefix(name, "/")
-	if reservedStorageName(guestFileScope, trimmed) {
+	if wipicrt.ReservedStorageName(wipicrt.GuestFileScope, trimmed) {
 		// The name this table keeps its own list under. Writing it would put
 		// the file's bytes where the list belongs, and reading the list back
 		// would mark whatever those bytes spell as deleted. Every caller
 		// refuses the name before reaching here; this is the backstop, and it
 		// is counted so a caller that does not is visible.
-		runtime.countDiagnostic("fs reserved name " + trimmed)
+		runtime.CountDiagnostic("fs reserved name " + trimmed)
 		return fmt.Errorf("reserved file name %q", trimmed)
 	}
-	return runtime.saveChanges(map[string][]byte{"fs/" + trimmed: data}, guestFileRemovedKey, runtime.removedGuestFiles(), map[string]bool{trimmed: false})
+	return runtime.SaveChanges(map[string][]byte{"fs/" + trimmed: data}, guestFileRemovedKey, runtime.RemovedGuestFiles(), map[string]bool{trimmed: false})
 }
 
 func runtimeFileSystemUnlink(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -308,7 +269,7 @@ func runtimeFileSystemUnlink(runtime *initializationRuntime, _ *jvm.VM, argument
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if reservedStorageName(guestFileScope, strings.TrimPrefix(name, "/")) {
+	if wipicrt.ReservedStorageName(wipicrt.GuestFileScope, strings.TrimPrefix(name, "/")) {
 		// The last guest-filesystem entry point that takes a name. Unlinking
 		// this one writes the list's own name into the list, and the claim
 		// that every way a name reaches a key is covered has to be true rather
@@ -318,8 +279,8 @@ func runtimeFileSystemUnlink(runtime *initializationRuntime, _ *jvm.VM, argument
 	if err := runtime.markGuestFileRemoved(name, true); err != nil {
 		return jvm.VoidValue(), newGuestIOException(err.Error())
 	}
-	delete(runtime.guestFiles, name)
-	delete(runtime.guestFiles, strings.TrimPrefix(name, "/"))
+	delete(runtime.GuestFiles, name)
+	delete(runtime.GuestFiles, strings.TrimPrefix(name, "/"))
 	return jvm.VoidValue(), nil
 }
 
@@ -333,8 +294,8 @@ func (runtime *initializationRuntime) fileState(arguments []jvm.Value) (*jvm.Obj
 	receiver, state, err := runtimeFileState(arguments)
 	if err == nil && state != nil {
 		key := guestFileKey(state.name)
-		if writes := runtime.guestFileWrites[key]; writes > state.seen {
-			if data, ok := runtime.guestFiles[key]; ok {
+		if writes := runtime.GuestFileWrites[key]; writes > state.seen {
+			if data, ok := runtime.GuestFiles[key]; ok {
 				state.data = data
 			}
 			state.seen = writes
@@ -354,21 +315,21 @@ func guestFileKey(name string) string {
 // never written in place afterwards, so an open File may share it.
 func (runtime *initializationRuntime) setGuestFile(name string, data []byte) {
 	runtime.restoreGuestFile(name, data)
-	if runtime.guestFileWrites == nil {
-		runtime.guestFileWrites = make(map[string]uint64)
+	if runtime.GuestFileWrites == nil {
+		runtime.GuestFileWrites = make(map[string]uint64)
 	}
-	runtime.guestFileWrites[guestFileKey(name)]++
+	runtime.GuestFileWrites[guestFileKey(name)]++
 }
 
 // restoreGuestFile records a path's content without counting it as a write,
 // which is what a rebind from the store is: the Files a load restored keep
 // what the load gave them.
 func (runtime *initializationRuntime) restoreGuestFile(name string, data []byte) {
-	if runtime.guestFiles == nil {
-		runtime.guestFiles = make(map[string][]byte)
+	if runtime.GuestFiles == nil {
+		runtime.GuestFiles = make(map[string][]byte)
 	}
-	delete(runtime.guestFiles, name)
-	runtime.guestFiles[guestFileKey(name)] = data
+	delete(runtime.GuestFiles, name)
+	runtime.GuestFiles[guestFileKey(name)] = data
 }
 
 func runtimeFileState(arguments []jvm.Value) (*jvm.Object, *runtimeGuestFile, error) {
@@ -415,11 +376,11 @@ func runtimeFileConstructor(runtime *initializationRuntime, _ *jvm.VM, arguments
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	runtime.countDiagnostic(fmt.Sprintf("file %s mode %d", name, mode))
+	runtime.CountDiagnostic(fmt.Sprintf("file %s mode %d", name, mode))
 	if name == "" || mode < 1 || mode > 4 {
 		return jvm.VoidValue(), newGuestIOException("Invalid file open")
 	}
-	if reservedStorageName(guestFileScope, strings.TrimPrefix(name, "/")) {
+	if wipicrt.ReservedStorageName(wipicrt.GuestFileScope, strings.TrimPrefix(name, "/")) {
 		// The name this table keeps its removal list under. Refused where the
 		// file is named rather than where it is written, so a title cannot
 		// open it, write, and be told the write worked while nothing is
@@ -427,7 +388,7 @@ func runtimeFileConstructor(runtime *initializationRuntime, _ *jvm.VM, arguments
 		return jvm.VoidValue(), newGuestIOException("Invalid file open")
 	}
 	state := &runtimeGuestFile{name: name}
-	data, exists := runtime.guestFile(name)
+	data, exists := runtime.GuestFile(name)
 	// Mode 1 is read-only: a missing file is an open error, matching the
 	// original runtime, so first-boot save loads take their fallback path.
 	if !exists && mode == 1 {
@@ -450,7 +411,7 @@ func runtimeFileConstructor(runtime *initializationRuntime, _ *jvm.VM, arguments
 		runtime.setGuestFile(name, []byte{})
 	}
 	state.truncated = mode == 3
-	state.seen = runtime.guestFileWrites[guestFileKey(name)]
+	state.seen = runtime.GuestFileWrites[guestFileKey(name)]
 	receiver.Native = state
 	return jvm.VoidValue(), nil
 }
@@ -569,7 +530,7 @@ func runtimeFileWrite(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm
 	}
 	state.data, state.position = staged, end
 	runtime.setGuestFile(state.name, staged)
-	state.seen = runtime.guestFileWrites[guestFileKey(state.name)]
+	state.seen = runtime.GuestFileWrites[guestFileKey(state.name)]
 	return jvm.IntValue(int32(len(data))), nil
 }
 
@@ -758,23 +719,23 @@ func runtimeFileSystemRename(runtime *initializationRuntime, _ *jvm.VM, argument
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	if reservedStorageName(guestFileScope, strings.TrimPrefix(from, "/")) {
+	if wipicrt.ReservedStorageName(wipicrt.GuestFileScope, strings.TrimPrefix(from, "/")) {
 		// The source as well as the destination. Reading one of these names
 		// resolves the platform's own list, so renaming it away would copy
 		// the list's bytes into a file the title can then open — around the
 		// refusal a File of that name already gets.
 		return jvm.VoidValue(), newGuestIOException("cannot rename a reserved name: " + from)
 	}
-	if reservedStorageName(guestFileScope, strings.TrimPrefix(to, "/")) {
+	if wipicrt.ReservedStorageName(wipicrt.GuestFileScope, strings.TrimPrefix(to, "/")) {
 		// The name this table keeps its removal list under. The write would be
 		// dropped and the source deleted, so the rename has to be refused
 		// before either — a rename that destroys its source and stores nothing
 		// is worse than one that fails.
 		return jvm.VoidValue(), newGuestIOException("cannot rename onto a reserved name: " + to)
 	}
-	data, exists := runtime.guestFile(from)
-	if runtime.saveReadError != nil {
-		return jvm.VoidValue(), runtime.saveReadError
+	data, exists := runtime.GuestFile(from)
+	if runtime.SaveReadError != nil {
+		return jvm.VoidValue(), runtime.SaveReadError
 	}
 	if !exists {
 		return jvm.VoidValue(), newGuestIOException("file not found: " + from)
@@ -782,14 +743,14 @@ func runtimeFileSystemRename(runtime *initializationRuntime, _ *jvm.VM, argument
 	if strings.TrimPrefix(from, "/") == strings.TrimPrefix(to, "/") {
 		return jvm.VoidValue(), nil
 	}
-	if err := runtime.saveChanges(map[string][]byte{"fs/" + strings.TrimPrefix(to, "/"): data}, guestFileRemovedKey, runtime.removedGuestFiles(), map[string]bool{strings.TrimPrefix(from, "/"): true, strings.TrimPrefix(to, "/"): false}); err != nil {
+	if err := runtime.SaveChanges(map[string][]byte{"fs/" + strings.TrimPrefix(to, "/"): data}, guestFileRemovedKey, runtime.RemovedGuestFiles(), map[string]bool{strings.TrimPrefix(from, "/"): true, strings.TrimPrefix(to, "/"): false}); err != nil {
 		return jvm.VoidValue(), newGuestIOException(err.Error())
 	}
 	runtime.setGuestFile(to, append([]byte(nil), data...))
 	// The old name is deleted, which is the same problem unlink has: the save
 	// underneath it outlives the rename unless the removal is written down.
-	delete(runtime.guestFiles, from)
-	delete(runtime.guestFiles, strings.TrimPrefix(from, "/"))
+	delete(runtime.GuestFiles, from)
+	delete(runtime.GuestFiles, strings.TrimPrefix(from, "/"))
 	return jvm.VoidValue(), nil
 }
 

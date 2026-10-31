@@ -26,7 +26,7 @@ func (runtime *initializationRuntime) installCameraBoundsCompatibility() error {
 		return nil
 	}
 	code := make([]byte, cameraBoundsEnd-cameraBoundsStart)
-	if err := runtime.client.core.Memory().Read(cameraBoundsStart, code); err != nil {
+	if err := runtime.client.Core().Memory().Read(cameraBoundsStart, code); err != nil {
 		return err
 	}
 	// Check the relocated routine too. Unknown layouts retain their code.
@@ -35,11 +35,11 @@ func (runtime *initializationRuntime) installCameraBoundsCompatibility() error {
 	}
 	// Replace only STR r3,[r0,#0x74]. The surrounding smoothing, horizontal
 	// bounds, registers, flags and return sequence remain guest instructions.
-	if err := runtime.client.core.Memory().Load(cameraBoundsStore, []byte{byte(svcCategoryCameraBounds), 0xdf}); err != nil {
+	if err := runtime.client.Core().Memory().Load(cameraBoundsStore, []byte{byte(svcCategoryCameraBounds), 0xdf}); err != nil {
 		return err
 	}
 	runtime.cameraBoundsStore = cameraBoundsStore
-	runtime.countDiagnostic("compatibility nonnegative camera bounds")
+	runtime.CountDiagnostic("compatibility nonnegative camera bounds")
 	return nil
 }
 
@@ -60,9 +60,9 @@ func (runtime *initializationRuntime) storeCameraBounds(thread *armcore.Thread, 
 	}
 	if int32(value) < 0 {
 		value = 0
-		runtime.countDiagnostic("compatibility camera Y clamp")
+		runtime.CountDiagnostic("compatibility camera Y clamp")
 	}
 	var word [4]byte
 	binary.LittleEndian.PutUint32(word[:], value)
-	return runtime.client.core.Memory().Write(base+0x74, word[:])
+	return runtime.client.Core().Memory().Write(base+0x74, word[:])
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/cheat"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // cheatTarget adapts the client's flat guest address space to the cheat
@@ -18,18 +19,18 @@ type cheatTarget struct {
 }
 
 func (target cheatTarget) ReadMemory(address uint32, destination []byte) error {
-	return target.client.core.Memory().Read(address, destination)
+	return target.client.Core().Memory().Read(address, destination)
 }
 
 // WriteMemory deliberately does not go through the watched write path: the
 // engine's own freeze rewrites land every tick, and recording them would make
 // the cheat the loudest writer of every address it holds.
 func (target cheatTarget) WriteMemory(address uint32, data []byte) error {
-	return target.client.core.Memory().WriteUntracked(address, data)
+	return target.client.Core().Memory().WriteUntracked(address, data)
 }
 
 func (target cheatTarget) Regions() []cheat.Region {
-	committed := target.client.core.Memory().CommittedRegions(armcore.PermissionWrite)
+	committed := target.client.Core().Memory().CommittedRegions(armcore.PermissionWrite)
 	regions := make([]cheat.Region, 0, len(committed))
 	for _, region := range committed {
 		label, code := target.label(region.Base)
@@ -55,17 +56,17 @@ func (target cheatTarget) Regions() []cheat.Region {
 func (target cheatTarget) label(base uint32) (string, bool) {
 	image := target.client.image
 	switch {
-	case base >= ImageBase && uint64(base) < uint64(ImageBase)+uint64(len(image.Data))+uint64(image.BSSSize):
+	case base >= wipicrt.ImageBase && uint64(base) < uint64(wipicrt.ImageBase)+uint64(len(image.Data))+uint64(image.BSSSize):
 		return "client", false
-	case base >= ThreadStackBase && base < platformDataBase:
+	case base >= wipicrt.ThreadStackBase && base < wipicrt.PlatformDataBase:
 		return "stack", false
-	case base >= platformCodeBase && uint64(base) < uint64(platformCodeBase)+platformCodeSize:
+	case base >= wipicrt.PlatformCodeBase && uint64(base) < uint64(wipicrt.PlatformCodeBase)+wipicrt.PlatformCodeSize:
 		// The 64 MiB data arena overlaps the read/execute stub arena, so the
 		// stub pages scan as writable. They are the platform's own veneers:
 		// nothing a game's state is ever in, and a whole arena of instructions
 		// for a sweep to walk.
 		return "stubs", true
-	case base >= platformDataBase && uint64(base) < uint64(platformDataBase)+platformDataSize:
+	case base >= wipicrt.PlatformDataBase && uint64(base) < uint64(wipicrt.PlatformDataBase)+wipicrt.PlatformDataSize:
 		return "platform", false
 	default:
 		return "data", false
@@ -78,13 +79,13 @@ func (target cheatTarget) label(base uint32) (string, bool) {
 // what makes cheatTarget a cheat.WatchTarget. A platform without an emulated
 // address space implements none of this and its sessions answer
 // cheat.ErrWatchUnsupported instead.
-func (target cheatTarget) Watch(address uint32)   { target.client.core.Watch(address) }
-func (target cheatTarget) Unwatch(address uint32) { target.client.core.Unwatch(address) }
-func (target cheatTarget) ClearWatches()          { target.client.core.ClearWatches() }
-func (target cheatTarget) Watches() []uint32      { return target.client.core.Watches() }
+func (target cheatTarget) Watch(address uint32)   { target.client.Core().Watch(address) }
+func (target cheatTarget) Unwatch(address uint32) { target.client.Core().Unwatch(address) }
+func (target cheatTarget) ClearWatches()          { target.client.Core().ClearWatches() }
+func (target cheatTarget) Watches() []uint32      { return target.client.Core().Watches() }
 
 func (target cheatTarget) WatchHits() []cheat.WatchHit {
-	hits := target.client.core.WatchHits()
+	hits := target.client.Core().WatchHits()
 	converted := make([]cheat.WatchHit, len(hits))
 	for index, hit := range hits {
 		converted[index] = cheat.WatchHit{
@@ -95,7 +96,9 @@ func (target cheatTarget) WatchHits() []cheat.WatchHit {
 	return converted
 }
 
-func (target cheatTarget) WatchHitsOverflowed() bool { return target.client.core.WatchHitsOverflowed() }
+func (target cheatTarget) WatchHitsOverflowed() bool {
+	return target.client.Core().WatchHitsOverflowed()
+}
 
 // writeOrigin translates the core's answer for the cheat engine, which is kept
 // free of the ARM core so a platform without one can still hold a session.

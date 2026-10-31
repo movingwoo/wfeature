@@ -56,8 +56,8 @@ func TestLocalSymbolizeProbe(t *testing.T) {
 	// copied from. Word 0 is deliberately overwritten, so it is skipped.
 	stale, checked := 0, 0
 	for classAddress, alias := range runtime.classAliases {
-		record, err1 := runtime.readAOTBytes(classAddress, javaClassSize, "probe class")
-		copied, err2 := runtime.readAOTBytes(alias, javaClassSize, "probe alias")
+		record, err1 := runtime.ReadAOTBytes(classAddress, javaClassSize, "probe class")
+		copied, err2 := runtime.ReadAOTBytes(alias, javaClassSize, "probe alias")
 		if err1 != nil || err2 != nil {
 			continue
 		}

@@ -105,7 +105,7 @@ func (runtime *initializationRuntime) validateClipListener(listener *jvm.Object)
 	if entry == 0 {
 		return fmt.Errorf("KTF listener callback has no entry")
 	}
-	return runtime.client.core.Memory().ValidateRange(entry&^1, width, armcore.PermissionExecute)
+	return runtime.client.Core().Memory().ValidateRange(entry&^1, width, armcore.PermissionExecute)
 }
 
 // Read the guest records again: cached summaries in a checkpoint are not
@@ -155,7 +155,7 @@ func (runtime *initializationRuntime) validateAOTMediaType(address uint32, name,
 		}
 	}
 	if undecided && len(pending) <= maxAOTHierarchyDepth {
-		runtime.countDiagnostic("media type undecided for " + target)
+		runtime.CountDiagnostic("media type undecided for " + target)
 		return nil
 	}
 	return fmt.Errorf("KTF media object does not implement %s within the class graph limit", target)
@@ -219,15 +219,15 @@ func (runtime *initializationRuntime) queueClipEvent(clip *jvm.Object, code int3
 	return nil
 }
 
-func (runtime *initializationRuntime) syncClipPlayback(clip *jvm.Object, state *clipState) error {
-	if !state.loaded || runtime.client.audio == nil {
+func (runtime *initializationRuntime) syncClipPlayback(clip *jvm.Object, state *javaClipState) error {
+	if !state.Loaded || runtime.client.Audio == nil {
 		return nil
 	}
-	progress, err := runtime.client.audio.PlaybackState(state.handle)
+	progress, err := runtime.client.Audio.PlaybackState(state.Handle)
 	if err != nil {
 		return err
 	}
-	if progress.Completed < state.completed {
+	if progress.Completed < state.Completed {
 		return fmt.Errorf("KTF Clip completion count moved backward")
 	}
 	listener, err := clipListener(clip)
@@ -235,7 +235,7 @@ func (runtime *initializationRuntime) syncClipPlayback(clip *jvm.Object, state *
 		return err
 	}
 	if listener != nil {
-		count := progress.Completed - state.completed
+		count := progress.Completed - state.Completed
 		// A Host pause does not stop the guest clock, so a looping clip a
 		// title leaves playing across a long park comes back owing more
 		// passes than the queue holds. The title was not running to hear
@@ -247,7 +247,7 @@ func (runtime *initializationRuntime) syncClipPlayback(clip *jvm.Object, state *
 			runtime.mediaEvents = append(runtime.mediaEvents, clipEvent{clip, listener, wipi.PlayEventEndOfData})
 		}
 	}
-	state.completed = progress.Completed
+	state.Completed = progress.Completed
 	if !progress.Playing && !progress.Paused {
 		state.owner = nil
 	}
@@ -256,21 +256,18 @@ func (runtime *initializationRuntime) syncClipPlayback(clip *jvm.Object, state *
 
 // Audio service and native calls run under client.run. Sort handles so
 // callbacks from different owners have deterministic observation order.
-func (runtime *initializationRuntime) syncClipCompletions(now time.Duration) error {
-	if runtime.client.audio != nil {
-		runtime.client.audio.Advance(now)
-	}
+func (runtime *initializationRuntime) syncJavaClips(time.Duration) error {
 	type loadedClip struct {
 		object *jvm.Object
-		state  *clipState
+		state  *javaClipState
 	}
 	var clips []loadedClip
 	for key, state := range runtime.clips {
-		if state.loaded {
+		if state.Loaded {
 			clips = append(clips, loadedClip{key.Value(), state})
 		}
 	}
-	slices.SortFunc(clips, func(a, b loadedClip) int { return cmp.Compare(a.state.handle, b.state.handle) })
+	slices.SortFunc(clips, func(a, b loadedClip) int { return cmp.Compare(a.state.Handle, b.state.Handle) })
 	for _, clip := range clips {
 		if err := runtime.syncClipPlayback(clip.object, clip.state); err != nil {
 			return err
@@ -292,12 +289,12 @@ func (runtime *initializationRuntime) mediaDeadlines(now time.Time, consider fun
 	if len(runtime.mediaEvents) != 0 {
 		consider(now)
 	}
-	audio := runtime.client.audio
+	audio := runtime.client.Audio
 	if audio == nil {
 		return
 	}
-	speed := runtime.client.speedOrDefault()
-	age := max(time.Duration(0), now.Sub(runtime.clockBase))
+	speed := runtime.client.SpeedOrDefault()
+	age := max(time.Duration(0), now.Sub(runtime.ClockBase))
 	scaled := float64(age) * speed
 	if scaled >= float64(math.MaxInt64) {
 		consider(now)
@@ -305,7 +302,7 @@ func (runtime *initializationRuntime) mediaDeadlines(now time.Time, consider fun
 	}
 	guestNow := time.Duration(scaled)
 	for key, state := range runtime.clips {
-		if !state.loaded {
+		if !state.Loaded {
 			continue
 		}
 		listener, err := clipListener(key.Value())
@@ -316,9 +313,9 @@ func (runtime *initializationRuntime) mediaDeadlines(now time.Time, consider fun
 		if listener == nil {
 			continue
 		}
-		end, ok := audio.NextCompletion(state.handle)
+		end, ok := audio.NextCompletion(state.Handle)
 		if !ok {
-			if audio.Playing(state.handle) {
+			if audio.Playing(state.Handle) {
 				consider(now) // A zero-length one-shot ends at its first advance.
 			}
 			continue

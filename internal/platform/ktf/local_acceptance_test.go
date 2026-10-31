@@ -18,6 +18,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 const localInitializationAcceptanceMaxSteps = 10_000_000
@@ -196,9 +197,9 @@ func TestLocalKTFArchivesInitialize(t *testing.T) {
 				t.Fatal(err)
 			}
 			result := summary.Context.Registers[0]
-			imageEnd := uint64(ImageBase) + archive.JAR.Client.MappedSize()
-			if uint64(result) < uint64(ImageBase) || uint64(result) >= imageEnd || result&3 != 0 {
-				t.Fatalf("entry result = %#x, want aligned descriptor in [%#x, %#x)", result, ImageBase, imageEnd)
+			imageEnd := uint64(wipicrt.ImageBase) + archive.JAR.Client.MappedSize()
+			if uint64(result) < uint64(wipicrt.ImageBase) || uint64(result) >= imageEnd || result&3 != 0 {
+				t.Fatalf("entry result = %#x, want aligned descriptor in [%#x, %#x)", result, wipicrt.ImageBase, imageEnd)
 			}
 			executable, err := client.ReadExecutable(result)
 			if err != nil {
@@ -331,7 +332,7 @@ func TestLocalKTFArchivesConstructMainClass(t *testing.T) {
 			}
 			object, constructed, err := client.NewObject(context.Background(), archive.Descriptor.MainClass, "()V")
 			if err != nil {
-				t.Fatal(withDiagnosticCounts(client.runtime.diagnosticCounts(), 2000,
+				t.Fatal(withDiagnosticCounts(client.runtime.DiagnosticCounts(), 2000,
 					"%v; runs=%+v callbacks=%+v", err, constructed.Runs, client.runtime.callbacks))
 			}
 			address, ok := client.JVM().AOTAddress(object)
@@ -396,7 +397,7 @@ func TestLocalKTFArchivesStartMainClass(t *testing.T) {
 			}
 			object, _, err := client.NewObject(context.Background(), archive.Descriptor.MainClass, "()V")
 			if err != nil {
-				t.Fatal(withDiagnosticCounts(client.runtime.diagnosticCounts(), 2000, "construct: %v", err))
+				t.Fatal(withDiagnosticCounts(client.runtime.DiagnosticCounts(), 2000, "construct: %v", err))
 			}
 			classAddress, err := client.runtime.ensureJavaClass("[Ljava/lang/String;")
 			if err != nil {
@@ -416,7 +417,7 @@ func TestLocalKTFArchivesStartMainClass(t *testing.T) {
 			}
 			started, err := client.InvokeVirtual(context.Background(), object, "startApp", "([Ljava/lang/String;)V", jvm.ReferenceValue(argumentsObject))
 			if err != nil {
-				t.Fatal(withDiagnosticCounts(client.runtime.diagnosticCounts(), 2000,
+				t.Fatal(withDiagnosticCounts(client.runtime.DiagnosticCounts(), 2000,
 					"site hints:\n%s\nstartApp: %v; runs=%d",
 					errorSiteHints(client.JVM(), err), err, len(started.Runs)))
 			}
@@ -507,7 +508,7 @@ func TestLocalKTFArchivesRenderFirstFrame(t *testing.T) {
 			// so it runs a manual clock it jumps to each next deadline: the
 			// same sequence of guest work at no real cost. This is what
 			// `runktf` does without -play.
-			clock := NewManualClock(time.Time{})
+			clock := wipicrt.NewManualClock(time.Time{})
 			session, err := StartSession(context.Background(), data, SessionOptions{
 				MaxSteps: localAcceptanceMaxSteps(t),
 				Clock:    clock,
@@ -551,7 +552,7 @@ func TestLocalKTFArchivesRenderFirstFrame(t *testing.T) {
 				}
 			}
 			if flushes == 0 || drawn == 0 {
-				t.Fatal(withDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 60,
+				t.Fatal(withDiagnosticCounts(session.Client.runtime.DiagnosticCounts(), 60,
 					"no frame (ticks=%d flushes=%d drawn=%d tickErr=%v)", ran, flushes, drawn, tickErr))
 			}
 			rendered++

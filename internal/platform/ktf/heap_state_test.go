@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestContinuationHeapRestoresDynamicObjectsAndGuestArray(t *testing.T) {
@@ -27,7 +28,7 @@ func TestContinuationHeapRestoresDynamicObjectsAndGuestArray(t *testing.T) {
 	source.object.SetFieldValue("self", jvm.ReferenceValue(source.object))
 	source.object.SetFieldValue("label", jvm.ReferenceValue(source.client.vm.NewString("saved after startup")))
 	saved := source.capture(t)
-	wantNext, err := source.runtime.allocate(20)
+	wantNext, err := source.runtime.Allocate(20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +65,7 @@ func TestContinuationHeapRestoresDynamicObjectsAndGuestArray(t *testing.T) {
 	}
 	var word [4]byte
 	binary.LittleEndian.PutUint32(word[:], 87)
-	if err := fresh.client.core.Memory().Write(elements+4, word[:]); err != nil {
+	if err := fresh.client.Core().Memory().Write(elements+4, word[:]); err != nil {
 		t.Fatal(err)
 	}
 	values, err := jvm.ArrayRange(restoredArray, 0, 2)
@@ -74,20 +75,20 @@ func TestContinuationHeapRestoresDynamicObjectsAndGuestArray(t *testing.T) {
 	if got, _ := values[1].Int32(); got != 87 {
 		t.Fatalf("guest store did not reach restored array: %d", got)
 	}
-	gotNext, err := fresh.runtime.allocate(20)
+	gotNext, err := fresh.runtime.Allocate(20)
 	if err != nil || gotNext != wantNext {
 		t.Fatalf("next allocation=%#x, %v; want %#x", gotNext, err, wantNext)
 	}
 }
 
 func TestArenaStatePreservesFreeListAndRefusesMalformedRanges(t *testing.T) {
-	arena := newGuestArena(0x1000, 0x1000)
-	a, _ := arena.allocate(32)
-	_, _ = arena.allocate(32)
-	c, _ := arena.allocate(32)
-	arena.release(a, 32)
-	arena.release(c, 32)
-	saved, err := arena.captureState()
+	arena := wipicrt.NewGuestArena(0x1000, 0x1000)
+	a, _ := arena.Allocate(32)
+	_, _ = arena.Allocate(32)
+	c, _ := arena.Allocate(32)
+	arena.Release(a, 32)
+	arena.Release(c, 32)
+	saved, err := captureArenaState(arena)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,8 +97,8 @@ func TestArenaStatePreservesFreeListAndRefusesMalformedRanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, size := range []uint64{12, 24, 4, 64} {
-		want, ok := arena.allocate(size)
-		got, freshOK := fresh.allocate(size)
+		want, ok := arena.Allocate(size)
+		got, freshOK := fresh.Allocate(size)
 		if ok != freshOK || got != want {
 			t.Fatalf("allocation(%d)=%#x/%v, want %#x/%v", size, got, freshOK, want, ok)
 		}

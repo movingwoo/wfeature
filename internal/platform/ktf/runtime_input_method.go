@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A title that draws its own text field builds an InputMethodHandler, gives it
@@ -73,7 +74,7 @@ const (
 	// inputMethodCarrier is the key a Host character travels on. The titles
 	// forward every key of the pad to their open field, and a digit is the key
 	// the WIPI C input method's Host text travels on too.
-	inputMethodCarrier = KeyNum0
+	inputMethodCarrier = wipicrt.KeyNum0
 	// maxInputMethodHostUnits bounds one Host composition, in Java chars. The
 	// field's own limit is the title's, and it applies it one key at a time.
 	maxInputMethodHostUnits = 64
@@ -156,18 +157,18 @@ func runtimeInputMethodNotifyKeyInput(runtime *initializationRuntime, vm *jvm.VM
 	// The title hands its field's keys here, so the field is open.
 	runtime.touchInputMethod(receiver, true)
 	// A press types; a release and a repeat do not.
-	if eventType != KeyPressed {
+	if eventType != wipicrt.KeyPressed {
 		return jvm.IntValue(0), nil
 	}
 	switch {
-	case key == KeyClear:
+	case key == wipicrt.KeyClear:
 		// The title forwards clear while its field has text — the first title
 		// takes it as cancel when the field is empty — and a deletion is the
 		// edit its listener applies to its own text.
 		if err := notifyInputMethodListener(vm, listener, nil, inputMethodDelete); err != nil {
 			return jvm.VoidValue(), err
 		}
-	case key >= KeyNum0 && key <= KeyNum9 && inputMethodTypesDigits(receiver):
+	case key >= wipicrt.KeyNum0 && key <= wipicrt.KeyNum9 && inputMethodTypesDigits(receiver):
 		if err := notifyInputMethodListener(vm, listener, []uint16{uint16(key)}, inputMethodInsert); err != nil {
 			return jvm.VoidValue(), err
 		}
@@ -181,7 +182,7 @@ func runtimeInputMethodNotifyKeyInput(runtime *initializationRuntime, vm *jvm.VM
 // character, for a title's own field or for the C input method, rather than
 // being a key the player pressed.
 func (runtime *initializationRuntime) hostCarrierInFlight() bool {
-	return runtime.javaInput.pending != nil || len(runtime.cInput.pending) != 0
+	return runtime.javaInput.pending != nil || len(runtime.CInput.Pending) != 0
 }
 
 // inputMethodTypesDigits answers whether a digit key types its digit: in the
@@ -384,7 +385,7 @@ func runtimeInputMethodSetListener(runtime *initializationRuntime, vm *jvm.VM, a
 // method leaves such a title out for the same reason.
 func (client *Client) titleFieldOffered(handler, card *jvm.Object, relaxed bool) bool {
 	runtime := client.runtime
-	if handler == nil || card == nil || runtime.guestEventLoop || runtime.topCard() != card {
+	if handler == nil || card == nil || runtime.GuestEventLoop || runtime.topCard() != card {
 		return false
 	}
 	// A vendor form that owns the keypad takes every press, so a carrier
@@ -417,8 +418,8 @@ func (client *Client) titleFieldTextInput(target textInputTarget) *backend.TextI
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			client.run.Lock()
-			defer client.run.Unlock()
+			client.Run.Lock()
+			defer client.Run.Unlock()
 			// The field is still the one a snapshot would choose, on its card,
 			// and nothing a press did has spent the composition.
 			unchanged := func() bool {
@@ -446,10 +447,10 @@ func (client *Client) titleFieldTextInput(target textInputTarget) *backend.TextI
 					runtime.javaInput.revision++
 				}
 			}()
-			defer client.beginHostService(ctx)()
-			previousThread, previousContext := runtime.currentThread, runtime.currentContext
-			runtime.currentThread, runtime.currentContext = client.thread, ctx
-			defer func() { runtime.currentThread, runtime.currentContext = previousThread, previousContext }()
+			defer client.BeginHostService(ctx)()
+			previousThread, previousContext := runtime.CurrentThread, runtime.CurrentContext
+			runtime.CurrentThread, runtime.CurrentContext = client.Thread, ctx
+			defer func() { runtime.CurrentThread, runtime.CurrentContext = previousThread, previousContext }()
 			for _, character := range text {
 				if err := ctx.Err(); err != nil {
 					return err
@@ -461,11 +462,11 @@ func (client *Client) titleFieldTextInput(target textInputTarget) *backend.TextI
 				runtime.javaInput.keyTaken = false
 				// The carrier is a key, and what keyNotify throws and does not
 				// catch ends that key here as it does for SendKey.
-				err := client.absorbUncaughtCallback("key", runtime.dispatchKeyToCards(KeyPressed, inputMethodCarrier))
+				err := client.absorbUncaughtCallback("key", runtime.dispatchKeyToCards(wipicrt.KeyPressed, inputMethodCarrier))
 				consumed := runtime.javaInput.pending == nil
 				runtime.javaInput.pending, runtime.javaInput.keyTaken = nil, false
 				if err == nil {
-					err = client.absorbUncaughtCallback("key", runtime.dispatchKeyToCards(KeyReleased, inputMethodCarrier))
+					err = client.absorbUncaughtCallback("key", runtime.dispatchKeyToCards(wipicrt.KeyReleased, inputMethodCarrier))
 				}
 				if err != nil {
 					return err

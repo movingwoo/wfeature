@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestHeapGraphicsPreservesTransparentColorAndSharedMask(t *testing.T) {
@@ -16,7 +17,7 @@ func TestHeapGraphicsPreservesTransparentColorAndSharedMask(t *testing.T) {
 	bitmap.SetNRGBA(-1, 3, color.NRGBA{R: 255, G: 19, B: 127, A: 0})
 	bitmap.SetNRGBA(0, 3, color.NRGBA{R: 211, G: 59, B: 73, A: 117})
 	bitmap.SetNRGBA(1, 3, color.NRGBA{R: 127, G: 255, B: 11, A: 255})
-	decoded := withOpacity(bitmap)
+	decoded := wipicrt.WithOpacity(bitmap)
 	imageObject := &jvm.Object{ClassName: "org/kwis/msp/lcdui/Image", Native: decoded, Fields: make(map[string]jvm.Value)}
 	handle, err := runtime.imageFramebufferHandle(imageObject)
 	if err != nil {
@@ -37,7 +38,7 @@ func TestHeapGraphicsPreservesTransparentColorAndSharedMask(t *testing.T) {
 	if len(saved.Opacities) != 1 {
 		t.Fatalf("shared mask count=%d", len(saved.Opacities))
 	}
-	memory, err := client.core.CaptureState()
+	memory, err := client.Core().CaptureState()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +51,8 @@ func TestHeapGraphicsPreservesTransparentColorAndSharedMask(t *testing.T) {
 		t.Fatal(err)
 	}
 	freshClient, fresh := newTestRuntime(t)
-	freshClient.core, err = armcore.NewCoreFromState(memory, armcore.CoreOptions{})
+	restoredCore, err := armcore.NewCoreFromState(memory, armcore.CoreOptions{})
+	freshClient.AttachCore(restoredCore, freshClient.Thread)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +69,7 @@ func TestHeapGraphicsPreservesTransparentColorAndSharedMask(t *testing.T) {
 			want, got := decoded.At(x, y), restored.At(x, y)
 			wr, wg, wb, wa := want.RGBA()
 			gr, gg, gb, ga := got.RGBA()
-			if wr != gr || wg != gg || wb != gb || wa != ga || color.NRGBAModel.Convert(want) != color.NRGBAModel.Convert(got) || imagePixel565(decoded, x, y) != imagePixel565(restored, x, y) {
+			if wr != gr || wg != gg || wb != gb || wa != ga || color.NRGBAModel.Convert(want) != color.NRGBAModel.Convert(got) || wipicrt.ImagePixel565(decoded, x, y) != wipicrt.ImagePixel565(restored, x, y) {
 				t.Fatalf("restored pixel differs at %d,%d", x, y)
 			}
 		}
@@ -75,12 +77,12 @@ func TestHeapGraphicsPreservesTransparentColorAndSharedMask(t *testing.T) {
 	if got := roots[1].Native.(*runtimeGraphicsState); got == state || *got != *state {
 		t.Fatal("graphics state differs or is shared with its source")
 	}
-	mask := fresh.framebufferOpacityOf(handle)
-	if mask != imageOpacityOf(restored) || mask == imageOpacityOf(decoded) {
+	mask := fresh.FramebufferOpacityOf(handle)
+	if mask != wipicrt.ImageOpacityOf(restored) || mask == wipicrt.ImageOpacityOf(decoded) {
 		t.Fatal("image/framebuffer mask alias was lost")
 	}
-	mask.markOpaque(0, 0)
-	if !imageOpacityOf(restored).opaqueAt(0, 0) || imageOpacityOf(decoded).opaqueAt(0, 0) {
+	mask.MarkOpaque(0, 0)
+	if !wipicrt.ImageOpacityOf(restored).OpaqueAt(0, 0) || wipicrt.ImageOpacityOf(decoded).OpaqueAt(0, 0) {
 		t.Fatal("restored mask mutation did not preserve sharing and independence")
 	}
 	if _, err := fresh.captureHeapState(roots); err != nil {
@@ -90,7 +92,7 @@ func TestHeapGraphicsPreservesTransparentColorAndSharedMask(t *testing.T) {
 
 func TestHeapImageColorModelsAndMalformedRecords(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	context := &heapNativeContext{runtime: runtime, opacityIDs: make(map[*imageOpacity]uint32), restored: []*imageOpacity{nil}}
+	context := &heapNativeContext{runtime: runtime, opacityIDs: make(map[*wipicrt.ImageOpacity]uint32), restored: []*wipicrt.ImageOpacity{nil}}
 	palette := color.Palette{color.NRGBA{R: 201, G: 7, B: 19, A: 0}, color.RGBA{R: 42, G: 21, B: 17, A: 93}, color.NRGBA64{R: 0x1234, G: 0x5678, B: 0x9abc, A: 0x1234}}
 	bitmap := image.NewPaletted(image.Rect(0, 0, 3, 1), palette)
 	copy(bitmap.Pix, []byte{0, 1, 2})

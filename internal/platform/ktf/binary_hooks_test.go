@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 const hookScratch = uint32(0x28000000)
@@ -14,7 +15,7 @@ const hookScratch = uint32(0x28000000)
 func newHookRuntime(t *testing.T) (*Client, *initializationRuntime) {
 	t.Helper()
 	client, runtime := newTestRuntime(t)
-	if err := client.core.Memory().Map(hookScratch, 1<<16, armcore.PermissionReadWrite); err != nil {
+	if err := client.Core().Memory().Map(hookScratch, 1<<16, armcore.PermissionReadWrite); err != nil {
 		t.Fatal(err)
 	}
 	return client, runtime
@@ -23,11 +24,11 @@ func newHookRuntime(t *testing.T) (*Client, *initializationRuntime) {
 func callHook(t *testing.T, client *Client, runtime *initializationRuntime, kind binaryHookKind, arguments ...uint32) uint32 {
 	t.Helper()
 	for register, value := range arguments {
-		if err := client.thread.SetRegister(register, value); err != nil {
+		if err := client.Thread.SetRegister(register, value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	result, err := runtime.handleBinaryHookCall(client.thread, uint32(kind))
+	result, err := runtime.handleBinaryHookCall(client.Thread, uint32(kind))
 	if err != nil {
 		t.Fatalf("hook %d error = %v", kind, err)
 	}
@@ -37,7 +38,7 @@ func callHook(t *testing.T, client *Client, runtime *initializationRuntime, kind
 func readScratch(t *testing.T, client *Client, address uint32, length int) []byte {
 	t.Helper()
 	buffer := make([]byte, length)
-	if err := client.core.Memory().Read(address, buffer); err != nil {
+	if err := client.Core().Memory().Read(address, buffer); err != nil {
 		t.Fatal(err)
 	}
 	return buffer
@@ -49,7 +50,7 @@ func readScratch(t *testing.T, client *Client, address uint32, length int) []byt
 // returned pointer are all checked.
 func TestHookedMemsetFillsAndReturnsDestination(t *testing.T) {
 	client, runtime := newHookRuntime(t)
-	if err := client.core.Memory().Write(hookScratch, bytes.Repeat([]byte{0xaa}, 16)); err != nil {
+	if err := client.Core().Memory().Write(hookScratch, bytes.Repeat([]byte{0xaa}, 16)); err != nil {
 		t.Fatal(err)
 	}
 	// memset(scratch+4, 0x1ff, 8): only the low byte is written.
@@ -77,7 +78,7 @@ func TestHookedMemcpyCopiesAndReturnsDestination(t *testing.T) {
 	source := hookScratch
 	destination := hookScratch + 0x100
 	payload := []byte{1, 2, 3, 4, 5, 6, 7, 8}
-	if err := client.core.Memory().Write(source, payload); err != nil {
+	if err := client.Core().Memory().Write(source, payload); err != nil {
 		t.Fatal(err)
 	}
 	result := callHook(t, client, runtime, hookMemcpy, destination, source, uint32(len(payload)))
@@ -91,14 +92,14 @@ func TestHookedMemcpyCopiesAndReturnsDestination(t *testing.T) {
 
 func TestHookedStrlenStopsAtTheTerminator(t *testing.T) {
 	client, runtime := newHookRuntime(t)
-	if err := client.core.Memory().Write(hookScratch, append([]byte("hello"), 0, 'x')); err != nil {
+	if err := client.Core().Memory().Write(hookScratch, append([]byte("hello"), 0, 'x')); err != nil {
 		t.Fatal(err)
 	}
 	if length := callHook(t, client, runtime, hookStrlen, hookScratch); length != 5 {
 		t.Fatalf("strlen = %d, want 5", length)
 	}
 	// An empty string is zero, not the chunk the scan reads at a time.
-	if err := client.core.Memory().Write(hookScratch, []byte{0}); err != nil {
+	if err := client.Core().Memory().Write(hookScratch, []byte{0}); err != nil {
 		t.Fatal(err)
 	}
 	if length := callHook(t, client, runtime, hookStrlen, hookScratch); length != 0 {
@@ -106,12 +107,12 @@ func TestHookedStrlenStopsAtTheTerminator(t *testing.T) {
 	}
 	// A string longer than the scan's first read and its buffer still
 	// resolves.
-	long := append(bytes.Repeat([]byte{'a'}, guestStringBuffer+7), 0)
-	if err := client.core.Memory().Write(hookScratch, long); err != nil {
+	long := append(bytes.Repeat([]byte{'a'}, wipicrt.GuestStringBuffer+7), 0)
+	if err := client.Core().Memory().Write(hookScratch, long); err != nil {
 		t.Fatal(err)
 	}
-	if length := callHook(t, client, runtime, hookStrlen, hookScratch); length != uint32(guestStringBuffer+7) {
-		t.Fatalf("strlen across chunks = %d, want %d", length, guestStringBuffer+7)
+	if length := callHook(t, client, runtime, hookStrlen, hookScratch); length != uint32(wipicrt.GuestStringBuffer+7) {
+		t.Fatalf("strlen across chunks = %d, want %d", length, wipicrt.GuestStringBuffer+7)
 	}
 }
 
@@ -123,11 +124,11 @@ func TestHookedStrcpyCopiesTheTerminatorAndReturnsTheDestination(t *testing.T) {
 	client, runtime := newHookRuntime(t)
 	const source = hookScratch
 	const destination = hookScratch + 0x100
-	if err := client.core.Memory().Write(source, append([]byte("hello"), 0, 'x')); err != nil {
+	if err := client.Core().Memory().Write(source, append([]byte("hello"), 0, 'x')); err != nil {
 		t.Fatal(err)
 	}
 	// Pre-fill the destination so a missing terminator would show as leftovers.
-	if err := client.core.Memory().Write(destination, bytes.Repeat([]byte{'Z'}, 8)); err != nil {
+	if err := client.Core().Memory().Write(destination, bytes.Repeat([]byte{'Z'}, 8)); err != nil {
 		t.Fatal(err)
 	}
 	if got := callHook(t, client, runtime, hookStrcpy, destination, source); got != destination {
@@ -146,10 +147,10 @@ func TestHookedStrcpyCopiesAnEmptyString(t *testing.T) {
 	client, runtime := newHookRuntime(t)
 	const source = hookScratch
 	const destination = hookScratch + 0x100
-	if err := client.core.Memory().Write(source, []byte{0}); err != nil {
+	if err := client.Core().Memory().Write(source, []byte{0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.core.Memory().Write(destination, []byte{'Z', 'Z'}); err != nil {
+	if err := client.Core().Memory().Write(destination, []byte{'Z', 'Z'}); err != nil {
 		t.Fatal(err)
 	}
 	callHook(t, client, runtime, hookStrcpy, destination, source)
@@ -170,7 +171,7 @@ func TestBinaryHooksInstallOverMatchesOnly(t *testing.T) {
 	}
 	image := make([]byte, 512)
 	copy(image[64:], raw)
-	if err := client.core.Memory().Write(hookScratch, image); err != nil {
+	if err := client.Core().Memory().Write(hookScratch, image); err != nil {
 		t.Fatal(err)
 	}
 

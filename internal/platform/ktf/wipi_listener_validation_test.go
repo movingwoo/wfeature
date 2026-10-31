@@ -9,6 +9,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -39,7 +40,7 @@ func TestKTFWIPIListenerCheckpointRejectsMalformedMediaWithoutChangingSource(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	audioBefore, err := fixture.client.audio.CaptureState()
+	audioBefore, err := fixture.client.Audio.CaptureState()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +192,7 @@ func TestKTFWIPIListenerCheckpointRejectsMalformedMediaWithoutChangingSource(t *
 				t.Fatal(err)
 			}
 			options := fixture.session.options
-			options.Clock, options.AudioSink = NewManualClock(time.Unix(1900000000, 0)), &audioPauseProbe{}
+			options.Clock, options.AudioSink = wipicrt.NewManualClock(time.Unix(1900000000, 0)), &audioPauseProbe{}
 			prepared, err := PrepareSessionCheckpoint(fixture.archive, corrupt, options)
 			if prepared != nil {
 				prepared.Discard()
@@ -199,7 +200,7 @@ func TestKTFWIPIListenerCheckpointRejectsMalformedMediaWithoutChangingSource(t *
 			if err == nil {
 				t.Fatal("malformed media checkpoint was accepted")
 			}
-			audioAfter, err := fixture.client.audio.CaptureState()
+			audioAfter, err := fixture.client.Audio.CaptureState()
 			if err != nil || !reflect.DeepEqual(audioBefore, audioAfter) || !slices.Equal(eventsBefore, fixture.runtime.mediaEvents) {
 				t.Fatalf("refused checkpoint changed source playback: %v", err)
 			}

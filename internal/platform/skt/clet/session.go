@@ -7,6 +7,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -46,11 +47,11 @@ type SessionOptions struct {
 	ServiceWait time.Duration
 	// SaveStore persists guest saves; when nil and SaveRoot is set, a directory
 	// store scoped by the program number is attached instead.
-	SaveStore SaveStore
+	SaveStore wipicrt.SaveStore
 	// SaveRoot is the directory a filesystem Host uses for saves.
 	SaveRoot string
 	// Clock is the time source waits are measured against; nil selects the wall.
-	Clock Clock
+	Clock wipicrt.Clock
 	// Speed scales the game's pace; zero and 1 both select the original speed.
 	Speed float64
 	// TraceLimit is how many recent boundary events Diagnostics reports.

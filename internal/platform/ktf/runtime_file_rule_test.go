@@ -54,7 +54,7 @@ func readRuleFile(t *testing.T, client *Client, runtime *initializationRuntime, 
 // the write used to keep the copy its own open took.
 func TestAWriteThroughOneFileIsSeenByAnotherOpenOnThePath(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	client.saveStore = &refusableSaveStore{saves: map[string][]byte{"fs/save.dat": []byte("old")}}
+	client.SaveStore = &refusableSaveStore{saves: map[string][]byte{"fs/save.dat": []byte("old")}}
 
 	reader := openRuleFile(t, client, runtime, "save.dat", 4)
 	writer := openRuleFile(t, client, runtime, "/save.dat", 4)
@@ -71,7 +71,7 @@ func TestAWriteThroughOneFileIsSeenByAnotherOpenOnThePath(t *testing.T) {
 func TestATruncatingOpenEmptiesTheFileAtTheOpen(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	store := &refusableSaveStore{saves: map[string][]byte{"fs/save.dat": []byte("old save")}}
-	client.saveStore = store
+	client.SaveStore = store
 
 	openRuleFile(t, client, runtime, "save.dat", 3)
 
@@ -88,7 +88,7 @@ func TestATruncatingOpenEmptiesTheFileAtTheOpen(t *testing.T) {
 // title to believe it is rewriting a file that still holds its old bytes.
 func TestATruncatingOpenTheStoreRefusesFails(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	client.saveStore = &refusableSaveStore{saves: map[string][]byte{"fs/save.dat": []byte("old")}, refuse: errRuleStoreRefused}
+	client.SaveStore = &refusableSaveStore{saves: map[string][]byte{"fs/save.dat": []byte("old")}, refuse: errRuleStoreRefused}
 
 	file := &jvm.Object{ClassName: "org/kwis/msp/io/File", Fields: make(map[string]jvm.Value)}
 	_, err := runtimeFileConstructor(runtime, client.vm, []jvm.Value{
@@ -131,19 +131,19 @@ func TestAWritingOpenCreatesAMissingFile(t *testing.T) {
 	for _, mode := range []int32{2, 4} {
 		client, runtime := newTestRuntime(t)
 		store := &refusableSaveStore{saves: map[string][]byte{}}
-		client.saveStore = store
+		client.SaveStore = store
 
 		openRuleFile(t, client, runtime, "new.dat", mode)
 
 		if data, ok := store.saves["fs/new.dat"]; !ok || len(data) != 0 {
 			t.Fatalf("mode %d: after opening a missing file for writing the store holds %q (found %v), want an empty file", mode, data, ok)
 		}
-		if _, exists := runtime.guestFile("new.dat"); !exists {
+		if _, exists := runtime.GuestFile("new.dat"); !exists {
 			t.Fatalf("mode %d: the created file is not there for the next open", mode)
 		}
 	}
 	client, runtime := newTestRuntime(t)
-	client.saveStore = &refusableSaveStore{saves: map[string][]byte{}}
+	client.SaveStore = &refusableSaveStore{saves: map[string][]byte{}}
 	file := &jvm.Object{ClassName: "org/kwis/msp/io/File", Fields: make(map[string]jvm.Value)}
 	if _, err := runtimeFileConstructor(runtime, client.vm, []jvm.Value{
 		jvm.ReferenceValue(file), jvm.ReferenceValue(client.vm.NewString("missing.dat")), jvm.IntValue(1),

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A game is supposed to check what MC_knlGetResourceID answered before it
@@ -16,17 +17,17 @@ import (
 func TestGetResourceRefusesAHandleThatIsAnErrorCode(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
-	for _, handle := range []uint32{wipicErrorNotFound, wipicErrorGeneric, wipicErrorShortBuf, 0x80000000} {
+	for _, handle := range []uint32{wipicrt.WIPICErrorNotFound, wipicrt.WIPICErrorGeneric, wipicrt.WIPICErrorShortBuf, 0x80000000} {
 		callContext := armcore.NewContext()
 		callContext.Registers[0] = handle
 		callContext.Registers[1] = 0
 		callContext.Registers[2] = 0
-		result, err := runtime.wipicGetResource(armcore.NewThread(callContext))
+		result, err := runtime.WIPICGetResource(armcore.NewThread(callContext))
 		if err != nil {
 			t.Fatalf("MC_knlGetResource(%#x) error = %v, want a refusal", handle, err)
 		}
-		if result != wipicErrorGeneric {
-			t.Fatalf("MC_knlGetResource(%#x) = %#x, want %#x", handle, result, wipicErrorGeneric)
+		if result != wipicrt.WIPICErrorGeneric {
+			t.Fatalf("MC_knlGetResource(%#x) = %#x, want %#x", handle, result, wipicrt.WIPICErrorGeneric)
 		}
 	}
 }
@@ -42,7 +43,7 @@ func TestFreeLeavesTheCallersRegisterAlone(t *testing.T) {
 	block := callocThroughSVC(t, runtime, 64)
 	callContext := armcore.NewContext()
 	callContext.Registers[0] = block
-	result, err := runtime.handleWIPICCall(armcore.NewThread(callContext), wipicKernelFree)
+	result, err := runtime.HandleWIPICCall(armcore.NewThread(callContext), wipicrt.WIPICKernelFree)
 	if err != nil {
 		t.Fatalf("MC_knlFree(%#x) error = %v", block, err)
 	}

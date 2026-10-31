@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // testStorageBudget is a checkpoint storage budget for a test that captures a
@@ -20,7 +21,7 @@ func testStorageBudget() func(uint64) error {
 // has attached, the way committing a load does.
 func bindTestStorage(t *testing.T, runtime *initializationRuntime) {
 	t.Helper()
-	if err := runtime.client.bindRestoredStorage(saveAdapterState{Version: saveAdapterVersion}, runtime.client.saveStore); err != nil {
+	if err := runtime.client.bindRestoredStorage(saveAdapterState{Version: saveAdapterVersion}, runtime.client.SaveStore); err != nil {
 		t.Fatalf("bind restored storage: %v", err)
 	}
 	runtime.restoredStorage = nil
@@ -45,17 +46,17 @@ func testSaveStore(t *testing.T, entries map[string][]byte) *backend.MemorySaveS
 // has then: here a store that has moved on since.
 func TestRuntimeStorageRestoresNamesAndReadsContentFromTheStore(t *testing.T) {
 	_, source := newTestRuntime(t)
-	file := &runtimeCFile{name: "stream", data: []byte("captured stream bytes"), packaged: 5}
-	source.cFiles = map[string]*runtimeCFile{"stream": file}
-	source.cFileHandles = map[uint32]*runtimeCFileHandle{0x1001: {store: file, position: 1}, 0x1002: {store: file, position: 4}}
-	source.nextCDatabaseHandle = 7
+	file := &wipicrt.RuntimeCFile{Name: "stream", Data: []byte("captured stream bytes"), Packaged: 5}
+	source.CFiles = map[string]*wipicrt.RuntimeCFile{"stream": file}
+	source.CFileHandles = map[uint32]*wipicrt.RuntimeCFileHandle{0x1001: {Store: file, Position: 1}, 0x1002: {Store: file, Position: 4}}
+	source.NextCDatabaseHandle = 7
 	records := &runtimeRecordDatabase{name: "records", records: [][]byte{nil, []byte("m"), []byte("captured record")}, recordSize: 12}
 	source.recordDatabases = map[string]*runtimeRecordDatabase{"records": records}
 	source.recordDatabaseHandles = map[uint32]*runtimeRecordDatabaseHandle{0x2001: {store: records}, 0x2003: {store: records}}
 	source.nextRecordDatabaseHandle = 3
-	source.guestFiles = map[string][]byte{"/guest": []byte("captured guest file"), "empty": {}, "gone": []byte("captured and gone")}
-	source.removedFiles = map[string]bool{"captured removal": true}
-	source.removedCDatabases = map[string]bool{}
+	source.GuestFiles = map[string][]byte{"/guest": []byte("captured guest file"), "empty": {}, "gone": []byte("captured and gone")}
+	source.RemovedFiles = map[string]bool{"captured removal": true}
+	source.RemovedCDatabases = map[string]bool{}
 	source.removedDatabaseLists = map[string]map[string]bool{javaDatabaseRemovedKey: {"captured hidden": true}, recordDatabaseRemovedKey: {}}
 	saved, err := source.captureStorageState(testStorageBudget())
 	if err != nil {
@@ -81,12 +82,12 @@ func TestRuntimeStorageRestoresNamesAndReadsContentFromTheStore(t *testing.T) {
 	}
 
 	store := testSaveStore(t, map[string][]byte{
-		"db/stream":         []byte("abcde"),
-		"rdb/records":       encodeSaveRecords([][]byte{nil, []byte("mid!"), []byte("last")}),
-		"fs/guest":          []byte("retained"),
-		"fs/empty":          {},
-		guestFileRemovedKey: joinRemovalList([]string{"deleted"}),
-		directoryListKey:    joinRemovalList([]string{"made"}),
+		"db/stream":              []byte("abcde"),
+		"rdb/records":            wipicrt.EncodeSaveRecords([][]byte{nil, []byte("mid!"), []byte("last")}),
+		"fs/guest":               []byte("retained"),
+		"fs/empty":               {},
+		guestFileRemovedKey:      wipicrt.JoinRemovalList([]string{"deleted"}),
+		wipicrt.DirectoryListKey: wipicrt.JoinRemovalList([]string{"made"}),
 	})
 	client, fresh := newTestRuntime(t)
 	client.AttachSaveStore(store)
@@ -95,19 +96,19 @@ func TestRuntimeStorageRestoresNamesAndReadsContentFromTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	storage.adopt(fresh)
-	if fresh.cFiles["stream"] == nil || len(fresh.cFiles["stream"].data) != 0 || fresh.guestFiles != nil || fresh.removedFiles != nil || fresh.removedDatabaseLists != nil {
+	if fresh.CFiles["stream"] == nil || len(fresh.CFiles["stream"].Data) != 0 || fresh.GuestFiles != nil || fresh.RemovedFiles != nil || fresh.removedDatabaseLists != nil {
 		t.Fatal("a restore without a store brought content with it")
 	}
-	if err := fresh.saveChanges(map[string][]byte{"db/stream": nil}, databaseRemovedKey, map[string]bool{}, nil); err == nil {
+	if err := fresh.SaveChanges(map[string][]byte{"db/stream": nil}, wipicrt.DatabaseRemovedKey, map[string]bool{}, nil); err == nil {
 		t.Fatal("restored storage wrote before a store had filled it")
 	}
 	bindTestStorage(t, fresh)
 
-	if fresh.cFileHandles[0x1001].store != fresh.cFiles["stream"] || fresh.cFileHandles[0x1002].store != fresh.cFiles["stream"] || fresh.cFiles["stream"] == file || fresh.nextCDatabaseHandle != 7 {
+	if fresh.CFileHandles[0x1001].Store != fresh.CFiles["stream"] || fresh.CFileHandles[0x1002].Store != fresh.CFiles["stream"] || fresh.CFiles["stream"] == file || fresh.NextCDatabaseHandle != 7 {
 		t.Fatal("file ownership or handle sequence changed")
 	}
-	if string(fresh.cFiles["stream"].data) != "abcde" || fresh.cFiles["stream"].packaged != 0 || fresh.cFileHandles[0x1001].position != 1 || fresh.cFileHandles[0x1002].position != 4 {
-		t.Fatalf("the file store holds %q with %d packaged bytes, want the store's bytes and none packaged", fresh.cFiles["stream"].data, fresh.cFiles["stream"].packaged)
+	if string(fresh.CFiles["stream"].Data) != "abcde" || fresh.CFiles["stream"].Packaged != 0 || fresh.CFileHandles[0x1001].Position != 1 || fresh.CFileHandles[0x1002].Position != 4 {
+		t.Fatalf("the file store holds %q with %d packaged bytes, want the store's bytes and none packaged", fresh.CFiles["stream"].Data, fresh.CFiles["stream"].Packaged)
 	}
 	if fresh.recordDatabaseHandles[0x2001].store != fresh.recordDatabases["records"] || fresh.recordDatabaseHandles[0x2003].store != fresh.recordDatabases["records"] || fresh.nextRecordDatabaseHandle != 3 ||
 		!reflect.DeepEqual(fresh.recordDatabases["records"].records, [][]byte{nil, []byte("mid!"), []byte("last")}) || fresh.recordDatabases["records"].recordSize != 12 {
@@ -115,14 +116,14 @@ func TestRuntimeStorageRestoresNamesAndReadsContentFromTheStore(t *testing.T) {
 	}
 	// The written-file table holds the names that are still there, with the
 	// store's bytes, and every list is the store's own.
-	if !reflect.DeepEqual(fresh.guestFiles, map[string][]byte{"guest": []byte("retained"), "empty": {}}) {
-		t.Fatalf("the written-file table holds %q", fresh.guestFiles)
+	if !reflect.DeepEqual(fresh.GuestFiles, map[string][]byte{"guest": []byte("retained"), "empty": {}}) {
+		t.Fatalf("the written-file table holds %q", fresh.GuestFiles)
 	}
-	if !reflect.DeepEqual(fresh.removedFiles, map[string]bool{"deleted": true}) || !reflect.DeepEqual(fresh.madeDirectories, map[string]bool{"made": true}) ||
-		fresh.removedCDatabases == nil || len(fresh.removedCDatabases) != 0 || len(fresh.removedDatabaseLists) != 2 || len(fresh.removedDatabaseLists[javaDatabaseRemovedKey]) != 0 {
+	if !reflect.DeepEqual(fresh.RemovedFiles, map[string]bool{"deleted": true}) || !reflect.DeepEqual(fresh.MadeDirectories, map[string]bool{"made": true}) ||
+		fresh.RemovedCDatabases == nil || len(fresh.RemovedCDatabases) != 0 || len(fresh.removedDatabaseLists) != 2 || len(fresh.removedDatabaseLists[javaDatabaseRemovedKey]) != 0 {
 		t.Fatal("the removal and directory lists are not the store's own, all of them read")
 	}
-	buffer, err := fresh.allocate(32)
+	buffer, err := fresh.Allocate(32)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,17 +136,17 @@ func TestRuntimeStorageRestoresNamesAndReadsContentFromTheStore(t *testing.T) {
 		}
 	}
 	set(0x1001, buffer, 2)
-	if count, err := fresh.wipicFileStream(thread, false); err != nil || count != 2 || string(readTestBytes(t, client, buffer, 2)) != "bc" {
+	if count, err := fresh.WIPICFileStream(thread, false); err != nil || count != 2 || string(readTestBytes(t, client, buffer, 2)) != "bc" {
 		t.Fatalf("restored file read=%d, %v", count, err)
 	}
-	if err := client.core.Memory().Write(buffer, []byte("Z")); err != nil {
+	if err := client.Core().Memory().Write(buffer, []byte("Z")); err != nil {
 		t.Fatal(err)
 	}
 	set(0x1002, buffer, 1)
-	if count, err := fresh.wipicFileStream(thread, true); err != nil || count != 1 {
+	if count, err := fresh.WIPICFileStream(thread, true); err != nil || count != 1 {
 		t.Fatalf("restored file write=%d, %v", count, err)
 	}
-	if string(fresh.cFileHandles[0x1001].store.data) != "abcdZ" || fresh.cFileHandles[0x1001].position != 3 || source.cFileHandles[0x1001].position != 1 {
+	if string(fresh.CFileHandles[0x1001].Store.Data) != "abcdZ" || fresh.CFileHandles[0x1001].Position != 3 || source.CFileHandles[0x1001].Position != 1 {
 		t.Fatal("file write lost store sharing or changed the source")
 	}
 	// The write went through to the store, and it changed the byte it named.
@@ -157,14 +158,14 @@ func TestRuntimeStorageRestoresNamesAndReadsContentFromTheStore(t *testing.T) {
 		t.Fatalf("restored record read=%#x, %v", result, err)
 	}
 	set(0x2001, 1, buffer, 32)
-	if result, err := fresh.wipicRecordDatabaseSelect(thread); err != nil || result != wipicErrorInvalid {
+	if result, err := fresh.wipicRecordDatabaseSelect(thread); err != nil || result != wipicrt.WIPICErrorInvalid {
 		t.Fatalf("deleted record read=%#x, %v", result, err)
 	}
 	set(0x2001, 2, buffer, 32)
 	if result, err := fresh.wipicRecordDatabaseSelect(thread); err != nil || result != 0 || string(readTestBytes(t, client, buffer, 4)) != "mid!" {
 		t.Fatalf("second record read=%#x, %v", result, err)
 	}
-	if err := client.core.Memory().Write(buffer, []byte("records\x00")); err != nil {
+	if err := client.Core().Memory().Write(buffer, []byte("records\x00")); err != nil {
 		t.Fatal(err)
 	}
 	set(buffer, 12, 0)
@@ -191,10 +192,10 @@ func jsonBytes(t *testing.T, text string) string {
 // and the session can be captured again in that state.
 func TestRuntimeStorageKeepsACursorPastTheEndOfAShorterFile(t *testing.T) {
 	_, source := newTestRuntime(t)
-	file := &runtimeCFile{name: "shrunk", data: []byte("0123456789"), packaged: 17}
-	source.cFiles = map[string]*runtimeCFile{"shrunk": file}
-	source.cFileHandles = map[uint32]*runtimeCFileHandle{0x1001: {store: file, position: 7}}
-	source.nextCDatabaseHandle = 1
+	file := &wipicrt.RuntimeCFile{Name: "shrunk", Data: []byte("0123456789"), Packaged: 17}
+	source.CFiles = map[string]*wipicrt.RuntimeCFile{"shrunk": file}
+	source.CFileHandles = map[uint32]*wipicrt.RuntimeCFileHandle{0x1001: {Store: file, Position: 7}}
+	source.NextCDatabaseHandle = 1
 	saved, err := source.captureStorageState(testStorageBudget())
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +209,7 @@ func TestRuntimeStorageKeepsACursorPastTheEndOfAShorterFile(t *testing.T) {
 	client.AttachSaveStore(store)
 	state.adopt(fresh)
 	bindTestStorage(t, fresh)
-	buffer, err := fresh.allocate(8)
+	buffer, err := fresh.Allocate(8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,17 +224,17 @@ func TestRuntimeStorageKeepsACursorPastTheEndOfAShorterFile(t *testing.T) {
 	set(0x1001, buffer, 1)
 	// The packaged count is what the name's packaged copy holds now, which
 	// is nothing: it is not carried.
-	if count, err := fresh.wipicFileStream(thread, false); err != nil || count != 0 || fresh.cFileHandles[0x1001].position != 7 || fresh.cFiles["shrunk"].packaged != 0 {
-		t.Fatalf("read past the end of the shorter file=%d, %v at %d", count, err, fresh.cFileHandles[0x1001].position)
+	if count, err := fresh.WIPICFileStream(thread, false); err != nil || count != 0 || fresh.CFileHandles[0x1001].Position != 7 || fresh.CFiles["shrunk"].Packaged != 0 {
+		t.Fatalf("read past the end of the shorter file=%d, %v at %d", count, err, fresh.CFileHandles[0x1001].Position)
 	}
 	if _, err := fresh.captureStorageState(testStorageBudget()); err != nil {
 		t.Fatalf("a cursor past the end cannot be captured again: %v", err)
 	}
-	if err := client.core.Memory().Write(buffer, []byte("XY")); err != nil {
+	if err := client.Core().Memory().Write(buffer, []byte("XY")); err != nil {
 		t.Fatal(err)
 	}
 	set(0x1001, buffer, 2)
-	if count, err := fresh.wipicFileStream(thread, true); err != nil || count != 2 {
+	if count, err := fresh.WIPICFileStream(thread, true); err != nil || count != 2 {
 		t.Fatalf("write past the end=%d, %v", count, err)
 	}
 	if stored, _ := store.LoadSave("db/shrunk"); string(stored) != "0123\x00\x00\x00XY" {
@@ -243,15 +244,15 @@ func TestRuntimeStorageKeepsACursorPastTheEndOfAShorterFile(t *testing.T) {
 
 func TestRuntimeStorageRejectsMalformedHandlesAndPaths(t *testing.T) {
 	_, source := newTestRuntime(t)
-	store := &runtimeCFile{name: "stream", data: []byte("abc")}
-	source.cFiles = map[string]*runtimeCFile{"stream": store}
-	source.cFileHandles = map[uint32]*runtimeCFileHandle{0x1001: {store: store}}
-	source.nextCDatabaseHandle = 1
+	store := &wipicrt.RuntimeCFile{Name: "stream", Data: []byte("abc")}
+	source.CFiles = map[string]*wipicrt.RuntimeCFile{"stream": store}
+	source.CFileHandles = map[uint32]*wipicrt.RuntimeCFileHandle{0x1001: {Store: store}}
+	source.NextCDatabaseHandle = 1
 	records := &runtimeRecordDatabase{name: "records", recordSize: 4}
 	source.recordDatabases = map[string]*runtimeRecordDatabase{"records": records}
 	source.recordDatabaseHandles = map[uint32]*runtimeRecordDatabaseHandle{0x2001: {store: records}}
 	source.nextRecordDatabaseHandle = 1
-	source.guestFiles = map[string][]byte{"written": []byte("x")}
+	source.GuestFiles = map[string][]byte{"written": []byte("x")}
 	saved, err := source.captureStorageState(testStorageBudget())
 	if err != nil {
 		t.Fatal(err)
@@ -303,7 +304,7 @@ func TestRuntimeStorageRejectsMalformedHandlesAndPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.fileHandles[0x1001].store != state.fileHandles[0x1002].store || state.files["stream"] != state.fileHandles[0x1002].store || len(state.restored.cFiles) != 1 {
+	if state.fileHandles[0x1001].Store != state.fileHandles[0x1002].Store || state.files["stream"] != state.fileHandles[0x1002].Store || len(state.restored.cFiles) != 1 {
 		t.Fatal("one name was restored as two stores")
 	}
 }

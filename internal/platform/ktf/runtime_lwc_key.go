@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/textinput"
 )
 
@@ -43,7 +44,7 @@ func runtimeTextComponentKeyNotify(runtime *initializationRuntime, vm *jvm.VM, a
 	// A press types; a release and a repeat do not. A handset's multi-tap
 	// counts presses, and taking the repeat as well would cycle a character
 	// while a thumb rested on the key.
-	if eventType != KeyPressed {
+	if eventType != wipicrt.KeyPressed {
 		return jvm.IntValue(1), nil
 	}
 	// A Host character's carrier is no key the player pressed, and the
@@ -55,10 +56,10 @@ func runtimeTextComponentKeyNotify(runtime *initializationRuntime, vm *jvm.VM, a
 	editor := textEditorFor(receiver)
 	changed := false
 	switch {
-	case key == KeyClear:
+	case key == wipicrt.KeyClear:
 		changed = editor.Backspace()
-	case key >= KeyNum0 && key <= KeyNum9, key == KeyStar, key == KeyHash:
-		changed = editor.Key(rune(key), runtime.client.now())
+	case key >= wipicrt.KeyNum0 && key <= wipicrt.KeyNum9, key == wipicrt.KeyStar, key == wipicrt.KeyHash:
+		changed = editor.Key(rune(key), runtime.client.Now())
 	default:
 		return jvm.IntValue(1), nil
 	}

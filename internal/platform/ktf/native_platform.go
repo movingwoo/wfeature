@@ -9,6 +9,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -34,12 +35,12 @@ import (
 type NativePlatform struct {
 	client  *NativeClient
 	archive *NativeArchive
-	clock   Clock
+	clock   wipicrt.Clock
 	// pace is the same clock, kept in its own type so the rate can be changed
 	// and a guest duration converted back to what it costs a Host. source is
 	// the clock underneath it, which is what a probe drives.
 	pace   *backend.SpeedClock
-	source Clock
+	source wipicrt.Clock
 	// started is the guest's zero for its millisecond clock. The module reads
 	// that clock, subtracts a saved reading and loops while the difference is
 	// below a bound, so what it needs is a monotonic millisecond count rather
@@ -90,7 +91,7 @@ type NativePlatform struct {
 	// of written is in the store unless it is named here or in unsaved.
 	refused map[string]bool
 	// saves is where those writes go to outlive the session.
-	saves SaveStore
+	saves wipicrt.SaveStore
 	// packaged is the package's files by the key their base name gives, built
 	// the first time a name is not in the package as it was written. See
 	// NativePlatform.packagedFile.
@@ -244,9 +245,9 @@ func nativeInterfaceSurface(identifier uint32) NativeSurface {
 // clock uses the wall clock, which is what a Host showing the title to a
 // person wants; a probe measuring what the guest computes passes a
 // ManualClock.
-func NewNativePlatform(client *NativeClient, archive *NativeArchive, clock Clock) *NativePlatform {
+func NewNativePlatform(client *NativeClient, archive *NativeArchive, clock wipicrt.Clock) *NativePlatform {
 	if clock == nil {
-		clock = wallClock{}
+		clock = wipicrt.WallClock{}
 	}
 	pace := backend.NewSpeedClock(clock.Now)
 	return &NativePlatform{
@@ -276,7 +277,7 @@ func (platform *NativePlatform) SetScreen(width, height int) {
 // screenSize is the handset to answer with, with the platform's own standing
 // in for whatever was not chosen.
 func (platform *NativePlatform) screenSize() (int, int) {
-	width, height := runtimeDisplayPixelWidth, runtimeDisplayPixelHeight
+	width, height := wipicrt.RuntimeDisplayPixelWidth, wipicrt.RuntimeDisplayPixelHeight
 	if platform != nil && platform.screenWidth > 0 && platform.screenHeight > 0 {
 		width, height = platform.screenWidth, platform.screenHeight
 	}

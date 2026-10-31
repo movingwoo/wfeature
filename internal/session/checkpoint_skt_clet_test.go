@@ -453,3 +453,35 @@ func TestCheckpointSKTCletWhilePaused(t *testing.T) {
 		}
 	}
 }
+
+// What a Host shows as a Clet's authentication is what its loader applied
+// before the program started. Session.Authentication asked every engine but
+// this one, so a Clet whose certificate the registry adapted was reported as
+// having no authentication support at all.
+func TestTheAuthenticationACletStartedUnderIsReported(t *testing.T) {
+	archive := sktCletArchive(t, testfixture.SKTCletOptions{})
+	for _, test := range []struct {
+		applied, want backend.AuthenticationStatus
+	}{
+		{backend.AuthenticationSKTNativeCertificate, backend.AuthenticationSKTNativeCertificate},
+		{backend.AuthenticationSKTNativeSaveSubscriber, backend.AuthenticationSKTNativeSaveSubscriber},
+		{"", backend.AuthenticationOff},
+	} {
+		program, _, err := sktNativeProgram(archive, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		program.Authentication = test.applied
+		store, _ := backend.NewMemorySaveStore(nil)
+		started, err := clet.StartCletSession(t.Context(), program, cletOptions(sktCletOptions(store)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		running := &Session{cletSession: started}
+		got := running.Authentication()
+		running.Close()
+		if got != test.want {
+			t.Errorf("a Clet started under %q reported %q, want %q", test.applied, got, test.want)
+		}
+	}
+}

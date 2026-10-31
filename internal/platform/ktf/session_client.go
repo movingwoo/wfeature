@@ -6,6 +6,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func sessionCoreOptions(options SessionOptions) armcore.CoreOptions {
@@ -29,22 +30,22 @@ func newSessionClient(archive *Archive, options SessionOptions) (*Client, error)
 	}
 	// Watches must be installed before the first guest write, including entry.
 	if options.Debug != nil {
-		options.Debug(client.core)
+		options.Debug(client.Core())
 	}
-	client.clock = options.Clock
-	if client.clock == nil {
-		client.clock = wallClock{}
+	client.Clock = options.Clock
+	if client.Clock == nil {
+		client.Clock = wipicrt.WallClock{}
 	}
 	client.SetSpeed(options.Speed)
 	screenWidth, screenHeight, _ := sessionScreen(archive.Descriptor, options)
 	client.SetScreen(screenWidth, screenHeight)
 	client.SetDiagnostics(options.TraceLimit, options.Logger)
-	client.audio = backend.NewAudioWithClock(options.AudioSink, client.now)
-	client.audio.SetLogger(options.Logger)
-	_ = client.audio.SetPlaybackRate(0, options.Speed)
-	client.frameSink = options.FrameSink
-	client.threadSliceSteps = options.ThreadSliceSteps
-	client.serviceSteps, client.serviceWait = options.ServiceSteps, options.ServiceWait
+	client.Audio = backend.NewAudioWithClock(options.AudioSink, client.Now)
+	client.Audio.SetLogger(options.Logger)
+	_ = client.Audio.SetPlaybackRate(0, options.Speed)
+	client.FrameSink = options.FrameSink
+	client.ThreadSliceSteps = options.ThreadSliceSteps
+	client.ServiceSteps, client.ServiceWait = options.ServiceSteps, options.ServiceWait
 	client.SetProgramName(ProgramNameForAID(archive.Descriptor.AID))
 	client.AttachAppProperties(archive.Descriptor.Properties)
 	client.AttachResources(archive.JAR.Entries)
@@ -52,7 +53,7 @@ func newSessionClient(archive *Archive, options SessionOptions) (*Client, error)
 	if options.SaveStore != nil {
 		client.AttachSaveStore(options.SaveStore)
 	} else if options.SaveRoot != "" {
-		client.AttachSaveStore(NewDirectorySaveStore(filepath.Join(options.SaveRoot, SaveOwner(archive.Descriptor))))
+		client.AttachSaveStore(wipicrt.NewDirectorySaveStore(filepath.Join(options.SaveRoot, SaveOwner(archive.Descriptor))))
 	}
 	return client, nil
 }
@@ -66,7 +67,7 @@ func restoreSessionClient(archive *Archive, saved clientState, adapters saveAdap
 	if err != nil {
 		return nil, err
 	}
-	if err := client.bindRestoredStorage(adapters, client.saveStore); err != nil {
+	if err := client.bindRestoredStorage(adapters, client.SaveStore); err != nil {
 		client.StopThreads()
 		return nil, err
 	}
@@ -95,7 +96,7 @@ func restoreSessionClientForActivation(archive *Archive, saved clientState, opti
 		return nil, err
 	}
 	if debug != nil {
-		debug(client.core)
+		debug(client.Core())
 	}
 	return client, nil
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // These records cover ARM calls whose pending Host remainder is known. They
@@ -77,17 +78,17 @@ func (runtime *initializationRuntime) resumeWorkerContinuation(ctx context.Conte
 		return err
 	}
 	_, err := runtime.client.vm.ResumeNativeExecution(saved.Execution, func(invocation *jvm.Invocation) (jvm.Value, error) {
-		previousContext := runtime.currentContext
+		previousContext := runtime.CurrentContext
 		ctx = context.WithValue(ctx, jvmInvocationKey{}, invocation)
-		runtime.currentContext = ctx
-		defer func() { runtime.currentContext = previousContext }()
+		runtime.CurrentContext = ctx
+		defer func() { runtime.CurrentContext = previousContext }()
 		previousEntry := worker.aotEntry
 		worker.aotEntry = &workerAOTEntry{class: saved.Class, method: saved.Method, entryHandler: saved.EntryHandler, invocation: invocation}
 		defer func() { worker.aotEntry = previousEntry }()
-		if err := runtime.enterAOTCall(); err != nil {
+		if err := runtime.EnterAOTCall(); err != nil {
 			return jvm.VoidValue(), err
 		}
-		defer runtime.leaveAOTCall(runtime.aotCallOwner())
+		defer runtime.LeaveAOTCall(runtime.AOTCallOwner())
 		run, callErr := runtime.resumeAOTCalls(ctx, worker.armThread, saved.Calls)
 		methodType := jvm.MethodDescriptor{Return: jvm.Type{Kind: jvm.TypeVoid}}
 		result, _, err := runtime.completeAOTMethod(ctx, worker.armThread, methodType, saved.EntryHandler, run, callErr)
@@ -131,7 +132,7 @@ func (runtime *initializationRuntime) captureAOTCalls(worker *guestWorker) ([]ao
 		return nil, fmt.Errorf("capture KTF calls without a guest worker")
 	}
 	var saved []aotCallCheckpoint
-	_, err := runtime.client.core.InspectParkedCalls(worker.armThread, func(thread *armcore.Thread, frame armcore.CallFrame) error {
+	_, err := runtime.client.Core().InspectParkedCalls(worker.armThread, func(thread *armcore.Thread, frame armcore.CallFrame) error {
 		record := aotCallCheckpoint{ARM: frame}
 		id := frame.Context.Registers[12]
 		if frame.Stop == armcore.CallStoppedAtSupervisor {
@@ -172,7 +173,7 @@ func (runtime *initializationRuntime) captureAOTCalls(worker *guestWorker) ([]ao
 }
 
 func (runtime *initializationRuntime) validateAOTCalls(saved []aotCallCheckpoint) error {
-	if len(saved) == 0 || len(saved) > int(maxAOTCallDepth) {
+	if len(saved) == 0 || len(saved) > int(wipicrt.MaxAOTCallDepth) {
 		return fmt.Errorf("invalid KTF captured call count %d", len(saved))
 	}
 	for index, record := range saved {
@@ -180,7 +181,7 @@ func (runtime *initializationRuntime) validateAOTCalls(saved []aotCallCheckpoint
 		if err := frame.Validate(); err != nil {
 			return err
 		}
-		if frame.End != ReturnAddress || frame.Budget != saved[0].ARM.Budget {
+		if frame.End != wipicrt.ReturnAddress || frame.Budget != saved[0].ARM.Budget {
 			return fmt.Errorf("KTF captured calls have incompatible return boundaries or budgets")
 		}
 		leaf := index == len(saved)-1
@@ -214,7 +215,7 @@ func (runtime *initializationRuntime) validateAOTCalls(saved []aotCallCheckpoint
 					return fmt.Errorf("KTF captured native result is not aligned")
 				}
 				var data [8]byte
-				if err := runtime.client.core.Memory().Read(address, data[:]); err != nil {
+				if err := runtime.client.Core().Memory().Read(address, data[:]); err != nil {
 					return err
 				}
 			default:
@@ -247,7 +248,7 @@ func (runtime *initializationRuntime) validateAOTCalls(saved []aotCallCheckpoint
 				if sp&3 != 0 || uint64(sp)+moduleJumpSpill*4 > uint64(frame.EntryStack) {
 					return fmt.Errorf("KTF module invocation has an invalid argument spill")
 				}
-				if err := runtime.client.core.Memory().ValidateRange(sp, moduleJumpSpill*4, armcore.PermissionReadWrite); err != nil {
+				if err := runtime.client.Core().Memory().ValidateRange(sp, moduleJumpSpill*4, armcore.PermissionReadWrite); err != nil {
 					return err
 				}
 			case moduleJumpWait:
@@ -277,15 +278,15 @@ func (runtime *initializationRuntime) resumeAOTCalls(ctx context.Context, parent
 func (runtime *initializationRuntime) resumeAOTCall(ctx context.Context, parent *armcore.Thread, saved []aotCallCheckpoint, index int) (armcore.RunSummary, error) {
 	record := saved[index]
 	complete := func(ctx context.Context, thread *armcore.Thread, call armcore.SupervisorCall) error {
-		previousThread, previousContext := runtime.currentThread, runtime.currentContext
-		runtime.currentThread, runtime.currentContext = thread, ctx
-		defer func() { runtime.currentThread, runtime.currentContext = previousThread, previousContext }()
+		previousThread, previousContext := runtime.CurrentThread, runtime.CurrentContext
+		runtime.CurrentThread, runtime.CurrentContext = thread, ctx
+		defer func() { runtime.CurrentThread, runtime.CurrentContext = previousThread, previousContext }()
 		var result uint32
 		var err error
 		switch call.Immediate {
 		case svcCategoryRuntimeJava:
-			if runtime.saveReadError != nil {
-				return runtime.saveReadError
+			if runtime.SaveReadError != nil {
+				return runtime.SaveReadError
 			}
 			method := runtime.nativeMethods[record.ARM.Context.Registers[12]].method
 			if record.Wait.Receiver != 0 {
@@ -311,14 +312,14 @@ func (runtime *initializationRuntime) resumeAOTCall(ctx context.Context, parent 
 		}
 		return thread.SetRegister(0, result)
 	}
-	return runtime.client.core.ResumeCall(ctx, parent, record.ARM, complete, runtime.handleSupervisorCall)
+	return runtime.client.Core().ResumeCall(ctx, parent, record.ARM, complete, runtime.handleSupervisorCall)
 }
 
 func (runtime *initializationRuntime) resumeModuleInvocation(ctx context.Context, thread *armcore.Thread, saved []aotCallCheckpoint, index int) (uint32, error) {
-	if err := runtime.enterAOTCall(); err != nil {
+	if err := runtime.EnterAOTCall(); err != nil {
 		return 0, err
 	}
-	defer runtime.leaveAOTCall(runtime.aotCallOwner())
+	defer runtime.LeaveAOTCall(runtime.AOTCallOwner())
 	summary, err := runtime.resumeAOTCall(ctx, thread, saved, index+1)
 	if err != nil {
 		return 0, err
@@ -327,10 +328,10 @@ func (runtime *initializationRuntime) resumeModuleInvocation(ctx context.Context
 }
 
 func (runtime *initializationRuntime) resumeAOTBridge(ctx context.Context, thread *armcore.Thread, saved []aotCallCheckpoint, index int) (uint32, error) {
-	if err := runtime.enterAOTCall(); err != nil {
+	if err := runtime.EnterAOTCall(); err != nil {
 		return 0, err
 	}
-	defer runtime.leaveAOTCall(runtime.aotCallOwner())
+	defer runtime.LeaveAOTCall(runtime.AOTCallOwner())
 	record := saved[index]
 	var scope *nativeReturnScope
 	if record.ARM.Context.Registers[12] == javaSVCCallNative {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // Local archives remain ignored. Every run uses isolated temporary saves;
@@ -25,7 +26,7 @@ func TestLocalNativeCheckpointContinuation(t *testing.T) {
 		}
 		identity := backend.SaveIdentity(archive)
 		t.Run(fmt.Sprintf("%x", identity[:6]), func(t *testing.T) {
-			clock := NewManualClock(time.Time{})
+			clock := wipicrt.NewManualClock(time.Time{})
 			store := backend.NewDirectorySaveStore(filepath.Join(t.TempDir(), "owner"))
 			options := NativeSessionOptions{Clock: clock, SaveStore: store, MaxSteps: 1_000_000_000}
 			source, err := StartNativeSession(t.Context(), archive, options)
@@ -33,15 +34,15 @@ func TestLocalNativeCheckpointContinuation(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer source.Close()
-			step := func(session *NativeSession, clock *ManualClock, round int) {
+			step := func(session *NativeSession, clock *wipicrt.ManualClock, round int) {
 				t.Helper()
 				if round == 5 || round == 19 {
-					if err := session.SendKey(t.Context(), KeyPressed, KeyNum0+5); err != nil {
+					if err := session.SendKey(t.Context(), wipicrt.KeyPressed, wipicrt.KeyNum0+5); err != nil {
 						t.Fatal(err)
 					}
 				}
 				if round == 6 || round == 20 {
-					if err := session.SendKey(t.Context(), KeyReleased, KeyNum0+5); err != nil {
+					if err := session.SendKey(t.Context(), wipicrt.KeyReleased, wipicrt.KeyNum0+5); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -69,7 +70,7 @@ func TestLocalNativeCheckpointContinuation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			freshClock := NewManualClock(time.Unix(1900000000, 0))
+			freshClock := wipicrt.NewManualClock(time.Unix(1900000000, 0))
 			// A slot carries no save. The restored session gets a copy of what
 			// the source's store held at the boundary: the same disk, seen by
 			// another process.

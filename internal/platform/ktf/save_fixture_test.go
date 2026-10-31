@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -116,13 +117,13 @@ func (fixture *saveFixture) press(action int32, progress uint32) {
 	fixture.t.Helper()
 	writeTestWords(fixture.t, fixture.session.Client, fixture.variant.progress, []uint32{progress})
 	before := fixture.word(fixture.variant.actions)
-	if err := fixture.session.SendKey(fixture.t.Context(), KeyPressed, action); err != nil {
+	if err := fixture.session.SendKey(fixture.t.Context(), wipicrt.KeyPressed, action); err != nil {
 		fixture.t.Fatalf("press %q: %v", rune(action), err)
 	}
 	if after := fixture.word(fixture.variant.actions); after != before+1 {
 		fixture.t.Fatalf("press %q finished %d actions, want one", rune(action), after-before)
 	}
-	if err := fixture.session.SendKey(fixture.t.Context(), KeyReleased, action); err != nil {
+	if err := fixture.session.SendKey(fixture.t.Context(), wipicrt.KeyReleased, action); err != nil {
 		fixture.t.Fatalf("release %q: %v", rune(action), err)
 	}
 	if after := fixture.word(fixture.variant.actions); after != before+1 {

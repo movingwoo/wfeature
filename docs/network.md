@@ -96,8 +96,8 @@ not listening yet, and the game then waits for a second one that never comes.
 `MC_netClose` drops a dial that has not reported, because it withdraws the
 question.
 
-`internal/platform/lgt/wipic_net.go` and `internal/platform/ktf/wipic_net.go`
-hold this. Callbacks run from `Session.Tick`, between guest calls and never
+`internal/platform/lgt/wipic_net.go` and `internal/platform/wipicrt/wipic_net.go`
+(the WIPI-C engine KTF titles and SKT Clets share) hold this. Callbacks run from `Session.Tick`, between guest calls and never
 inside one, where timers fire.
 
 **`MC_knlGetAccessLevel` reports API permission, not connectivity.** All API

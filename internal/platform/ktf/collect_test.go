@@ -24,7 +24,7 @@ func newCollectorRuntime(t *testing.T) (*Client, *initializationRuntime) {
 	if _, err := runtime.prepare(); err != nil {
 		t.Fatal(err)
 	}
-	client.runtime = runtime
+	client.setRuntimes(runtime, client.prepared)
 	return client, runtime
 }
 
@@ -52,12 +52,12 @@ func allocateTestArray(t *testing.T, runtime *initializationRuntime, length uint
 // confirmed nothing else holds it.
 func collectTwice(t *testing.T, runtime *initializationRuntime) CollectionStats {
 	t.Helper()
-	runtime.collectAt = 0
+	runtime.CollectAt = 0
 	if _, err := runtime.collectGuestObjects(nil); err != nil {
 		t.Fatal(err)
 	}
 	goruntime.GC()
-	runtime.collectAt = 0
+	runtime.CollectAt = 0
 	stats, err := runtime.collectGuestObjects(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func writeWord(t *testing.T, runtime *initializationRuntime, address, value uint
 	t.Helper()
 	var word [4]byte
 	binary.LittleEndian.PutUint32(word[:], value)
-	if err := runtime.client.core.Memory().Write(address, word[:]); err != nil {
+	if err := runtime.client.Core().Memory().Write(address, word[:]); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -78,7 +78,7 @@ func TestCollectorKeepsObjectsGuestMemoryStillNames(t *testing.T) {
 	client, runtime := newCollectorRuntime(t)
 	// A platform word outside any object is what a guest static looks like to
 	// the scan: whatever it holds is a root.
-	root, err := runtime.allocateWords([]uint32{0})
+	root, err := runtime.AllocateWords([]uint32{0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestCollectorKeepsObjectsGuestMemoryStillNames(t *testing.T) {
 
 func TestCollectorFollowsReferencesBetweenObjects(t *testing.T) {
 	_, runtime := newCollectorRuntime(t)
-	root, err := runtime.allocateWords([]uint32{0})
+	root, err := runtime.AllocateWords([]uint32{0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestCollectorReclaimsUnreachableCycles(t *testing.T) {
 	writeWord(t, runtime, first+elements, second)
 	writeWord(t, runtime, second+elements, first)
 
-	before := runtime.arena.used()
+	before := runtime.Arena.Used()
 	collectTwice(t, runtime)
 
 	if _, tracked := runtime.objects[first]; tracked {
@@ -151,7 +151,7 @@ func TestCollectorReclaimsUnreachableCycles(t *testing.T) {
 	if _, tracked := runtime.objects[second]; tracked {
 		t.Error("kept the other half of a dead cycle")
 	}
-	if after := runtime.arena.used(); after >= before {
+	if after := runtime.Arena.Used(); after >= before {
 		t.Errorf("arena use is %d after collecting, want less than %d", after, before)
 	}
 }
@@ -183,12 +183,12 @@ func TestCollectorTreatsFrozenCheatAddressesAsRoots(t *testing.T) {
 	address := allocateTestArray(t, runtime, 4)
 	frozen := address + javaInstanceSize + javaInstanceHeader + javaArrayLengthSize
 
-	runtime.collectAt = 0
+	runtime.CollectAt = 0
 	if _, err := runtime.collectGuestObjects([]uint32{frozen}); err != nil {
 		t.Fatal(err)
 	}
 	goruntime.GC()
-	runtime.collectAt = 0
+	runtime.CollectAt = 0
 	if _, err := runtime.collectGuestObjects([]uint32{frozen}); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestAllocationFailureRunsACollectionAndTheRetrySucceeds(t *testing.T) {
 
 	// One cycle to drop the Host's strong reference; the allocation below is
 	// what runs the second.
-	runtime.collectAt = 0
+	runtime.CollectAt = 0
 	if _, err := runtime.collectGuestObjects(nil); err != nil {
 		t.Fatal(err)
 	}
@@ -216,8 +216,8 @@ func TestAllocationFailureRunsACollectionAndTheRetrySucceeds(t *testing.T) {
 
 	// Nothing left above the cursor, so the only room the arena has is what
 	// the collector gives back.
-	runtime.arena.limit = runtime.arena.cursor
-	address, err := runtime.allocate(uint64(length) * 4)
+	runtime.Arena.Limit = runtime.Arena.Cursor
+	address, err := runtime.Allocate(uint64(length) * 4)
 	if err != nil {
 		t.Fatalf("an allocation a collection would have made room for failed: %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func shownVendorTextField(t *testing.T, text string) (*Session, *jvm.Object, *jvm.Object, *jvm.Object) {
@@ -176,7 +177,7 @@ func TestVendorFormOffersTheFieldItHoldsNow(t *testing.T) {
 				t.Fatal(err)
 			}
 			session.Client.runtime.displayCards = append(session.Client.runtime.displayCards, newWidget("test/UnderlyingCard"))
-			pressCardKey(t, session.Client.runtime, KeyFire)
+			pressCardKey(t, session.Client.runtime, wipicrt.KeyFire)
 			if cardEvents != 2 {
 				t.Fatalf("card beneath the form received %d events, want press and release", cardEvents)
 			}
@@ -301,7 +302,7 @@ func TestVendorFieldListenerAcceptsCommittedTextAndOwnsTrailingRelease(t *testin
 		if data != nil {
 			return jvm.VoidValue(), errors.New("event data is not null")
 		}
-		if event[2] == KeyFire {
+		if event[2] == wipicrt.KeyFire {
 			accepted = runtimeComponentText(field)
 			form.Fields[componentShownField] = jvm.IntValue(0)
 			runtime.clearActiveVendorForm(form)
@@ -327,15 +328,15 @@ func TestVendorFieldListenerAcceptsCommittedTextAndOwnsTrailingRelease(t *testin
 	if err := input.Commit(context.Background(), "새 이름"); err != nil {
 		t.Fatal(err)
 	}
-	for _, eventType := range []int32{KeyPressed, KeyReleased} {
-		if err := runtime.dispatchKeyToCards(eventType, KeyFire); err != nil {
+	for _, eventType := range []int32{wipicrt.KeyPressed, wipicrt.KeyReleased} {
+		if err := runtime.dispatchKeyToCards(eventType, wipicrt.KeyFire); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if accepted != "새 이름" {
 		t.Fatalf("guest accepted %q", accepted)
 	}
-	if len(listenerEvents) != 1 || listenerEvents[0] != [4]int32{3, KeyPressed, KeyFire, 0} {
+	if len(listenerEvents) != 1 || listenerEvents[0] != [4]int32{3, wipicrt.KeyPressed, wipicrt.KeyFire, 0} {
 		t.Fatalf("listener events = %v", listenerEvents)
 	}
 	if cardEvents != 0 {
@@ -366,7 +367,7 @@ func TestOpeningReleaseStaysWithTheCardThatOwnedItsPress(t *testing.T) {
 	cardEvents := 0
 	if err := client.JVM().RegisterNative("test/OpeningCard", "keyNotify", "(II)Z", func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		eventType, _ := arguments[1].Int32()
-		if eventType == KeyPressed {
+		if eventType == wipicrt.KeyPressed {
 			callVendorFormMethod(t, runtime, client.JVM(), form, "show")
 		}
 		cardEvents++
@@ -376,8 +377,8 @@ func TestOpeningReleaseStaysWithTheCardThatOwnedItsPress(t *testing.T) {
 	}
 	runtime.displayCards = append(runtime.displayCards, newWidget("test/OpeningCard"))
 
-	for _, eventType := range []int32{KeyPressed, KeyReleased} {
-		if err := runtime.dispatchKeyToCards(eventType, KeyFire); err != nil {
+	for _, eventType := range []int32{wipicrt.KeyPressed, wipicrt.KeyReleased} {
+		if err := runtime.dispatchKeyToCards(eventType, wipicrt.KeyFire); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -422,7 +423,7 @@ func TestOwnedReleaseDoesNotReachAReplacementVendorLifecycle(t *testing.T) {
 			if err := session.Client.JVM().RegisterNative(listener.ClassName, "eventNotify", "(IIIILjava/lang/Object;)Z", func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 				currentEvents++
 				eventType, _ := arguments[2].Int32()
-				if eventType == KeyPressed {
+				if eventType == wipicrt.KeyPressed {
 					probe.replace(t, runtime, session.Client.JVM(), form)
 				}
 				return jvm.IntValue(0), nil
@@ -436,8 +437,8 @@ func TestOwnedReleaseDoesNotReachAReplacementVendorLifecycle(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			for _, eventType := range []int32{KeyPressed, KeyReleased} {
-				if err := runtime.dispatchKeyToCards(eventType, KeyFire); err != nil {
+			for _, eventType := range []int32{wipicrt.KeyPressed, wipicrt.KeyReleased} {
+				if err := runtime.dispatchKeyToCards(eventType, wipicrt.KeyFire); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -462,8 +463,8 @@ func TestVendorKeyReleaseDoesNotReachReplacementListener(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []int32{KeyPressed, KeyReleased} {
-		if err := runtime.dispatchKeyToCards(kind, KeyFire); err != nil {
+	for _, kind := range []int32{wipicrt.KeyPressed, wipicrt.KeyReleased} {
+		if err := runtime.dispatchKeyToCards(kind, wipicrt.KeyFire); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -478,7 +479,7 @@ func TestVendorReleaseErrorClearsKeyOwner(t *testing.T) {
 	failure := errors.New("release callback failed")
 	if err := session.Client.JVM().RegisterNative(listener.ClassName, "eventNotify", "(IIIILjava/lang/Object;)Z", func(_ *jvm.VM, args []jvm.Value) (jvm.Value, error) {
 		kind, _ := args[2].Int32()
-		if kind == KeyReleased {
+		if kind == wipicrt.KeyReleased {
 			callVendorFormMethod(t, runtime, session.Client.JVM(), form, "hide")
 			return jvm.VoidValue(), failure
 		}
@@ -486,13 +487,13 @@ func TestVendorReleaseErrorClearsKeyOwner(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.dispatchKeyToVendorForm(KeyPressed, KeyFire); err != nil {
+	if _, err := runtime.dispatchKeyToVendorForm(wipicrt.KeyPressed, wipicrt.KeyFire); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.dispatchKeyToVendorForm(KeyReleased, KeyFire); !errors.Is(err, failure) {
+	if _, err := runtime.dispatchKeyToVendorForm(wipicrt.KeyReleased, wipicrt.KeyFire); !errors.Is(err, failure) {
 		t.Fatalf("release error = %v", err)
 	}
-	if handled, err := runtime.dispatchKeyToVendorForm(KeyPressed, KeyFire); handled || err != nil {
+	if handled, err := runtime.dispatchKeyToVendorForm(wipicrt.KeyPressed, wipicrt.KeyFire); handled || err != nil {
 		t.Fatalf("next card press handled=%v error=%v", handled, err)
 	}
 }

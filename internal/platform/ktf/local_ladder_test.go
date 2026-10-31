@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/ladder"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // Two rungs above a first frame.
@@ -165,7 +166,7 @@ func TestLocalKTFArchivesSustainAFrame(t *testing.T) {
 				// The reason goes last: the sweep records the final line a
 				// subtest printed, so counts printed after it are what the
 				// report files this archive under. See `docs/testing.md`.
-				t.Fatal(withDiagnosticCounts(session.Client.runtime.diagnosticCounts(), 40,
+				t.Fatal(withDiagnosticCounts(session.Client.runtime.DiagnosticCounts(), 40,
 					"tick %d after the first frame: %v", ran, err))
 			}
 			if ran < sustain {
@@ -325,7 +326,7 @@ func pressEachKey(t *testing.T, session *Session, screen *ladder.Watcher, hold i
 	t.Helper()
 	answer := keyAnswer{}
 	for _, name := range localLadderKeys {
-		code, known := KeyCodeByName(name)
+		code, known := wipicrt.KeyCodeByName(name)
 		if !known {
 			t.Fatalf("no key called %q", name)
 		}
@@ -490,7 +491,7 @@ func eachLocalKTFArchive(t *testing.T, ask func(t *testing.T, saves string, laun
 				// deadline: the same sequence of guest work at no real cost.
 				session, err := StartSession(context.Background(), data, SessionOptions{
 					MaxSteps: localAcceptanceMaxSteps(t),
-					Clock:    NewManualClock(time.Time{}),
+					Clock:    wipicrt.NewManualClock(time.Time{}),
 					SaveRoot: saves,
 				})
 				if err != nil {
@@ -585,7 +586,7 @@ func tickUntilSettled(session *Session) (screen *ladder.Watcher, settled bool, w
 // blinking prompt differs from any single frame of itself.
 func pressAndWatch(session *Session, key int32, screen *ladder.Watcher, hold, after int) (bool, int, error) {
 	ctx := context.Background()
-	if err := session.SendKey(ctx, KeyPressed, key); err != nil {
+	if err := session.SendKey(ctx, wipicrt.KeyPressed, key); err != nil {
 		return false, 0, err
 	}
 	elapsed := 0
@@ -606,7 +607,7 @@ func pressAndWatch(session *Session, key int32, screen *ladder.Watcher, hold, af
 	if err != nil {
 		return false, elapsed, err
 	}
-	if releaseErr := session.SendKey(ctx, KeyReleased, key); releaseErr != nil && !changed {
+	if releaseErr := session.SendKey(ctx, wipicrt.KeyReleased, key); releaseErr != nil && !changed {
 		return false, elapsed, releaseErr
 	}
 	if changed {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // This compiled revision stores five content lengths in its preference record.
@@ -18,14 +19,14 @@ const subscriberReceiptImage = "390284cd703b23cd3fddd25991a290fe2a8d9f2104a61db4
 var subscriberReceiptFiles = [...]string{"char.dat", "map.dat", "mon.dat", "pattern.dat", "tile.dat"}
 
 type subscriberReceiptStore struct {
-	base    SaveStore
+	base    wipicrt.SaveStore
 	number  string
 	table   []byte
 	files   map[string][]byte
 	lengths [5]uint32
 }
 
-func authenticationSubscriberReceipt(base SaveStore, archive *Archive, number string) SaveStore {
+func authenticationSubscriberReceipt(base wipicrt.SaveStore, archive *Archive, number string) wipicrt.SaveStore {
 	if archive == nil || archive.JAR == nil || fmt.Sprintf("%x", sha256.Sum256(archive.JAR.Client.Data)) != subscriberReceiptImage {
 		return base
 	}
@@ -38,7 +39,7 @@ func authenticationSubscriberReceipt(base SaveStore, archive *Archive, number st
 	return newSubscriberReceiptStore(base, number, resource[offset:offset+256], archive.GuestFiles())
 }
 
-func newSubscriberReceiptStore(base SaveStore, number string, table []byte, files map[string][]byte) SaveStore {
+func newSubscriberReceiptStore(base wipicrt.SaveStore, number string, table []byte, files map[string][]byte) wipicrt.SaveStore {
 	if len(number) != 11 || len(table) != 256 {
 		return base
 	}
@@ -63,7 +64,7 @@ func newSubscriberReceiptStore(base SaveStore, number string, table []byte, file
 // nonce and unused bits retain their original values. Nothing is written by
 // startup; later ordinary guest writes still use the existing save boundary.
 func (store *subscriberReceiptStore) ReadSave(name string) ([]byte, bool, error) {
-	key, err := NormalizeSaveKey(name)
+	key, err := wipicrt.NormalizeSaveKey(name)
 	if err != nil {
 		return nil, false, err
 	}
@@ -80,11 +81,11 @@ func (store *subscriberReceiptStore) ReadSave(name string) ([]byte, bool, error)
 			return data, present, nil
 		}
 	}
-	removed, _, err := backend.ReadSave(store.base, databaseRemovedKey)
+	removed, _, err := backend.ReadSave(store.base, wipicrt.DatabaseRemovedKey)
 	if err != nil {
 		return nil, false, err
 	}
-	for _, name := range splitRemovalList(removed) {
+	for _, name := range wipicrt.SplitRemovalList(removed) {
 		if name == "prefs" {
 			return data, present, nil
 		}
@@ -112,7 +113,7 @@ func (store *subscriberReceiptStore) ReadSave(name string) ([]byte, bool, error)
 	if err != nil {
 		return nil, false, err
 	}
-	for _, name := range splitRemovalList(removed) {
+	for _, name := range wipicrt.SplitRemovalList(removed) {
 		if _, ok := store.files[name]; ok {
 			return data, present, nil
 		}

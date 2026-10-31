@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"encoding/binary"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"testing"
 )
 
@@ -42,11 +43,11 @@ func TestRelocatableClientRebasesItsSegmentAndNamesItsEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("a module in the older layout was not recognized")
 	}
-	relocated, err := module.relocate(data, ImageBase)
+	relocated, err := module.relocate(data, wipicrt.ImageBase)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := ImageBase + uint32(module.segmentStart)
+	base := wipicrt.ImageBase + uint32(module.segmentStart)
 	segment := relocated[module.segmentStart:]
 	if value := binary.LittleEndian.Uint32(segment[0x08:]); value != base+0x30 {
 		t.Fatalf("pointer rebased to %#x, want %#x", value, base+0x30)
@@ -70,11 +71,11 @@ func TestRelocatableClientRebasesThePointerTableTheListDoesNotName(t *testing.T)
 	if !ok {
 		t.Fatal("a module in the older layout was not recognized")
 	}
-	relocated, err := module.relocate(data, ImageBase)
+	relocated, err := module.relocate(data, wipicrt.ImageBase)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := ImageBase + uint32(module.segmentStart)
+	base := wipicrt.ImageBase + uint32(module.segmentStart)
 	segment := relocated[module.segmentStart:]
 	for offset, want := range map[int]uint32{0x50: base + 0x30, 0x54: base + 0x44} {
 		if value := binary.LittleEndian.Uint32(segment[offset:]); value != want {
@@ -104,7 +105,7 @@ func TestPointerTableBoundsOutsideTheSegmentAreRefused(t *testing.T) {
 		binary.LittleEndian.PutUint32(segment[relocatableStaticBaseOffset:], bounds.staticBase)
 		binary.LittleEndian.PutUint32(segment[relocatableSegmentEndOffset:], bounds.end)
 		module.relocations = []uint32{0x00}
-		if _, err := module.relocate(data, ImageBase); err == nil {
+		if _, err := module.relocate(data, wipicrt.ImageBase); err == nil {
 			t.Fatalf("%s was accepted", bounds.name)
 		}
 	}
@@ -139,7 +140,7 @@ func TestARelocationOutsideTheSegmentIsRefused(t *testing.T) {
 		t.Fatal("a module in the older layout was not recognized")
 	}
 	module.relocations = append(module.relocations, 0x1000)
-	if _, err := module.relocate(data, ImageBase); err == nil {
+	if _, err := module.relocate(data, wipicrt.ImageBase); err == nil {
 		t.Fatal("a relocation outside the segment was applied")
 	}
 }

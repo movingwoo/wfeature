@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // closeDatabaseHandle drives MC_fsClose.
@@ -15,7 +16,7 @@ func closeDatabaseHandle(t *testing.T, runtime *initializationRuntime, handle ui
 	if err := thread.SetRegister(0, handle); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.handleWIPICFileCall(thread, wipicFileClose); err != nil {
+	if _, err := runtime.HandleWIPICFileCall(thread, wipicrt.WIPICFileClose); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -34,50 +35,50 @@ func closeDatabaseHandle(t *testing.T, runtime *initializationRuntime, handle ui
 func TestFileNamesThatAreNotKeysOfTheirOwnAreRefused(t *testing.T) {
 	root := t.TempDir()
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(root)
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(root)
 
 	for _, name := range []string{"/", ".", "./"} {
-		if got := databaseCall(t, runtime, wipicFileOpen, name, 4); got != wipicErrorBadFileName {
+		if got := databaseCall(t, runtime, wipicrt.WIPICFileOpen, name, 4); got != wipicrt.WIPICErrorBadFileName {
 			t.Errorf("open(%q) = %#x, want M_E_BADFILENAME", name, got)
 		}
-		if got := databaseCall(t, runtime, wipicFileExists, name); got != 0 {
+		if got := databaseCall(t, runtime, wipicrt.WIPICFileExists, name); got != 0 {
 			t.Errorf("exists(%q) = %#x, want 0 for the root", name, got)
 		}
-		if got := databaseCall(t, runtime, wipicFileStatByName, name, 0); got != 0 {
+		if got := databaseCall(t, runtime, wipicrt.WIPICFileStatByName, name, 0); got != 0 {
 			t.Errorf("stat(%q) = %#x, want 0 for the root", name, got)
 		}
-		if got := databaseCall(t, runtime, wipicFileMakeDirectory, name, 1); got != wipicErrorExists {
+		if got := databaseCall(t, runtime, wipicrt.WIPICFileMakeDirectory, name, 1); got != wipicrt.WIPICErrorExists {
 			t.Errorf("mkdir(%q) = %#x, want M_E_EXIST for the root", name, got)
 		}
 	}
 	for _, name := range []string{"a/../b", ".."} {
-		if got := databaseCall(t, runtime, wipicFileOpen, name, 4); got != wipicErrorBadFileName {
+		if got := databaseCall(t, runtime, wipicrt.WIPICFileOpen, name, 4); got != wipicrt.WIPICErrorBadFileName {
 			t.Errorf("open(%q) = %#x, want M_E_BADFILENAME", name, got)
 		}
-		if got := databaseCall(t, runtime, wipicFileExists, name); got != wipicErrorBadFileName {
+		if got := databaseCall(t, runtime, wipicrt.WIPICFileExists, name); got != wipicrt.WIPICErrorBadFileName {
 			t.Errorf("exists(%q) = %#x, want M_E_BADFILENAME", name, got)
 		}
-		if got := databaseCall(t, runtime, wipicFileStatByName, name, 0); got != wipicErrorBadFileName {
+		if got := databaseCall(t, runtime, wipicrt.WIPICFileStatByName, name, 0); got != wipicrt.WIPICErrorBadFileName {
 			t.Errorf("stat(%q) = %#x, want M_E_BADFILENAME", name, got)
 		}
-		if got := databaseCall(t, runtime, wipicFileMakeDirectory, name, 1); got != wipicErrorBadFileName {
+		if got := databaseCall(t, runtime, wipicrt.WIPICFileMakeDirectory, name, 1); got != wipicrt.WIPICErrorBadFileName {
 			t.Errorf("mkdir(%q) = %#x, want M_E_BADFILENAME", name, got)
 		}
 	}
-	if runtime.saveReadError != nil {
-		t.Fatalf("a refused name left the session unable to save: %v", runtime.saveReadError)
+	if runtime.SaveReadError != nil {
+		t.Fatalf("a refused name left the session unable to save: %v", runtime.SaveReadError)
 	}
 	if info, err := os.Stat(filepath.Join(root, "db")); err == nil && !info.IsDir() {
 		t.Fatal("a refused name was stored over the table's own directory")
 	}
 
 	// A save written afterwards lands where it always did.
-	handle := databaseCall(t, runtime, wipicFileOpen, "save.dat", 4)
+	handle := databaseCall(t, runtime, wipicrt.WIPICFileOpen, "save.dat", 4)
 	if int32(handle) < 0 {
 		t.Fatalf("open(save.dat) = %d", int32(handle))
 	}
-	runtime.cFiles["save.dat"].data = []byte("progress")
-	if err := runtime.cFiles["save.dat"].persist(runtime); err != nil {
+	runtime.CFiles["save.dat"].Data = []byte("progress")
+	if err := runtime.CFiles["save.dat"].Persist(runtime.Runtime); err != nil {
 		t.Fatal(err)
 	}
 	if data, err := os.ReadFile(filepath.Join(root, "db", "save.dat")); err != nil || string(data) != "progress" {
@@ -86,20 +87,20 @@ func TestFileNamesThatAreNotKeysOfTheirOwnAreRefused(t *testing.T) {
 
 	// Deleting or renaming a name the removal list cannot carry is refused
 	// rather than written into the list.
-	runtime.cFiles["a\nsave.dat"] = &runtimeCFile{name: "a\nsave.dat", data: []byte("x")}
-	if got := databaseCall(t, runtime, wipicFileDelete, "a\nsave.dat", 1); got != wipicErrorBadFileName {
+	runtime.CFiles["a\nsave.dat"] = &wipicrt.RuntimeCFile{Name: "a\nsave.dat", Data: []byte("x")}
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileDelete, "a\nsave.dat", 1); got != wipicrt.WIPICErrorBadFileName {
 		t.Errorf("delete(a\\nsave.dat) = %#x, want M_E_BADFILENAME", got)
 	}
-	if got := renameCall(t, runtime, "a\nsave.dat", "other.dat"); uint32(got) != wipicErrorBadFileName {
+	if got := renameCall(t, runtime, "a\nsave.dat", "other.dat"); uint32(got) != wipicrt.WIPICErrorBadFileName {
 		t.Errorf("rename(a\\nsave.dat) = %d, want M_E_BADFILENAME", got)
 	}
-	if got := renameCall(t, runtime, "save.dat", "."); uint32(got) != wipicErrorBadFileName {
+	if got := renameCall(t, runtime, "save.dat", "."); uint32(got) != wipicrt.WIPICErrorBadFileName {
 		t.Errorf("rename(save.dat, .) = %d, want M_E_BADFILENAME", got)
 	}
-	if runtime.removedDatabases()["save.dat"] || runtime.removedDatabases()["a"] {
+	if runtime.RemovedDatabases()["save.dat"] || runtime.RemovedDatabases()["a"] {
 		t.Fatal("a refused delete or rename reached the removal list")
 	}
-	if got := databaseCall(t, runtime, wipicFileExists, "save.dat"); got != 0 {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileExists, "save.dat"); got != 0 {
 		t.Fatalf("exists(save.dat) after the refusals = %#x", got)
 	}
 	closeDatabaseHandle(t, runtime, handle)
@@ -111,20 +112,20 @@ func TestFileNamesThatAreNotKeysOfTheirOwnAreRefused(t *testing.T) {
 // a title makes to write its save among them.
 func TestFileHandlesAreRecycledAfterTheCounterRunsOut(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 	// Mode 2 stores only the open that creates the file, so the loop is not
 	// four thousand store writes.
-	for open := 0; open < maxCFileHandles+16; open++ {
-		handle := databaseCall(t, runtime, wipicFileOpen, "save.dat", 2)
-		if handle&0xfffff000 != cFileHandleBit || handle&0x0fff == 0 {
+	for open := 0; open < wipicrt.MaxCFileHandles+16; open++ {
+		handle := databaseCall(t, runtime, wipicrt.WIPICFileOpen, "save.dat", 2)
+		if handle&0xfffff000 != wipicrt.CFileHandleBit || handle&0x0fff == 0 {
 			t.Fatalf("open %d answered %#x, want a file handle", open+1, handle)
 		}
 		closeDatabaseHandle(t, runtime, handle)
 	}
 	// A handle still open is never handed out twice.
-	held := databaseCall(t, runtime, wipicFileOpen, "save.dat", 2)
-	other := databaseCall(t, runtime, wipicFileOpen, "save.dat", 2)
-	if held == other || held&0xfffff000 != cFileHandleBit || other&0xfffff000 != cFileHandleBit {
+	held := databaseCall(t, runtime, wipicrt.WIPICFileOpen, "save.dat", 2)
+	other := databaseCall(t, runtime, wipicrt.WIPICFileOpen, "save.dat", 2)
+	if held == other || held&0xfffff000 != wipicrt.CFileHandleBit || other&0xfffff000 != wipicrt.CFileHandleBit {
 		t.Fatalf("two open handles = %#x and %#x", held, other)
 	}
 }
@@ -133,7 +134,7 @@ func TestFileHandlesAreRecycledAfterTheCounterRunsOut(t *testing.T) {
 // for the record database table, which issued its handles the same way.
 func TestRecordDatabaseHandlesAreRecycledAfterTheCounterRunsOut(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 	for open := 0; open < maxRecordDatabaseHandles+16; open++ {
 		handle := openRecordDatabase(t, runtime, "scores", 8, 1)
 		if handle&0xfffff000 != recordDatabaseHandleBit || handle&0x0fff == 0 {
@@ -155,20 +156,20 @@ func TestRecordDatabaseHandlesAreRecycledAfterTheCounterRunsOut(t *testing.T) {
 // MC_fsIsExist answered that there was none.
 func TestStatAfterRemoveReportsNoFile(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	runtime.client.saveStore = NewDirectorySaveStore(t.TempDir())
-	handle := databaseCall(t, runtime, wipicFileOpen, "save.dat", 4)
-	runtime.cFiles["save.dat"].data = []byte("progress")
-	if err := runtime.cFiles["save.dat"].persist(runtime); err != nil {
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
+	handle := databaseCall(t, runtime, wipicrt.WIPICFileOpen, "save.dat", 4)
+	runtime.CFiles["save.dat"].Data = []byte("progress")
+	if err := runtime.CFiles["save.dat"].Persist(runtime.Runtime); err != nil {
 		t.Fatal(err)
 	}
 	closeDatabaseHandle(t, runtime, handle)
-	if got := databaseCall(t, runtime, wipicFileDelete, "save.dat", 1); got != 0 {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileDelete, "save.dat", 1); got != 0 {
 		t.Fatalf("delete = %#x", got)
 	}
-	if got := databaseCall(t, runtime, wipicFileExists, "save.dat"); got != wipicErrorNotFound {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileExists, "save.dat"); got != wipicrt.WIPICErrorNotFound {
 		t.Fatalf("exists after the delete = %#x, want M_E_NOENT", got)
 	}
-	if got := databaseCall(t, runtime, wipicFileStatByName, "save.dat", 0); got != wipicErrorNotFound {
+	if got := databaseCall(t, runtime, wipicrt.WIPICFileStatByName, "save.dat", 0); got != wipicrt.WIPICErrorNotFound {
 		t.Fatalf("stat after the delete = %#x, want M_E_NOENT", got)
 	}
 }

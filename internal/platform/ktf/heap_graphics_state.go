@@ -11,6 +11,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/textinput"
 )
 
@@ -41,10 +42,10 @@ const heapFilePayloadKind = "ktf-file-v2"
 type heapNativeContext struct {
 	runtime      *initializationRuntime
 	audioState   *backend.AudioState
-	opacityIDs   map[*imageOpacity]uint32
+	opacityIDs   map[*wipicrt.ImageOpacity]uint32
 	opacities    []opacityState
 	opacityBytes uint64
-	restored     []*imageOpacity
+	restored     []*wipicrt.ImageOpacity
 	databaseIDs  map[*runtimeDataBaseStore]uint32
 	databases    []heapDatabaseState
 	restoredDBs  []*runtimeDataBaseStore
@@ -63,14 +64,14 @@ type heapNativeContext struct {
 }
 
 func (runtime *initializationRuntime) captureHeapState(roots []*jvm.Object) (runtimeHeapState, error) {
-	return runtime.captureHeapStateAt(roots, runtime.client.now())
+	return runtime.captureHeapStateAt(roots, runtime.client.Now())
 }
 
 func (runtime *initializationRuntime) captureHeapStateAt(roots []*jvm.Object, now time.Time) (runtimeHeapState, error) {
-	if len(runtime.framebufferOpacity) > 1<<18 {
+	if len(runtime.FramebufferOpacity) > 1<<18 {
 		return runtimeHeapState{}, fmt.Errorf("KTF framebuffer opacity bindings exceed limit")
 	}
-	context := &heapNativeContext{runtime: runtime, opacityIDs: make(map[*imageOpacity]uint32), now: now}
+	context := &heapNativeContext{runtime: runtime, opacityIDs: make(map[*wipicrt.ImageOpacity]uint32), now: now}
 	codec := runtime.heapCodec()
 	codec.CaptureNative = context.captureNative
 	saved := runtimeHeapState{}
@@ -91,13 +92,13 @@ func (runtime *initializationRuntime) captureHeapStateAt(roots []*jvm.Object, no
 	if err != nil {
 		return runtimeHeapState{}, err
 	}
-	handles := make([]uint32, 0, len(runtime.framebufferOpacity))
-	for handle := range runtime.framebufferOpacity {
+	handles := make([]uint32, 0, len(runtime.FramebufferOpacity))
+	for handle := range runtime.FramebufferOpacity {
 		handles = append(handles, handle)
 	}
 	slices.Sort(handles)
 	for _, handle := range handles {
-		id, err := context.captureOpacity(runtime.framebufferOpacity[handle])
+		id, err := context.captureOpacity(runtime.FramebufferOpacity[handle])
 		if err != nil {
 			return runtimeHeapState{}, err
 		}
@@ -114,7 +115,7 @@ func (runtime *initializationRuntime) captureHeapStateAt(roots []*jvm.Object, no
 }
 
 func (runtime *initializationRuntime) restoreHeapState(saved runtimeHeapState) ([]*jvm.Object, error) {
-	return runtime.restoreHeapStateAt(saved, runtime.client.now())
+	return runtime.restoreHeapStateAt(saved, runtime.client.Now())
 }
 
 func (runtime *initializationRuntime) restoreHeapStateAt(saved runtimeHeapState, now time.Time) ([]*jvm.Object, error) {
@@ -140,14 +141,14 @@ func (runtime *initializationRuntime) restoreHeapWithContext(saved runtimeHeapSt
 		return nil, err
 	}
 	for _, surface := range saved.Roots.ImageSurfaces {
-		if err := runtime.client.core.Memory().ValidateRange(surface.Handle, 4, armcore.PermissionRead); err != nil {
+		if err := runtime.client.Core().Memory().ValidateRange(surface.Handle, 4, armcore.PermissionRead); err != nil {
 			return nil, err
 		}
 	}
 	if len(saved.Opacities) > 1<<18 || len(saved.FramebufferOpacity) > 1<<18 {
 		return nil, fmt.Errorf("KTF heap opacity records exceed limit")
 	}
-	context.restored = make([]*imageOpacity, len(saved.Opacities)+1)
+	context.restored = make([]*wipicrt.ImageOpacity, len(saved.Opacities)+1)
 	if uint64(saved.Roots.FocusedEditor) > uint64(len(saved.Editors)) {
 		return nil, fmt.Errorf("KTF focused editor reference is invalid")
 	}
@@ -173,18 +174,18 @@ func (runtime *initializationRuntime) restoreHeapWithContext(saved runtimeHeapSt
 		}
 	}
 	for i, mask := range saved.Opacities {
-		opacity := &imageOpacity{width: mask.Width, height: mask.Height, opaque: make([]bool, len(mask.Opaque))}
+		opacity := &wipicrt.ImageOpacity{Width: mask.Width, Height: mask.Height, Opaque: make([]bool, len(mask.Opaque))}
 		for index, value := range mask.Opaque {
-			opacity.opaque[index] = value != 0
+			opacity.Opaque[index] = value != 0
 		}
 		context.restored[i+1] = opacity
 	}
-	framebuffers := make(map[uint32]*imageOpacity, len(saved.FramebufferOpacity))
+	framebuffers := make(map[uint32]*wipicrt.ImageOpacity, len(saved.FramebufferOpacity))
 	for i, binding := range saved.FramebufferOpacity {
 		if binding.Handle == 0 || uint64(binding.Opacity) >= uint64(len(context.restored)) || i > 0 && saved.FramebufferOpacity[i-1].Handle >= binding.Handle {
 			return nil, fmt.Errorf("KTF framebuffer opacity binding is invalid")
 		}
-		if err := runtime.client.core.Memory().ValidateRange(binding.Handle, 4, armcore.PermissionRead); err != nil {
+		if err := runtime.client.Core().Memory().ValidateRange(binding.Handle, 4, armcore.PermissionRead); err != nil {
 			return nil, err
 		}
 		framebuffers[binding.Handle] = context.restored[binding.Opacity]
@@ -202,7 +203,7 @@ func (runtime *initializationRuntime) restoreHeapWithContext(saved runtimeHeapSt
 	if err != nil {
 		return nil, err
 	}
-	runtime.framebufferOpacity = framebuffers
+	runtime.FramebufferOpacity = framebuffers
 	runtime.databases = databases
 	runtime.adoptPlatformRoots(saved.Roots, roots, context)
 	runtime.adoptMediaRoots(media)
@@ -215,22 +216,22 @@ func (runtime *initializationRuntime) restoreHeapWithContext(saved runtimeHeapSt
 }
 
 func validHeapImageSize(width, height int) bool {
-	return width > 0 && height > 0 && width <= maxWIPICFramebufferSide && height <= maxWIPICFramebufferSide && uint64(width)*uint64(height) <= maxWIPICFramebufferBytes/2
+	return width > 0 && height > 0 && width <= wipicrt.MaxWIPICFramebufferSide && height <= wipicrt.MaxWIPICFramebufferSide && uint64(width)*uint64(height) <= wipicrt.MaxWIPICFramebufferBytes/2
 }
 
-func (context *heapNativeContext) captureOpacity(mask *imageOpacity) (uint32, error) {
+func (context *heapNativeContext) captureOpacity(mask *wipicrt.ImageOpacity) (uint32, error) {
 	if mask == nil {
 		return 0, nil
 	}
 	if id := context.opacityIDs[mask]; id != 0 {
 		return id, nil
 	}
-	if !validHeapImageSize(mask.width, mask.height) || uint64(len(mask.opaque)) != uint64(mask.width)*uint64(mask.height) || len(context.opacities) >= 1<<18 || context.opacityBytes+uint64(len(mask.opaque)) > 64<<20 {
+	if !validHeapImageSize(mask.Width, mask.Height) || uint64(len(mask.Opaque)) != uint64(mask.Width)*uint64(mask.Height) || len(context.opacities) >= 1<<18 || context.opacityBytes+uint64(len(mask.Opaque)) > 64<<20 {
 		return 0, fmt.Errorf("KTF heap opacity exceeds shape or size limits")
 	}
-	context.opacityBytes += uint64(len(mask.opaque))
-	record := opacityState{Width: mask.width, Height: mask.height, Opaque: make([]byte, len(mask.opaque))}
-	for i, value := range mask.opaque {
+	context.opacityBytes += uint64(len(mask.Opaque))
+	record := opacityState{Width: mask.Width, Height: mask.Height, Opaque: make([]byte, len(mask.Opaque))}
+	for i, value := range mask.Opaque {
 		if value {
 			record.Opaque[i] = 1
 		}
@@ -261,7 +262,7 @@ func (context *heapNativeContext) captureNative(native any) (jvm.HeapExternalPay
 		data, err := context.captureHeapFile(value)
 		return jvm.HeapExternalPayload{Kind: heapFilePayloadKind, Data: data}, err
 	case *runtimeGraphicsState:
-		words := []uint32{value.target.width, value.target.height, value.target.bpl, value.target.bpp, value.target.buffer, value.target.pixels,
+		words := []uint32{value.target.Width, value.target.Height, value.target.Bpl, value.target.Bpp, value.target.Buffer, value.target.Pixels,
 			uint32(value.color), value.rgb, uint32(value.clipX), uint32(value.clipY), uint32(value.clipWidth), uint32(value.clipHeight),
 			uint32(value.translateX), uint32(value.translateY), uint32(value.strokeStyle), 0, uint32(value.alpha)}
 		if value.xorMode {
@@ -332,11 +333,11 @@ func (context *heapNativeContext) restoreGraphics(data []byte) (*runtimeGraphics
 	for i := range w {
 		w[i] = binary.LittleEndian.Uint32(data[4*i:])
 	}
-	target := wipicFramebuffer{width: w[0], height: w[1], bpl: w[2], bpp: w[3], buffer: w[4], pixels: w[5]}
-	if target.width == 0 || target.height == 0 || target.width > maxWIPICFramebufferSide || target.height > maxWIPICFramebufferSide || target.bpp != 16 || uint64(target.bpl) < uint64(target.width)*2 || uint64(target.bpl)*uint64(target.height) > maxWIPICFramebufferBytes || w[6] > 65535 || w[15] > 1 {
+	target := wipicrt.WIPICFramebuffer{Width: w[0], Height: w[1], Bpl: w[2], Bpp: w[3], Buffer: w[4], Pixels: w[5]}
+	if target.Width == 0 || target.Height == 0 || target.Width > wipicrt.MaxWIPICFramebufferSide || target.Height > wipicrt.MaxWIPICFramebufferSide || target.Bpp != 16 || uint64(target.Bpl) < uint64(target.Width)*2 || uint64(target.Bpl)*uint64(target.Height) > wipicrt.MaxWIPICFramebufferBytes || w[6] > 65535 || w[15] > 1 {
 		return nil, fmt.Errorf("KTF graphics state has an invalid surface or flag")
 	}
-	if err := context.runtime.client.core.Memory().ValidateRange(target.pixels, uint64(target.bpl)*uint64(target.height), armcore.PermissionReadWrite); err != nil {
+	if err := context.runtime.client.Core().Memory().ValidateRange(target.Pixels, uint64(target.Bpl)*uint64(target.Height), armcore.PermissionReadWrite); err != nil {
 		return nil, err
 	}
 	return &runtimeGraphicsState{target: target, color: uint16(w[6]), rgb: w[7], clipX: int32(w[8]), clipY: int32(w[9]), clipWidth: int32(w[10]), clipHeight: int32(w[11]), translateX: int32(w[12]), translateY: int32(w[13]), strokeStyle: int32(w[14]), xorMode: w[15] != 0, alpha: int32(w[16])}, nil
@@ -373,7 +374,7 @@ func (context *heapNativeContext) captureImage(source image.Image) ([]byte, erro
 	if !validHeapImageSize(bounds.Dx(), bounds.Dy()) || int64(bounds.Min.X) < -1<<31 || int64(bounds.Min.Y) < -1<<31 || int64(bounds.Max.X) > 1<<31-1 || int64(bounds.Max.Y) > 1<<31-1 {
 		return nil, fmt.Errorf("KTF heap image bounds exceed limits")
 	}
-	mask, err := context.captureOpacity(imageOpacityOf(source))
+	mask, err := context.captureOpacity(wipicrt.ImageOpacityOf(source))
 	if err != nil {
 		return nil, err
 	}
@@ -428,7 +429,7 @@ func (context *heapNativeContext) restoreImage(data []byte) (image.Image, error)
 	}
 	result := &heapImage{rect: image.Rect(int(x), int(y), int(x+int64(width)), int(y+int64(height))), data: append([]byte(nil), data[20:]...)}
 	if mask != 0 {
-		return decodedImage{Image: result, opacity: context.restored[mask]}, nil
+		return wipicrt.DecodedImage{Image: result, Opacity: context.restored[mask]}, nil
 	}
 	return result, nil
 }

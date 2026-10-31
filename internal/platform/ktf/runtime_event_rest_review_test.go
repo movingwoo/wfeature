@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // TestNotifyFanOutSurvivesAListenerRemovingItself covers a Jlet listener that
@@ -31,7 +32,7 @@ func TestNotifyFanOutSurvivesAListenerRemovingItself(t *testing.T) {
 		}
 	}
 	runtime.jletListeners = slices.Clone(listeners)
-	if err := runtime.dispatchNotifyEvent(client.JVM(), guestEvent{kind: eventKindNotify, param1: 1}); err != nil {
+	if err := runtime.dispatchNotifyEvent(client.JVM(), wipicrt.GuestEvent{Kind: wipicrt.EventKindNotify, Param1: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"A", "B", "C"}; !slices.Equal(seen, want) {
@@ -93,7 +94,7 @@ func TestCardDispatchSurvivesAHandlerShrinkingTheStack(t *testing.T) {
 				if pointer {
 					return runtime.dispatchPointerToCards(0, 1, 1)
 				}
-				return runtime.dispatchKeyToCards(KeyReleased, KeyFire)
+				return runtime.dispatchKeyToCards(wipicrt.KeyReleased, wipicrt.KeyFire)
 			}()
 			if err != nil {
 				t.Fatal(err)

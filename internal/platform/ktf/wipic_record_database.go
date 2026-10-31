@@ -3,11 +3,10 @@ package ktf
 import (
 	"encoding/binary"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
-	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The record database is the other half of the WIPI C storage interface. Where
@@ -78,7 +77,7 @@ func (runtime *initializationRuntime) handleWIPICRecordDatabaseCall(thread *armc
 			return 0, err
 		}
 		if _, ok := runtime.recordDatabaseHandles[handle]; !ok {
-			return wipicErrorInvalid, nil
+			return wipicrt.WIPICErrorInvalid, nil
 		}
 		delete(runtime.recordDatabaseHandles, handle)
 		return 0, nil
@@ -112,7 +111,7 @@ func (runtime *initializationRuntime) handleWIPICRecordDatabaseCall(thread *armc
 	case wipicRecordDatabaseNumRecords:
 		state, ok := runtime.recordDatabaseHandle(thread)
 		if !ok {
-			return wipicErrorInvalid, nil
+			return wipicrt.WIPICErrorInvalid, nil
 		}
 		count := 0
 		for _, record := range state.store.records {
@@ -124,7 +123,7 @@ func (runtime *initializationRuntime) handleWIPICRecordDatabaseCall(thread *armc
 	case wipicRecordDatabaseRecordSize:
 		state, ok := runtime.recordDatabaseHandle(thread)
 		if !ok {
-			return wipicErrorInvalid, nil
+			return wipicrt.WIPICErrorInvalid, nil
 		}
 		return state.store.recordSize, nil
 	case wipicRecordDatabaseListNames:
@@ -132,10 +131,10 @@ func (runtime *initializationRuntime) handleWIPICRecordDatabaseCall(thread *armc
 		// rather than as a list, and refuse to save below a threshold of their
 		// own. It is the same per-game storage MC_fsAvailable reports, so it
 		// is the same figure.
-		return runtime.storageAvailable(), nil
+		return runtime.StorageAvailable(), nil
 	default:
-		runtime.countDiagnostic(fmt.Sprintf("wipic record database function %d", function))
-		return wipicErrorInvalid, nil
+		runtime.CountDiagnostic(fmt.Sprintf("wipic record database function %d", function))
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 }
 
@@ -152,16 +151,16 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 	if err != nil {
 		return 0, err
 	}
-	name, err := runtime.readCString(nameAddress, maxFileNameRead)
+	name, err := runtime.ReadCString(nameAddress, wipicrt.MaxFileNameRead)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF record database name: %w", err)
 	}
-	runtime.countDiagnostic(fmt.Sprintf("rdb open %s size %d create %d", name, recordSize, int32(create)))
-	if !storableName(recordDatabaseScope, name) || len(name) > maxRecordDatabaseName {
-		return wipicErrorInvalid, nil
+	runtime.CountDiagnostic(fmt.Sprintf("rdb open %s size %d create %d", name, recordSize, int32(create)))
+	if !wipicrt.StorableName(wipicrt.RecordDatabaseScope, name) || len(name) > maxRecordDatabaseName {
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	if runtime.nextRecordDatabaseHandle >= maxRecordDatabaseHandles && len(runtime.recordDatabaseHandles) >= maxRecordDatabaseHandles {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	store, exists := runtime.recordDatabases[name]
 	if !exists {
@@ -170,7 +169,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 			return 0, err
 		}
 		if source == storageAbsent && int32(create) == 0 {
-			return wipicErrorNotFound, nil
+			return wipicrt.WIPICErrorNotFound, nil
 		}
 		store = &runtimeRecordDatabase{name: name, recordSize: recordSize, records: records}
 		if runtime.recordDatabases == nil {
@@ -202,12 +201,12 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 	}
 	// See nextTableHandle: closed numbers are reused once the counter runs
 	// out.
-	handle, ok := nextTableHandle(&runtime.nextRecordDatabaseHandle, maxRecordDatabaseHandles, recordDatabaseHandleBit, func(handle uint32) bool {
+	handle, ok := wipicrt.NextTableHandle(&runtime.nextRecordDatabaseHandle, maxRecordDatabaseHandles, recordDatabaseHandleBit, func(handle uint32) bool {
 		_, open := runtime.recordDatabaseHandles[handle]
 		return open
 	})
 	if !ok {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	runtime.recordDatabaseHandles[handle] = &runtimeRecordDatabaseHandle{store: store}
 	return handle, nil
@@ -225,9 +224,9 @@ func (runtime *initializationRuntime) wipicRecordDatabaseOpen(thread *armcore.Th
 // them; see the Java table for why an empty save is not treated as absent.
 func (runtime *initializationRuntime) resolveRecordDatabase(name string, recordSize uint32) ([][]byte, storageSource, error) {
 	deleted := runtime.recordDatabaseRemovals(recordDatabaseRemovedKey)[name]
-	saved, hasSaved := runtime.loadSave("rdb/" + name)
-	if runtime.saveReadError != nil {
-		return nil, storageAbsent, runtime.saveReadError
+	saved, hasSaved := runtime.LoadSave("rdb/" + name)
+	if runtime.SaveReadError != nil {
+		return nil, storageAbsent, runtime.SaveReadError
 	}
 	var records [][]byte
 	hasPackaged := false
@@ -239,7 +238,7 @@ func (runtime *initializationRuntime) resolveRecordDatabase(name string, recordS
 	}
 	switch {
 	case hasSaved:
-		decoded, err := decodeSaveRecords(saved)
+		decoded, err := wipicrt.DecodeSaveRecords(saved)
 		if err != nil {
 			return nil, storageAbsent, fmt.Errorf("corrupt record database %s: %w", name, err)
 		}
@@ -280,21 +279,21 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDelete(thread *armcore.
 	if err != nil {
 		return 0, err
 	}
-	name, err := runtime.readCString(nameAddress, maxFileNameRead)
+	name, err := runtime.ReadCString(nameAddress, wipicrt.MaxFileNameRead)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF record database name: %w", err)
 	}
-	runtime.countDiagnostic(fmt.Sprintf("rdb delete %s", name))
+	runtime.CountDiagnostic(fmt.Sprintf("rdb delete %s", name))
 	// The name is written into the removal list, so it has to survive that
 	// list for the same reason an open has to: a name carrying a newline would
 	// come back as two, and hide two databases nobody deleted.
-	if !storableName(recordDatabaseScope, name) || len(name) > maxRecordDatabaseName {
-		return wipicErrorInvalid, nil
+	if !wipicrt.StorableName(wipicrt.RecordDatabaseScope, name) || len(name) > maxRecordDatabaseName {
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	if !runtime.recordDatabaseExists(name) {
-		return wipicErrorNotFound, nil
+		return wipicrt.WIPICErrorNotFound, nil
 	}
-	if err := runtime.saveChanges(map[string][]byte{"rdb/" + name: encodeSaveRecords(nil)}, recordDatabaseRemovedKey, runtime.recordDatabaseRemovals(recordDatabaseRemovedKey), map[string]bool{name: true}); err != nil {
+	if err := runtime.SaveChanges(map[string][]byte{"rdb/" + name: wipicrt.EncodeSaveRecords(nil)}, recordDatabaseRemovedKey, runtime.recordDatabaseRemovals(recordDatabaseRemovedKey), map[string]bool{name: true}); err != nil {
 		return 0, err
 	}
 	delete(runtime.recordDatabases, name)
@@ -320,7 +319,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDelete(thread *armcore.
 func (runtime *initializationRuntime) wipicRecordDatabaseInsert(thread *armcore.Thread) (uint32, error) {
 	state, ok := runtime.recordDatabaseHandle(thread)
 	if !ok {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	buffer, err := thread.Register(1)
 	if err != nil {
@@ -331,11 +330,11 @@ func (runtime *initializationRuntime) wipicRecordDatabaseInsert(thread *armcore.
 		return 0, err
 	}
 	if int32(length) < 0 || length > maxRecordDatabaseBytes {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	data := make([]byte, length)
 	if length > 0 {
-		if err := runtime.client.core.Memory().Read(buffer, data); err != nil {
+		if err := runtime.client.Core().Memory().Read(buffer, data); err != nil {
 			return 0, fmt.Errorf("read KTF record database insert buffer: %w", err)
 		}
 	}
@@ -352,7 +351,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseInsert(thread *armcore.
 func (runtime *initializationRuntime) wipicRecordDatabaseSelect(thread *armcore.Thread) (uint32, error) {
 	state, ok := runtime.recordDatabaseHandle(thread)
 	if !ok {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	recordID, err := thread.Register(1)
 	if err != nil {
@@ -368,13 +367,13 @@ func (runtime *initializationRuntime) wipicRecordDatabaseSelect(thread *armcore.
 	}
 	data, ok := state.store.record(recordID)
 	if !ok {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	if length < uint32(len(data)) {
-		return wipicErrorShortBuf, nil
+		return wipicrt.WIPICErrorShortBuf, nil
 	}
 	if len(data) > 0 {
-		if err := runtime.client.core.Memory().Write(buffer, data); err != nil {
+		if err := runtime.client.Core().Memory().Write(buffer, data); err != nil {
 			return 0, fmt.Errorf("write KTF record database select buffer: %w", err)
 		}
 	}
@@ -384,7 +383,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseSelect(thread *armcore.
 func (runtime *initializationRuntime) wipicRecordDatabaseUpdate(thread *armcore.Thread) (uint32, error) {
 	state, ok := runtime.recordDatabaseHandle(thread)
 	if !ok {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	recordID, err := thread.Register(1)
 	if err != nil {
@@ -399,14 +398,14 @@ func (runtime *initializationRuntime) wipicRecordDatabaseUpdate(thread *armcore.
 		return 0, err
 	}
 	if int32(length) < 0 || length > maxRecordDatabaseBytes {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	if _, ok := state.store.record(recordID); !ok {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	data := make([]byte, length)
 	if length > 0 {
-		if err := runtime.client.core.Memory().Read(buffer, data); err != nil {
+		if err := runtime.client.Core().Memory().Read(buffer, data); err != nil {
 			return 0, fmt.Errorf("read KTF record database update buffer: %w", err)
 		}
 	}
@@ -424,14 +423,14 @@ func (runtime *initializationRuntime) wipicRecordDatabaseUpdate(thread *armcore.
 func (runtime *initializationRuntime) wipicRecordDatabaseDeleteRecord(thread *armcore.Thread) (uint32, error) {
 	state, ok := runtime.recordDatabaseHandle(thread)
 	if !ok {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	recordID, err := thread.Register(1)
 	if err != nil {
 		return 0, err
 	}
 	if _, ok := state.store.record(recordID); !ok {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	// The slot stays, holding nothing. Compacting would renumber every record
 	// after it, and the ids are what the game stored.
@@ -468,7 +467,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseDeleteRecord(thread *ar
 func (runtime *initializationRuntime) wipicRecordDatabaseList(thread *armcore.Thread) (uint32, error) {
 	state, ok := runtime.recordDatabaseHandle(thread)
 	if !ok {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	buffer, err := thread.Register(1)
 	if err != nil {
@@ -479,7 +478,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseList(thread *armcore.Th
 		return 0, err
 	}
 	if buffer == 0 || int32(capacity) <= 0 {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	written := uint32(0)
 	var word [4]byte
@@ -491,7 +490,7 @@ func (runtime *initializationRuntime) wipicRecordDatabaseList(thread *armcore.Th
 			break
 		}
 		binary.LittleEndian.PutUint32(word[:], uint32(index+1))
-		if err := runtime.client.core.Memory().Write(buffer+written*4, word[:]); err != nil {
+		if err := runtime.client.Core().Memory().Write(buffer+written*4, word[:]); err != nil {
 			return 0, fmt.Errorf("write KTF record database id list: %w", err)
 		}
 		written++
@@ -512,7 +511,7 @@ func (store *runtimeRecordDatabase) record(id uint32) ([]byte, bool) {
 }
 
 func (runtime *initializationRuntime) persistRecordDatabase(store *runtimeRecordDatabase) error {
-	return runtime.saveChanges(map[string][]byte{"rdb/" + store.name: encodeSaveRecords(store.records)}, recordDatabaseRemovedKey, runtime.recordDatabaseRemovals(recordDatabaseRemovedKey), map[string]bool{store.name: false})
+	return runtime.SaveChanges(map[string][]byte{"rdb/" + store.name: wipicrt.EncodeSaveRecords(store.records)}, recordDatabaseRemovedKey, runtime.recordDatabaseRemovals(recordDatabaseRemovedKey), map[string]bool{store.name: false})
 }
 
 // packagedRecordDatabase reads a record database an archive ships with it. The
@@ -531,14 +530,14 @@ func (runtime *initializationRuntime) persistRecordDatabase(store *runtimeRecord
 // recordSize is what the caller asked to open the database with. It is only
 // consulted when the index disagrees with the size of its own data file.
 func (runtime *initializationRuntime) packagedRecordDatabase(name string, recordSize uint32) ([][]byte, bool) {
-	if index, exists := runtime.guestFile(name + recordDatabaseIndexSuffix); exists {
-		data, _ := runtime.guestFile(name + recordDatabaseDataSuffix)
+	if index, exists := runtime.GuestFile(name + recordDatabaseIndexSuffix); exists {
+		data, _ := runtime.GuestFile(name + recordDatabaseDataSuffix)
 		if records, ok := runtime.parseRecordDatabaseIndex(name, index, data, recordSize); ok {
 			return records, true
 		}
 	}
 	for _, candidate := range []string{name, name + recordDatabaseDataSuffix} {
-		data, exists := runtime.guestFile(candidate)
+		data, exists := runtime.GuestFile(candidate)
 		if !exists {
 			continue
 		}
@@ -624,13 +623,13 @@ func (runtime *initializationRuntime) parseRecordDatabaseIndex(name string, inde
 			return nil, false
 		}
 		recordSize = uint32(len(data) / int(count))
-		runtime.countDiagnostic(fmt.Sprintf("rdb index size disagrees %s: %d records over %d bytes", name, count, len(data)))
+		runtime.CountDiagnostic(fmt.Sprintf("rdb index size disagrees %s: %d records over %d bytes", name, count, len(data)))
 	}
 	if recordSize == 0 || recordSize > maxRecordDatabaseBytes {
 		return nil, false
 	}
 	if requested != 0 && requested != recordSize {
-		runtime.countDiagnostic(fmt.Sprintf("rdb packaged size %d opened as %d %s", recordSize, requested, name))
+		runtime.CountDiagnostic(fmt.Sprintf("rdb packaged size %d opened as %d %s", recordSize, requested, name))
 	}
 	records := make([][]byte, 0, count)
 	for offset := 0; offset+int(recordSize) <= len(data); offset += int(recordSize) {
@@ -696,31 +695,6 @@ func (runtime *initializationRuntime) databaseDeleted(name string) bool {
 		runtime.recordDatabaseRemovals(javaDatabaseRemovedKey)[name]
 }
 
-// A removal list is one encoding, written here and read here, because it was
-// four: the two database tables, the guest filesystem and the WIPI C file
-// table each had their own pair, and the pairs disagreed about trimming. A
-// name with a space around it went out as itself and came back trimmed, so
-// deleting "save " hid "save" — found once per list, one review round at a
-// time. Names are joined by newlines and read back exactly as written; what
-// cannot survive that is refused by storableName rather than mangled here.
-func joinRemovalList(names []string) []byte {
-	sort.Strings(names)
-	return []byte(strings.Join(names, "\n"))
-}
-
-// splitRemovalList reads one back, dropping only the empty line an empty list
-// leaves behind.
-func splitRemovalList(data []byte) []string {
-	lines := strings.Split(string(data), "\n")
-	names := make([]string, 0, len(lines))
-	for _, name := range lines {
-		if name != "" {
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
 // databaseRemovals reads one deletion list, once per session per list.
 func (runtime *initializationRuntime) recordDatabaseRemovals(key string) map[string]bool {
 	if runtime.removedDatabaseLists == nil {
@@ -730,12 +704,12 @@ func (runtime *initializationRuntime) recordDatabaseRemovals(key string) map[str
 		return names
 	}
 	names := make(map[string]bool)
-	if data, exists := runtime.loadSave(key); exists {
-		for _, line := range splitRemovalList(data) {
+	if data, exists := runtime.LoadSave(key); exists {
+		for _, line := range wipicrt.SplitRemovalList(data) {
 			if key == javaDatabaseRemovedKey {
 				// A Java database's name is read as a path, so one an earlier
 				// build listed as "/save" is the database "save" now.
-				line = listingPath(strings.ReplaceAll(line, "\\", "/"))
+				line = wipicrt.ListingPath(strings.ReplaceAll(line, "\\", "/"))
 			}
 			names[line] = true
 		}
@@ -748,90 +722,5 @@ func (runtime *initializationRuntime) recordDatabaseRemovals(key string) map[str
 // Creating a database again takes its name off, or a title that deleted a save
 // and started a new game would never see the new one.
 func (runtime *initializationRuntime) markRecordDatabaseRemoved(key, name string, removed bool) error {
-	return runtime.saveChanges(nil, key, runtime.recordDatabaseRemovals(key), map[string]bool{name: removed})
-}
-
-// reservedStorageNames are the names the storage tables keep their own
-// bookkeeping under, beside the entries a game names. A save key is a table's
-// scope and the game's name joined, so a game naming an entry after one of
-// these addresses the table's own record — the list of what was deleted, the
-// list of directories that exist. Whichever was written last would win, and
-// both readings are wrong: the game's save read back as a list of deleted
-// names, or a list read back as the game's save. Worse, a list overwritten by
-// records reads as a set of deleted names on the next run, which hides
-// databases nobody deleted.
-//
-// Moving the bookkeeping somewhere a name cannot reach would orphan every list
-// already written, which is the same reason these save keys still spell "db".
-// So the names are reserved instead. No local title asks for one.
-// The set is per scope, because a name is only reserved where a list of that
-// name actually lives: the guest filesystem keeps a removal list, the WIPI C
-// file table keeps a removal list and a directory list, and each database
-// table keeps a removal list. A guest file called ".dirs" collides with
-// nothing under "fs/" and is left alone there.
-var reservedStorageNames = map[string]map[string]bool{
-	guestFileScope:      {".removed": true, ".dirs": true},
-	cFileScope:          {".removed": true, ".dirs": true},
-	recordDatabaseScope: {".removed": true},
-	javaDatabaseScope:   {".removed": true, ".sizes": true},
-}
-
-const (
-	guestFileScope      = "fs"
-	cFileScope          = "db"
-	recordDatabaseScope = "rdb"
-	javaDatabaseScope   = "jdb"
-)
-
-// reservedStorageName answers whether a guest-chosen name addresses one of the
-// lists its own table keeps. The test is against the key the name normalizes
-// to rather than against the name: NormalizeSaveKey drops empty and "."
-// components, so "./.removed" and ".removed/" reach the same file.
-func reservedStorageName(scope, name string) bool {
-	key, err := backend.NormalizeSaveKey(scope + "/" + name)
-	if err != nil {
-		return false
-	}
-	rest, found := strings.CutPrefix(key, scope+"/")
-	return found && reservedStorageNames[scope][rest]
-}
-
-// storableName is what both tables accept from a guest. A name has to be a
-// save key on its own, has to survive the removal list's own encoding, and
-// must not address the list itself.
-//
-// The list is names joined by newlines and read back a line at a time with the
-// surrounding space trimmed, so a name carrying either would not come back as
-// itself: deleting "A\nB" would hide the unrelated databases A and B, and
-// deleting "save " would hide "save", which nobody deleted. Neither table
-// bounded those characters, and both accept whatever string the guest built.
-// It does not bound the length. That bound is the WIPI C record database's
-// own, from its specification, and applying it to the Java class would refuse
-// names that class has always accepted — eleven Korean characters are
-// thirty-three bytes, so a title using one, and any save already written under
-// it, would stop working.
-func storableName(scope, name string) bool {
-	if name == "" {
-		return false
-	}
-	// Only the line separators. A name with a space around it is a name a
-	// title may already have a save under, and the list carries it as it is.
-	if strings.ContainsAny(name, "\n\r") {
-		return false
-	}
-	// And it has to be a key of its own under the scope. NormalizeSaveKey
-	// refuses "..", and it *collapses* ".", "/" and "./" away — so those
-	// passed, and the store then wrote the scope itself: a regular file named
-	// "jdb" where the directory belongs, after which every jdb write for that
-	// title fails with "not a directory" and stays failing across sessions,
-	// the removal list among them. What survives normalization has to still
-	// be the scope and a name under it.
-	key, err := backend.NormalizeSaveKey(scope + "/" + name)
-	if err != nil {
-		return false
-	}
-	if rest, under := strings.CutPrefix(key, scope+"/"); !under || rest == "" {
-		return false
-	}
-	return !reservedStorageName(scope, name)
+	return runtime.SaveChanges(nil, key, runtime.recordDatabaseRemovals(key), map[string]bool{name: removed})
 }

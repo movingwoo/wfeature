@@ -7,6 +7,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestAsyncWorkerRepaintDoesNotAdvanceWorldBetweenRequests(t *testing.T) {
@@ -32,7 +33,7 @@ func TestAsyncWorkerRepaintDoesNotAdvanceWorldBetweenRequests(t *testing.T) {
 	if steps != 1 {
 		t.Fatalf("one async repaint advanced world %d times", steps)
 	}
-	runtime.repaintPending = true
+	runtime.RepaintPending = true
 	if _, err := runtime.paintTopCard(); err != nil {
 		t.Fatal(err)
 	}
@@ -51,10 +52,10 @@ func TestAsyncWorkerRepaintDoesNotAdvanceWorldBetweenRequests(t *testing.T) {
 func TestCRepaintWithoutGuestEventLoopQueuesAPaint(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	thread := armcore.NewThread(armcore.Context{})
-	if _, err := runtime.handleWIPICTableCall(thread, wipicTableGraphics, 25); err != nil {
+	if _, err := runtime.HandleWIPICTableCall(thread, wipicrt.WIPICTableGraphics, 25); err != nil {
 		t.Fatal(err)
 	}
-	if !runtime.repaintPending {
+	if !runtime.RepaintPending {
 		t.Fatal("MC_grpRepaint dropped without a guest event loop")
 	}
 }
@@ -62,23 +63,23 @@ func TestCRepaintWithoutGuestEventLoopQueuesAPaint(t *testing.T) {
 // The callback requests paint and rearms itself through real Thumb calls to
 // the platform table. Unrelated timers must not retain ownership after cancel.
 func TestCRepaintTimerOwnsCadenceUntilCancelled(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 	steps := 0
 	if err := client.JVM().RegisterNative("test/TimerCard", "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", func(*jvm.VM, []jvm.Value) (jvm.Value, error) { steps++; return jvm.VoidValue(), nil }); err != nil {
 		t.Fatal(err)
 	}
 	runtime.displayCards = []*jvm.Object{{ClassName: "test/TimerCard"}}
-	repaint, err := runtime.stub(svcCategoryWIPIC, wipicTableGraphics<<16|25)
+	repaint, err := runtime.Stub(wipicrt.SVCCategoryWIPIC, wipicrt.WIPICTableGraphics<<16|25)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rearm, err := runtime.stub(svcCategoryWIPIC, wipicKernelSetTimer)
+	rearm, err := runtime.Stub(wipicrt.SVCCategoryWIPIC, wipicrt.WIPICKernelSetTimer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	address := uint32((runtime.codeCursor + 3) &^ 3)
-	runtime.codeCursor = uint64(address) + 32
+	address := uint32((runtime.CodeCursor + 3) &^ 3)
+	runtime.CodeCursor = uint64(address) + 32
 	body := make([]byte, 32)
 	// push {r4,r5,lr}; retain timer; repaint(0); setTimer(timer,120,0,0); return.
 	for i, word := range []uint16{0xb530, 0x4604, 0x2000, 0x4d04, 0x47a8, 0x4620, 0x2178, 0x2200, 0x2300, 0x4d02, 0x47a8, 0xbd30} {
@@ -86,10 +87,10 @@ func TestCRepaintTimerOwnsCadenceUntilCancelled(t *testing.T) {
 	}
 	binary.LittleEndian.PutUint32(body[24:], repaint)
 	binary.LittleEndian.PutUint32(body[28:], rearm)
-	if err := client.core.Memory().Load(address, body); err != nil {
+	if err := client.Core().Memory().Load(address, body); err != nil {
 		t.Fatal(err)
 	}
-	record, err := runtime.allocate(4)
+	record, err := runtime.Allocate(4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestCRepaintTimerOwnsCadenceUntilCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	for frame := 1; frame <= 3; frame++ {
-		clock.Advance(runtime.pendingTimers[0].due.Sub(client.now()))
+		clock.Advance(runtime.PendingTimers[0].Due.Sub(client.Now()))
 		if count, err := client.ServiceTimers(t.Context(), 4); err != nil || count != 1 {
 			t.Fatalf("frame=%d timer count=%d error=%v", frame, count, err)
 		}
@@ -111,10 +112,10 @@ func TestCRepaintTimerOwnsCadenceUntilCancelled(t *testing.T) {
 		}
 	}
 	setTimer(t, client, runtime, 10000)
-	if err := client.thread.SetRegister(0, record); err != nil {
+	if err := client.Thread.SetRegister(0, record); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.wipicUnsetTimer(client.thread); err != nil {
+	if _, err := runtime.WIPICUnsetTimer(client.Thread); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runtime.paintTopCard(); err != nil {
@@ -126,7 +127,7 @@ func TestCRepaintTimerOwnsCadenceUntilCancelled(t *testing.T) {
 }
 
 func TestRepeatingJavaTimerKeepsPaintCadenceAfterTaskReturns(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 	steps := 0
 	card := &jvm.Object{ClassName: "test/TimerPaintCard"}
@@ -141,7 +142,7 @@ func TestRepeatingJavaTimerKeepsPaintCadenceAfterTaskReturns(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime.displayCards = []*jvm.Object{card}
-	runtime.pendingTimers = []wipicTimer{{owner: owner, task: task, period: 100 * time.Millisecond, due: client.now()}}
+	runtime.PendingTimers = []wipicrt.WIPICTimer{{Owner: guestValue(owner), Task: guestValue(task), Period: 100 * time.Millisecond, Due: client.Now()}}
 	t.Cleanup(client.StopThreads)
 	for frame := 1; frame <= 3; frame++ {
 		if _, err := client.ServiceTimers(t.Context(), 1); err != nil {
@@ -164,7 +165,7 @@ func TestRepeatingJavaTimerKeepsPaintCadenceAfterTaskReturns(t *testing.T) {
 		clock.Advance(100 * time.Millisecond)
 	}
 	// An unrelated task on the same Timer does not retain this card's cadence.
-	runtime.pendingTimers = []wipicTimer{{owner: owner, task: &jvm.Object{ClassName: "test/OtherTask"}, due: client.now().Add(time.Second)}}
+	runtime.PendingTimers = []wipicrt.WIPICTimer{{Owner: guestValue(owner), Task: guestValue(&jvm.Object{ClassName: "test/OtherTask"}), Due: client.Now().Add(time.Second)}}
 	if _, err := runtime.paintTopCard(); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +181,7 @@ func TestSerialRepaintKeepsCadenceWhileRunnablePolls(t *testing.T) {
 			name = "sync"
 		}
 		t.Run(name, func(t *testing.T) {
-			clock := NewManualClock(time.Unix(1700000000, 0))
+			clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 			client, runtime := newPacedTestRuntime(t, clock, 1)
 			card := &jvm.Object{ClassName: "test/SerialPaintCard"}
 			runnable := &jvm.Object{ClassName: "test/SerialPaintLoop"}

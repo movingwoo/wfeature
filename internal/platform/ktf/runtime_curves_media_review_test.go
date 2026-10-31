@@ -11,8 +11,8 @@ import (
 
 func screenBytes(t *testing.T, runtime *initializationRuntime, state *runtimeGraphicsState) []byte {
 	t.Helper()
-	data := make([]byte, int(state.target.height*state.target.bpl))
-	if err := runtime.client.core.Memory().Read(state.target.pixels, data); err != nil {
+	data := make([]byte, int(state.target.Height*state.target.Bpl))
+	if err := runtime.client.Core().Memory().Read(state.target.Pixels, data); err != nil {
 		t.Fatal(err)
 	}
 	return data
@@ -20,7 +20,7 @@ func screenBytes(t *testing.T, runtime *initializationRuntime, state *runtimeGra
 
 func restoreScreen(t *testing.T, runtime *initializationRuntime, state *runtimeGraphicsState, data []byte) {
 	t.Helper()
-	if err := runtime.client.core.Memory().Write(state.target.pixels, data); err != nil {
+	if err := runtime.client.Core().Memory().Write(state.target.Pixels, data); err != nil {
 		t.Fatal(err)
 	}
 }

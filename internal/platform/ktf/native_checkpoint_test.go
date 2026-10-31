@@ -13,6 +13,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -21,7 +22,7 @@ func TestNativeCheckpointFixtureUsesOrdinaryStartupFramesAndInput(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock := NewManualClock(time.Time{})
+	clock := wipicrt.NewManualClock(time.Time{})
 	session, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: clock, Width: 32, Height: 48})
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +51,7 @@ func TestNativeCheckpointFixtureUsesOrdinaryStartupFramesAndInput(t *testing.T) 
 			t.Fatalf("frame %d did not fill and present through the platform: %dx%d, flushes=%d, pixel=%x", round, width, height, flushes, pixels[:min(4, len(pixels))])
 		}
 	}
-	if err := session.SendKey(t.Context(), KeyPressed, KeyNum0+5); err != nil {
+	if err := session.SendKey(t.Context(), wipicrt.KeyPressed, wipicrt.KeyNum0+5); err != nil {
 		t.Fatal(err)
 	}
 	if read(testfixture.KTFNativeCheckpointLastKey) != nativeKeyDigitBase+5 {
@@ -70,7 +71,7 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := newNativeSaveFixtureStore(t)
-	clock := NewManualClock(time.Unix(1, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1, 0))
 	sink := &countingSink{}
 	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: clock, SaveStore: store, AudioSink: sink, Width: 32, Height: 48})
 	if err != nil {
@@ -137,7 +138,7 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 	}
 	// A load installs no save, so the second session's store is a copy of the
 	// first's as the capture left it: the same disk, seen by another process.
-	freshClock := NewManualClock(time.Unix(500, 0))
+	freshClock := wipicrt.NewManualClock(time.Unix(500, 0))
 	freshStore := newNativeSaveFixtureStore(t, store.snapshot(t)...)
 	freshSink := &countingSink{}
 	prepared, err := PrepareNativeSessionCheckpoint(archive, saved, NativeSessionOptions{Clock: freshClock, SaveStore: freshStore, AudioSink: freshSink})
@@ -191,7 +192,7 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 	}
 	for _, pair := range []struct {
 		session *NativeSession
-		clock   *ManualClock
+		clock   *wipicrt.ManualClock
 	}{{source, clock}, {restored, freshClock}} {
 		pair.clock.Advance(100 * time.Millisecond)
 		if _, err := pair.session.Tick(t.Context()); err != nil {
@@ -243,7 +244,7 @@ func TestNativeCheckpointRefusesMalformedStateBeforeAdoption(t *testing.T) {
 		t.Fatal(err)
 	}
 	store, _ := backend.NewMemorySaveStore([]backend.SaveEntry{{Key: "progress", Data: []byte("original")}})
-	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: NewManualClock(time.Time{}), SaveStore: store})
+	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Time{}), SaveStore: store})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +364,7 @@ func TestNativeSessionCheckpointContinuesWithoutStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 	store, _ := backend.NewMemorySaveStore([]backend.SaveEntry{{Key: "progress", Data: []byte("saved")}})
-	clock := NewManualClock(time.Unix(10, 0))
+	clock := wipicrt.NewManualClock(time.Unix(10, 0))
 	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: clock, SaveStore: store, Speed: 2, Width: 32, Height: 48})
 	if err != nil {
 		t.Fatal(err)
@@ -398,7 +399,7 @@ func TestNativeSessionCheckpointContinuesWithoutStartup(t *testing.T) {
 	steps, elapsed := source.Client.Steps(), source.GuestElapsed()
 	_ = store.StoreSave("progress", []byte("later"))
 	source.platform.keep("pending", []byte("discarded"))
-	freshClock := NewManualClock(time.Unix(500, 0))
+	freshClock := wipicrt.NewManualClock(time.Unix(500, 0))
 	prepared, err := PrepareNativeSessionCheckpoint(archive, checkpoint, NativeSessionOptions{Clock: freshClock, SaveStore: store})
 	if err != nil {
 		t.Fatal(err)
@@ -444,7 +445,7 @@ func TestNativeCheckpointDropsAnEarlierBuildsQueuedCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	store, _ := backend.NewMemorySaveStore(nil)
-	clock := NewManualClock(time.Unix(10, 0))
+	clock := wipicrt.NewManualClock(time.Unix(10, 0))
 	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: clock, SaveStore: store})
 	if err != nil {
 		t.Fatal(err)
@@ -467,7 +468,7 @@ func TestNativeCheckpointDropsAnEarlierBuildsQueuedCall(t *testing.T) {
 	if earlier.Runtime, err = backend.EncodeCheckpointRecord(record); err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := PrepareNativeSessionCheckpoint(archive, earlier, NativeSessionOptions{Clock: NewManualClock(time.Unix(500, 0)), SaveStore: store})
+	prepared, err := PrepareNativeSessionCheckpoint(archive, earlier, NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Unix(500, 0)), SaveStore: store})
 	if err != nil {
 		t.Fatal(err)
 	}

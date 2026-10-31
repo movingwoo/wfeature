@@ -25,27 +25,27 @@ func (activation *clientActivation) activate() {
 	if client == nil {
 		return
 	}
-	now := client.now()
+	now := client.Now()
 	rebase := func(instant time.Time) time.Time {
 		return captureHeapDeadline(instant, activation.constructed).restore(now)
 	}
 	// The guest clock anchor is never a missing deadline, even at epoch zero.
-	client.runtime.clockBase = now.Add(client.runtime.clockBase.Sub(activation.constructed))
+	client.runtime.ClockBase = now.Add(client.runtime.ClockBase.Sub(activation.constructed))
 	client.runtime.serialDueAt = rebase(client.runtime.serialDueAt)
-	for i := range client.runtime.pendingTimers {
-		client.runtime.pendingTimers[i].due = rebase(client.runtime.pendingTimers[i].due)
+	for i := range client.runtime.PendingTimers {
+		client.runtime.PendingTimers[i].Due = rebase(client.runtime.PendingTimers[i].Due)
 	}
 	for _, worker := range client.workers {
 		worker.wakeAt = rebase(worker.wakeAt)
 	}
-	client.clientWakeAt = rebase(client.clientWakeAt)
+	client.ClientWakeAt = rebase(client.ClientWakeAt)
 	client.lastPaint = rebase(client.lastPaint)
-	client.nextRoundPaint = rebase(client.nextRoundPaint)
+	client.NextRoundPaint = rebase(client.NextRoundPaint)
 	for _, editor := range activation.editors {
 		editor.RebaseClock(activation.constructed, now)
 	}
-	client.audio.ActivateOutputClock()
+	client.Audio.ActivateOutputClock()
 	// This is the already validated record applied to the motor's own clock.
-	_ = client.vibrator.RestoreState(activation.vibration)
+	_ = client.Vibrator.RestoreState(activation.vibration)
 	*activation = clientActivation{}
 }

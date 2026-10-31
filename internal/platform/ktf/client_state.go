@@ -10,6 +10,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // clientStateVersion is the layout of clientState. Version 1 carried the
@@ -57,11 +58,11 @@ type clientState struct {
 }
 
 func (client *Client) captureClientState() (clientState, error) {
-	return client.captureClientStateAt(client.now())
+	return client.captureClientStateAt(client.Now())
 }
 
 func (client *Client) captureClientStateAt(now time.Time) (clientState, error) {
-	if client == nil || client.core == nil || client.thread == nil || client.runtime == nil || client.workersStopped || client.activeWorker != nil || client.serviceDepth != 0 || client.activeTimer != nil || !client.servingDue.IsZero() || client.skipPaint {
+	if client == nil || client.Core() == nil || client.Thread == nil || client.runtime == nil || client.workersStopped || client.activeWorker != nil || client.ServiceDepth != 0 || client.ActiveTimer != nil || !client.ServingDue.IsZero() || client.skipPaint {
 		return clientState{}, fmt.Errorf("KTF client capture requires an idle, running session")
 	}
 	if client.prepared != nil && client.prepared != client.runtime {
@@ -72,23 +73,23 @@ func (client *Client) captureClientStateAt(now time.Time) (clientState, error) {
 	saved := clientState{Version: clientStateVersion, ImageHash: sha256.Sum256(client.image.Data), ImageName: []byte(client.image.Name), ImageBSS: client.image.BSSSize,
 		WorkerStackCount: client.workerStackCount, FreeWorkerStacks: slices.Clone(client.freeWorkerStacks),
 		Initialized: client.initializationStarted, Prepared: client.prepared != nil, InitParameters: slices.Clone(client.initParameters),
-		Argument: client.argument, Executable: client.executable, Subscriber: client.subscriberNumber, Authentication: client.authentication,
-		Frame: bytes.Clone(client.frame), FrameWidth: client.frameWidth, FrameHeight: client.frameHeight,
-		ScreenWidth: client.screenWidth, ScreenHeight: client.screenHeight, FlushCount: client.flushCount,
-		FramePending: client.framePending, PartialFrame: client.partialFrame, ForcedSlice: client.forcedSlice,
-		Speed: client.speedOrDefault(), ClientWake: captureHeapDeadline(client.clientWakeAt, now), LastPaint: captureHeapDeadline(client.lastPaint, now),
-		NextRoundPaint: captureHeapDeadline(client.nextRoundPaint, now), PaintLoad: client.paintLoad, PaintCost: client.paintCost, EntryCost: client.entryCost,
-		WorkBaseline: client.workBaseline, ThreadSliceSteps: client.threadSliceSteps, ServiceSteps: client.serviceSteps, ServiceWait: client.serviceWait}
+		Argument: client.argument, Executable: client.executable, Subscriber: client.SubscriberNumber, Authentication: client.authentication,
+		Frame: bytes.Clone(client.FrameRGBA), FrameWidth: client.FrameWidth, FrameHeight: client.FrameHeight,
+		ScreenWidth: client.ScreenWidth, ScreenHeight: client.ScreenHeight, FlushCount: client.FlushCount,
+		FramePending: client.FramePending, PartialFrame: client.PartialFrame, ForcedSlice: client.forcedSlice,
+		Speed: client.SpeedOrDefault(), ClientWake: captureHeapDeadline(client.ClientWakeAt, now), LastPaint: captureHeapDeadline(client.lastPaint, now),
+		NextRoundPaint: captureHeapDeadline(client.NextRoundPaint, now), PaintLoad: client.PaintLoad, PaintCost: client.PaintCost, EntryCost: client.EntryCost,
+		WorkBaseline: client.WorkBaseline, ThreadSliceSteps: client.ThreadSliceSteps, ServiceSteps: client.ServiceSteps, ServiceWait: client.ServiceWait}
 	workers, roots, err := client.captureWorkerStates(now)
 	if err != nil {
 		return clientState{}, err
 	}
 	saved.Workers = workers
-	saved.Vibration, err = client.vibrator.CaptureState()
+	saved.Vibration, err = client.Vibrator.CaptureState()
 	if err != nil {
 		return clientState{}, err
 	}
-	saved.Thread, err = client.core.CaptureRootThread(client.thread)
+	saved.Thread, err = client.Core().CaptureRootThread(client.Thread)
 	if err != nil {
 		return clientState{}, err
 	}
@@ -100,12 +101,12 @@ func (client *Client) captureClientStateAt(now time.Time) (clientState, error) {
 	if err != nil {
 		return clientState{}, err
 	}
-	saved.Core, err = client.core.CaptureState()
+	saved.Core, err = client.Core().CaptureState()
 	if err != nil {
 		return clientState{}, err
 	}
-	if client.audio != nil {
-		audio, err := client.audio.CaptureStateAt(now)
+	if client.Audio != nil {
+		audio, err := client.Audio.CaptureStateAt(now)
 		if err != nil {
 			return clientState{}, err
 		}
@@ -124,10 +125,10 @@ func (client *Client) validateClientState(saved clientState) error {
 	if len(saved.Workers) > maxGuestWorkers || saved.WorkerStackCount < 0 || saved.WorkerStackCount > maxGuestWorkers || len(saved.FreeWorkerStacks) > maxGuestWorkers || len(saved.InitParameters) != 0 && len(saved.InitParameters) != 5 || !saved.Prepared && len(saved.InitParameters) != 0 {
 		return fmt.Errorf("KTF client tables exceed limits or initialization is inconsistent")
 	}
-	if saved.Thread.StepBudget != 0 || !stackContains(ThreadStackBase, saved.Thread.Context.Registers[armcore.RegisterSP]) || saved.WorkBaseline > saved.Core.Steps {
+	if saved.Thread.StepBudget != 0 || !stackContains(wipicrt.ThreadStackBase, saved.Thread.Context.Registers[armcore.RegisterSP]) || saved.WorkBaseline > saved.Core.Steps {
 		return fmt.Errorf("KTF client root thread or instruction baseline is invalid")
 	}
-	if saved.ThreadSliceSteps != client.threadSliceSteps || saved.ServiceSteps != client.serviceSteps || saved.ServiceWait != client.serviceWait {
+	if saved.ThreadSliceSteps != client.ThreadSliceSteps || saved.ServiceSteps != client.ServiceSteps || saved.ServiceWait != client.ServiceWait {
 		return fmt.Errorf("KTF client service policy is incompatible")
 	}
 	if len(saved.Subscriber) > 64 || !bytes.Equal([]byte(saved.Subscriber), bytes.ToValidUTF8([]byte(saved.Subscriber), nil)) {
@@ -138,7 +139,7 @@ func (client *Client) validateClientState(saved clientState) error {
 	default:
 		return fmt.Errorf("KTF client authentication state is invalid")
 	}
-	if saved.ScreenWidth < 0 || saved.ScreenHeight < 0 || saved.ScreenWidth > maxWIPICFramebufferSide || saved.ScreenHeight > maxWIPICFramebufferSide || (saved.ScreenWidth == 0) != (saved.ScreenHeight == 0) {
+	if saved.ScreenWidth < 0 || saved.ScreenHeight < 0 || saved.ScreenWidth > wipicrt.MaxWIPICFramebufferSide || saved.ScreenHeight > wipicrt.MaxWIPICFramebufferSide || (saved.ScreenWidth == 0) != (saved.ScreenHeight == 0) {
 		return fmt.Errorf("KTF client screen shape is invalid")
 	}
 	if len(saved.Frame) == 0 {
@@ -204,7 +205,7 @@ func (client *Client) restoreClientState(saved clientState, limits armcore.CoreO
 	if err := client.restoreClientStateForActivation(saved, limits, sink, nil); err != nil {
 		return err
 	}
-	if err := client.bindRestoredStorage(saveAdapterState{Version: saveAdapterVersion}, client.saveStore); err != nil {
+	if err := client.bindRestoredStorage(saveAdapterState{Version: saveAdapterVersion}, client.SaveStore); err != nil {
 		client.StopThreads()
 		return err
 	}
@@ -213,7 +214,7 @@ func (client *Client) restoreClientState(saved clientState, limits armcore.CoreO
 }
 
 func (client *Client) restoreClientStateForActivation(saved clientState, limits armcore.CoreOptions, sink backend.AudioSink, activation *clientActivation) error {
-	if client == nil || client.runtime == nil || client.core.Steps() != 0 || client.prepared != nil || len(client.workers) != 0 || client.initializationStarted {
+	if client == nil || client.runtime == nil || client.Core().Steps() != 0 || client.prepared != nil || len(client.workers) != 0 || client.initializationStarted {
 		return fmt.Errorf("KTF client restoration requires a fresh detached runtime")
 	}
 	if err := client.validateClientState(saved); err != nil {
@@ -227,7 +228,7 @@ func (client *Client) restoreClientStateForActivation(saved clientState, limits 
 	if err != nil {
 		return err
 	}
-	client.core, client.thread = core, thread
+	client.AttachCore(core, thread)
 	if err := client.validateWorkerStacks(saved.Workers, saved.WorkerStackCount, saved.FreeWorkerStacks); err != nil {
 		return err
 	}
@@ -245,13 +246,13 @@ func (client *Client) restoreClientStateForActivation(saved clientState, limits 
 	}
 	var audio *backend.Audio
 	if saved.Audio != nil {
-		audio, err = backend.NewAudioFromStateWithClock(*saved.Audio, sink, client.now)
+		audio, err = backend.NewAudioFromStateWithClock(*saved.Audio, sink, client.Now)
 		if err != nil {
 			return err
 		}
-		audio.SetLogger(client.logger)
+		audio.SetLogger(client.Logger)
 	}
-	now := client.now()
+	now := client.Now()
 	heapContext := &heapNativeContext{runtime: client.runtime, now: now, audioState: saved.Audio}
 	roots, err := client.runtime.restoreHeapWithContext(saved.Heap, heapContext)
 	if err != nil {
@@ -261,23 +262,23 @@ func (client *Client) restoreClientStateForActivation(saved clientState, limits 
 	if err != nil {
 		return err
 	}
-	if err := client.vibrator.RestoreState(saved.Vibration); err != nil {
+	if err := client.Vibrator.RestoreState(saved.Vibration); err != nil {
 		return err
 	}
 	client.initializationStarted = saved.Initialized
 	if saved.Prepared {
-		client.prepared = client.runtime
+		client.setRuntimes(client.runtime, client.runtime)
 	}
 	client.initParameters = slices.Clone(saved.InitParameters)
 	client.argument, client.executable = saved.Argument, saved.Executable
-	client.subscriberNumber, client.authentication = saved.Subscriber, saved.Authentication
-	client.frame, client.frameWidth, client.frameHeight = bytes.Clone(saved.Frame), saved.FrameWidth, saved.FrameHeight
-	client.screenWidth, client.screenHeight, client.flushCount = saved.ScreenWidth, saved.ScreenHeight, saved.FlushCount
-	client.framePending, client.partialFrame, client.forcedSlice = saved.FramePending, saved.PartialFrame, saved.ForcedSlice
-	client.speed, client.clientWakeAt = saved.Speed, saved.ClientWake.restore(now)
-	client.lastPaint, client.nextRoundPaint = saved.LastPaint.restore(now), saved.NextRoundPaint.restore(now)
-	client.paintLoad, client.paintCost, client.entryCost, client.workBaseline = saved.PaintLoad, saved.PaintCost, saved.EntryCost, saved.WorkBaseline
-	client.audio = audio
+	client.SubscriberNumber, client.authentication = saved.Subscriber, saved.Authentication
+	client.FrameRGBA, client.FrameWidth, client.FrameHeight = bytes.Clone(saved.Frame), saved.FrameWidth, saved.FrameHeight
+	client.ScreenWidth, client.ScreenHeight, client.FlushCount = saved.ScreenWidth, saved.ScreenHeight, saved.FlushCount
+	client.FramePending, client.PartialFrame, client.forcedSlice = saved.FramePending, saved.PartialFrame, saved.ForcedSlice
+	client.SpeedMultiplier, client.ClientWakeAt = saved.Speed, saved.ClientWake.restore(now)
+	client.lastPaint, client.NextRoundPaint = saved.LastPaint.restore(now), saved.NextRoundPaint.restore(now)
+	client.PaintLoad, client.PaintCost, client.EntryCost, client.WorkBaseline = saved.PaintLoad, saved.PaintCost, saved.EntryCost, saved.WorkBaseline
+	client.Audio = audio
 	if audio != nil {
 		elapsed := time.Duration(float64(max(saved.Heap.Control.ClockAge, 0)) * saved.Speed)
 		if err := audio.RebasePlaybackClock(elapsed, saved.Speed); err != nil {
@@ -288,7 +289,7 @@ func (client *Client) restoreClientStateForActivation(saved clientState, limits 
 	client.workers, client.runningTimerTasks = workers, timers
 	// Frame sampling and diagnostic caches start empty. The retained LCD above
 	// remains exact even when the back buffer contains unflushed drawing.
-	client.frameSampleAt, client.lastSample = time.Time{}, nil
+	client.FrameSampleAt, client.LastSample = time.Time{}, nil
 	if activation != nil {
 		*activation = clientActivation{client: client, constructed: now, editors: heapContext.restoredEditors, vibration: saved.Vibration}
 	}

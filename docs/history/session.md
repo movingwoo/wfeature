@@ -24,6 +24,7 @@ acceptance evidence.
 - [Automatic offline authentication](#implementation-automatic-offline-authentication)
 - [Frame bandwidth — 2026-09-24](#frame-bandwidth-2026-09-24)
 - [CPU saturation investigation (2026-09-23)](#cpu-saturation-investigation-2026-09-23)
+- [An SKT Clet's ending and its authentication (2026-10-31)](#session-engine-endings-2026-10-31)
 
 <a id="implementation-server-sessions"></a>
 
@@ -1884,3 +1885,21 @@ all seven authored browser checks in WebKit, and those checks plus the local KTF
 original-resolution route in Chromium. The timing measurements above keep their
 original checkout provenance; this pass verified the independent PR's behavior
 and is not a new benchmark.
+
+<a id="session-engine-endings-2026-10-31"></a>
+
+## An SKT Clet's ending and its authentication (2026-10-31)
+
+Two of the session's per-engine switches had left the SKT Clet engine out. The
+check that tells a guest's own ending from a failure knew the KTF and LGT exit
+sentinels and not the Clet's, and only the Clet's tick checked for it by name:
+a Clet that called `MC_knlExit` from a key, a pause, a resume or its start entry
+was reported as failing, and its exit reason was never recorded. One function,
+`guestExited`, now answers for every engine on both the start path and the
+running one. `Session.Authentication` asked every engine but the Clet one, so a
+Clet whose certificate the registry adapted was reported as having no
+authentication support; it now reports what the loader applied. Both are covered
+by tests that failed before the change
+(`TestAGuestEndingIsAnEndingRatherThanAFailure`,
+`TestAGuestThatEndedDuringItsStartIsAnEnding`,
+`TestTheAuthenticationACletStartedUnderIsReported`).

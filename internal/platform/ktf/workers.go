@@ -9,6 +9,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // Guest Java threads each run their run() method on a dedicated goroutine
@@ -23,7 +24,7 @@ const (
 	// workerStackBase places per-worker guest stacks above the root client
 	// stack and below the platform data region at 0x30000000; 64 workers of
 	// 1MB each end at 0x24100000.
-	workerStackBase = ThreadStackBase + uint32(ThreadStackSize)
+	workerStackBase = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize)
 
 	// defaultThreadSliceSteps bounds one worker's ARM steps per Host tick. A
 	// loop that sleeps parks earlier; a loop that never sleeps still yields.
@@ -45,7 +46,7 @@ func (client *Client) describeStackOverflow(address, stackPointer uint32) string
 	ranOff := func(base uint32) bool {
 		return base != 0 && (justBelow(base, address) || justBelow(base, stackPointer))
 	}
-	if ranOff(ThreadStackBase) {
+	if ranOff(wipicrt.ThreadStackBase) {
 		return "(the client thread's guest stack overflowed)"
 	}
 	for index, worker := range client.workers {
@@ -60,7 +61,7 @@ func (client *Client) describeStackOverflow(address, stackPointer uint32) string
 // The window is a stack's own size because that is how far a runaway frame
 // chain reaches before the mapping under it, if any, would answer instead.
 func justBelow(base, address uint32) bool {
-	return address < base && uint64(base)-uint64(address) <= ThreadStackSize
+	return address < base && uint64(base)-uint64(address) <= wipicrt.ThreadStackSize
 }
 
 type workerEvent struct {
@@ -121,14 +122,14 @@ func (client *Client) newGuestWorker(javaThread *jvm.Object) (*guestWorker, erro
 		if client.workerStackCount >= maxGuestWorkers {
 			return nil, fmt.Errorf("KTF guest worker count exceeds %d", maxGuestWorkers)
 		}
-		stackBase = workerStackBase + uint32(client.workerStackCount)*uint32(ThreadStackSize)
-		if err := client.core.Memory().Map(stackBase, ThreadStackSize, armcore.PermissionReadWrite); err != nil {
+		stackBase = workerStackBase + uint32(client.workerStackCount)*uint32(wipicrt.ThreadStackSize)
+		if err := client.Core().Memory().Map(stackBase, wipicrt.ThreadStackSize, armcore.PermissionReadWrite); err != nil {
 			return nil, fmt.Errorf("map KTF guest worker stack: %w", err)
 		}
 		client.workerStackCount++
 	}
 	initial := armcore.NewContext()
-	initial.Registers[armcore.RegisterSP] = stackBase + uint32(ThreadStackSize)
+	initial.Registers[armcore.RegisterSP] = stackBase + uint32(wipicrt.ThreadStackSize)
 	// An older module's runtime glue reaches everything through `fp`, so a
 	// worker that starts without it faults on its first helper call. See
 	// module_link.go.
@@ -143,7 +144,7 @@ func (client *Client) newGuestWorker(javaThread *jvm.Object) (*guestWorker, erro
 		events:     make(chan workerEvent, 1),
 		finished:   make(chan struct{}),
 	}
-	slice := client.threadSliceSteps
+	slice := client.ThreadSliceSteps
 	if slice == 0 {
 		slice = defaultThreadSliceSteps
 	}
@@ -190,12 +191,12 @@ func (worker *guestWorker) run(client *Client) {
 	func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				err = backend.GuestPanic(client.logger, "KTF guest thread", recovered)
+				err = backend.GuestPanic(client.Logger, "KTF guest thread", recovered)
 			}
 		}()
 		if saved := worker.continuation; saved != nil {
 			worker.continuation = nil
-			err = client.runtime.resumeWorkerContinuation(client.runtime.currentContext, worker, *saved)
+			err = client.runtime.resumeWorkerContinuation(client.runtime.CurrentContext, worker, *saved)
 		} else {
 			_, err = client.vm.InvokeVirtual(worker.javaThread, "run", "()V")
 		}
@@ -235,10 +236,10 @@ func (runtime *initializationRuntime) sleepCurrentWorker(wait time.Duration) err
 	}
 	worker := runtime.client.activeWorker
 	if worker == nil {
-		runtime.client.deferClientWait(wait)
+		runtime.client.DeferClientWait(wait)
 		return nil
 	}
-	worker.wakeAt = runtime.client.waitDeadline(wait)
+	worker.wakeAt = runtime.client.WaitDeadline(wait)
 	return worker.park()
 }
 
@@ -264,8 +265,8 @@ func (client *Client) StopThreads() {
 	if client == nil {
 		return
 	}
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	if client.workersStopped {
 		return
 	}
@@ -298,12 +299,12 @@ func (client *Client) waitForWorker(worker *guestWorker) {
 			return
 		case <-worker.events:
 		case <-timer.C:
-			if client.logger != nil {
+			if client.Logger != nil {
 				class := ""
 				if worker.javaThread != nil {
 					class = worker.javaThread.ClassName
 				}
-				client.logger.Warn("KTF guest thread did not unwind when the session closed",
+				client.Logger.Warn("KTF guest thread did not unwind when the session closed",
 					"class", class, "waited", bound)
 			}
 			return

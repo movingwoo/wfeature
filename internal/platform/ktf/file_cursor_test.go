@@ -1,8 +1,10 @@
 package ktf
 
 import (
-	"github.com/movingwoo/wfeature/internal/jvm"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestInputStreamSharesFileCursorAndWrites(t *testing.T) {
@@ -53,8 +55,8 @@ func TestUserEventPreservesTypeAndBothArguments(t *testing.T) {
 	}
 	runtime.jletListeners = []*jvm.Object{{ClassName: "test/UserListener"}}
 	for _, kind := range []int32{0x5000, 0xa600, 0x7fffffff} {
-		runtime.postGuestEvent(guestEvent{kind: kind, param1: -7, param2: 42})
-		event, _ := runtime.nextGuestEvent()
+		runtime.PostGuestEvent(wipicrt.GuestEvent{Kind: kind, Param1: -7, Param2: 42})
+		event, _ := runtime.NextGuestEvent()
 		if err := runtime.dispatchGuestEvent(vm, event); err != nil {
 			t.Fatal(err)
 		}
@@ -62,7 +64,7 @@ func TestUserEventPreservesTypeAndBothArguments(t *testing.T) {
 			t.Fatalf("payload = %v", seen)
 		}
 	}
-	if err := runtime.dispatchGuestEvent(vm, guestEvent{kind: 0x4fff}); err == nil {
+	if err := runtime.dispatchGuestEvent(vm, wipicrt.GuestEvent{Kind: 0x4fff}); err == nil {
 		t.Fatal("reserved event accepted")
 	}
 }

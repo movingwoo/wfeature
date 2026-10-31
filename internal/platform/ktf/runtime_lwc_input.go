@@ -59,7 +59,7 @@ func (client *Client) TypeKey(key rune) bool {
 	}
 	// The editor is given guest time, not wall time, so a Host batching ticks
 	// types the same text as one running live.
-	now := client.now()
+	now := client.Now()
 	changed := editor.Key(key, now)
 	if changed {
 		client.textMu.Lock()
@@ -69,7 +69,7 @@ func (client *Client) TypeKey(key rune) bool {
 		setComponentCursor(component, len([]rune(text)))
 		if client.runtime != nil {
 			if err := client.runtime.publishTextComponent(component); err != nil {
-				client.log("KTF text component publish failed", "error", err)
+				client.Log("KTF text component publish failed", "error", err)
 			}
 		}
 	}

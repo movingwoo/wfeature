@@ -1031,7 +1031,7 @@ func startEndedOrFailed(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ktf.ErrGuestExited) || errors.Is(err, lgt.ErrGuestExited) {
+	if guestExited(err) {
 		return fmt.Errorf("%w: %w", ErrExited, err)
 	}
 	return err
@@ -1045,11 +1045,22 @@ func (s *Session) endedOrFailed(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ktf.ErrGuestExited) || errors.Is(err, lgt.ErrGuestExited) {
+	if guestExited(err) {
 		s.noteExit(err)
 		return ErrExited
 	}
 	return err
+}
+
+// guestExited reports whether err is a guest's own ending on any engine that
+// has one. Each engine names its ending with its own sentinel, and a sentinel
+// left out of this list turns that engine's ending into a failure on every path
+// but the ones that check it by name: a Clet that called MC_knlExit from a key,
+// a pause, a resume or its start entry was reported as failing, because only
+// its tick checked for clet.ErrGuestExited.
+func guestExited(err error) bool {
+	return errors.Is(err, ktf.ErrGuestExited) || errors.Is(err, lgt.ErrGuestExited) ||
+		errors.Is(err, clet.ErrGuestExited)
 }
 
 // noteExit records how the game ended and tears the session down. The text is
@@ -1656,6 +1667,9 @@ func (session *Session) Authentication() backend.AuthenticationStatus {
 	}
 	if session.lgt != nil {
 		return session.lgt.Authentication()
+	}
+	if session.cletSession != nil {
+		return session.cletSession.Authentication()
 	}
 	return backend.AuthenticationUnsupported
 }

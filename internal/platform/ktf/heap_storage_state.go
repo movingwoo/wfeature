@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"slices"
 	"strings"
 )
@@ -33,7 +34,7 @@ func (context *heapNativeContext) chargeStorage(size uint64) error {
 }
 
 func validHeapDatabaseName(name string) bool {
-	return len(name) <= 1<<20 && storableName(javaDatabaseScope, name)
+	return len(name) <= 1<<20 && wipicrt.StorableName(wipicrt.JavaDatabaseScope, name)
 }
 
 func cloneHeapRecords(records [][]byte) [][]byte {
@@ -165,7 +166,7 @@ const (
 )
 
 func validHeapFile(name string, position, length uint64, truncated bool) bool {
-	return len(name) <= 1<<20 && storableName(guestFileScope, strings.TrimPrefix(name, "/")) &&
+	return len(name) <= 1<<20 && wipicrt.StorableName(wipicrt.GuestFileScope, strings.TrimPrefix(name, "/")) &&
 		position <= maxHeapStorageBytes && length <= maxHeapStorageBytes && (truncated || length == 0)
 }
 

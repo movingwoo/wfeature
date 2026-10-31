@@ -9,6 +9,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // encodePalettedPNG builds the shape the games' sprite assets have: a palette
@@ -101,14 +102,14 @@ func TestCreateImageCopyInheritsEncodedTransparency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opacity := runtime.framebufferOpacityOf(handle)
+	opacity := runtime.FramebufferOpacityOf(handle)
 	if opacity == nil {
 		t.Fatal("the copy records no transparency")
 	}
-	if opacity.opaqueAt(0, 0) {
+	if opacity.OpaqueAt(0, 0) {
 		t.Error("the copy reports its transparent column as drawn")
 	}
-	if !opacity.opaqueAt(1, 0) {
+	if !opacity.OpaqueAt(1, 0) {
 		t.Error("the copy reports its opaque column as absent")
 	}
 }
@@ -124,44 +125,44 @@ func TestCreateImageRecordsTransparencyUnderTheImageHandle(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	encoded := encodePalettedPNG(t, 2, 2)
 
-	data, err := runtime.allocateWIPIC(uint32(len(encoded)))
+	data, err := runtime.AllocateWIPIC(uint32(len(encoded)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.client.core.Memory().Write(data+wipicAllocationOverhead, encoded); err != nil {
+	if err := runtime.client.Core().Memory().Write(data+wipicrt.WIPICAllocationOverhead, encoded); err != nil {
 		t.Fatal(err)
 	}
-	result, err := runtime.allocateWIPIC(4)
+	result, err := runtime.AllocateWIPIC(4)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	thread := armcore.NewThread(armcore.Context{})
-	for register, value := range []uint32{result + wipicAllocationOverhead, data, 0, uint32(len(encoded))} {
+	for register, value := range []uint32{result + wipicrt.WIPICAllocationOverhead, data, 0, uint32(len(encoded))} {
 		if err := thread.SetRegister(register, value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if code, err := runtime.wipicCreateImage(thread); err != nil || code != 1 {
+	if code, err := runtime.WIPICCreateImage(thread); err != nil || code != 1 {
 		t.Fatalf("MC_grpCreateImage() = %#x, %v", code, err)
 	}
 
-	handles, err := runtime.readAOTWords(result+wipicAllocationOverhead, 1, "created image handle")
+	handles, err := runtime.ReadAOTWords(result+wipicrt.WIPICAllocationOverhead, 1, "created image handle")
 	if err != nil {
 		t.Fatal(err)
 	}
 	image := handles[0]
-	if _, err := runtime.readWIPICFramebuffer(image); err != nil {
+	if _, err := runtime.ReadWIPICFramebuffer(image); err != nil {
 		t.Fatalf("the image handle does not read as a framebuffer: %v", err)
 	}
-	opacity := runtime.framebufferOpacityOf(image)
+	opacity := runtime.FramebufferOpacityOf(image)
 	if opacity == nil {
 		t.Fatal("the image handle records no transparency")
 	}
-	if opacity.opaqueAt(0, 0) {
+	if opacity.OpaqueAt(0, 0) {
 		t.Error("the transparent column reports as drawn")
 	}
-	if !opacity.opaqueAt(1, 0) {
+	if !opacity.OpaqueAt(1, 0) {
 		t.Error("the opaque column reports as absent")
 	}
 }
@@ -190,7 +191,7 @@ func TestFullyOpaqueImageCarriesNoOpacityMask(t *testing.T) {
 	if decoded == nil {
 		t.Fatal("decoded image is missing")
 	}
-	if opacity := imageOpacityOf(decoded); opacity != nil {
+	if opacity := wipicrt.ImageOpacityOf(decoded); opacity != nil {
 		t.Errorf("an opaque image carries an opacity mask: %+v", opacity)
 	}
 }

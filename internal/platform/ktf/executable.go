@@ -3,6 +3,7 @@ package ktf
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 const (
@@ -46,11 +47,11 @@ type ExecutableFunctions struct {
 // ExeInterfaceFunctions pointers returned by ExecuteEntry. All pointers remain
 // guest addresses; callers must still use Core.Call to invoke function fields.
 func (client *Client) ReadExecutable(address uint32) (Executable, error) {
-	if client == nil || client.core == nil {
+	if client == nil || client.Core() == nil {
 		return Executable{}, fmt.Errorf("KTF client is not initialized")
 	}
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	return client.readExecutable(address)
 }
 
@@ -142,7 +143,7 @@ func (client *Client) readExecutableWords(name string, address uint32, count uin
 		return nil, fmt.Errorf("KTF %s range [%#x, %#x) is outside the client image", name, address, uint64(address)+size)
 	}
 	data := make([]byte, size)
-	if err := client.core.Memory().Read(address, data); err != nil {
+	if err := client.Core().Memory().Read(address, data); err != nil {
 		return nil, fmt.Errorf("read KTF %s at %#x: %w", name, address, err)
 	}
 	words := make([]uint32, count)
@@ -159,11 +160,11 @@ func (client *Client) readExecutableName(name string, address uint32) (string, e
 	data := make([]byte, 0, maxExecutableNameBytes)
 	for offset := uint64(0); offset < maxExecutableNameBytes; offset++ {
 		current := uint64(address) + offset
-		if current >= uint64(ImageBase)+client.image.MappedSize() {
+		if current >= uint64(wipicrt.ImageBase)+client.image.MappedSize() {
 			return "", fmt.Errorf("KTF %s at %#x is not null-terminated inside the client image", name, address)
 		}
 		var value [1]byte
-		if err := client.core.Memory().Read(uint32(current), value[:]); err != nil {
+		if err := client.Core().Memory().Read(uint32(current), value[:]); err != nil {
 			return "", fmt.Errorf("read KTF %s at %#x: %w", name, current, err)
 		}
 		if value[0] == 0 {
@@ -198,7 +199,7 @@ func (client *Client) validateExecutableFunction(name string, address uint32, re
 func (client *Client) containsImageRange(address uint32, size uint64) bool {
 	start := uint64(address)
 	end := start + size
-	imageStart := uint64(ImageBase)
+	imageStart := uint64(wipicrt.ImageBase)
 	imageEnd := imageStart + client.image.MappedSize()
 	return size != 0 && end >= start && start >= imageStart && end <= imageEnd
 }

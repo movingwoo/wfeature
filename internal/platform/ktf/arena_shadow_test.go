@@ -6,6 +6,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The detector is only worth having if a write that lands in a released block
@@ -29,8 +30,8 @@ func TestArenaShadowFindsAWriteIntoAReleasedBlock(t *testing.T) {
 		t.Fatalf("Write() = %v", err)
 	}
 
-	shadow := newArenaShadow(base, 64<<10)
-	window, ok := shadow.window(base, size)
+	shadow := wipicrt.NewArenaShadow(base, 64<<10)
+	window, ok := shadow.Window(base, size)
 	if !ok {
 		t.Fatal("the shadow does not cover the block")
 	}
@@ -41,7 +42,7 @@ func TestArenaShadowFindsAWriteIntoAReleasedBlock(t *testing.T) {
 	if err := memory.Read(base, current); err != nil {
 		t.Fatalf("Read() = %v", err)
 	}
-	if _, written := firstDifference(window, current); written != nil {
+	if _, written := wipicrt.FirstDifference(window, current); written != nil {
 		t.Fatalf("an untouched block reported %x", written)
 	}
 
@@ -52,7 +53,7 @@ func TestArenaShadowFindsAWriteIntoAReleasedBlock(t *testing.T) {
 	if err := memory.Read(base, current); err != nil {
 		t.Fatalf("Read() = %v", err)
 	}
-	offset, written := firstDifference(window, current)
+	offset, written := wipicrt.FirstDifference(window, current)
 	if offset != 4096+8 {
 		t.Fatalf("offset = %d, want %d", offset, 4096+8)
 	}
@@ -68,7 +69,7 @@ func TestArenaShadowFindsAWriteIntoAReleasedBlock(t *testing.T) {
 	if err := memory.Read(base, current); err != nil {
 		t.Fatalf("Read() = %v", err)
 	}
-	if _, written := firstDifference(window, current); written != nil {
+	if _, written := wipicrt.FirstDifference(window, current); written != nil {
 		t.Fatalf("a re-recorded block reported %x", written)
 	}
 }
@@ -88,8 +89,8 @@ func TestArenaShadowLeavesAReleasedBlockUntouched(t *testing.T) {
 	if err := memory.Write(base+16, pointer); err != nil {
 		t.Fatalf("Write() = %v", err)
 	}
-	shadow := newArenaShadow(base, 4<<10)
-	window, _ := shadow.window(base, 64)
+	shadow := wipicrt.NewArenaShadow(base, 4<<10)
+	window, _ := shadow.Window(base, 64)
 	if err := memory.Read(base, window); err != nil {
 		t.Fatalf("Read() = %v", err)
 	}
@@ -105,7 +106,7 @@ func TestArenaShadowLeavesAReleasedBlockUntouched(t *testing.T) {
 // A range outside the arena is refused rather than answered with a window that
 // belongs to something else.
 func TestArenaShadowRefusesARangeOutsideTheArena(t *testing.T) {
-	shadow := newArenaShadow(0x30000000, 1<<10)
+	shadow := wipicrt.NewArenaShadow(0x30000000, 1<<10)
 	for _, probe := range []struct {
 		name    string
 		address uint32
@@ -115,7 +116,7 @@ func TestArenaShadowRefusesARangeOutsideTheArena(t *testing.T) {
 		{"past its end", 0x300003ff, 4},
 		{"larger than the arena", 0x30000000, 1 << 11},
 	} {
-		if _, ok := shadow.window(probe.address, probe.size); ok {
+		if _, ok := shadow.Window(probe.address, probe.size); ok {
 			t.Errorf("%s was accepted", probe.name)
 		}
 	}
@@ -129,27 +130,27 @@ func TestArenaShadowReportsAWriteThroughTheArena(t *testing.T) {
 		t.Skip("the detector is installed in debug builds alone")
 	}
 	client, runtime := newTestRuntime(t)
-	runtime.installArenaShadow()
-	address, ok := runtime.arena.allocate(64)
+	runtime.InstallArenaShadow()
+	address, ok := runtime.Arena.Allocate(64)
 	if !ok {
 		t.Fatal("the arena refused an allocation")
 	}
-	runtime.arena.release(address, 64)
-	if runtime.shadowedBlocks == 0 {
+	runtime.Arena.Release(address, 64)
+	if runtime.ShadowedBlocks == 0 {
 		t.Fatal("the release recorded nothing")
 	}
-	if err := client.core.Memory().Write(address+8, []byte{0xaa, 0xbb, 0xcc, 0xdd}); err != nil {
+	if err := client.Core().Memory().Write(address+8, []byte{0xaa, 0xbb, 0xcc, 0xdd}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := runtime.arena.allocate(64); !ok {
+	if _, ok := runtime.Arena.Allocate(64); !ok {
 		t.Fatal("the arena refused the second allocation")
 	}
-	if runtime.checkedBlocks == 0 {
+	if runtime.CheckedBlocks == 0 {
 		t.Fatal("the reuse checked nothing")
 	}
 	reported := false
-	for event := range runtime.callCounts {
-		if strings.HasPrefix(event.text, "arena use after free") {
+	for event := range runtime.CallCounts {
+		if strings.HasPrefix(event.Text, "arena use after free") {
 			reported = true
 		}
 	}
@@ -162,22 +163,22 @@ func TestArenaShadowReportsAWriteThroughTheArena(t *testing.T) {
 // uses a fraction of a 64MB region, and reserving the span up front would cost
 // more than everything else a debug session holds.
 func TestArenaShadowGrowsToWhatWasReleased(t *testing.T) {
-	shadow := newArenaShadow(0x30000000, 64<<20)
-	if len(shadow.bytes) != 0 {
-		t.Fatalf("a fresh shadow holds %d bytes", len(shadow.bytes))
+	shadow := wipicrt.NewArenaShadow(0x30000000, 64<<20)
+	if len(shadow.Bytes) != 0 {
+		t.Fatalf("a fresh shadow holds %d bytes", len(shadow.Bytes))
 	}
-	if _, ok := shadow.window(0x30000000, 1<<10); !ok {
+	if _, ok := shadow.Window(0x30000000, 1<<10); !ok {
 		t.Fatal("the first window was refused")
 	}
-	if len(shadow.bytes) >= 1<<20 {
-		t.Fatalf("a 1KB release grew the copy to %d bytes", len(shadow.bytes))
+	if len(shadow.Bytes) >= 1<<20 {
+		t.Fatalf("a 1KB release grew the copy to %d bytes", len(shadow.Bytes))
 	}
 	// A window that reaches further grows it again, and one past the region is
 	// still refused however far the copy has grown.
-	if _, ok := shadow.window(0x30100000, 4<<10); !ok {
+	if _, ok := shadow.Window(0x30100000, 4<<10); !ok {
 		t.Fatal("a later window was refused")
 	}
-	if _, ok := shadow.window(0x30000000+uint32(64<<20)-4, 8); ok {
+	if _, ok := shadow.Window(0x30000000+uint32(64<<20)-4, 8); ok {
 		t.Fatal("a window crossing the end of the region was accepted")
 	}
 }

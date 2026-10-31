@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A Host parks a game whose page has gone away rather than closing it, and a
@@ -89,7 +90,7 @@ func TestClosingAJletAfterNotifyDestroyedRunsDestroyOnlyOnce(t *testing.T) {
 		t.Fatalf("notifyDestroyed error = %v", err)
 	}
 	// Replace the callback with a counter, so a second entry is observable.
-	if err := client.Core().Memory().WriteHalfwords(ImageBase+0x1d0, []uint16{
+	if err := client.Core().Memory().WriteHalfwords(wipicrt.ImageBase+0x1d0, []uint16{
 		0x68c8, // ldr r0,[r1,#12]
 		0x3001, // adds r0,#1
 		0x60c8, // str r0,[r1,#12]
@@ -118,10 +119,10 @@ func TestClosingAJletContinuesAfterDestroyThrows(t *testing.T) {
 	}
 	client.runtime.activeJlet = object
 	var throwingBody [16]byte
-	if err := client.Core().Memory().Read(ImageBase+0x1b0, throwingBody[:]); err != nil {
+	if err := client.Core().Memory().Read(wipicrt.ImageBase+0x1b0, throwingBody[:]); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Core().Memory().Write(ImageBase+0x1d0, throwingBody[:]); err != nil {
+	if err := client.Core().Memory().Write(wipicrt.ImageBase+0x1d0, throwingBody[:]); err != nil {
 		t.Fatal(err)
 	}
 	session := &Session{Client: client}
@@ -131,7 +132,7 @@ func TestClosingAJletContinuesAfterDestroyThrows(t *testing.T) {
 	if !client.workersStopped {
 		t.Fatal("throwing destroy callback prevented worker shutdown")
 	}
-	if got := client.runtime.diagnosticCounts()["lifecycle callback failed"]; got != 1 {
+	if got := client.runtime.DiagnosticCounts()["lifecycle callback failed"]; got != 1 {
 		t.Fatalf("lifecycle callback failures = %d, want 1", got)
 	}
 	if !client.runtime.destroyCallbackStarted {
@@ -149,8 +150,8 @@ func TestClosingAJletBoundsALoopingDestroyCallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.runtime.activeJlet = object
-	client.serviceSteps = client.Core().MaxSteps()
-	if err := client.Core().Memory().WriteHalfwords(ImageBase+0x1d0, []uint16{0xe7fe}); err != nil { // b .
+	client.ServiceSteps = client.Core().MaxSteps()
+	if err := client.Core().Memory().WriteHalfwords(wipicrt.ImageBase+0x1d0, []uint16{0xe7fe}); err != nil { // b .
 		t.Fatal(err)
 	}
 	session := &Session{Client: client}
@@ -160,7 +161,7 @@ func TestClosingAJletBoundsALoopingDestroyCallback(t *testing.T) {
 	if !client.workersStopped {
 		t.Fatal("looping destroy callback prevented worker shutdown")
 	}
-	if got := client.runtime.diagnosticCounts()["lifecycle callback failed"]; got != 1 {
+	if got := client.runtime.DiagnosticCounts()["lifecycle callback failed"]; got != 1 {
 		t.Fatalf("lifecycle callback failures = %d, want 1", got)
 	}
 }

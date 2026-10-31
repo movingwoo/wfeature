@@ -6,6 +6,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // TestNativeFormCallReleasesItsArgumentContainer covers the Host's call into
@@ -21,16 +22,16 @@ func TestNativeFormCallReleasesItsArgumentContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := func() {
-		if _, _, err := runtime.runAOTMethod(t.Context(), client.thread, "", method, typeInfo, []uint32{0x11, 0x22}); err != nil {
+		if _, _, err := runtime.runAOTMethod(t.Context(), client.Thread, "", method, typeInfo, []uint32{0x11, 0x22}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	call()
-	before := runtime.arena.used()
+	before := runtime.Arena.Used()
 	for range 64 {
 		call()
 	}
-	if after := runtime.arena.used(); after != before {
+	if after := runtime.Arena.Used(); after != before {
 		t.Fatalf("64 native-form calls grew the arena from %d to %d bytes", before, after)
 	}
 }
@@ -41,7 +42,7 @@ func TestNativeFormCallReleasesItsArgumentContainer(t *testing.T) {
 func TestModuleNativeCallReleasesItsArgumentContainer(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	body := returningStub(t, runtime)
-	name, err := runtime.allocateBytes([]byte("\x00(I)V+call\x00"))
+	name, err := runtime.AllocateBytes([]byte("\x00(I)V+call\x00"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,11 +50,11 @@ func TestModuleNativeCallReleasesItsArgumentContainer(t *testing.T) {
 	binary.LittleEndian.PutUint32(record[8:], body)
 	binary.LittleEndian.PutUint32(record[12:], name)
 	binary.LittleEndian.PutUint16(record[22:], 0x109)
-	methodAddress, err := runtime.allocateBytes(record)
+	methodAddress, err := runtime.AllocateBytes(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stackTop := ThreadStackBase + uint32(ThreadStackSize) - 64
+	stackTop := wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize) - 64
 	call := func() {
 		thread := armcore.NewThread(armcore.NewContext())
 		for register, value := range map[int]uint32{0: methodAddress, 1: 0x33, armcore.RegisterSP: stackTop} {
@@ -66,11 +67,11 @@ func TestModuleNativeCallReleasesItsArgumentContainer(t *testing.T) {
 		}
 	}
 	call()
-	before := runtime.arena.used()
+	before := runtime.Arena.Used()
 	for range 64 {
 		call()
 	}
-	if after := runtime.arena.used(); after != before {
+	if after := runtime.Arena.Used(); after != before {
 		t.Fatalf("64 module native calls grew the arena from %d to %d bytes", before, after)
 	}
 	_ = client

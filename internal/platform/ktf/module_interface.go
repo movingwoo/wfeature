@@ -49,13 +49,13 @@ func (runtime *initializationRuntime) makeModuleInterface() (uint32, error) {
 	}
 	entries := make([]uint32, moduleInterfaceFunctions)
 	for function := range entries {
-		stub, err := runtime.stub(svcCategoryModuleInterface, uint32(function))
+		stub, err := runtime.Stub(svcCategoryModuleInterface, uint32(function))
 		if err != nil {
 			return 0, err
 		}
 		entries[function] = stub
 	}
-	table, err := runtime.allocateWords(entries)
+	table, err := runtime.AllocateWords(entries)
 	if err != nil {
 		return 0, err
 	}
@@ -103,7 +103,7 @@ func (runtime *initializationRuntime) handleModuleInterfaceCall(ctx context.Cont
 	case moduleInterfaceThrow:
 		return runtime.throwAOTException(thread)
 	case moduleInterfaceFailed:
-		return 0, fmt.Errorf("KTF module reported a failed allocation%s", runtime.callerSite(thread))
+		return 0, fmt.Errorf("KTF module reported a failed allocation%s", runtime.CallerSite(thread))
 	case moduleInterfaceNew:
 		runtime.callbacks.Allocations++
 		return runtime.newAOTInstance(thread)
@@ -132,7 +132,7 @@ func (runtime *initializationRuntime) handleModuleInterfaceCall(ctx context.Cont
 		return runtime.moduleNewMultiArray(thread)
 	}
 	return 0, fmt.Errorf("KTF module interface function %d (%#x) is not implemented%s",
-		function, function*4, runtime.callerSite(thread))
+		function, function*4, runtime.CallerSite(thread))
 }
 
 // modulePrimitiveTypes is the table a module names a primitive by. The
@@ -154,7 +154,7 @@ func (runtime *initializationRuntime) moduleNewPrimitiveArray(thread *armcore.Th
 	}
 	index := code / 4
 	if code%4 != 0 || index >= uint32(len(modulePrimitiveTypes)) || modulePrimitiveTypes[index] == 0 {
-		return 0, fmt.Errorf("KTF module primitive array type code %#x is not one of the eight%s", code, runtime.callerSite(thread))
+		return 0, fmt.Errorf("KTF module primitive array type code %#x is not one of the eight%s", code, runtime.CallerSite(thread))
 	}
 	if err := thread.SetRegister(0, uint32(modulePrimitiveTypes[index])); err != nil {
 		return 0, err
@@ -171,9 +171,9 @@ func (runtime *initializationRuntime) moduleObjectClass(thread *armcore.Thread) 
 		return 0, err
 	}
 	if object == 0 {
-		return 0, fmt.Errorf("KTF module asked for the class of a null object%s", runtime.callerSite(thread))
+		return 0, fmt.Errorf("KTF module asked for the class of a null object%s", runtime.CallerSite(thread))
 	}
-	class, err := runtime.readWord(object + 4)
+	class, err := runtime.ReadWord(object + 4)
 	if err != nil {
 		return 0, fmt.Errorf("read KTF module object class at %#x: %w", object, err)
 	}
@@ -210,7 +210,7 @@ func (runtime *initializationRuntime) moduleInitializeClass(ctx context.Context,
 	if err != nil {
 		return 0, fmt.Errorf("resolve KTF module class %#x for initialization: %w", class, err)
 	}
-	runtime.countDiagnostic("module initialize " + metadata.Name)
+	runtime.CountDiagnostic("module initialize " + metadata.Name)
 	if err := runtime.runAOTClassInitializer(ctx, thread, metadata); err != nil {
 		return 0, err
 	}
@@ -238,9 +238,9 @@ func (runtime *initializationRuntime) moduleNewMultiArray(thread *armcore.Thread
 		return 0, err
 	}
 	if dimensions == 0 || dimensions > maxModuleArrayDimensions {
-		return 0, fmt.Errorf("KTF module array of %d dimensions%s", dimensions, runtime.callerSite(thread))
+		return 0, fmt.Errorf("KTF module array of %d dimensions%s", dimensions, runtime.CallerSite(thread))
 	}
-	lengths, err := runtime.readAOTWords(lengthsAddress, dimensions, "module array lengths")
+	lengths, err := runtime.ReadAOTWords(lengthsAddress, dimensions, "module array lengths")
 	if err != nil {
 		return 0, err
 	}
@@ -266,11 +266,11 @@ func (runtime *initializationRuntime) allocateModuleArray(class uint32, lengths 
 	if len(lengths) == 1 || lengths[0] == 0 {
 		return address, nil
 	}
-	descriptor, err := runtime.readWord(metadata.Address + 8)
+	descriptor, err := runtime.ReadWord(metadata.Address + 8)
 	if err != nil {
 		return 0, err
 	}
-	element, err := runtime.readWord(descriptor + javaDescriptorElement)
+	element, err := runtime.ReadWord(descriptor + javaDescriptorElement)
 	if err != nil {
 		return 0, err
 	}

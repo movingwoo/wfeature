@@ -7,12 +7,13 @@ import (
 	"sort"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // runtimeGraphicsState is the drawing state behind one org/kwis/msp/lcdui/
 // Graphics object targeting the WIPI C screen framebuffer.
 type runtimeGraphicsState struct {
-	target wipicFramebuffer
+	target wipicrt.WIPICFramebuffer
 	color  uint16
 	rgb    uint32
 	// The clip is kept in device coordinates so a translated clip and a
@@ -29,18 +30,18 @@ type runtimeGraphicsState struct {
 // newScreenGraphics builds a Graphics object whose operations draw into the
 // shared screen framebuffer.
 func (runtime *initializationRuntime) newScreenGraphics() (*jvm.Object, error) {
-	handle, err := runtime.wipicGetScreenFramebuffer()
+	handle, err := runtime.WIPICGetScreenFramebuffer()
 	if err != nil {
 		return nil, err
 	}
-	target, err := runtime.readWIPICFramebuffer(handle)
+	target, err := runtime.ReadWIPICFramebuffer(handle)
 	if err != nil {
 		return nil, err
 	}
 	state := &runtimeGraphicsState{
 		target:     target,
-		clipWidth:  int32(target.width),
-		clipHeight: int32(target.height),
+		clipWidth:  int32(target.Width),
+		clipHeight: int32(target.Height),
 		alpha:      255,
 	}
 	graphics := &jvm.Object{ClassName: "org/kwis/msp/lcdui/Graphics", Native: state, Fields: make(map[string]jvm.Value)}
@@ -107,11 +108,11 @@ func (state *runtimeGraphicsState) clip(x, y, width, height int32) (int32, int32
 	if top < 0 {
 		top = 0
 	}
-	if right > int64(state.target.width) {
-		right = int64(state.target.width)
+	if right > int64(state.target.Width) {
+		right = int64(state.target.Width)
 	}
-	if bottom > int64(state.target.height) {
-		bottom = int64(state.target.height)
+	if bottom > int64(state.target.Height) {
+		bottom = int64(state.target.Height)
 	}
 	if int64(left) >= right || int64(top) >= bottom {
 		return 0, 0, 0, 0, false
@@ -128,7 +129,7 @@ func (runtime *initializationRuntime) graphicsFillRect(state *runtimeGraphicsSta
 	for column := int32(0); column < clippedWidth; column++ {
 		binary.LittleEndian.PutUint16(row[column*2:], pixel)
 	}
-	memory := runtime.client.core.Memory()
+	memory := runtime.client.Core().Memory()
 	// XOR mode draws the difference between the colour and what is already
 	// there, so the destination has to be read back a row at a time.
 	var target []byte
@@ -136,7 +137,7 @@ func (runtime *initializationRuntime) graphicsFillRect(state *runtimeGraphicsSta
 		target = make([]byte, len(row))
 	}
 	for line := int32(0); line < clippedHeight; line++ {
-		address := state.target.pixels + uint32(top+line)*state.target.bpl + uint32(left)*2
+		address := state.target.Pixels + uint32(top+line)*state.target.Bpl + uint32(left)*2
 		written := row
 		if state.xorMode {
 			if err := memory.Read(address, target); err != nil {
@@ -154,24 +155,6 @@ func (runtime *initializationRuntime) graphicsFillRect(state *runtimeGraphicsSta
 	return nil
 }
 
-// blend565 mixes a source pixel into a destination one by coverage, in the
-// 5/6/5 space both already live in. Full coverage is the source untouched, so
-// a glyph that lands on whole pixels — which every glyph on the 16-dot grid
-// does — comes out of this exactly as it did when text was plotted rather than
-// blended.
-func blend565(destination, source uint16, coverage uint8) uint16 {
-	if coverage == 0xff {
-		return source
-	}
-	mix := func(from, to uint32) uint32 {
-		return (from*uint32(0xff-coverage) + to*uint32(coverage) + 0x7f) / 0xff
-	}
-	red := mix(uint32(destination>>11&0x1f), uint32(source>>11&0x1f))
-	green := mix(uint32(destination>>5&0x3f), uint32(source>>5&0x3f))
-	blue := mix(uint32(destination&0x1f), uint32(source&0x1f))
-	return uint16(red<<11 | green<<5 | blue)
-}
-
 // graphicsBlendPixel draws one glyph pixel, mixing the current colour into
 // whatever is already there by how much of the pixel the outline covers. The
 // clip and the translation are the same ones every other operation goes
@@ -187,8 +170,8 @@ func (runtime *initializationRuntime) graphicsBlendPixel(state *runtimeGraphicsS
 	if !ok {
 		return nil
 	}
-	memory := runtime.client.core.Memory()
-	address := state.target.pixels + uint32(top)*state.target.bpl + uint32(left)*2
+	memory := runtime.client.Core().Memory()
+	address := state.target.Pixels + uint32(top)*state.target.Bpl + uint32(left)*2
 	var pixel [2]byte
 	if err := memory.Read(address, pixel[:]); err != nil {
 		return err
@@ -198,7 +181,7 @@ func (runtime *initializationRuntime) graphicsBlendPixel(state *runtimeGraphicsS
 	if state.xorMode {
 		source = destination ^ state.color
 	}
-	binary.LittleEndian.PutUint16(pixel[:], blend565(destination, source, coverage))
+	binary.LittleEndian.PutUint16(pixel[:], wipicrt.Blend565(destination, source, coverage))
 	return memory.Write(address, pixel[:])
 }
 
@@ -312,29 +295,6 @@ func runtimeGraphicsDrawLine(runtime *initializationRuntime, _ *jvm.VM, argument
 	return jvm.VoidValue(), runtime.graphicsDrawSegment(state, values[0], values[1], values[2], values[3])
 }
 
-// graphicsTextWidth mirrors the runtime font advance used by Font metrics.
-func (runtime *initializationRuntime) graphicsTextWidth(text []rune) int32 {
-	width := int32(0)
-	for _, character := range text {
-		width += runtime.graphicsCharAdvance(character)
-	}
-	return width
-}
-
-func (runtime *initializationRuntime) graphicsCharAdvance(character rune) int32 {
-	if character == 0 {
-		return 0
-	}
-	// WIPI Java uses five-pixel printable ASCII cells beside ten-pixel
-	// Korean syllables. Space-padded overlays replace ASCII with one space
-	// and Korean with two; the font asset's proportional advances would
-	// leave colored fringes after punctuation and narrow Latin characters.
-	if character >= ' ' && character <= '~' {
-		return 5
-	}
-	return int32(runtime.fontFace().Render(character).Advance)
-}
-
 // runtimeGraphicsDrawString renders text with the runtime-owned 5x7 bitmap
 // glyphs in the current color. The anchor places the text box; baseline
 // anchoring uses the shared 8-pixel baseline.
@@ -362,13 +322,13 @@ func (runtime *initializationRuntime) graphicsDrawText(state *runtimeGraphicsSta
 	if len(text) == 0 {
 		return nil
 	}
-	face := runtime.fontFace()
-	width := runtime.graphicsTextWidth(text)
-	x, y = anchorOrigin(x, y, width, runtime.fontHeight(), anchor)
+	face := runtime.FontFace()
+	width := runtime.GraphicsTextWidth(text)
+	x, y = anchorOrigin(x, y, width, runtime.FontHeight(), anchor)
 	if anchor&64 != 0 {
-		y -= runtime.fontBaseline()
+		y -= runtime.FontBaseline()
 	}
-	baseline := y + runtime.fontBaseline()
+	baseline := y + runtime.FontBaseline()
 	cursor := x
 	for _, character := range text {
 		if character == 0 {
@@ -386,7 +346,7 @@ func (runtime *initializationRuntime) graphicsDrawText(state *runtimeGraphicsSta
 				}
 			}
 		}
-		cursor += runtime.graphicsCharAdvance(character)
+		cursor += runtime.GraphicsCharAdvance(character)
 	}
 	return nil
 }
@@ -526,11 +486,11 @@ func anchorOrigin(x, y, width, height, anchor int32) (int32, int32) {
 // graphics target with anchor and clip applied, row by row through guest
 // memory.
 func (runtime *initializationRuntime) graphicsBlitFramebuffer(state *runtimeGraphicsState, handle uint32, x, y, anchor int32, transparent *uint16) error {
-	source, err := runtime.readWIPICFramebuffer(handle)
+	source, err := runtime.ReadWIPICFramebuffer(handle)
 	if err != nil {
 		return err
 	}
-	width, height := int32(source.width), int32(source.height)
+	width, height := int32(source.Width), int32(source.Height)
 	x, y = anchorOrigin(x, y, width, height, anchor)
 	// **The clip answers in device coordinates and these are still the
 	// caller's**, so the corner the source is measured from has to move the
@@ -548,7 +508,7 @@ func (runtime *initializationRuntime) graphicsBlitFramebuffer(state *runtimeGrap
 	// A blit is masked when the image declared a transparent colour or when its
 	// encoding left pixels undrawn; either way the skipped pixels keep whatever
 	// the target already holds.
-	opacity := runtime.framebufferOpacityOf(handle)
+	opacity := runtime.FramebufferOpacityOf(handle)
 	// **XOR is a mode of every drawing operation, this one included.** A
 	// picture is how one title draws Korean at all: it fills a small image with
 	// the ink colour, XORs that over the cell, draws the jamo strip normally,
@@ -558,16 +518,16 @@ func (runtime *initializationRuntime) graphicsBlitFramebuffer(state *runtimeGrap
 	// syllable comes out a solid block of the ink colour. See docs/history/ktf.md,
 	// "Text a title composes by XOR".
 	xor := state.xorMode
-	memory := runtime.client.core.Memory()
+	memory := runtime.client.Core().Memory()
 	row := make([]byte, int(clippedWidth)*2)
 	target := make([]byte, int(clippedWidth)*2)
 	for line := int32(0); line < clippedHeight; line++ {
 		sourceY := top - originY + line
-		sourceAddress := source.pixels + uint32(sourceY)*source.bpl + uint32(left-originX)*2
+		sourceAddress := source.Pixels + uint32(sourceY)*source.Bpl + uint32(left-originX)*2
 		if err := memory.Read(sourceAddress, row); err != nil {
 			return fmt.Errorf("read KTF blit source row %d: %w", line, err)
 		}
-		targetAddress := state.target.pixels + uint32(top+line)*state.target.bpl + uint32(left)*2
+		targetAddress := state.target.Pixels + uint32(top+line)*state.target.Bpl + uint32(left)*2
 		if transparent != nil || opacity != nil || xor {
 			if err := memory.Read(targetAddress, target); err != nil {
 				return fmt.Errorf("read KTF blit target row %d: %w", line, err)
@@ -575,7 +535,7 @@ func (runtime *initializationRuntime) graphicsBlitFramebuffer(state *runtimeGrap
 			for column := 0; column < len(row); column += 2 {
 				sourceX := left - originX + int32(column/2)
 				if (transparent != nil && binary.LittleEndian.Uint16(row[column:]) == *transparent) ||
-					!opacity.opaqueAt(int(sourceX), int(sourceY)) {
+					!opacity.OpaqueAt(int(sourceX), int(sourceY)) {
 					copy(row[column:column+2], target[column:column+2])
 					continue
 				}
@@ -630,25 +590,25 @@ func (runtime *initializationRuntime) imageFramebufferHandle(image *jvm.Object) 
 		return 0, fmt.Errorf("image has no pixels")
 	}
 	bounds := decoded.Bounds()
-	handle, err := runtime.newWIPICFramebufferRecord(uint32(bounds.Dx()), uint32(bounds.Dy()))
+	handle, err := runtime.NewWIPICFramebufferRecord(uint32(bounds.Dx()), uint32(bounds.Dy()))
 	if err != nil {
 		return 0, err
 	}
-	framebuffer, err := runtime.readWIPICFramebuffer(handle)
+	framebuffer, err := runtime.ReadWIPICFramebuffer(handle)
 	if err != nil {
 		return 0, err
 	}
-	memory := runtime.client.core.Memory()
+	memory := runtime.client.Core().Memory()
 	row := make([]byte, bounds.Dx()*2)
 	for line := 0; line < bounds.Dy(); line++ {
 		for column := 0; column < bounds.Dx(); column++ {
-			binary.LittleEndian.PutUint16(row[column*2:], imagePixel565(decoded, bounds.Min.X+column, bounds.Min.Y+line))
+			binary.LittleEndian.PutUint16(row[column*2:], wipicrt.ImagePixel565(decoded, bounds.Min.X+column, bounds.Min.Y+line))
 		}
-		if err := memory.Write(framebuffer.pixels+uint32(line)*framebuffer.bpl, row); err != nil {
+		if err := memory.Write(framebuffer.Pixels+uint32(line)*framebuffer.Bpl, row); err != nil {
 			return 0, err
 		}
 	}
-	runtime.setFramebufferOpacity(handle, imageOpacityOf(decoded))
+	runtime.SetFramebufferOpacity(handle, wipicrt.ImageOpacityOf(decoded))
 	image.Fields["guestFramebuffer:I"] = jvm.IntValue(int32(handle))
 	runtime.trackImageSurface(image, handle)
 	return handle, nil
@@ -688,7 +648,7 @@ func runtimeGraphicsDrawImage(runtime *initializationRuntime, _ *jvm.VM, argumen
 		return jvm.VoidValue(), nil // sized mutable image without pixel data yet
 	}
 	transparent := imageTransparentPixel(imageObject)
-	if transparent != nil || imageOpacityOf(decoded) != nil || state.xorMode {
+	if transparent != nil || wipicrt.ImageOpacityOf(decoded) != nil || state.xorMode {
 		// A masked draw needs the image's pixels in target format, so the
 		// decoded image is rasterized once and drawn through the same blit
 		// framebuffer-backed images use. An image whose encoding declared
@@ -713,7 +673,7 @@ func runtimeGraphicsDrawImage(runtime *initializationRuntime, _ *jvm.VM, argumen
 	if !ok {
 		return jvm.VoidValue(), nil
 	}
-	memory := runtime.client.core.Memory()
+	memory := runtime.client.Core().Memory()
 	row := make([]byte, int(clippedWidth)*2)
 	for line := int32(0); line < clippedHeight; line++ {
 		sourceY := bounds.Min.Y + int(top-originY+line)
@@ -723,7 +683,7 @@ func runtimeGraphicsDrawImage(runtime *initializationRuntime, _ *jvm.VM, argumen
 			pixel := uint16(red>>11)<<11 | uint16(green>>10)<<5 | uint16(blue>>11)
 			binary.LittleEndian.PutUint16(row[column*2:], pixel)
 		}
-		address := state.target.pixels + uint32(top+line)*state.target.bpl + uint32(left)*2
+		address := state.target.Pixels + uint32(top+line)*state.target.Bpl + uint32(left)*2
 		if err := memory.Write(address, row); err != nil {
 			return jvm.VoidValue(), err
 		}
@@ -770,7 +730,7 @@ func runtimeGraphicsReset(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.V
 	}
 	state.translateX, state.translateY = 0, 0
 	state.clipX, state.clipY = 0, 0
-	state.clipWidth, state.clipHeight = int32(state.target.width), int32(state.target.height)
+	state.clipWidth, state.clipHeight = int32(state.target.Width), int32(state.target.Height)
 	state.color, state.rgb = 0, 0
 	state.strokeStyle = 0
 	state.xorMode = false
@@ -959,11 +919,11 @@ func runtimeGraphicsCopyArea(runtime *initializationRuntime, _ *jvm.VM, argument
 	// carries no transparency of its own to preserve here. The clip is already
 	// applied to the rectangle above, so the blit takes an empty one and the
 	// context contributes only its drawing mode.
-	return jvm.VoidValue(), runtime.wipicBlitClipped(
-		state.target, wipicClip{}, wipicPixelOp{xor: state.xorMode},
+	return jvm.VoidValue(), runtime.WIPICBlitClipped(
+		state.target, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{Xor: state.xorMode},
 		left, top, clippedWidth, clippedHeight,
 		state.target, sourceX, sourceY,
-		blitOpacity{},
+		wipicrt.BlitOpacity{},
 	)
 }
 
@@ -993,23 +953,14 @@ func runtimeGraphicsGetPixel(runtime *initializationRuntime, _ *jvm.VM, argument
 		return jvm.VoidValue(), err
 	}
 	x, y := values[0]+state.translateX, values[1]+state.translateY
-	if x < 0 || y < 0 || uint32(x) >= state.target.width || uint32(y) >= state.target.height {
+	if x < 0 || y < 0 || uint32(x) >= state.target.Width || uint32(y) >= state.target.Height {
 		return jvm.IntValue(0), nil
 	}
 	var data [2]byte
-	if err := runtime.client.core.Memory().Read(state.target.pixels+uint32(y)*state.target.bpl+uint32(x)*2, data[:]); err != nil {
+	if err := runtime.client.Core().Memory().Read(state.target.Pixels+uint32(y)*state.target.Bpl+uint32(x)*2, data[:]); err != nil {
 		return jvm.VoidValue(), err
 	}
-	return jvm.IntValue(int32(rgbFromPixel565(binary.LittleEndian.Uint16(data[:])))), nil
-}
-
-// rgbFromPixel565 expands a 16-bit target pixel to a 0x00RRGGBB word, keeping
-// the top bits in the low positions so white stays white.
-func rgbFromPixel565(pixel uint16) uint32 {
-	red := uint32(pixel>>11&0x1f) << 3
-	green := uint32(pixel>>5&0x3f) << 2
-	blue := uint32(pixel&0x1f) << 3
-	return red<<16 | green<<8 | blue | red>>5<<16 | green>>6<<8 | blue>>5
+	return jvm.IntValue(int32(wipicrt.RGBFromPixel565(binary.LittleEndian.Uint16(data[:])))), nil
 }
 
 func pixel565FromRGB(rgb uint32) uint16 {
@@ -1034,10 +985,10 @@ func runtimeGraphicsEncodeImage(runtime *initializationRuntime, _ *jvm.VM, argum
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	encoded, err := runtime.encodeFramebufferRegion(state.target,
+	encoded, err := runtime.EncodeFramebufferRegion(state.target,
 		values[0]+state.translateX, values[1]+state.translateY, values[2], values[3])
 	if err != nil {
-		runtime.countDiagnostic("encode image refused")
+		runtime.CountDiagnostic("encode image refused")
 		return jvm.ReferenceValue(nil), nil
 	}
 	return jvm.ReferenceValue(jvm.NewByteArray(encoded)), nil
@@ -1107,7 +1058,7 @@ func runtimeGraphicsTransferRGBPixels(write bool) runtimeJavaImplementation {
 				Message: message,
 			}
 		}
-		memory := runtime.client.core.Memory()
+		memory := runtime.client.Core().Memory()
 		var source []jvm.Value
 		if write {
 			if _, source, err = jvm.ArraySnapshot(buffer); err != nil {
@@ -1120,8 +1071,8 @@ func runtimeGraphicsTransferRGBPixels(write bool) runtimeJavaImplementation {
 			base := int(offset + line*pitch)
 			for column := int32(0); column < width; column++ {
 				x := bounds[0] + state.translateX + column
-				address := state.target.pixels + uint32(y)*state.target.bpl + uint32(x)*2
-				inside := x >= 0 && y >= 0 && uint32(x) < state.target.width && uint32(y) < state.target.height
+				address := state.target.Pixels + uint32(y)*state.target.Bpl + uint32(x)*2
+				inside := x >= 0 && y >= 0 && uint32(x) < state.target.Width && uint32(y) < state.target.Height
 				if !write {
 					row[column] = jvm.IntValue(0)
 					if !inside {
@@ -1131,7 +1082,7 @@ func runtimeGraphicsTransferRGBPixels(write bool) runtimeJavaImplementation {
 					if err := memory.Read(address, data[:]); err != nil {
 						return jvm.VoidValue(), err
 					}
-					row[column] = jvm.IntValue(int32(rgbFromPixel565(binary.LittleEndian.Uint16(data[:]))))
+					row[column] = jvm.IntValue(int32(wipicrt.RGBFromPixel565(binary.LittleEndian.Uint16(data[:]))))
 					continue
 				}
 				if !inside {
@@ -1203,7 +1154,7 @@ func runtimeGraphicsTransferPixels(write bool) runtimeJavaImplementation {
 		if offset < 0 || pitch < 0 || last > int64(length) {
 			return jvm.VoidValue(), fmt.Errorf("Graphics pixel range exceeds the %d byte buffer", length)
 		}
-		memory := runtime.client.core.Memory()
+		memory := runtime.client.Core().Memory()
 		var source []jvm.Value
 		if write {
 			if _, source, err = jvm.ArraySnapshot(buffer); err != nil {
@@ -1216,8 +1167,8 @@ func runtimeGraphicsTransferPixels(write bool) runtimeJavaImplementation {
 			base := int(offset + line*pitch)
 			for column := int32(0); column < width; column++ {
 				x := bounds[0] + state.translateX + column
-				address := state.target.pixels + uint32(y)*state.target.bpl + uint32(x)*2
-				inside := x >= 0 && y >= 0 && uint32(x) < state.target.width && uint32(y) < state.target.height
+				address := state.target.Pixels + uint32(y)*state.target.Bpl + uint32(x)*2
+				inside := x >= 0 && y >= 0 && uint32(x) < state.target.Width && uint32(y) < state.target.Height
 				var data [2]byte
 				if !write {
 					if inside {
@@ -1299,7 +1250,7 @@ func runtimeGraphicsDrawPolygon(fill bool) runtimeJavaImplementation {
 		// are the guest's, and a span that ends at Integer.MAX_VALUE never
 		// let the counter pass it.
 		first := max(int64(top), -int64(state.translateY))
-		last := min(int64(bottom), int64(state.target.height)-1-int64(state.translateY))
+		last := min(int64(bottom), int64(state.target.Height)-1-int64(state.translateY))
 		for row := first; row <= last; row++ {
 			y := int32(row)
 			var crossings []int32
@@ -1350,7 +1301,7 @@ func runtimeIntArrayArgument(value jvm.Value) ([]int32, error) {
 // only across the target in the caller's translated space; see clippedLine.
 func (runtime *initializationRuntime) graphicsDrawSegment(state *runtimeGraphicsState, x0, y0, x1, y1 int32) error {
 	left, top := -int64(state.translateX), -int64(state.translateY)
-	return clippedLine(x0, y0, x1, y1, left, top, left+int64(state.target.width), top+int64(state.target.height),
+	return wipicrt.ClippedLine(x0, y0, x1, y1, left, top, left+int64(state.target.Width), top+int64(state.target.Height),
 		func(x, y int32) error {
 			return runtime.graphicsFillRect(state, x, y, 1, 1, state.color)
 		})
@@ -1431,26 +1382,26 @@ func (runtime *initializationRuntime) copyImageRegion(_ *jvm.VM, source *jvm.Obj
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	sourceFramebuffer, err := runtime.readWIPICFramebuffer(sourceHandle)
+	sourceFramebuffer, err := runtime.ReadWIPICFramebuffer(sourceHandle)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	handle, err := runtime.newWIPICFramebufferRecord(uint32(width), uint32(height))
+	handle, err := runtime.NewWIPICFramebufferRecord(uint32(width), uint32(height))
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	target, err := runtime.readWIPICFramebuffer(handle)
+	target, err := runtime.ReadWIPICFramebuffer(handle)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
 	// The copy replaces rather than composites, so it inherits the region's
 	// transparency outright instead of merging into what the fresh
 	// framebuffer holds.
-	sourceOpacity := runtime.framebufferOpacityOf(sourceHandle)
-	if err := runtime.wipicBlit(target, 0, 0, width, height, sourceFramebuffer, x, y, blitOpacity{source: sourceOpacity}); err != nil {
+	sourceOpacity := runtime.FramebufferOpacityOf(sourceHandle)
+	if err := runtime.WIPICBlit(target, 0, 0, width, height, sourceFramebuffer, x, y, wipicrt.BlitOpacity{Source: sourceOpacity}); err != nil {
 		return jvm.VoidValue(), err
 	}
-	runtime.setFramebufferOpacity(handle, sourceOpacity.region(int(x), int(y), int(width), int(height)))
+	runtime.SetFramebufferOpacity(handle, sourceOpacity.Region(int(x), int(y), int(width), int(height)))
 	fields := map[string]jvm.Value{
 		"width:I":            jvm.IntValue(width),
 		"height:I":           jvm.IntValue(height),
@@ -1500,11 +1451,11 @@ func runtimeImageDrawImage(runtime *initializationRuntime, _ *jvm.VM, arguments 
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	target, err := runtime.readWIPICFramebuffer(targetHandle)
+	target, err := runtime.ReadWIPICFramebuffer(targetHandle)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	sourceFramebuffer, err := runtime.readWIPICFramebuffer(sourceHandle)
+	sourceFramebuffer, err := runtime.ReadWIPICFramebuffer(sourceHandle)
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
@@ -1513,12 +1464,12 @@ func runtimeImageDrawImage(runtime *initializationRuntime, _ *jvm.VM, arguments 
 	// the smaller of the two.
 	width := min(geometry[2], geometry[6])
 	height := min(geometry[3], geometry[7])
-	return jvm.VoidValue(), runtime.wipicBlit(
+	return jvm.VoidValue(), runtime.WIPICBlit(
 		target, geometry[0], geometry[1], width, height,
 		sourceFramebuffer, geometry[4], geometry[5],
-		blitOpacity{
-			source:      runtime.framebufferOpacityOf(sourceHandle),
-			destination: runtime.framebufferOpacityOf(targetHandle),
+		wipicrt.BlitOpacity{
+			Source:      runtime.FramebufferOpacityOf(sourceHandle),
+			Destination: runtime.FramebufferOpacityOf(targetHandle),
 		},
 	)
 }

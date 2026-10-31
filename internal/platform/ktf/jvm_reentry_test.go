@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 type reentryClassSource []byte
@@ -29,7 +30,7 @@ func TestBytecodeARMRoundTripPreservesInitializationMonitorAndBudget(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		address, err := runtime.allocate(4)
+		address, err := runtime.Allocate(4)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -37,7 +38,7 @@ func TestBytecodeARMRoundTripPreservesInitializationMonitorAndBudget(t *testing.
 			Methods: []jvm.AOTMethodMetadata{{Address: address + 4, Name: "through", Descriptor: "()I", AccessFlags: 9, Body: stub}}}); err != nil {
 			t.Fatal(err)
 		}
-		runtime.currentThread, runtime.currentContext = client.thread, t.Context()
+		runtime.CurrentThread, runtime.CurrentContext = client.Thread, t.Context()
 		result, err := client.vm.InvokeStatic("ReentryProbe", "outer", "()I")
 		if err != nil {
 			t.Fatal(err)
@@ -59,8 +60,8 @@ func TestBytecodeARMRoundTripPreservesInitializationMonitorAndBudget(t *testing.
 		if budget == 10000 && err != nil {
 			t.Fatal(err)
 		}
-		if len(runtime.aotCallDepth) != 0 {
-			t.Fatalf("round trip leaked depth: %v", runtime.aotCallDepth)
+		if len(runtime.AOTCallDepth) != 0 {
+			t.Fatalf("round trip leaked depth: %v", runtime.AOTCallDepth)
 		}
 	}
 }
@@ -74,8 +75,8 @@ func TestRuntimeJavaReentryRetainsSynchronizedOwner(t *testing.T) {
 		Methods: []jvm.MethodDefinition{
 			{Name: "inner", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessSynchronized, Body: func(*jvm.Invocation, []jvm.Value) (jvm.Value, error) { return jvm.IntValue(42), nil }},
 			{Name: "outer", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessSynchronized, Body: func(call *jvm.Invocation, _ []jvm.Value) (jvm.Value, error) {
-				runtime.currentContext = context.WithValue(t.Context(), jvmInvocationKey{}, call)
-				defer func() { runtime.currentContext = nil }()
+				runtime.CurrentContext = context.WithValue(t.Context(), jvmInvocationKey{}, call)
+				defer func() { runtime.CurrentContext = nil }()
 				result, err := runtime.handleRuntimeJavaCall(armcore.NewThread(armcore.NewContext()), 991)
 				return jvm.IntValue(int32(result)), err
 			}},
@@ -92,32 +93,32 @@ func TestRuntimeJavaReentryRetainsSynchronizedOwner(t *testing.T) {
 func TestAOTDepthLeavesTheEnteringThread(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	first, second := armcore.NewThread(armcore.NewContext()), armcore.NewThread(armcore.NewContext())
-	runtime.currentThread = first
+	runtime.CurrentThread = first
 	runtime.client.activeWorker = &guestWorker{armThread: first}
-	if err := runtime.enterAOTCall(); err != nil {
+	if err := runtime.EnterAOTCall(); err != nil {
 		t.Fatal(err)
 	}
-	owner := runtime.currentThread
-	runtime.currentThread = second
+	owner := runtime.CurrentThread
+	runtime.CurrentThread = second
 	runtime.client.activeWorker = &guestWorker{armThread: second}
-	if err := runtime.enterAOTCall(); err != nil {
+	if err := runtime.EnterAOTCall(); err != nil {
 		t.Fatal(err)
 	}
-	runtime.leaveAOTCall(owner)
-	if runtime.aotCallDepth[first] != 0 || runtime.aotCallDepth[second] != 1 {
-		t.Fatalf("depth ownership = %v", runtime.aotCallDepth)
+	runtime.LeaveAOTCall(owner)
+	if runtime.AOTCallDepth[first] != 0 || runtime.AOTCallDepth[second] != 1 {
+		t.Fatalf("depth ownership = %v", runtime.AOTCallDepth)
 	}
-	runtime.leaveAOTCall(second)
-	for i := 0; i < int(maxAOTCallDepth); i++ {
-		runtime.currentThread = armcore.NewThread(armcore.NewContext())
-		if err := runtime.enterAOTCall(); err != nil {
+	runtime.LeaveAOTCall(second)
+	for i := 0; i < int(wipicrt.MaxAOTCallDepth); i++ {
+		runtime.CurrentThread = armcore.NewThread(armcore.NewContext())
+		if err := runtime.EnterAOTCall(); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := runtime.enterAOTCall(); err == nil {
+	if err := runtime.EnterAOTCall(); err == nil {
 		t.Fatal("derived frames bypassed the worker depth limit")
 	}
-	for i := 0; i < int(maxAOTCallDepth); i++ {
-		runtime.leaveAOTCall(second)
+	for i := 0; i < int(wipicrt.MaxAOTCallDepth); i++ {
+		runtime.LeaveAOTCall(second)
 	}
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func checkpointFixtureSession(t *testing.T, fixture continuationFixture, store backend.SaveStore) *Session {
@@ -20,7 +21,7 @@ func checkpointFixtureSession(t *testing.T, fixture continuationFixture, store b
 	fixture.client.AttachSaveStore(store)
 	return &Session{Archive: &Archive{JAR: &JAR{Client: fixture.client.image}}, Client: fixture.client,
 		archiveIdentity: backend.SaveIdentity([]byte("authored checkpoint fixture")),
-		options:         SessionOptions{MaxSteps: fixture.client.core.MaxSteps(), SaveStore: store, Clock: fixture.clock}}
+		options:         SessionOptions{MaxSteps: fixture.client.Core().MaxSteps(), SaveStore: store, Clock: fixture.clock}}
 }
 
 // A load restores execution state and leaves the saves alone: what was saved
@@ -36,7 +37,7 @@ func TestSessionCheckpointLeavesLaterSavesAndIsolatesDiscardedWrites(t *testing.
 		t.Fatal(err)
 	}
 	source := checkpointFixtureSession(t, fixture, store)
-	source.Client.saveStore = newCertificateSaveStore(store, []byte("saved certificate"))
+	source.Client.SaveStore = newCertificateSaveStore(store, []byte("saved certificate"))
 	checkpoint, err := source.CaptureCheckpoint(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +57,7 @@ func TestSessionCheckpointLeavesLaterSavesAndIsolatesDiscardedWrites(t *testing.
 	// save runs while StopThreads unwinds it, after the replacement committed.
 	if err := source.Client.vm.RegisterNative("saved/Discard", "run", "()V", func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
 		defer func() {
-			if err := source.Client.saveStore.StoreSave("late-discard", []byte("must stay isolated")); err != nil {
+			if err := source.Client.SaveStore.StoreSave("late-discard", []byte("must stay isolated")); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -73,7 +74,7 @@ func TestSessionCheckpointLeavesLaterSavesAndIsolatesDiscardedWrites(t *testing.
 		t.Fatal(err)
 	}
 	options := source.options
-	clock := NewManualClock(time.Unix(1900000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1900000000, 0))
 	options.Clock = clock
 	prepared, err := prepareSessionCheckpoint(source.Archive, source.archiveIdentity, checkpoint, options)
 	if err != nil {
@@ -97,7 +98,7 @@ func TestSessionCheckpointLeavesLaterSavesAndIsolatesDiscardedWrites(t *testing.
 	if source.Client != nil || !old.workersStopped || restored.Client == old {
 		t.Fatal("old session remained live after adoption")
 	}
-	if data, _ := old.saveStore.LoadSave("late-discard"); string(data) != "must stay isolated" {
+	if data, _ := old.SaveStore.LoadSave("late-discard"); string(data) != "must stay isolated" {
 		t.Fatal("discarded worker did not finish its deferred save")
 	}
 	after, err := store.SnapshotSaves()
@@ -113,7 +114,7 @@ func TestSessionCheckpointLeavesLaterSavesAndIsolatesDiscardedWrites(t *testing.
 			t.Fatalf("the load left %s beside the saves: %v", name, err)
 		}
 	}
-	certificate, _ := restored.Client.saveStore.LoadSave(certificateSaveKey)
+	certificate, _ := restored.Client.SaveStore.LoadSave(certificateSaveKey)
 	if string(certificate) != "saved certificate" {
 		t.Fatal("adoption lost authentication adapter state")
 	}
@@ -146,9 +147,9 @@ func TestSessionCheckpointRefusalKeepsOriginalRunning(t *testing.T) {
 	if _, err := source.CaptureCheckpoint(canceled); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled capture = %v", err)
 	}
-	source.Client.run.Lock()
+	source.Client.Run.Lock()
 	_, busy := source.CaptureCheckpoint(t.Context())
-	source.Client.run.Unlock()
+	source.Client.Run.Unlock()
 	if !errors.Is(busy, ErrCheckpointBusy) {
 		t.Fatalf("busy capture = %v", busy)
 	}
@@ -170,8 +171,8 @@ func TestSessionCheckpointRefusalKeepsOriginalRunning(t *testing.T) {
 			return err
 		}},
 		{"busy", func(prepared *PreparedSession) error {
-			source.Client.run.Lock()
-			defer source.Client.run.Unlock()
+			source.Client.Run.Lock()
+			defer source.Client.Run.Unlock()
 			_, err := prepared.Commit(t.Context(), source, store)
 			return err
 		}},
@@ -204,7 +205,7 @@ func TestSessionCheckpointRequiresASaveStore(t *testing.T) {
 	fixture.start(t)
 	source := &Session{Archive: &Archive{JAR: &JAR{Client: fixture.client.image}}, Client: fixture.client,
 		archiveIdentity: backend.SaveIdentity([]byte("authored checkpoint fixture")),
-		options:         SessionOptions{MaxSteps: fixture.client.core.MaxSteps(), Clock: fixture.clock}}
+		options:         SessionOptions{MaxSteps: fixture.client.Core().MaxSteps(), Clock: fixture.clock}}
 	if _, err := source.CaptureCheckpoint(t.Context()); err == nil {
 		t.Fatal("a session without a save store was captured")
 	}
@@ -232,7 +233,7 @@ func TestSessionCheckpointSubprocess(t *testing.T) {
 			t.Fatal(err)
 		}
 		archive := &Archive{JAR: &JAR{Client: fresh.client.image}}
-		prepared, err := prepareSessionCheckpoint(archive, identity, saved, SessionOptions{MaxSteps: fresh.client.core.MaxSteps(), Clock: fresh.clock, SaveStore: store})
+		prepared, err := prepareSessionCheckpoint(archive, identity, saved, SessionOptions{MaxSteps: fresh.client.Core().MaxSteps(), Clock: fresh.clock, SaveStore: store})
 		if err != nil {
 			t.Fatal(err)
 		}

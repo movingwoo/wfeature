@@ -10,12 +10,13 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestRuntimeControlContinuesClockCallbacksInputAndUnloadedClip(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1.25)
-	probe, err := runtime.allocate(8)
+	probe, err := runtime.Allocate(8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,17 +24,18 @@ func TestRuntimeControlContinuesClockCallbacksInputAndUnloadedClip(t *testing.T)
 		code.literal(2, probe)
 		code.emit(0xe5820000, 0xe5821004, 0xe12fff1e)
 	})
-	netCall(t, runtime, wipicNetConnect, callback, 0x1234)
+	netCall(t, runtime, wipicrt.WIPICNetConnect, callback, 0x1234)
 	card := &jvm.Object{ClassName: jvm.ObjectClass}
-	runtime.cInput = cInputState{card: card, owner: cInputOwner{address: probe}, active: true, mode: 3, revision: 17, calls: 12, activations: 3, discardCarrier: true, clearPending: true}
-	runtime.cInput.pending = []byte{0xb0, 0xa1}
-	runtime.repaintPending, runtime.guestFlushedOwnFrame, runtime.guestHasPainted = true, true, true
-	runtime.roundsSinceGuestPaint, runtime.guestEventLoop = 3, true
-	clip := mediaCall(t, runtime, wipicMediaClipCreate, 0, 0, 0)
-	runtime.wipicClips[clip].state.data = oneNoteSMAF()
-	mediaCall(t, runtime, wipicMediaSetMuteState, 3, 1)
-	mediaCall(t, runtime, wipicMediaSetMuteState, 0, 0)
-	mediaCall(t, runtime, wipicMediaClipSetVolume, clip, 45)
+	runtime.cInputCardOwner = card
+	runtime.CInput = wipicrt.CInputState{Owner: wipicrt.CInputOwner{Address: probe}, Active: true, Mode: 3, Revision: 17, Calls: 12, Activations: 3, DiscardCarrier: true, ClearPending: true}
+	runtime.CInput.Pending = []byte{0xb0, 0xa1}
+	runtime.RepaintPending, runtime.GuestFlushedOwnFrame, runtime.guestHasPainted = true, true, true
+	runtime.roundsSinceGuestPaint, runtime.GuestEventLoop = 3, true
+	clip := mediaCall(t, runtime, wipicrt.WIPICMediaClipCreate, 0, 0, 0)
+	runtime.WIPICClips[clip].State.Data = oneNoteSMAF()
+	mediaCall(t, runtime, wipicrt.WIPICMediaSetMuteState, 3, 1)
+	mediaCall(t, runtime, wipicrt.WIPICMediaSetMuteState, 0, 0)
+	mediaCall(t, runtime, wipicrt.WIPICMediaClipSetVolume, clip, 45)
 	clock.Advance(123456789 * time.Nanosecond)
 	heap, err := runtime.captureHeapState(nil)
 	if err != nil {
@@ -51,14 +53,15 @@ func TestRuntimeControlContinuesClockCallbacksInputAndUnloadedClip(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	core, err := client.core.CaptureState()
+	core, err := client.Core().CaptureState()
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture := newContinuationRestoreFixture(t, 1900000000, continuationFixtureOptions{})
 	fresh := fixture.runtime
 	fixture.client.SetSpeed(1.25)
-	fixture.client.core, err = armcore.NewCoreFromState(core, armcore.CoreOptions{})
+	restoredCore, err := armcore.NewCoreFromState(core, armcore.CoreOptions{})
+	fixture.client.AttachCore(restoredCore, fixture.client.Thread)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,66 +74,66 @@ func TestRuntimeControlContinuesClockCallbacksInputAndUnloadedClip(t *testing.T)
 	for _, step := range []time.Duration{0, time.Nanosecond, time.Microsecond, 800 * time.Microsecond} {
 		clock.Advance(step)
 		fixture.clock.Advance(step)
-		if got, want := fresh.guestElapsed(), runtime.guestElapsed(); got != want {
+		if got, want := fresh.GuestElapsed(), runtime.GuestElapsed(); got != want {
 			t.Fatalf("restored guest elapsed = %s, want %s", got, want)
 		}
-		if got, want := fresh.guestMillis(), runtime.guestMillis(); got != want {
+		if got, want := fresh.GuestMillis(), runtime.GuestMillis(); got != want {
 			t.Fatalf("restored guest date = %d, want %d", got, want)
 		}
 	}
-	if !fresh.cInput.owner.current(fresh) || fresh.cInput.card == nil || fresh.cInput.card == card || fresh.cInput.revision != 17 || fresh.cInput.calls != 12 || fresh.cInput.activations != 3 || !fresh.cInput.active || fresh.cInput.mode != 3 || !fresh.cInput.discardCarrier || !fresh.cInput.clearPending {
+	if !fresh.CInput.Owner.Current(fresh.Runtime) || fresh.cInputCardOwner == nil || fresh.cInputCardOwner == card || fresh.CInput.Revision != 17 || fresh.CInput.Calls != 12 || fresh.CInput.Activations != 3 || !fresh.CInput.Active || fresh.CInput.Mode != 3 || !fresh.CInput.DiscardCarrier || !fresh.CInput.ClearPending {
 		t.Fatal("C input ownership or pending control state differs")
 	}
-	if !fresh.repaintPending || !fresh.guestFlushedOwnFrame || !fresh.guestHasPainted || fresh.roundsSinceGuestPaint != 3 || !fresh.guestEventLoop {
+	if !fresh.RepaintPending || !fresh.GuestFlushedOwnFrame || !fresh.guestHasPainted || fresh.roundsSinceGuestPaint != 3 || !fresh.GuestEventLoop {
 		t.Fatal("guest painting or event ownership differs")
 	}
-	if mediaCall(t, fresh, wipicMediaGetMuteState, 3) != 1 || mediaCall(t, fresh, wipicMediaGetMuteState, 0) != 0 || len(fresh.wipicMutedSources) != 1 {
-		t.Fatalf("restored C media mute state = %v, want source 3 alone", fresh.wipicMutedSources)
+	if mediaCall(t, fresh, wipicrt.WIPICMediaGetMuteState, 3) != 1 || mediaCall(t, fresh, wipicrt.WIPICMediaGetMuteState, 0) != 0 || len(fresh.WIPICMutedSources) != 1 {
+		t.Fatalf("restored C media mute state = %v, want source 3 alone", fresh.WIPICMutedSources)
 	}
-	if level := mediaCall(t, fresh, wipicMediaClipGetVolume, clip); level != 45 {
+	if level := mediaCall(t, fresh, wipicrt.WIPICMediaClipGetVolume, clip); level != 45 {
 		t.Fatalf("restored C clip volume = %d, want 45", level)
 	}
-	buffer, err := fresh.allocate(4)
+	buffer, err := fresh.Allocate(4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	capacity, err := fresh.allocateWords([]uint32{4})
+	capacity, err := fresh.AllocateWords([]uint32{4})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for pass := 0; pass < 2; pass++ {
 		writeWord(t, fresh, capacity, 4)
-		if got, err := cInputCall(t, fresh, wipicIMHandleInput, uint32(cInputCarrier), cInputPressed, buffer, capacity, 0, 0); err != nil || got != 1 {
+		if got, err := cInputCall(t, fresh, wipicrt.WIPICIMHandleInput, uint32(wipicrt.CInputCarrier), wipicrt.CInputPressed, buffer, capacity, 0, 0); err != nil || got != 1 {
 			t.Fatalf("restored C input = %d, %v", got, err)
 		}
-		if pass == 0 && (len(fresh.cInput.pending) != 2 || fresh.cInput.discardCarrier || readTestBytes(t, fixture.client, buffer, 1)[0] != 0) {
+		if pass == 0 && (len(fresh.CInput.Pending) != 2 || fresh.CInput.DiscardCarrier || readTestBytes(t, fixture.client, buffer, 1)[0] != 0) {
 			t.Fatal("restored C input did not discard its canceled carrier")
 		}
 	}
-	if len(fresh.cInput.pending) != 0 || !bytes.Equal(readTestBytes(t, fixture.client, buffer, 3), []byte{0xb0, 0xa1, 0}) || len(runtime.cInput.pending) != 2 {
+	if len(fresh.CInput.Pending) != 0 || !bytes.Equal(readTestBytes(t, fixture.client, buffer, 3), []byte{0xb0, 0xa1, 0}) || len(runtime.CInput.Pending) != 2 {
 		t.Fatal("restored C input did not deliver pending text independently")
 	}
-	if count, err := fixture.client.serviceNetCallbacks(t.Context()); err != nil || count != 1 {
+	if count, err := fixture.client.ServiceNetCallbacks(t.Context()); err != nil || count != 1 {
 		t.Fatalf("restored network callback = %d, %v", count, err)
 	}
-	words, err := fresh.readAOTWords(probe, 2, "restored network callback")
-	if err != nil || words[0] != wipiErrorCode || words[1] != 0x1234 || len(fresh.pendingNetCallbacks) != 0 || fresh.cInput.owner.current(fresh) {
+	words, err := fresh.ReadAOTWords(probe, 2, "restored network callback")
+	if err != nil || words[0] != wipicrt.WipiErrorCode || words[1] != 0x1234 || len(fresh.PendingNetCallbacks) != 0 || fresh.CInput.Owner.Current(fresh.Runtime) {
 		t.Fatalf("restored callback arguments or ownership = %v, %v", words, err)
 	}
-	if len(runtime.pendingNetCallbacks) != 1 || !runtime.cInput.owner.current(runtime) || !bytes.Equal(fresh.wipicClips[clip].state.data, runtime.wipicClips[clip].state.data) {
+	if len(runtime.PendingNetCallbacks) != 1 || !runtime.CInput.Owner.Current(runtime.Runtime) || !bytes.Equal(fresh.WIPICClips[clip].State.Data, runtime.WIPICClips[clip].State.Data) {
 		t.Fatal("restored control changed its source or clip data")
 	}
 	sink := &countingSink{}
-	fixture.client.audio = backend.NewAudio(sink)
-	if got := mediaCall(t, fresh, wipicMediaPlay, clip, 0); got != 0 {
+	fixture.client.Audio = backend.NewAudio(sink)
+	if got := mediaCall(t, fresh, wipicrt.WIPICMediaPlay, clip, 0); got != 0 {
 		t.Fatalf("restored unloaded clip play = %#x", got)
 	}
-	fixture.client.audio.Advance(fresh.guestElapsed() + time.Second)
+	fixture.client.Audio.Advance(fresh.GuestElapsed() + time.Second)
 	if sink.noteOns != 1 {
 		t.Fatalf("restored clip emitted %d notes", sink.noteOns)
 	}
-	mediaCall(t, fresh, wipicMediaClipFree, clip)
-	if len(fresh.wipicClips) != 0 || len(fresh.wipicClipOrder) != 0 || runtime.wipicClips[clip] == nil {
+	mediaCall(t, fresh, wipicrt.WIPICMediaClipFree, clip)
+	if len(fresh.WIPICClips) != 0 || len(fresh.WIPICClipOrder) != 0 || runtime.WIPICClips[clip] == nil {
 		t.Fatal("restored clip deletion changed source ownership")
 	}
 }
@@ -138,11 +141,11 @@ func TestRuntimeControlContinuesClockCallbacksInputAndUnloadedClip(t *testing.T)
 func TestRuntimeControlRefusesHostRemaindersAndMalformedState(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	invoked := false
-	runtime.cInput.pendingValid = func() bool { invoked = true; return true }
+	runtime.CInput.PendingValid = func() bool { invoked = true; return true }
 	if _, err := runtime.captureHeapState(nil); err == nil || invoked {
 		t.Fatal("capture ran or ignored a pending Host input guard")
 	}
-	runtime.cInput.pendingValid = nil
+	runtime.CInput.PendingValid = nil
 	saved, err := runtime.captureHeapState(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -157,20 +160,20 @@ func TestRuntimeControlRefusesHostRemaindersAndMalformedState(t *testing.T) {
 		func(s *runtimeHeapState) { s.Control.ClipOrder = []uint32{1} },
 		func(s *runtimeHeapState) { s.Control.MutedSources = []uint32{3, 3} },
 		func(s *runtimeHeapState) {
-			s.Control.Clips = []runtimeCClipState{{Address: 0x1000, Volume: wipicClipFullVolume + 1}}
+			s.Control.Clips = []runtimeCClipState{{Address: 0x1000, Volume: wipicrt.WIPICClipFullVolume + 1}}
 			s.Control.ClipOrder = []uint32{0x1000}
 		},
 		func(s *runtimeHeapState) {
 			s.Control.MutedSources = nil
-			for source := uint32(0); source <= maxWIPICMutedSources; source++ {
+			for source := uint32(0); source <= wipicrt.MaxWIPICMutedSources; source++ {
 				s.Control.MutedSources = append(s.Control.MutedSources, source)
 			}
 		},
 	} {
 		bad := saved
 		damage(&bad)
-		runtime.guestEventLoop = true
-		if _, err := runtime.restoreHeapState(bad); err == nil || !runtime.guestEventLoop {
+		runtime.GuestEventLoop = true
+		if _, err := runtime.restoreHeapState(bad); err == nil || !runtime.GuestEventLoop {
 			t.Fatal("malformed control state was adopted")
 		}
 	}

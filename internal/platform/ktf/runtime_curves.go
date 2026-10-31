@@ -32,8 +32,8 @@ func (runtime *initializationRuntime) curveEmit(state *runtimeGraphicsState) cur
 // larger than any surface, so the geometry walks only this part of it.
 func curveBounds(state *runtimeGraphicsState) curve.Bounds {
 	left, top := max(int64(state.clipX), 0), max(int64(state.clipY), 0)
-	right := min(int64(state.clipX)+int64(state.clipWidth), int64(state.target.width))
-	bottom := min(int64(state.clipY)+int64(state.clipHeight), int64(state.target.height))
+	right := min(int64(state.clipX)+int64(state.clipWidth), int64(state.target.Width))
+	bottom := min(int64(state.clipY)+int64(state.clipHeight), int64(state.target.Height))
 	translateX, translateY := int64(state.translateX), int64(state.translateY)
 	return curve.Bounds{Left: left - translateX, Top: top - translateY, Right: right - translateX, Bottom: bottom - translateY}
 }

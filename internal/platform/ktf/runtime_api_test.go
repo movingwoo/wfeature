@@ -7,6 +7,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // newTestRuntime prepares the platform runtime over the synthetic client the
@@ -25,7 +26,7 @@ func newTestRuntime(t *testing.T) (*Client, *initializationRuntime) {
 	if _, err := runtime.prepare(); err != nil {
 		t.Fatal(err)
 	}
-	client.runtime = runtime
+	client.setRuntimes(runtime, client.prepared)
 	return client, runtime
 }
 
@@ -43,7 +44,7 @@ func TestEventQueueAnswersQueuedEventsThenRedraw(t *testing.T) {
 	queue := runtime.runtimeEventQueueObject()
 	array := newIntArray(t, client, eventQueueSlots)
 
-	runtime.postGuestEvent(guestEvent{kind: eventKindKey, param1: KeyPressed, param2: KeyFire})
+	runtime.PostGuestEvent(wipicrt.GuestEvent{Kind: wipicrt.EventKindKey, Param1: wipicrt.KeyPressed, Param2: wipicrt.KeyFire})
 	if _, err := runtimeEventQueueGetNextEvent(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(queue), jvm.ReferenceValue(array)}); err != nil {
 		t.Fatalf("getNextEvent() error = %v", err)
 	}
@@ -51,10 +52,10 @@ func TestEventQueueAnswersQueuedEventsThenRedraw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event != (guestEvent{kind: eventKindKey, param1: KeyPressed, param2: KeyFire}) {
+	if event != (wipicrt.GuestEvent{Kind: wipicrt.EventKindKey, Param1: wipicrt.KeyPressed, Param2: wipicrt.KeyFire}) {
 		t.Fatalf("queued event = %+v", event)
 	}
-	if !runtime.guestEventLoop {
+	if !runtime.GuestEventLoop {
 		t.Fatal("getNextEvent did not record that the guest drives the event loop")
 	}
 
@@ -67,7 +68,7 @@ func TestEventQueueAnswersQueuedEventsThenRedraw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.kind != eventKindRepaint {
+	if event.Kind != wipicrt.EventKindRepaint {
 		t.Fatalf("idle event = %+v, want a redraw request", event)
 	}
 }
@@ -91,28 +92,28 @@ func TestEventQueueDispatchesKeysToCardStack(t *testing.T) {
 	runtime.displayCards = append(runtime.displayCards, card)
 
 	array := newIntArray(t, client, eventQueueSlots)
-	if err := storeGuestEvent(array, guestEvent{kind: eventKindKey, param1: KeyReleased, param2: KeyLeft}); err != nil {
+	if err := storeGuestEvent(array, wipicrt.GuestEvent{Kind: wipicrt.EventKindKey, Param1: wipicrt.KeyReleased, Param2: wipicrt.KeyLeft}); err != nil {
 		t.Fatal(err)
 	}
 	queue := runtime.runtimeEventQueueObject()
 	if _, err := runtimeEventQueueDispatchEvent(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(queue), jvm.ReferenceValue(array)}); err != nil {
 		t.Fatalf("dispatchEvent() error = %v", err)
 	}
-	if len(seen) != 2 || seen[0] != KeyReleased || seen[1] != KeyLeft {
-		t.Fatalf("card received %v, want [%d %d]", seen, KeyReleased, KeyLeft)
+	if len(seen) != 2 || seen[0] != wipicrt.KeyReleased || seen[1] != wipicrt.KeyLeft {
+		t.Fatalf("card received %v, want [%d %d]", seen, wipicrt.KeyReleased, wipicrt.KeyLeft)
 	}
 }
 
 func TestSendKeyQueuesOnceTheGuestDrivesTheEventLoop(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.guestEventLoop = true
-	if err := client.SendKey(t.Context(), KeyPressed, KeyNum0); err != nil {
+	runtime.GuestEventLoop = true
+	if err := client.SendKey(t.Context(), wipicrt.KeyPressed, wipicrt.KeyNum0); err != nil {
 		t.Fatalf("SendKey() error = %v", err)
 	}
-	if len(runtime.events) != 1 {
-		t.Fatalf("queued %d events, want 1", len(runtime.events))
+	if len(runtime.Events) != 1 {
+		t.Fatalf("queued %d events, want 1", len(runtime.Events))
 	}
-	if got := runtime.events[0]; got != (guestEvent{kind: eventKindKey, param1: KeyPressed, param2: KeyNum0}) {
+	if got := runtime.Events[0]; got != (wipicrt.GuestEvent{Kind: wipicrt.EventKindKey, Param1: wipicrt.KeyPressed, Param2: wipicrt.KeyNum0}) {
 		t.Fatalf("queued event = %+v", got)
 	}
 }
@@ -120,7 +121,7 @@ func TestSendKeyQueuesOnceTheGuestDrivesTheEventLoop(t *testing.T) {
 func TestEventQueueRejectsUnknownEventKind(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	array := newIntArray(t, client, eventQueueSlots)
-	if err := storeGuestEvent(array, guestEvent{kind: 7}); err != nil {
+	if err := storeGuestEvent(array, wipicrt.GuestEvent{Kind: 7}); err != nil {
 		t.Fatal(err)
 	}
 	queue := runtime.runtimeEventQueueObject()
@@ -247,7 +248,7 @@ func TestGraphicsTranslateMovesDrawingAndClip(t *testing.T) {
 func readScreenPixel(t *testing.T, runtime *initializationRuntime, state *runtimeGraphicsState, x, y uint32) uint16 {
 	t.Helper()
 	var data [2]byte
-	if err := runtime.client.core.Memory().Read(state.target.pixels+y*state.target.bpl+x*2, data[:]); err != nil {
+	if err := runtime.client.Core().Memory().Read(state.target.Pixels+y*state.target.Bpl+x*2, data[:]); err != nil {
 		t.Fatal(err)
 	}
 	return binary.LittleEndian.Uint16(data[:])
@@ -256,7 +257,7 @@ func readScreenPixel(t *testing.T, runtime *initializationRuntime, state *runtim
 func TestFileSystemListsRenamesAndEncodesNames(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	client.AttachFilesystem(map[string][]byte{"save/one.dat": []byte("one"), "other.dat": []byte("other")})
-	runtime.guestFiles = map[string][]byte{"save/two.dat": []byte("two")}
+	runtime.GuestFiles = map[string][]byte{"save/two.dat": []byte("two")}
 
 	listed, err := runtimeFileSystemList(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(client.JVM().NewString("save"))})
 	if err != nil {
@@ -290,10 +291,10 @@ func TestFileSystemListsRenamesAndEncodesNames(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("rename() error = %v", err)
 	}
-	if _, exists := runtime.guestFile("save/two.dat"); exists {
+	if _, exists := runtime.GuestFile("save/two.dat"); exists {
 		t.Fatal("renamed file is still readable under its old name")
 	}
-	data, exists := runtime.guestFile("save/three.dat")
+	data, exists := runtime.GuestFile("save/three.dat")
 	if !exists || string(data) != "two" {
 		t.Fatalf("renamed file = %q/%t", data, exists)
 	}
@@ -310,7 +311,7 @@ func TestFileSystemListsRenamesAndEncodesNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bytes) == 0 || bytes[len(bytes)-1] != 0 || decodeEUCKR(bytes[:len(bytes)-1]) != "가.dat" {
+	if len(bytes) == 0 || bytes[len(bytes)-1] != 0 || wipicrt.DecodeEUCKR(bytes[:len(bytes)-1]) != "가.dat" {
 		t.Fatalf("toCString() = %v", bytes)
 	}
 }
@@ -477,13 +478,13 @@ func listedCount(t *testing.T, client *Client, runtime *initializationRuntime, p
 // loop's back.
 func TestSendPointerTakesTheSameTwoRoadsAKeyDoes(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.guestEventLoop = true
+	runtime.GuestEventLoop = true
 	if err := client.SendPointer(t.Context(), PointerDragged, 17, 39); err != nil {
 		t.Fatalf("SendPointer() error = %v", err)
 	}
-	want := guestEvent{kind: eventKindPointer, param1: PointerDragged, param2: 17, param3: 39}
-	if len(runtime.events) != 1 || runtime.events[0] != want {
-		t.Fatalf("queued %+v, want one %+v", runtime.events, want)
+	want := wipicrt.GuestEvent{Kind: wipicrt.EventKindPointer, Param1: PointerDragged, Param2: 17, Param3: 39}
+	if len(runtime.Events) != 1 || runtime.Events[0] != want {
+		t.Fatalf("queued %+v, want one %+v", runtime.Events, want)
 	}
 
 	var seen []int32
@@ -521,7 +522,7 @@ func TestSendPointerTakesTheSameTwoRoadsAKeyDoes(t *testing.T) {
 // produced.
 func TestOpenDataBaseThrowsWhenItIsNotThereAndWasNotAskedToCreateIt(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 	name := jvm.ReferenceValue(client.JVM().NewString("scores"))
 	open := func(create int32) (jvm.Value, error) {
 		return runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(64), jvm.IntValue(create)})
@@ -540,7 +541,7 @@ func TestOpenDataBaseThrowsWhenItIsNotThereAndWasNotAskedToCreateIt(t *testing.T
 	if _, err := open(0); err != nil {
 		t.Fatalf("openDataBase(create=false) after creating it = %v", err)
 	}
-	if _, ok := client.saveStore.LoadSave("jdb/scores"); !ok {
+	if _, ok := client.SaveStore.LoadSave("jdb/scores"); !ok {
 		t.Fatal("a created database left nothing behind for the next session")
 	}
 	runtime.databases = nil
@@ -558,9 +559,9 @@ func TestOpenDataBaseThrowsWhenItIsNotThereAndWasNotAskedToCreateIt(t *testing.T
 // they were already carrying.
 func TestAJavaDataBaseFindsWhatTheArchiveShipped(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 	index, data := splitRecordDatabase(4, []byte("aaaa"))
-	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	runtime.GuestFiles = map[string][]byte{"save.idx": index, "save.db": data}
 	name := jvm.ReferenceValue(client.JVM().NewString("save"))
 
 	database, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)})
@@ -579,7 +580,7 @@ func TestAJavaDataBaseFindsWhatTheArchiveShipped(t *testing.T) {
 		t.Fatalf("records = %q, want the one the archive ships", store.records)
 	}
 	// It is the archive's copy, so nothing is written until the game writes.
-	if _, written := client.saveStore.LoadSave("jdb/save"); written {
+	if _, written := client.SaveStore.LoadSave("jdb/save"); written {
 		t.Fatal("opening a packaged database wrote a save over it")
 	}
 }
@@ -590,11 +591,11 @@ func TestAJavaDataBaseFindsWhatTheArchiveShipped(t *testing.T) {
 // reads. Nothing about the archive is consulted once there is a save.
 func TestAWrittenDatabaseWinsOverTheOneTheArchiveShipped(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	store := NewDirectorySaveStore(t.TempDir())
-	client.saveStore = store
+	store := wipicrt.NewDirectorySaveStore(t.TempDir())
+	client.SaveStore = store
 	index, data := splitRecordDatabase(4, []byte("aaaa"), []byte("bbbb"))
 	files := map[string][]byte{"save.idx": index, "save.db": data}
-	runtime.guestFiles = files
+	runtime.GuestFiles = files
 	open := func(runtime *initializationRuntime) *runtimeDataBaseStore {
 		t.Helper()
 		name := jvm.ReferenceValue(runtime.client.JVM().NewString("save"))
@@ -623,8 +624,8 @@ func TestAWrittenDatabaseWinsOverTheOneTheArchiveShipped(t *testing.T) {
 	first.persist(runtime)
 
 	_, next := newTestRuntime(t)
-	next.client.saveStore = store
-	next.guestFiles = files
+	next.client.SaveStore = store
+	next.GuestFiles = files
 	if reopened := open(next); len(reopened.records) != 1 || string(reopened.records[0]) != "zzzz" {
 		t.Fatalf("records = %q, want what the title wrote", reopened.records)
 	}
@@ -637,9 +638,9 @@ func TestAWrittenDatabaseWinsOverTheOneTheArchiveShipped(t *testing.T) {
 // would come back on the next run as though the delete had not happened.
 func TestDeletingADatabaseReachesTheOneNobodyOpened(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 	index, data := splitRecordDatabase(4, []byte("aaaa"))
-	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	runtime.GuestFiles = map[string][]byte{"save.idx": index, "save.db": data}
 	name := jvm.ReferenceValue(client.JVM().NewString("save"))
 
 	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); err != nil {
@@ -687,11 +688,11 @@ func TestDeletingADatabaseReachesTheOneNobodyOpened(t *testing.T) {
 // again — so it would also resurrect a save somebody had just deleted.
 func TestASaveWinsOverTheArchiveEvenWhenItHoldsNothing(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	store := NewDirectorySaveStore(t.TempDir())
-	client.saveStore = store
+	store := wipicrt.NewDirectorySaveStore(t.TempDir())
+	client.SaveStore = store
 	index, data := splitRecordDatabase(4, []byte("aaaa"))
-	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
-	if err := store.StoreSave("jdb/save", encodeSaveRecords(nil)); err != nil {
+	runtime.GuestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	if err := store.StoreSave("jdb/save", wipicrt.EncodeSaveRecords(nil)); err != nil {
 		t.Fatal(err)
 	}
 	name := jvm.ReferenceValue(client.JVM().NewString("save"))
@@ -719,9 +720,9 @@ func TestASaveWinsOverTheArchiveEvenWhenItHoldsNothing(t *testing.T) {
 // save it had just cleared was still there.
 func TestDeletingADatabaseTwiceSaysItIsGone(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 	index, data := splitRecordDatabase(4, []byte("aaaa"))
-	runtime.guestFiles = map[string][]byte{"save.idx": index, "save.db": data}
+	runtime.GuestFiles = map[string][]byte{"save.idx": index, "save.db": data}
 	name := jvm.ReferenceValue(client.JVM().NewString("save"))
 	if _, err := runtimeDataBaseDeleteStore(runtime, client.JVM(), []jvm.Value{name}); err != nil {
 		t.Fatalf("first delete = %v", err)
@@ -736,7 +737,7 @@ func TestDeletingADatabaseTwiceSaysItIsGone(t *testing.T) {
 // writes, and those records must not land under a key the deletion list hides.
 func TestWritingThroughAHandleHeldAcrossADeleteBringsItBack(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	client.saveStore = NewDirectorySaveStore(t.TempDir())
+	client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
 	name := jvm.ReferenceValue(client.JVM().NewString("save"))
 	value, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(1)})
 	if err != nil {
@@ -774,11 +775,11 @@ func TestWritingThroughAHandleHeldAcrossADeleteBringsItBack(t *testing.T) {
 // would hand the title back the records it had just deleted.
 func TestADatabaseClearedAndCreatedAgainStaysCleared(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	store := NewDirectorySaveStore(t.TempDir())
-	client.saveStore = store
+	store := wipicrt.NewDirectorySaveStore(t.TempDir())
+	client.SaveStore = store
 	index, data := splitRecordDatabase(4, []byte("aaaa"))
 	files := map[string][]byte{"save.idx": index, "save.db": data}
-	runtime.guestFiles = files
+	runtime.GuestFiles = files
 	name := jvm.ReferenceValue(client.JVM().NewString("save"))
 	if _, err := runtimeOpenDataBase(runtime, client.JVM(), []jvm.Value{name, jvm.IntValue(4), jvm.IntValue(0)}); err != nil {
 		t.Fatal(err)
@@ -791,8 +792,8 @@ func TestADatabaseClearedAndCreatedAgainStaysCleared(t *testing.T) {
 	}
 
 	_, next := newTestRuntime(t)
-	next.client.saveStore = store
-	next.guestFiles = files
+	next.client.SaveStore = store
+	next.GuestFiles = files
 	value, err := runtimeOpenDataBase(next, next.client.JVM(), []jvm.Value{
 		jvm.ReferenceValue(next.client.JVM().NewString("save")), jvm.IntValue(4), jvm.IntValue(0)})
 	if err != nil {
@@ -811,7 +812,7 @@ func TestADatabaseClearedAndCreatedAgainStaysCleared(t *testing.T) {
 // includes it, and so does a later session. Its bytes used to be copied by
 // appending to nil, which gave nil, and nil is what a deleted record is.
 func TestAnEmptyDataBaseRecordIsARecord(t *testing.T) {
-	store := NewDirectorySaveStore(t.TempDir())
+	store := wipicrt.NewDirectorySaveStore(t.TempDir())
 	open := func(runtime *initializationRuntime) jvm.Value {
 		t.Helper()
 		name := jvm.ReferenceValue(runtime.client.JVM().NewString("slots"))
@@ -841,7 +842,7 @@ func TestAnEmptyDataBaseRecordIsARecord(t *testing.T) {
 	}
 
 	client, runtime := newTestRuntime(t)
-	client.saveStore = store
+	client.SaveStore = store
 	database := open(runtime)
 	nothing := jvm.ReferenceValue(jvm.NewByteArray(nil))
 	if id, err := runtimeDataBaseInsert(runtime, client.JVM(), []jvm.Value{database, nothing, jvm.IntValue(0), jvm.IntValue(0)}); err != nil {
@@ -854,7 +855,7 @@ func TestAnEmptyDataBaseRecordIsARecord(t *testing.T) {
 	}
 	holds(runtime, database, "after the inserts", 0, 3)
 	next, nextRuntime := newTestRuntime(t)
-	next.saveStore = store
+	next.SaveStore = store
 	holds(nextRuntime, open(nextRuntime), "in a later session", 0, 3)
 
 	// Updating a record to no bytes keeps it as well.
@@ -863,7 +864,7 @@ func TestAnEmptyDataBaseRecordIsARecord(t *testing.T) {
 	}
 	holds(runtime, database, "after the update", 0, 0)
 	last, lastRuntime := newTestRuntime(t)
-	last.saveStore = store
+	last.SaveStore = store
 	holds(lastRuntime, open(lastRuntime), "in a session after the update", 0, 0)
 }
 
@@ -873,9 +874,9 @@ func TestAnEmptyDataBaseRecordIsARecord(t *testing.T) {
 // record list over the other's save: what was written through the new object
 // was gone after a write through the old one.
 func TestADatabaseOpenedAgainAfterADeleteIsTheOneTheOldObjectHolds(t *testing.T) {
-	store := NewDirectorySaveStore(t.TempDir())
+	store := wipicrt.NewDirectorySaveStore(t.TempDir())
 	client, runtime := newTestRuntime(t)
-	client.saveStore = store
+	client.SaveStore = store
 	vm := client.JVM()
 	name := jvm.ReferenceValue(vm.NewString("save"))
 	open := func() jvm.Value {
@@ -917,7 +918,7 @@ func TestADatabaseOpenedAgainAfterADeleteIsTheOneTheOldObjectHolds(t *testing.T)
 	}
 
 	_, next := newTestRuntime(t)
-	next.client.saveStore = store
+	next.client.SaveStore = store
 	value, err := runtimeOpenDataBase(next, next.client.JVM(), []jvm.Value{
 		jvm.ReferenceValue(next.client.JVM().NewString("save")), jvm.IntValue(4), jvm.IntValue(0)})
 	if err != nil {

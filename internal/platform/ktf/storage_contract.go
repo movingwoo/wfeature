@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"fmt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,46 +15,10 @@ import (
 // between its WIPI C and Java halves: how long a name may be, how much a title
 // has stored, and what the Java half calls a directory.
 
-// maxWIPIFileName is the longest name a WIPI storage call takes, which
-// FileSystem.getMaxFilenameLength answers. A longer one is M_E_LONGNAME in C
-// and IOException in Java.
-const maxWIPIFileName = 255
-
-// nameTooLong reports whether a name passes maxWIPIFileName, counted on the
-// path it stands for: a backslash is a slash, and leading separators, empty
-// and "." segments are not part of it.
-func nameTooLong(name string) bool {
-	return len(listingPath(strings.ReplaceAll(name, "\\", "/"))) > maxWIPIFileName
-}
-
-// maxFileNameRead is how far a C name is read looking for its end. A name
-// that runs past it is not a name, and stops the run as an unterminated
-// string does everywhere here.
-const maxFileNameRead = 4096
-
-// storageBudget is the space every title has.
-const storageBudget = wipicFileStorageLimit
-
 // maxStoredBytes bounds one file, and one database's records together. It is a
 // bound on what a title's numbers may make the Host hold, not a quota: no
 // save comes near it.
 const maxStoredBytes = 4 << 20
-
-// storageAvailable answers the budget less what the title has stored, never
-// below zero. A store that cannot be read is answered as if nothing were
-// stored: the figure is advice, and a title told it has no room refuses to
-// save.
-func (runtime *initializationRuntime) storageAvailable() uint32 {
-	used, err := runtime.storageUsed()
-	if err != nil {
-		runtime.countDiagnostic(fmt.Sprintf("storage used: %v", err))
-		used = 0
-	}
-	if used >= storageBudget {
-		return 0
-	}
-	return uint32(storageBudget - used)
-}
 
 // storageUsed counts each file and database the title has written at its size
 // less the size of the archive's file of the same name, never below zero. A
@@ -63,7 +28,7 @@ func (runtime *initializationRuntime) storageAvailable() uint32 {
 //
 // What this session holds in memory wins over the store for the same name,
 // because it is newer, and a session without a store has nothing else.
-func (runtime *initializationRuntime) storageUsed() (int, error) {
+func (runtime *initializationRuntime) platformStorageUsed() (int, error) {
 	used := 0
 	add := func(size, packaged int) {
 		if size > packaged {
@@ -72,20 +37,20 @@ func (runtime *initializationRuntime) storageUsed() (int, error) {
 	}
 
 	seen := make(map[string]bool)
-	for name, store := range runtime.cFiles {
+	for name, store := range runtime.CFiles {
 		seen[name] = true
-		add(len(store.data), store.packaged)
+		add(len(store.Data), store.Packaged)
 	}
-	if err := runtime.addStoredFiles(cFileScope, seen, runtime.removedDatabases(), add); err != nil {
+	if err := runtime.addStoredFiles(wipicrt.CFileScope, seen, runtime.RemovedDatabases(), add); err != nil {
 		return 0, err
 	}
 	seen = make(map[string]bool)
-	for name, data := range runtime.guestFiles {
-		name = wipicFileKey(name)
+	for name, data := range runtime.GuestFiles {
+		name = wipicrt.WIPICFileKey(name)
 		seen[name] = true
-		add(len(data), len(runtime.client.files[name]))
+		add(len(data), len(runtime.client.Files[name]))
 	}
-	if err := runtime.addStoredFiles(guestFileScope, seen, runtime.removedGuestFiles(), add); err != nil {
+	if err := runtime.addStoredFiles(wipicrt.GuestFileScope, seen, runtime.RemovedGuestFiles(), add); err != nil {
 		return 0, err
 	}
 
@@ -106,7 +71,7 @@ func (runtime *initializationRuntime) storageUsed() (int, error) {
 		if records, ok := runtime.packagedRecordDatabase(name, 0); ok {
 			return recordBytes(records)
 		}
-		return len(runtime.client.files[strings.TrimPrefix(name, "/")])
+		return len(runtime.client.Files[strings.TrimPrefix(name, "/")])
 	}
 	seen = make(map[string]bool)
 	for name, store := range runtime.recordDatabases {
@@ -119,21 +84,21 @@ func (runtime *initializationRuntime) storageUsed() (int, error) {
 	}
 	for _, scope := range []struct {
 		name, removedKey, prefix string
-	}{{recordDatabaseScope, recordDatabaseRemovedKey, ""}, {javaDatabaseScope, javaDatabaseRemovedKey, "\x00"}} {
-		names, err := runtime.listSaves(scope.name)
+	}{{wipicrt.RecordDatabaseScope, recordDatabaseRemovedKey, ""}, {wipicrt.JavaDatabaseScope, javaDatabaseRemovedKey, "\x00"}} {
+		names, err := runtime.ListSaves(scope.name)
 		if err != nil {
 			return 0, err
 		}
 		removed := runtime.recordDatabaseRemovals(scope.removedKey)
 		for _, name := range names {
-			if seen[scope.prefix+name] || removed[name] || reservedStorageName(scope.name, name) {
+			if seen[scope.prefix+name] || removed[name] || wipicrt.ReservedStorageName(scope.name, name) {
 				continue
 			}
-			data, ok := runtime.loadSave(scope.name + "/" + name)
+			data, ok := runtime.LoadSave(scope.name + "/" + name)
 			if !ok {
 				continue
 			}
-			records, err := decodeSaveRecords(data)
+			records, err := wipicrt.DecodeSaveRecords(data)
 			if err != nil {
 				continue
 			}
@@ -146,16 +111,16 @@ func (runtime *initializationRuntime) storageUsed() (int, error) {
 // addStoredFiles counts the saved files of one scope that this session holds
 // no copy of.
 func (runtime *initializationRuntime) addStoredFiles(scope string, seen, removed map[string]bool, add func(size, packaged int)) error {
-	names, err := runtime.listSaves(scope)
+	names, err := runtime.ListSaves(scope)
 	if err != nil {
 		return err
 	}
 	for _, name := range names {
-		if seen[name] || removed[name] || reservedStorageName(scope, name) {
+		if seen[name] || removed[name] || wipicrt.ReservedStorageName(scope, name) {
 			continue
 		}
-		if data, ok := runtime.loadSave(scope + "/" + name); ok {
-			add(len(data), len(runtime.client.files[name]))
+		if data, ok := runtime.LoadSave(scope + "/" + name); ok {
+			add(len(data), len(runtime.client.Files[name]))
 		}
 	}
 	return nil
@@ -173,8 +138,8 @@ func (runtime *initializationRuntime) guestDirectories() map[string]bool {
 		return runtime.madeGuestDirectories
 	}
 	runtime.madeGuestDirectories = make(map[string]bool)
-	if data, exists := runtime.loadSave(guestDirectoryListKey); exists {
-		for _, line := range splitRemovalList(data) {
+	if data, exists := runtime.LoadSave(guestDirectoryListKey); exists {
+		for _, line := range wipicrt.SplitRemovalList(data) {
 			runtime.madeGuestDirectories[line] = true
 		}
 	}
@@ -184,27 +149,27 @@ func (runtime *initializationRuntime) guestDirectories() map[string]bool {
 // markGuestDirectory records or forgets one made directory and writes the
 // list back.
 func (runtime *initializationRuntime) markGuestDirectory(path string, made bool) error {
-	return runtime.saveChanges(nil, guestDirectoryListKey, runtime.guestDirectories(), map[string]bool{path: made})
+	return runtime.SaveChanges(nil, guestDirectoryListKey, runtime.guestDirectories(), map[string]bool{path: made})
 }
 
 // guestFileNames answers every file the Java side can open, by path: the
 // archive's files, this session's writes and the saves of every session, less
 // what was removed and the platform's own lists.
 func (runtime *initializationRuntime) guestFileNames() (map[string]bool, error) {
-	removed := listingPaths(runtime.removedGuestFiles())
+	removed := wipicrt.ListingPaths(runtime.RemovedGuestFiles())
 	names := make(map[string]bool)
 	add := func(name string) {
-		path := listingPath(name)
-		if path != "" && !removed[path] && !reservedStorageName(guestFileScope, path) {
+		path := wipicrt.ListingPath(name)
+		if path != "" && !removed[path] && !wipicrt.ReservedStorageName(wipicrt.GuestFileScope, path) {
 			names[path] = true
 		}
 	}
-	for _, table := range []map[string][]byte{runtime.client.files, runtime.guestFiles} {
+	for _, table := range []map[string][]byte{runtime.client.Files, runtime.GuestFiles} {
 		for name := range table {
 			add(name)
 		}
 	}
-	saved, err := runtime.listSaves(guestFileScope)
+	saved, err := runtime.ListSaves(wipicrt.GuestFileScope)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +189,7 @@ func (runtime *initializationRuntime) guestDirectoryEntries(directory string) ([
 	for path := range runtime.guestDirectories() {
 		names[path] = true
 	}
-	prefix := listingPath(directory)
+	prefix := wipicrt.ListingPath(directory)
 	if prefix != "" {
 		prefix += "/"
 	}
@@ -249,17 +214,17 @@ func (runtime *initializationRuntime) guestDirectoryEntries(directory string) ([
 
 // guestIsFile answers whether a file of this name is there for the Java side.
 func (runtime *initializationRuntime) guestIsFile(name string) bool {
-	if listingPath(name) == "" {
+	if wipicrt.ListingPath(name) == "" {
 		return false
 	}
-	_, exists := runtime.guestFile(name)
+	_, exists := runtime.GuestFile(name)
 	return exists
 }
 
 // guestIsDirectory answers whether a name is a directory: the root, one mkdir
 // made, or one a file lies below. A name that is a file is not a directory.
 func (runtime *initializationRuntime) guestIsDirectory(name string) (bool, error) {
-	path := listingPath(name)
+	path := wipicrt.ListingPath(name)
 	if path == "" {
 		return true, nil
 	}
@@ -288,10 +253,10 @@ func databaseName(value jvm.Value) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("DataBase name is not a string")
 	}
-	if nameTooLong(name) {
-		return "", runtimeDataBaseException(fmt.Sprintf("a name of %d bytes is longer than %d", len(name), maxWIPIFileName))
+	if wipicrt.NameTooLong(name) {
+		return "", runtimeDataBaseException(fmt.Sprintf("a name of %d bytes is longer than %d", len(name), wipicrt.MaxWIPIFileName))
 	}
-	return listingPath(strings.ReplaceAll(name, "\\", "/")), nil
+	return wipicrt.ListingPath(strings.ReplaceAll(name, "\\", "/")), nil
 }
 
 // javaDatabaseSizeKey holds the record size each Java database was created
@@ -305,8 +270,8 @@ func (runtime *initializationRuntime) javaDatabaseSizes() map[string]int32 {
 		return runtime.databaseSizes
 	}
 	runtime.databaseSizes = make(map[string]int32)
-	if data, exists := runtime.loadSave(javaDatabaseSizeKey); exists {
-		for _, line := range splitRemovalList(data) {
+	if data, exists := runtime.LoadSave(javaDatabaseSizeKey); exists {
+		for _, line := range wipicrt.SplitRemovalList(data) {
 			sizeText, name, found := strings.Cut(line, " ")
 			size, err := strconv.ParseInt(sizeText, 10, 32)
 			if found && err == nil && size > 0 && name != "" {
@@ -337,7 +302,7 @@ func (runtime *initializationRuntime) setJavaDatabaseSize(name string, size int3
 	for key, value := range staged {
 		lines = append(lines, strconv.Itoa(int(value))+" "+key)
 	}
-	if err := runtime.saveChanges(map[string][]byte{javaDatabaseSizeKey: joinRemovalList(lines)}, javaDatabaseRemovedKey, runtime.recordDatabaseRemovals(javaDatabaseRemovedKey), nil); err != nil {
+	if err := runtime.SaveChanges(map[string][]byte{javaDatabaseSizeKey: wipicrt.JoinRemovalList(lines)}, javaDatabaseRemovedKey, runtime.recordDatabaseRemovals(javaDatabaseRemovedKey), nil); err != nil {
 		return err
 	}
 	runtime.databaseSizes = staged

@@ -66,7 +66,7 @@ func runtimeThrowablePrintStackTrace(runtime *initializationRuntime, _ *jvm.VM, 
 	if text, ok := receiver.Native.(string); ok && text != "" {
 		line += ": " + text
 	}
-	runtime.client.guestPrint(line)
+	runtime.client.GuestPrint(line)
 	return jvm.VoidValue(), nil
 }
 
@@ -122,12 +122,12 @@ func runtimeLEDSet(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Va
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	runtime.leds = value
+	runtime.Leds = value
 	return jvm.VoidValue(), nil
 }
 
 func runtimeLEDGet(runtime *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	return jvm.IntValue(runtime.leds), nil
+	return jvm.IntValue(runtime.Leds), nil
 }
 
 // runtimeLabelComponentClassDefinition is the lwc component that shows a string
@@ -470,7 +470,7 @@ func runtimeDialogDoModal(runtime *initializationRuntime, _ *jvm.VM, arguments [
 	if kind == runtimeDialogTypeNone {
 		action = runtimeDialogTimeout
 	}
-	runtime.countDiagnostic(fmt.Sprintf("dialog answered unseen type=%d action=%d", kind, action))
+	runtime.CountDiagnostic(fmt.Sprintf("dialog answered unseen type=%d action=%d", kind, action))
 	receiver.Fields[runtimeDialogActionField] = jvm.IntValue(action)
 	return jvm.IntValue(action), nil
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The SKT root's slot 14 is the C library the specification requires a
@@ -58,8 +59,8 @@ const (
 const clibTimeRecordSize = 36
 
 func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thread, function uint32) (uint32, error) {
-	memory := runtime.client.core.Memory()
-	argument := func(index int) (uint32, error) { return runtime.wipicArgument(thread, index) }
+	memory := runtime.client.Core().Memory()
+	argument := func(index int) (uint32, error) { return runtime.WIPICArgument(thread, index) }
 	first, err := argument(0)
 	if err != nil {
 		return 0, err
@@ -80,7 +81,7 @@ func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thre
 		}
 		destination := first
 		if function == clibStrcat {
-			length, err := guestStringLength(memory, first)
+			length, err := runtime.GuestStringLength(memory, first)
 			if err != nil {
 				return 0, err
 			}
@@ -97,10 +98,10 @@ func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thre
 		if err != nil {
 			return 0, err
 		}
-		if err := hookRange(memory, first, third, armcore.PermissionWrite); err != nil {
+		if err := wipicrt.HookRange(memory, first, third, armcore.PermissionWrite); err != nil {
 			return 0, err
 		}
-		buffer := runtime.hookBuffer(third)
+		buffer := runtime.HookBuffer(third)
 		clear(buffer)
 		copy(buffer, source)
 		return first, memory.Write(first, buffer)
@@ -109,13 +110,13 @@ func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thre
 		if err != nil {
 			return 0, err
 		}
-		length, err := guestStringLength(memory, first)
+		length, err := runtime.GuestStringLength(memory, first)
 		if err != nil {
 			return 0, err
 		}
 		return first, memory.Write(first+length, append(source, 0))
 	case clibStrcmp, clibStrncmp:
-		limit := uint32(maxGuestStringLength)
+		limit := uint32(wipicrt.MaxGuestStringLength)
 		if function == clibStrncmp {
 			limit = third
 		}
@@ -180,7 +181,7 @@ func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thre
 		}
 		return first + uint32(index), nil
 	case clibStrlen:
-		return guestStringLength(memory, first)
+		return runtime.GuestStringLength(memory, first)
 	case clibStrtok:
 		return runtime.clibStrtok(memory, first, second)
 	case clibMemcpy, clibMemmove:
@@ -190,13 +191,13 @@ func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thre
 		if third == 0 {
 			return first, nil
 		}
-		if err := hookRange(memory, second, third, armcore.PermissionRead); err != nil {
+		if err := wipicrt.HookRange(memory, second, third, armcore.PermissionRead); err != nil {
 			return 0, err
 		}
-		if err := hookRange(memory, first, third, armcore.PermissionWrite); err != nil {
+		if err := wipicrt.HookRange(memory, first, third, armcore.PermissionWrite); err != nil {
 			return 0, err
 		}
-		buffer := runtime.hookBuffer(third)
+		buffer := runtime.HookBuffer(third)
 		if err := memory.Read(second, buffer); err != nil {
 			return 0, err
 		}
@@ -205,17 +206,17 @@ func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thre
 		if third == 0 {
 			return 0, nil
 		}
-		if err := hookRange(memory, first, third, armcore.PermissionRead); err != nil {
+		if err := wipicrt.HookRange(memory, first, third, armcore.PermissionRead); err != nil {
 			return 0, err
 		}
-		if err := hookRange(memory, second, third, armcore.PermissionRead); err != nil {
+		if err := wipicrt.HookRange(memory, second, third, armcore.PermissionRead); err != nil {
 			return 0, err
 		}
 		left := make([]byte, third)
 		if err := memory.Read(first, left); err != nil {
 			return 0, err
 		}
-		right := runtime.hookBuffer(third)
+		right := runtime.HookBuffer(third)
 		if err := memory.Read(second, right); err != nil {
 			return 0, err
 		}
@@ -224,10 +225,10 @@ func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thre
 		if third == 0 {
 			return 0, nil
 		}
-		if err := hookRange(memory, first, third, armcore.PermissionRead); err != nil {
+		if err := wipicrt.HookRange(memory, first, third, armcore.PermissionRead); err != nil {
 			return 0, err
 		}
-		buffer := runtime.hookBuffer(third)
+		buffer := runtime.HookBuffer(third)
 		if err := memory.Read(first, buffer); err != nil {
 			return 0, err
 		}
@@ -239,10 +240,10 @@ func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thre
 		if third == 0 {
 			return first, nil
 		}
-		if err := hookRange(memory, first, third, armcore.PermissionWrite); err != nil {
+		if err := wipicrt.HookRange(memory, first, third, armcore.PermissionWrite); err != nil {
 			return 0, err
 		}
-		fill := runtime.hookBuffer(third)
+		fill := runtime.HookBuffer(third)
 		for index := range fill {
 			fill[index] = byte(second)
 		}
@@ -287,9 +288,9 @@ func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thre
 	case clibClock:
 		// Milliseconds the program has run, the resolution a handset's tick
 		// gives.
-		return uint32(runtime.guestElapsed() / time.Millisecond), nil
+		return uint32(runtime.GuestElapsed() / time.Millisecond), nil
 	case clibTime:
-		seconds := uint32(runtime.guestMillis() / 1000)
+		seconds := uint32(runtime.GuestMillis() / 1000)
 		if first != 0 {
 			if err := runtime.clibWriteWord(memory, first, seconds); err != nil {
 				return 0, err
@@ -304,7 +305,7 @@ func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thre
 		if first == 0 {
 			return 0, nil
 		}
-		words, err := runtime.readAOTWords(first, 1, "time value")
+		words, err := runtime.ReadAOTWords(first, 1, "time value")
 		if err != nil {
 			return 0, err
 		}
@@ -316,13 +317,13 @@ func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thre
 		}
 		return runtime.clibWriteTime(memory, moment)
 	}
-	return 0, fmt.Errorf("SKT WIPI-C C library function %d is not implemented%s", function, runtime.callerSite(thread))
+	return 0, fmt.Errorf("SKT WIPI-C C library function %d is not implemented%s", function, runtime.CallerSite(thread))
 }
 
 // clibString reads a terminated string the way every reader here does,
 // bounded by maxGuestStringLength.
 func (runtime *initializationRuntime) clibString(memory *armcore.Memory, address uint32) ([]byte, error) {
-	length, err := guestStringLength(memory, address)
+	length, err := runtime.GuestStringLength(memory, address)
 	if err != nil {
 		return nil, err
 	}
@@ -335,11 +336,11 @@ func (runtime *initializationRuntime) clibString(memory *armcore.Memory, address
 
 // clibBoundedString reads at most limit bytes, stopping at a terminator.
 func (runtime *initializationRuntime) clibBoundedString(memory *armcore.Memory, address, limit uint32) ([]byte, error) {
-	limit = min(limit, maxGuestStringLength)
+	limit = min(limit, wipicrt.MaxGuestStringLength)
 	if limit == 0 {
 		return nil, nil
 	}
-	data, _, err := readGuestString(memory, address, limit, 1)
+	data, _, err := wipicrt.ReadGuestString(memory, address, limit, 1)
 	return data, err
 }
 
@@ -516,7 +517,7 @@ func clibParseFloat(text []byte) (float64, int) {
 func (runtime *initializationRuntime) clibWriteTime(memory *armcore.Memory, moment time.Time) (uint32, error) {
 	state := runtime.client.clet
 	if state.timeRecord == 0 {
-		address, err := runtime.allocate(clibTimeRecordSize)
+		address, err := runtime.Allocate(clibTimeRecordSize)
 		if err != nil {
 			return 0, err
 		}
@@ -540,7 +541,7 @@ func (runtime *initializationRuntime) clibWriteTime(memory *armcore.Memory, mome
 // clibMktime is localtime's inverse over the same nine fields, which it
 // normalises in place as mktime does.
 func (runtime *initializationRuntime) clibMktime(memory *armcore.Memory, address uint32) (uint32, error) {
-	words, err := runtime.readAOTWords(address, 6, "struct tm")
+	words, err := runtime.ReadAOTWords(address, 6, "struct tm")
 	if err != nil {
 		return 0, err
 	}

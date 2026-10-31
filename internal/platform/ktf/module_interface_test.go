@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // syntheticModuleClient builds an older module whose entry does what all three
@@ -107,14 +108,14 @@ func TestModuleInterfaceSlotsNameThemselvesAndTheirCaller(t *testing.T) {
 	runtime := client.runtime
 	table := runtime.moduleInterface
 	buffer := make([]byte, 4)
-	if err := client.core.Memory().Read(table+0x2c, buffer); err != nil {
+	if err := client.Core().Memory().Read(table+0x2c, buffer); err != nil {
 		t.Fatal(err)
 	}
 	stub := binary.LittleEndian.Uint32(buffer)
 	initial := armcore.NewContext()
-	initial.Registers[armcore.RegisterSP] = ThreadStackBase + uint32(ThreadStackSize)
+	initial.Registers[armcore.RegisterSP] = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize)
 	thread := armcore.NewThread(initial)
-	_, err := client.core.Call(context.Background(), thread, stub, ReturnAddress, nil, runtime.handleSupervisorCall)
+	_, err := client.Core().Call(context.Background(), thread, stub, wipicrt.ReturnAddress, nil, runtime.handleSupervisorCall)
 	if err == nil {
 		t.Fatal("an unimplemented interface slot answered instead of reporting itself")
 	}

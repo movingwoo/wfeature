@@ -13,7 +13,7 @@ import (
 // stubs were indexed by address: by walking every stub, kept as the answer
 // the index has to give.
 func nativeCallIsWideByWalk(runtime *initializationRuntime, address uint32) bool {
-	for key, stub := range runtime.stubs {
+	for key, stub := range runtime.Stubs {
 		if stub != address || uint32(key>>32) != svcCategoryRuntimeJava {
 			continue
 		}
@@ -33,7 +33,7 @@ func nativeCallIsWideByWalk(runtime *initializationRuntime, address uint32) bool
 // describeNativeCallByWalk is how a native call was named before the stubs
 // were indexed by address, kept as the answer the index has to give.
 func describeNativeCallByWalk(runtime *initializationRuntime, address uint32) string {
-	for key, stub := range runtime.stubs {
+	for key, stub := range runtime.Stubs {
 		if stub != address || uint32(key>>32) != svcCategoryRuntimeJava {
 			continue
 		}
@@ -59,7 +59,7 @@ func TestANativeCallsWidthIsFoundByItsStub(t *testing.T) {
 		}
 		addresses = append(addresses, stub, stub+2, stub&^1)
 	}
-	other, err := runtime.stub(svcCategoryRuntimeJava+1, 7)
+	other, err := runtime.Stub(svcCategoryRuntimeJava+1, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,14 +93,16 @@ func TestANativeCallsWidthIsFoundByItsStub(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	coreState, err := client.core.CaptureState()
+	coreState, err := client.Core().CaptureState()
 	if err != nil {
 		t.Fatal(err)
 	}
 	freshClient, fresh := newTestRuntime(t)
-	if freshClient.core, err = armcore.NewCoreFromState(coreState, armcore.CoreOptions{}); err != nil {
+	restoredCore, err := armcore.NewCoreFromState(coreState, armcore.CoreOptions{})
+	if err != nil {
 		t.Fatal(err)
 	}
+	freshClient.AttachCore(restoredCore, freshClient.Thread)
 	if err := fresh.restoreMetadataState(decoded); err != nil {
 		t.Fatal(err)
 	}

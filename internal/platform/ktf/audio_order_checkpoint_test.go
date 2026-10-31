@@ -41,8 +41,8 @@ func TestKTFWIPIClipTransitionReconcilesPeerCompletionBeforeCheckpoint(t *testin
 			if !slices.Equal(peer.runtime.mediaEvents, wantQueued) {
 				t.Errorf("native transition queued %+v, want peer END followed by %s", peer.runtime.mediaEvents, method)
 			}
-			if state := peer.runtime.clip(peer.clip); state.completed != 1 || state.owner != nil {
-				t.Errorf("completed peer retains stale progress or active owner: completed=%d owner=%p", state.completed, state.owner)
+			if state := peer.runtime.clip(peer.clip); state.Completed != 1 || state.owner != nil {
+				t.Errorf("completed peer retains stale progress or active owner: completed=%d owner=%p", state.Completed, state.owner)
 			}
 			peer.wantHistory(starts...)
 			end := peer.event(0, wipi.PlayEventEndOfData)
@@ -53,7 +53,7 @@ func TestKTFWIPIClipTransitionReconcilesPeerCompletionBeforeCheckpoint(t *testin
 			}
 			restoreKTFWIPIListenerCheckpoint(t, peer, saved)
 			peer.setListener(peer.listeners[1])
-			if state := peer.runtime.clip(peer.clip); state.completed != 1 || state.owner != nil {
+			if state := peer.runtime.clip(peer.clip); state.Completed != 1 || state.owner != nil {
 				t.Fatal("restoration revived the completed peer's active owner")
 			}
 			if count := peer.drain(); count != 2 {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"path"
 	"strings"
 )
@@ -306,7 +307,7 @@ func ParseNativeInfo(data []byte) (NativeInfo, error) {
 			}
 			info.Icons = append(info.Icons, icon)
 		case nativeSpanText:
-			text := decodeEUCKR(span[2:])
+			text := wipicrt.DecodeEUCKR(span[2:])
 			if len(text) > maxNativeInfoText {
 				return NativeInfo{}, fmt.Errorf("span %d text is %d bytes, limit %d", index, len(text), maxNativeInfoText)
 			}

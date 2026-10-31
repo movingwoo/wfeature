@@ -9,12 +9,13 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestHeapPlatformRootsPreserveOwnershipQueuesAndTimers(t *testing.T) {
 	client, source := newTestRuntime(t)
 	now := time.Unix(1700000000, 0)
-	client.clock = NewManualClock(now)
+	client.Clock = wipicrt.NewManualClock(now)
 	card := &jvm.Object{ClassName: "org/kwis/msp/lcdui/Card", Fields: make(map[string]jvm.Value)}
 	runnable := &jvm.Object{ClassName: jvm.ObjectClass}
 	owner := &jvm.Object{ClassName: runtimeTimerClass}
@@ -33,10 +34,10 @@ func TestHeapPlatformRootsPreserveOwnershipQueuesAndTimers(t *testing.T) {
 		form: card, field: card, visibilityRevision: jvm.IntValue(4), childrenRevision: jvm.IntValue(9),
 		event: runtimeComponentEventState{revision: jvm.IntValue(2), hasListener: true, listenerValue: jvm.ReferenceValue(runnable), listener: runnable, hasData: true, dataValue: jvm.ReferenceValue(card), data: card},
 	}}
-	source.pendingTimers = []wipicTimer{{task: runnable, owner: owner, paintedCard: card, due: now.Add(37 * time.Millisecond), period: time.Second}}
-	source.events = []guestEvent{{kind: eventKindKey, param1: 17, param2: -3, param3: 7}}
-	source.clips = map[weak.Pointer[jvm.Object]]*clipState{weak.Make(clip): {data: []byte("authored sound bytes"), handle: backend.AudioHandle(17), loaded: true, played: true}}
-	source.cInput.card = card
+	source.PendingTimers = []wipicrt.WIPICTimer{{Task: guestValue(runnable), Owner: guestValue(owner), PaintedCard: guestValue(card), Due: now.Add(37 * time.Millisecond), Period: time.Second}}
+	source.Events = []wipicrt.GuestEvent{{Kind: wipicrt.EventKindKey, Param1: 17, Param2: -3, Param3: 7}}
+	source.clips = map[weak.Pointer[jvm.Object]]*javaClipState{weak.Make(clip): {Data: []byte("authored sound bytes"), Handle: backend.AudioHandle(17), Loaded: true, Played: true}}
+	source.cInputCardOwner = card
 	client.focusedText = card
 	saved, err := source.captureHeapState([]*jvm.Object{card, nil})
 	if err != nil {
@@ -52,7 +53,7 @@ func TestHeapPlatformRootsPreserveOwnershipQueuesAndTimers(t *testing.T) {
 	}
 	freshClient, fresh := newTestRuntime(t)
 	freshNow := time.Unix(1900000000, 0)
-	freshClient.clock = NewManualClock(freshNow)
+	freshClient.Clock = wipicrt.NewManualClock(freshNow)
 	roots, err := fresh.restoreHeapState(parsed)
 	if err != nil {
 		t.Fatal(err)
@@ -61,30 +62,30 @@ func TestHeapPlatformRootsPreserveOwnershipQueuesAndTimers(t *testing.T) {
 		t.Fatal("caller roots changed")
 	}
 	restoredCard := roots[0]
-	if len(fresh.displayCards) != 2 || fresh.displayCards[0] != restoredCard || fresh.displayCards[1] != restoredCard || fresh.dockedCard != restoredCard || fresh.activeJlet != restoredCard || fresh.runtimeObjects["screen"] != restoredCard || freshClient.focusedText != restoredCard || fresh.cInput.card != restoredCard {
+	if len(fresh.displayCards) != 2 || fresh.displayCards[0] != restoredCard || fresh.displayCards[1] != restoredCard || fresh.dockedCard != restoredCard || fresh.activeJlet != restoredCard || fresh.runtimeObjects["screen"] != restoredCard || freshClient.focusedText != restoredCard || fresh.cInputCardOwner != restoredCard {
 		t.Fatal("platform root sharing changed")
 	}
 	restoredRunnable := fresh.pendingSerial[0]
 	if restoredRunnable == runnable || fresh.pendingSerial[1] != restoredRunnable || fresh.pendingThreads[0] != restoredRunnable || fresh.serialPaintOwners[restoredRunnable] != restoredCard || fresh.jletListeners[0] != restoredRunnable || fresh.grabbedKeys[17] != restoredCard {
 		t.Fatal("queued ownership changed")
 	}
-	if fresh.serialDueAt.Sub(freshNow) != 23*time.Millisecond || fresh.pendingTimers[0].due.Sub(freshNow) != 37*time.Millisecond || fresh.pendingTimers[0].paintedCard != restoredCard || fresh.pendingTimers[0].task != restoredRunnable {
+	if fresh.serialDueAt.Sub(freshNow) != 23*time.Millisecond || fresh.PendingTimers[0].Due.Sub(freshNow) != 37*time.Millisecond || guestObject(fresh.PendingTimers[0].PaintedCard) != restoredCard || guestObject(fresh.PendingTimers[0].Task) != restoredRunnable {
 		t.Fatal("timer ownership or relative deadlines changed")
 	}
 	key := fresh.kfcOwnedKeys[18]
 	if key.form != restoredCard || key.field != restoredCard || key.event.listener != restoredRunnable || key.event.data != restoredCard || key.visibilityRevision != jvm.IntValue(4) || key.childrenRevision != jvm.IntValue(9) || !key.event.hasListener || !key.event.hasData {
 		t.Fatal("key ownership changed")
 	}
-	if got, ok := fresh.nextGuestEvent(); !ok || got != source.events[0] || len(source.events) != 1 {
+	if got, ok := fresh.NextGuestEvent(); !ok || got != source.Events[0] || len(source.Events) != 1 {
 		t.Fatal("restored event queue changed or shares its source")
 	}
 	restoredClip, _ := restoredCard.Fields["clip"].Reference()
 	clipData := fresh.clips[weak.Make(restoredClip)]
-	if clipData == nil || clipData.handle != 17 || !clipData.loaded || !clipData.played || string(clipData.data) != "authored sound bytes" {
+	if clipData == nil || clipData.Handle != 17 || !clipData.Loaded || !clipData.Played || string(clipData.Data) != "authored sound bytes" {
 		t.Fatal("weak clip ownership or metadata changed")
 	}
-	clipData.data[0] = 'A'
-	if source.clips[weak.Make(clip)].data[0] != 'a' {
+	clipData.Data[0] = 'A'
+	if source.clips[weak.Make(clip)].Data[0] != 'a' {
 		t.Fatal("restored media bytes share their source")
 	}
 	if _, err := fresh.captureHeapState(roots); err != nil {
@@ -93,7 +94,7 @@ func TestHeapPlatformRootsPreserveOwnershipQueuesAndTimers(t *testing.T) {
 	if _, err := runtimeTimerCancel(fresh, freshClient.vm, []jvm.Value{jvm.ReferenceValue(fresh.runtimeObjects["clock"])}); err != nil {
 		t.Fatal(err)
 	}
-	if len(fresh.pendingTimers) != 0 || len(source.pendingTimers) != 1 {
+	if len(fresh.PendingTimers) != 0 || len(source.PendingTimers) != 1 {
 		t.Fatal("Timer.cancel did not retain its restored owner or changed the source")
 	}
 }
@@ -103,7 +104,7 @@ func TestHeapPlatformRootsRejectMalformedBindingsBeforeAdoption(t *testing.T) {
 	card := &jvm.Object{ClassName: jvm.ObjectClass}
 	source.displayCards = []*jvm.Object{card}
 	source.runtimeObjects = map[string]*jvm.Object{"screen": card}
-	source.pendingTimers = []wipicTimer{{task: card}}
+	source.PendingTimers = []wipicrt.WIPICTimer{{Task: guestValue(card)}}
 	saved, err := source.captureHeapState(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +145,7 @@ func TestHeapPlatformRootsRejectMalformedBindingsBeforeAdoption(t *testing.T) {
 func TestHeapPlatformWeakOwnersRemainCollectible(t *testing.T) {
 	_, source := newTestRuntime(t)
 	clip := &jvm.Object{ClassName: "org/kwis/msp/media/Clip"}
-	source.clips = map[weak.Pointer[jvm.Object]]*clipState{weak.Make(clip): {data: []byte("authored")}}
+	source.clips = map[weak.Pointer[jvm.Object]]*javaClipState{weak.Make(clip): {Data: []byte("authored")}}
 	saved, err := source.captureHeapState(nil)
 	if err != nil {
 		t.Fatal(err)

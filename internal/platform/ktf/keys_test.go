@@ -4,23 +4,24 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestKeyCodeByNameCoversTheNamesRoutesAndTheCommandLineUse(t *testing.T) {
 	for name, want := range map[string]int32{
-		"up": KeyUp, "down": KeyDown, "left": KeyLeft, "right": KeyRight,
-		"fire": KeyFire, "ok": KeyFire, "FIRE": KeyFire,
-		"soft1": KeyLeftSoft, "soft2": KeyRightSoft, "clear": KeyClear,
-		"call": KeyCall, "hangup": KeyHangup,
+		"up": wipicrt.KeyUp, "down": wipicrt.KeyDown, "left": wipicrt.KeyLeft, "right": wipicrt.KeyRight,
+		"fire": wipicrt.KeyFire, "ok": wipicrt.KeyFire, "FIRE": wipicrt.KeyFire,
+		"soft1": wipicrt.KeyLeftSoft, "soft2": wipicrt.KeyRightSoft, "clear": wipicrt.KeyClear,
+		"call": wipicrt.KeyCall, "hangup": wipicrt.KeyHangup,
 		"0": '0', "9": '9', "*": '*', "#": '#',
 	} {
-		got, ok := KeyCodeByName(name)
+		got, ok := wipicrt.KeyCodeByName(name)
 		if !ok || got != want {
 			t.Errorf("KeyCodeByName(%q) = %d, %v; want %d, true", name, got, ok, want)
 		}
 	}
 	for _, name := range []string{"", "sideways", "10", "fire2"} {
-		if _, ok := KeyCodeByName(name); ok {
+		if _, ok := wipicrt.KeyCodeByName(name); ok {
 			t.Errorf("KeyCodeByName(%q) resolved, want it rejected", name)
 		}
 	}
@@ -31,17 +32,17 @@ func TestKeyCodeByNameCoversTheNamesRoutesAndTheCommandLineUse(t *testing.T) {
 // own table, because what is asked below is whether that table answers both
 // questions — not whether it agrees with itself.
 var gameActionPairs = []struct{ key, action int32 }{
-	{KeyUp, 1},
-	{KeyLeft, 2},
-	{KeyRight, 5},
-	{KeyDown, 6},
-	{KeyFire, 8},
-	{KeyLeftSoft, 90},
-	{KeyRightSoft, 91},
-	{KeyThirdSoft, 92},
-	{KeyVolumeUp, 96},
-	{KeyVolumeDown, 97},
-	{KeyClear, 99},
+	{wipicrt.KeyUp, 1},
+	{wipicrt.KeyLeft, 2},
+	{wipicrt.KeyRight, 5},
+	{wipicrt.KeyDown, 6},
+	{wipicrt.KeyFire, 8},
+	{wipicrt.KeyLeftSoft, 90},
+	{wipicrt.KeyRightSoft, 91},
+	{wipicrt.KeyThirdSoft, 92},
+	{wipicrt.KeyVolumeUp, 96},
+	{wipicrt.KeyVolumeDown, 97},
+	{wipicrt.KeyClear, 99},
 }
 
 // A game action is something a title indexes by, so it is never a key code.

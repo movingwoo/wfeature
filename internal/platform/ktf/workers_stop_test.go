@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // stubWorker is a worker whose goroutine stands in for a parked guest thread:
@@ -38,20 +39,20 @@ func stubWorker(client *Client, unwind func()) *guestWorker {
 // parked worker together, and each unwound its own nested call stack through
 // the same two runtime fields with nothing ordering it against the others.
 func TestStoppedWorkersUnwindOneAtATime(t *testing.T) {
-	client, initialization := newPacedTestRuntime(t, NewManualClock(time.Unix(1700000000, 0)), 1)
+	client, initialization := newPacedTestRuntime(t, wipicrt.NewManualClock(time.Unix(1700000000, 0)), 1)
 	const workers = 8
 	unwound := make(chan int, workers)
 	for index := 0; index < workers; index++ {
 		index := index
 		worker := stubWorker(client, func() {
-			previousThread, previousContext := initialization.currentThread, initialization.currentContext
-			initialization.currentThread = armcore.NewThread(armcore.NewContext())
-			initialization.currentContext = context.Background()
+			previousThread, previousContext := initialization.CurrentThread, initialization.CurrentContext
+			initialization.CurrentThread = armcore.NewThread(armcore.NewContext())
+			initialization.CurrentContext = context.Background()
 			// A restore is two writes with guest work between them, so the
 			// window a second unwinding worker lands in is not one statement
 			// wide. Yielding here makes the test's window the same shape.
 			runtime.Gosched()
-			initialization.currentThread, initialization.currentContext = previousThread, previousContext
+			initialization.CurrentThread, initialization.CurrentContext = previousThread, previousContext
 			unwound <- index
 		})
 		client.workers = append(client.workers, worker)
@@ -76,7 +77,7 @@ func TestStoppedWorkersUnwindOneAtATime(t *testing.T) {
 // A worker that never returns is a bug elsewhere, but it must cost a session's
 // close rather than the Host goroutine that is holding every other session.
 func TestStopThreadsGivesUpOnAWorkerThatCannotAnswer(t *testing.T) {
-	client, _ := newPacedTestRuntime(t, NewManualClock(time.Unix(1700000000, 0)), 1)
+	client, _ := newPacedTestRuntime(t, wipicrt.NewManualClock(time.Unix(1700000000, 0)), 1)
 	client.unwindBound = 20 * time.Millisecond
 	stuck := make(chan struct{})
 	defer close(stuck)
@@ -111,7 +112,7 @@ func TestStopThreadsGivesUpOnAWorkerThatCannotAnswer(t *testing.T) {
 // it never sends an event, and a teardown that waited for one would wait out
 // its whole bound.
 func TestStoppedWorkerNeverGrantedStillReturns(t *testing.T) {
-	client, _ := newPacedTestRuntime(t, NewManualClock(time.Unix(1700000000, 0)), 1)
+	client, _ := newPacedTestRuntime(t, wipicrt.NewManualClock(time.Unix(1700000000, 0)), 1)
 	client.unwindBound = 2 * time.Second
 	worker := &guestWorker{
 		armThread: armcore.NewThread(armcore.NewContext()),

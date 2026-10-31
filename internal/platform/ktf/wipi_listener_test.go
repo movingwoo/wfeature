@@ -9,6 +9,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -23,7 +24,7 @@ type ktfWIPIListenerFixture struct {
 	session   *Session
 	client    *Client
 	runtime   *initializationRuntime
-	clock     *ManualClock
+	clock     *wipicrt.ManualClock
 	store     backend.SaveStore
 	sink      *audioPauseProbe
 	clip      *jvm.Object
@@ -40,7 +41,7 @@ func newKTFWIPIListenerFixture(t *testing.T) *ktfWIPIListenerFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock := NewManualClock(time.Unix(1800000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1800000000, 0))
 	sink := &audioPauseProbe{}
 	session, err := StartSession(t.Context(), archive, SessionOptions{Clock: clock, SaveStore: store, AudioSink: sink})
 	if err != nil {
@@ -97,14 +98,14 @@ func (fixture *ktfWIPIListenerFixture) drain() int {
 func (fixture *ktfWIPIListenerFixture) advance(duration time.Duration) {
 	fixture.t.Helper()
 	fixture.clock.Advance(duration)
-	if err := fixture.client.serviceAudio(); err != nil {
+	if err := fixture.client.ServiceAudio(); err != nil {
 		fixture.t.Fatal(err)
 	}
 }
 
 func (fixture *ktfWIPIListenerFixture) duration() time.Duration {
 	fixture.t.Helper()
-	progress, err := fixture.client.audio.Playback(fixture.runtime.clip(fixture.clip).handle, fixture.runtime.guestElapsed())
+	progress, err := fixture.client.Audio.Playback(fixture.runtime.clip(fixture.clip).Handle, fixture.runtime.GuestElapsed())
 	if err != nil || progress.Length <= 0 {
 		fixture.t.Fatalf("authored clip duration = %v, %v", progress.Length, err)
 	}
@@ -315,14 +316,14 @@ func TestKTFWIPIListenerPostedGenericEventsWaitForNextDrain(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		pending int
-	}{{"empty generic queue", 0}, {"pending generic event", 1}, {"full generic queue", maxQueuedEvents}} {
+	}{{"empty generic queue", 0}, {"pending generic event", 1}, {"full generic queue", wipicrt.MaxQueuedEvents}} {
 		t.Run(test.name, func(t *testing.T) {
 			client, runtime := newTestRuntime(t)
 			var seen []int32
 			listener := &jvm.Object{ClassName: "fixture/Listener"}
 			if err := client.JVM().RegisterNative(listener.ClassName, "playUpdate", clipUpdateSignature,
 				func(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-					runtime.postGuestEvent(guestEvent{kind: eventKindNotify, param1: 2})
+					runtime.PostGuestEvent(wipicrt.GuestEvent{Kind: wipicrt.EventKindNotify, Param1: 2})
 					return jvm.VoidValue(), nil
 				}); err != nil {
 				t.Fatal(err)
@@ -340,7 +341,7 @@ func TestKTFWIPIListenerPostedGenericEventsWaitForNextDrain(t *testing.T) {
 			want := 1 + test.pending
 			var first []int32
 			for range test.pending {
-				runtime.postGuestEvent(guestEvent{kind: eventKindNotify, param1: 1})
+				runtime.PostGuestEvent(wipicrt.GuestEvent{Kind: wipicrt.EventKindNotify, Param1: 1})
 				first = append(first, 1)
 			}
 			if delivered, err := client.ServiceEvents(t.Context()); err != nil || delivered != want || !slices.Equal(seen, first) {
@@ -374,7 +375,7 @@ func TestKTFWIPIListenerFromGenericEventWaitsForNextDrain(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime.jletListeners = []*jvm.Object{listener}
-	runtime.postGuestEvent(guestEvent{kind: eventKindNotify})
+	runtime.PostGuestEvent(wipicrt.GuestEvent{Kind: wipicrt.EventKindNotify})
 	if delivered, err := client.ServiceEvents(t.Context()); err != nil || delivered != 1 || updates != 0 {
 		t.Fatalf("first drain delivered=%d updates=%d err=%v", delivered, updates, err)
 	}
@@ -397,7 +398,7 @@ func TestKTFWIPIListenerSurvivesGenericCallbackException(t *testing.T) {
 	runtime.mediaEvents = []clipEvent{{clip: &jvm.Object{ClassName: "org/kwis/msp/media/Clip"}, listener: listener, code: 2}}
 	// The session absorbs this invalid generic event's GuestException and
 	// continues. A waiting media notification must survive that failed drain.
-	runtime.postGuestEvent(guestEvent{kind: 0})
+	runtime.PostGuestEvent(wipicrt.GuestEvent{Kind: 0})
 	var exception *jvm.GuestException
 	if delivered, err := client.ServiceEvents(t.Context()); !errors.As(err, &exception) || delivered != 1 || updates != 0 {
 		t.Fatalf("failed generic drain delivered=%d updates=%d err=%v", delivered, updates, err)
@@ -482,7 +483,7 @@ func TestKTFWIPIListenerAcceptsAnUnlinkedImplementsEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	options := fixture.session.options
-	options.Clock, options.AudioSink = NewManualClock(time.Unix(1900000000, 0)), &audioPauseProbe{}
+	options.Clock, options.AudioSink = wipicrt.NewManualClock(time.Unix(1900000000, 0)), &audioPauseProbe{}
 	prepared, err := PrepareSessionCheckpoint(fixture.archive, checkpoint, options)
 	if err != nil {
 		t.Fatalf("quick save with an unlinked implements entry was refused: %v", err)
@@ -600,7 +601,7 @@ func TestKTFWIPIListenerQueueBoundAndAudioServiceError(t *testing.T) {
 		fixture.call("play", true, true)
 		fixture.drain()
 		fixture.clock.Advance(4097 * fixture.duration())
-		if err := fixture.client.serviceAudio(); err != nil {
+		if err := fixture.client.ServiceAudio(); err != nil {
 			t.Fatalf("audio service refused a completion backlog: %v", err)
 		}
 		if got := fixture.drain(); got != 1 {

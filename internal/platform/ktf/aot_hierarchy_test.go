@@ -13,11 +13,11 @@ import (
 func writeGuestClassWithMethod(t *testing.T, runtime *initializationRuntime, name string, parent uint32, method, descriptor string) uint32 {
 	t.Helper()
 	class := writeGuestClass(t, runtime, name, parent, nil, 0x21)
-	fullName, err := runtime.allocateBytes(append([]byte{0}, append([]byte(descriptor+"+"+method), 0)...))
+	fullName, err := runtime.AllocateBytes(append([]byte{0}, append([]byte(descriptor+"+"+method), 0)...))
 	if err != nil {
 		t.Fatal(err)
 	}
-	methodAddress, err := runtime.allocate(javaMethodSize)
+	methodAddress, err := runtime.Allocate(javaMethodSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,20 +26,20 @@ func writeGuestClassWithMethod(t *testing.T, runtime *initializationRuntime, nam
 	binary.LittleEndian.PutUint32(record[4:], class)
 	binary.LittleEndian.PutUint32(record[12:], fullName)
 	binary.LittleEndian.PutUint16(record[22:], 0x0001)
-	if err := runtime.client.core.Memory().Write(methodAddress, record); err != nil {
+	if err := runtime.client.Core().Memory().Write(methodAddress, record); err != nil {
 		t.Fatal(err)
 	}
-	table, err := runtime.allocateWords([]uint32{methodAddress, 0})
+	table, err := runtime.AllocateWords([]uint32{methodAddress, 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptorAddress, err := runtime.readAOTWords(class+8, 1, "class descriptor")
+	descriptorAddress, err := runtime.ReadAOTWords(class+8, 1, "class descriptor")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var pointer [4]byte
 	binary.LittleEndian.PutUint32(pointer[:], table)
-	if err := runtime.client.core.Memory().Write(descriptorAddress[0]+12, pointer[:]); err != nil {
+	if err := runtime.client.Core().Memory().Write(descriptorAddress[0]+12, pointer[:]); err != nil {
 		t.Fatal(err)
 	}
 	return class
@@ -84,13 +84,13 @@ func TestAnUnreadableAncestorDoesNotFailTheClassThatAskedForIt(t *testing.T) {
 	leaf := writeGuestClass(t, runtime, "game/Leaf", base, nil, 0x21)
 	// The base keeps a readable name, which is what the child's own record
 	// needs, and loses its method table, which is what registering it needs.
-	descriptorAddress, err := runtime.readAOTWords(base+8, 1, "class descriptor")
+	descriptorAddress, err := runtime.ReadAOTWords(base+8, 1, "class descriptor")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var pointer [4]byte
 	binary.LittleEndian.PutUint32(pointer[:], 0xdeadbee0)
-	if err := runtime.client.core.Memory().Write(descriptorAddress[0]+12, pointer[:]); err != nil {
+	if err := runtime.client.Core().Memory().Write(descriptorAddress[0]+12, pointer[:]); err != nil {
 		t.Fatal(err)
 	}
 	metadata, err := runtime.resolveAOTClass(leaf)
@@ -111,7 +111,7 @@ func TestAFailedFieldLookupNamesItsClass(t *testing.T) {
 	if _, err := runtime.resolveAOTClass(class); err != nil {
 		t.Fatal(err)
 	}
-	nameAddress, err := runtime.allocateBytes(append([]byte{0}, append([]byte("I+missing"), 0)...))
+	nameAddress, err := runtime.AllocateBytes(append([]byte{0}, append([]byte("I+missing"), 0)...))
 	if err != nil {
 		t.Fatal(err)
 	}

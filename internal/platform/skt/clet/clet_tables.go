@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The SKT root table, as both local titles index it (2026-10-30; see
@@ -32,14 +33,14 @@ const (
 // position. Slot 33 and above are this runtime's own additions for KTF
 // libraries and are not offered.
 var sktKernelFunctions = map[uint32]bool{
-	wipicKernelPrintk: true, wipicKernelSprintk: true, wipicKernelGetExecNames: true,
-	wipicKernelLoad: true, wipicKernelExit: true, wipicKernelGetCurProgramID: true,
-	wipicKernelGetAccessLevel: true, wipicKernelGetProgramName: true,
-	wipicKernelAlloc: true, wipicKernelCalloc: true, wipicKernelFree: true,
-	wipicKernelGetTotalMemory: true, wipicKernelGetFreeMemory: true,
-	wipicKernelDefTimer: true, wipicKernelSetTimer: true, wipicKernelUnsetTimer: true,
-	wipicKernelCurrentTime: true, wipicKernelGetSysProperty: true, wipicKernelSetSysProperty: true,
-	wipicKernelGetResourceID: true, wipicKernelGetResource: true,
+	wipicrt.WIPICKernelPrintk: true, wipicrt.WIPICKernelSprintk: true, wipicrt.WIPICKernelGetExecNames: true,
+	wipicrt.WIPICKernelLoad: true, wipicrt.WIPICKernelExit: true, wipicrt.WIPICKernelGetCurProgramID: true,
+	wipicrt.WIPICKernelGetAccessLevel: true, wipicrt.WIPICKernelGetProgramName: true,
+	wipicrt.WIPICKernelAlloc: true, wipicrt.WIPICKernelCalloc: true, wipicrt.WIPICKernelFree: true,
+	wipicrt.WIPICKernelGetTotalMemory: true, wipicrt.WIPICKernelGetFreeMemory: true,
+	wipicrt.WIPICKernelDefTimer: true, wipicrt.WIPICKernelSetTimer: true, wipicrt.WIPICKernelUnsetTimer: true,
+	wipicrt.WIPICKernelCurrentTime: true, wipicrt.WIPICKernelGetSysProperty: true, wipicrt.WIPICKernelSetSysProperty: true,
+	wipicrt.WIPICKernelGetResourceID: true, wipicrt.WIPICKernelGetResource: true,
 }
 
 // The SKT graphics table is the specification's graphics section up to
@@ -115,9 +116,9 @@ const (
 func sktFilesystemFunction(function uint32) uint32 {
 	switch function {
 	case 15:
-		return wipicFileExists
+		return wipicrt.WIPICFileExists
 	case 16:
-		return wipicFileTell
+		return wipicrt.WIPICFileTell
 	}
 	return function
 }
@@ -145,18 +146,18 @@ func sktFilesystemFunction(function uint32) uint32 {
 //
 // A slot neither title reaches is refused with its caller named.
 var sktMediaFunctions = map[uint32]uint32{
-	0:  wipicMediaClipCreate,
-	1:  wipicMediaClipFree,
-	4:  wipicMediaClipPutData,
-	10: wipicMediaClipClearData,
-	13: wipicMediaClipSetVolume,
-	14: wipicMediaPlay,
-	15: wipicMediaPause,
-	16: wipicMediaResume,
-	17: wipicMediaStop,
-	21: wipicMediaVibrator,
-	24: wipicMediaSetMuteState,
-	25: wipicMediaGetMuteState,
+	0:  wipicrt.WIPICMediaClipCreate,
+	1:  wipicrt.WIPICMediaClipFree,
+	4:  wipicrt.WIPICMediaClipPutData,
+	10: wipicrt.WIPICMediaClipClearData,
+	13: wipicrt.WIPICMediaClipSetVolume,
+	14: wipicrt.WIPICMediaPlay,
+	15: wipicrt.WIPICMediaPause,
+	16: wipicrt.WIPICMediaResume,
+	17: wipicrt.WIPICMediaStop,
+	21: wipicrt.WIPICMediaVibrator,
+	24: wipicrt.WIPICMediaSetMuteState,
+	25: wipicrt.WIPICMediaGetMuteState,
 }
 
 // handleCletCall routes one call through the SKT root table to the function
@@ -166,47 +167,47 @@ func (runtime *initializationRuntime) handleCletCall(thread *armcore.Thread, id 
 	switch slot {
 	case sktRootKernel:
 		if sktKernelFunctions[function] {
-			return runtime.handleWIPICCall(thread, function)
+			return runtime.HandleWIPICCall(thread, function)
 		}
 		if function == sktKernelSetting {
-			runtime.countDiagnostic("SKT kernel setting accepted" + runtime.callerMark(thread))
+			runtime.CountDiagnostic("SKT kernel setting accepted" + runtime.CallerMark(thread))
 			return 0, nil
 		}
 		if function == sktKernelLaunch {
-			runtime.countDiagnostic("SKT launch refused" + runtime.callerMark(thread))
-			return wipicErrorInvalid, nil
+			runtime.CountDiagnostic("SKT launch refused" + runtime.CallerMark(thread))
+			return wipicrt.WIPICErrorInvalid, nil
 		}
 	case sktRootGraphics:
 		return runtime.handleCletGraphicsCall(thread, function)
 	case sktRootFilesystem:
-		if function <= wipicFileExists {
-			return runtime.handleWIPICCall(thread, wipicTableFilesystem<<16|sktFilesystemFunction(function))
+		if function <= wipicrt.WIPICFileExists {
+			return runtime.HandleWIPICCall(thread, wipicrt.WIPICTableFilesystem<<16|sktFilesystemFunction(function))
 		}
 	case sktRootMisc:
 		// MC_miscBackLight. The rest of the table — the LED calls — no
 		// local title reaches.
 		if function == 0 {
-			return runtime.handleWIPICCall(thread, wipicTableMisc<<16|function)
+			return runtime.HandleWIPICCall(thread, wipicrt.WIPICTableMisc<<16|function)
 		}
 	case sktRootNet:
 		// The specification's order, which this runtime's net table follows:
 		// connect, close, and the socket calls, all of which are refused here
 		// the way they are for a KTF title.
-		return runtime.handleWIPICCall(thread, wipicTableNet<<16|function)
+		return runtime.HandleWIPICCall(thread, wipicrt.WIPICTableNet<<16|function)
 	case sktRootUtil:
-		if function <= wipicUtilInetAddrStr {
-			return runtime.handleWIPICCall(thread, wipicTableUtil<<16|function)
+		if function <= wipicrt.WIPICUtilInetAddrStr {
+			return runtime.HandleWIPICCall(thread, wipicrt.WIPICTableUtil<<16|function)
 		}
 	case sktRootMedia:
 		if mapped, ok := sktMediaFunctions[function]; ok {
-			return runtime.handleWIPICCall(thread, wipicTableMedia<<16|mapped)
+			return runtime.HandleWIPICCall(thread, wipicrt.WIPICTableMedia<<16|mapped)
 		}
 	case sktRootSerial, sktRootPhone, sktRootTerminal:
 		return runtime.handleCletDeviceCall(thread, slot, function)
 	case sktRootCLibrary:
 		return runtime.handleCletLibraryCall(thread, function)
 	}
-	return 0, fmt.Errorf("SKT WIPI-C root %d function %d is not implemented%s", slot, function, runtime.callerSite(thread))
+	return 0, fmt.Errorf("SKT WIPI-C root %d function %d is not implemented%s", slot, function, runtime.CallerSite(thread))
 }
 
 // handleCletGraphicsCall serves the SKT graphics table; see the constants above
@@ -216,15 +217,15 @@ func (runtime *initializationRuntime) handleCletGraphicsCall(thread *armcore.Thr
 	case function == sktGraphicsRepaint:
 		// The paint entry is called for it on the next round, which is the
 		// specification's answer; a card's paint is not this program's.
-		runtime.recordDiagnostic(diagEvent{kind: diagWIPICCall, nums: [5]uint32{wipicTableGraphics<<16 | function}})
+		runtime.RecordDiagnostic(wipicrt.DiagEvent{Kind: wipicrt.DiagWIPICCall, Nums: [5]uint32{wipicrt.WIPICTableGraphics<<16 | function}})
 		runtime.client.clet.repaint = true
 		return 0, nil
 	case function <= sktGraphicsPostEvent:
-		return runtime.handleWIPICCall(thread, wipicTableGraphics<<16|function)
+		return runtime.HandleWIPICCall(thread, wipicrt.WIPICTableGraphics<<16|function)
 	case function >= sktGraphicsInputFirst && function <= sktGraphicsInputLast:
-		return runtime.handleWIPICCall(thread, wipicTableInputMethod<<16|(function-sktGraphicsInputFirst))
+		return runtime.HandleWIPICCall(thread, wipicrt.WIPICTableInputMethod<<16|(function-sktGraphicsInputFirst))
 	case function == sktGraphicsHandsetField:
-		runtime.countDiagnostic(fmt.Sprintf("SKT graphics function %d accepted%s", function, runtime.callerMark(thread)))
+		runtime.CountDiagnostic(fmt.Sprintf("SKT graphics function %d accepted%s", function, runtime.CallerMark(thread)))
 		return 0, nil
 	case function == sktGraphicsHandsetHeight:
 		return runtime.cletHandsetBarProperty(thread)
@@ -233,24 +234,24 @@ func (runtime *initializationRuntime) handleCletGraphicsCall(thread *armcore.Thr
 		if err != nil {
 			return 0, err
 		}
-		screen, err := runtime.wipicGetScreenFramebuffer()
+		screen, err := runtime.WIPICGetScreenFramebuffer()
 		if err != nil {
 			return 0, err
 		}
 		var word [4]byte
 		binary.LittleEndian.PutUint32(word[:], screen)
-		if err := runtime.client.core.Memory().Write(surface, word[:]); err != nil {
+		if err := runtime.client.Core().Memory().Write(surface, word[:]); err != nil {
 			return 0, fmt.Errorf("write SKT screen surface at %#x: %w", surface, err)
 		}
 		return 0, nil
 	case function == sktGraphicsNamedFont:
 		// MC_grpGetFont reads its size from the second argument too.
-		return runtime.handleWIPICCall(thread, wipicTableGraphics<<16|26)
+		return runtime.HandleWIPICCall(thread, wipicrt.WIPICTableGraphics<<16|26)
 	case function == sktGraphicsPropertyGet || function == sktGraphicsPropertySet:
-		runtime.countDiagnostic(fmt.Sprintf("SKT graphics function %d refused%s", function, runtime.callerMark(thread)))
-		return wipicErrorInvalid, nil
+		runtime.CountDiagnostic(fmt.Sprintf("SKT graphics function %d refused%s", function, runtime.CallerMark(thread)))
+		return wipicrt.WIPICErrorInvalid, nil
 	}
-	return 0, fmt.Errorf("SKT WIPI-C graphics function %d is not implemented%s", function, runtime.callerSite(thread))
+	return 0, fmt.Errorf("SKT WIPI-C graphics function %d is not implemented%s", function, runtime.CallerSite(thread))
 }
 
 // cletHandsetBarProperty answers graphics function 45, (lcd, name, buf, size):
@@ -266,18 +267,18 @@ func (runtime *initializationRuntime) cletHandsetBarProperty(thread *armcore.Thr
 		}
 		arguments[index] = value
 	}
-	name, err := runtime.readCString(arguments[1], 64)
+	name, err := runtime.ReadCString(arguments[1], 64)
 	if err != nil {
 		return 0, fmt.Errorf("read SKT handset property name: %w", err)
 	}
-	runtime.countDiagnostic("SKT handset property " + name)
+	runtime.CountDiagnostic("SKT handset property " + name)
 	if name != "HEIGHT" {
-		return wipicErrorInvalid, nil
+		return wipicrt.WIPICErrorInvalid, nil
 	}
 	if arguments[3] < 2 {
-		return wipicErrorShortBuf, nil
+		return wipicrt.WIPICErrorShortBuf, nil
 	}
-	if err := runtime.client.core.Memory().Write(arguments[2], []byte{'0', 0}); err != nil {
+	if err := runtime.client.Core().Memory().Write(arguments[2], []byte{'0', 0}); err != nil {
 		return 0, fmt.Errorf("write SKT handset property: %w", err)
 	}
 	return 0, nil
@@ -292,6 +293,6 @@ func (runtime *initializationRuntime) cletHandsetBarProperty(thread *armcore.Thr
 // failure themselves.
 func (runtime *initializationRuntime) handleCletDeviceCall(thread *armcore.Thread, slot, function uint32) (uint32, error) {
 	name := map[uint32]string{sktRootSerial: "serial", sktRootPhone: "phone", sktRootTerminal: "terminal resource"}[slot]
-	runtime.countDiagnostic(fmt.Sprintf("SKT %s function %d refused%s", name, function, runtime.callerMark(thread)))
-	return wipiErrorCode, nil
+	runtime.CountDiagnostic(fmt.Sprintf("SKT %s function %d refused%s", name, function, runtime.CallerMark(thread)))
+	return wipicrt.WipiErrorCode, nil
 }

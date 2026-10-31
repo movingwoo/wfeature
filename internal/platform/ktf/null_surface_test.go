@@ -14,27 +14,27 @@ import "testing"
 func TestNullDrawSurfaceDrawsNothingAndAGarbageOneStillFails(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
-	if _, ok, err := runtime.readWIPICDrawSurface(0, "draw image source"); err != nil || ok {
+	if _, ok, err := runtime.ReadWIPICDrawSurface(0, "draw image source"); err != nil || ok {
 		t.Fatalf("a null surface answered ok=%v, err=%v; want false, nil", ok, err)
 	}
-	if count := runtime.diagnosticCounts()["grp draw image source on a null surface"]; count != 1 {
+	if count := runtime.DiagnosticCounts()["grp draw image source on a null surface"]; count != 1 {
 		t.Fatalf("the null draw was counted %d times, want 1 — a report has to show it", count)
 	}
 
-	handle, err := runtime.wipicGetScreenFramebuffer()
+	handle, err := runtime.WIPICGetScreenFramebuffer()
 	if err != nil {
 		t.Fatal(err)
 	}
-	surface, ok, err := runtime.readWIPICDrawSurface(handle, "draw image destination")
+	surface, ok, err := runtime.ReadWIPICDrawSurface(handle, "draw image destination")
 	if err != nil || !ok {
 		t.Fatalf("the screen answered ok=%v, err=%v; want true, nil", ok, err)
 	}
-	if surface.width == 0 || surface.height == 0 {
-		t.Fatalf("the screen surface came back empty: %dx%d", surface.width, surface.height)
+	if surface.Width == 0 || surface.Height == 0 {
+		t.Fatalf("the screen surface came back empty: %dx%d", surface.Width, surface.Height)
 	}
 
 	// Not null, not a frame buffer: still an error.
-	if _, _, err := runtime.readWIPICDrawSurface(handle+2, "draw image source"); err == nil {
+	if _, _, err := runtime.ReadWIPICDrawSurface(handle+2, "draw image source"); err == nil {
 		t.Fatal("an unaligned handle was accepted as a surface")
 	}
 }
@@ -48,35 +48,35 @@ func TestNullDrawSurfaceDrawsNothingAndAGarbageOneStillFails(t *testing.T) {
 func TestADestroyedDrawSurfaceDrawsNothing(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
-	handle, err := runtime.newWIPICFramebufferRecord(4, 4)
+	handle, err := runtime.NewWIPICFramebufferRecord(4, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := runtime.readWIPICDrawSurface(handle, "draw image source"); err != nil || !ok {
+	if _, ok, err := runtime.ReadWIPICDrawSurface(handle, "draw image source"); err != nil || !ok {
 		t.Fatalf("a live surface answered ok=%v, err=%v; want true, nil", ok, err)
 	}
 
-	runtime.destroyWIPICFramebufferRecord(handle)
+	runtime.DestroyWIPICFramebufferRecord(handle)
 	// Whatever the arena hands out next may or may not land here, so the
 	// record is overwritten deliberately: what is being pinned is the answer
 	// to a record that no longer decodes, not the arena's reuse order.
-	if err := runtime.clearGuestRange(handle, 64); err != nil {
+	if err := runtime.ClearGuestRange(handle, 64); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := runtime.readWIPICDrawSurface(handle, "draw image source"); err != nil || ok {
+	if _, ok, err := runtime.ReadWIPICDrawSurface(handle, "draw image source"); err != nil || ok {
 		t.Fatalf("a destroyed surface answered ok=%v, err=%v; want false, nil", ok, err)
 	}
-	if count := runtime.diagnosticCounts()["grp draw image source on a destroyed surface"]; count != 1 {
+	if count := runtime.DiagnosticCounts()["grp draw image source on a destroyed surface"]; count != 1 {
 		t.Fatalf("the destroyed draw was counted %d times, want 1 — a report has to show it", count)
 	}
 
 	// A block allocated at that address again is live, and a record that does
 	// not decode there is a bug once more rather than a release.
-	reissued, err := runtime.allocateWIPIC(32)
+	reissued, err := runtime.AllocateWIPIC(32)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.wasReleasedWIPIC(reissued) {
+	if runtime.WasReleasedWIPIC(reissued) {
 		t.Fatal("an address the arena reissued is still remembered as released")
 	}
 }
@@ -87,13 +87,13 @@ func TestADestroyedDrawSurfaceDrawsNothing(t *testing.T) {
 func TestASurfaceIsBoundedByItsCostRatherThanItsSides(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 
-	if _, err := runtime.newWIPICFramebufferRecord(2464, 32); err != nil {
+	if _, err := runtime.NewWIPICFramebufferRecord(2464, 32); err != nil {
 		t.Fatalf("a 2464x32 strip was refused: %v", err)
 	}
-	if _, err := runtime.newWIPICFramebufferRecord(4096, 4096); err == nil {
+	if _, err := runtime.NewWIPICFramebufferRecord(4096, 4096); err == nil {
 		t.Fatal("a 32MB surface was accepted")
 	}
-	if _, err := runtime.newWIPICFramebufferRecord(0, 8); err == nil {
+	if _, err := runtime.NewWIPICFramebufferRecord(0, 8); err == nil {
 		t.Fatal("an empty surface was accepted")
 	}
 }

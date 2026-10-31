@@ -14,15 +14,16 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestNativeReturnCaptureSurvivesScopeReplacement(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	thread := armcore.NewThread(armcore.NewContext())
-	if err := client.core.SetThreadLocalWord(thread, runtime.exceptionContext+nativeReturnTagOffset, 2); err != nil {
+	if err := client.Core().SetThreadLocalWord(thread, runtime.exceptionContext+nativeReturnTagOffset, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.core.SetThreadLocalWord(thread, runtime.exceptionContext+nativeReturnValueOffset, 75); err != nil {
+	if err := client.Core().SetThreadLocalWord(thread, runtime.exceptionContext+nativeReturnValueOffset, 75); err != nil {
 		t.Fatal(err)
 	}
 	scope, err := runtime.beginNativeReturn(thread)
@@ -39,10 +40,10 @@ func TestNativeReturnCaptureSurvivesScopeReplacement(t *testing.T) {
 	}
 	freshClient, fresh := newTestRuntime(t)
 	freshThread := armcore.NewThread(armcore.NewContext())
-	if err := freshClient.core.SetThreadLocalWord(freshThread, fresh.exceptionContext+nativeReturnTagOffset, 2); err != nil {
+	if err := freshClient.Core().SetThreadLocalWord(freshThread, fresh.exceptionContext+nativeReturnTagOffset, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := freshClient.core.SetThreadLocalWord(freshThread, fresh.exceptionContext+nativeReturnValueOffset, 17); err != nil {
+	if err := freshClient.Core().SetThreadLocalWord(freshThread, fresh.exceptionContext+nativeReturnValueOffset, 17); err != nil {
 		t.Fatal(err)
 	}
 	resumed, err := fresh.resumeNativeReturn(freshThread, saved)
@@ -53,7 +54,7 @@ func TestNativeReturnCaptureSurvivesScopeReplacement(t *testing.T) {
 		t.Fatalf("restoration erased the current native answer: %d, %v", value, err)
 	}
 	resumed.restore()
-	if got, err := freshClient.core.ThreadLocalWord(freshThread, fresh.exceptionContext+nativeReturnValueOffset); err != nil || got != 75 {
+	if got, err := freshClient.Core().ThreadLocalWord(freshThread, fresh.exceptionContext+nativeReturnValueOffset); err != nil || got != 75 {
 		t.Fatalf("restored parent environment = %d, %v", got, err)
 	}
 	if len(fresh.nativeReturnScopes) != 0 {
@@ -67,7 +68,7 @@ func TestNativeReturnCaptureSurvivesScopeReplacement(t *testing.T) {
 type continuationFixture struct {
 	client           *Client
 	runtime          *initializationRuntime
-	clock            *ManualClock
+	clock            *wipicrt.ManualClock
 	object           *jvm.Object
 	probe, container uint32
 	handler          uint32
@@ -96,7 +97,7 @@ func newContinuationFixture(t *testing.T, epoch int64, options continuationFixtu
 	}
 	if options.Module {
 		var err error
-		client.moduleSegment, err = runtime.allocate(moduleContextSlotOffset + 4)
+		client.moduleSegment, err = runtime.Allocate(moduleContextSlotOffset + 4)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -104,15 +105,15 @@ func newContinuationFixture(t *testing.T, epoch int64, options continuationFixtu
 			t.Fatal(err)
 		}
 	}
-	probe, err := runtime.allocate(16)
+	probe, err := runtime.Allocate(16)
 	if err != nil {
 		t.Fatal(err)
 	}
-	container, err := runtime.allocateWords([]uint32{123, 456})
+	container, err := runtime.AllocateWords([]uint32{123, 456})
 	if err != nil {
 		t.Fatal(err)
 	}
-	objectAddress, err := runtime.allocate(4)
+	objectAddress, err := runtime.Allocate(4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +131,7 @@ func newContinuationFixture(t *testing.T, epoch int64, options continuationFixtu
 	}
 	var exceptionName, handler uint32
 	if options.Throw {
-		exceptionName, err = runtime.allocateBytes([]byte("java/lang/Error\x00"))
+		exceptionName, err = runtime.AllocateBytes([]byte("java/lang/Error\x00"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -140,32 +141,32 @@ func newContinuationFixture(t *testing.T, epoch int64, options continuationFixtu
 		}
 		catch := fixtureARM(t, runtime, func(code *continuationARM) {
 			code.literal(4, probe)
-			code.literal(13, workerStackBase+uint32(ThreadStackSize)-24)
+			code.literal(13, workerStackBase+uint32(wipicrt.ThreadStackSize)-24)
 			code.emit(0xe3a0004d, 0xe5840004, 0xe28dd010, 0xe8bd8010)
 		})
-		entry, err := runtime.allocateWords([]uint32{0x100, 0x110, catch, catchClass})
+		entry, err := runtime.AllocateWords([]uint32{0x100, 0x110, catch, catchClass})
 		if err != nil {
 			t.Fatal(err)
 		}
-		table, err := runtime.allocateWords([]uint32{entry})
+		table, err := runtime.AllocateWords([]uint32{entry})
 		if err != nil {
 			t.Fatal(err)
 		}
 		methodData := make([]byte, javaMethodSize)
 		binary.LittleEndian.PutUint32(methodData[8:], table)
 		binary.LittleEndian.PutUint16(methodData[16:], 1)
-		methodAddress, err := runtime.allocateBytes(methodData)
+		methodAddress, err := runtime.AllocateBytes(methodData)
 		if err != nil {
 			t.Fatal(err)
 		}
-		functions, err := runtime.allocateWords([]uint32{0, catch})
+		functions, err := runtime.AllocateWords([]uint32{0, catch})
 		if err != nil {
 			t.Fatal(err)
 		}
 		words := make([]uint32, javaExceptionHandler/4)
 		words[0], words[runtime.exceptionLabel()/4], words[5] = methodAddress, 0x105, functions
-		words[runtime.exceptionFrameStack()/4] = workerStackBase + uint32(ThreadStackSize) - 8
-		handler, err = runtime.allocateWords(words)
+		words[runtime.exceptionFrameStack()/4] = workerStackBase + uint32(wipicrt.ThreadStackSize) - 8
+		handler, err = runtime.AllocateWords(words)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -202,7 +203,7 @@ func newContinuationFixture(t *testing.T, epoch int64, options continuationFixtu
 	})
 	var moduleMethod uint32
 	if options.Module {
-		name, err := runtime.allocateBytes([]byte("\x00()J+result\x00"))
+		name, err := runtime.AllocateBytes([]byte("\x00()J+result\x00"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -211,7 +212,7 @@ func newContinuationFixture(t *testing.T, epoch int64, options continuationFixtu
 		binary.LittleEndian.PutUint32(record[8:], inner)
 		binary.LittleEndian.PutUint32(record[12:], name)
 		binary.LittleEndian.PutUint16(record[22:], 1)
-		moduleMethod, err = runtime.allocateBytes(record)
+		moduleMethod, err = runtime.AllocateBytes(record)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -238,7 +239,7 @@ func newContinuationFixture(t *testing.T, epoch int64, options continuationFixtu
 		code.emit(0xe3a0c000|javaSVCCallNative, 0xef000000|svcCategoryJavaInterface)
 		code.emit(0xe5900000, 0xe5840004, 0xe28dd010, 0xe8bd8010)
 	})
-	classAddress, err := runtime.allocate(8)
+	classAddress, err := runtime.Allocate(8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +265,7 @@ func newContinuationFixture(t *testing.T, epoch int64, options continuationFixtu
 		graphics.Native.(*runtimeGraphicsState).color = 0x1234
 		bitmap := image.NewNRGBA(image.Rect(0, 0, 1, 1))
 		bitmap.SetNRGBA(0, 0, color.NRGBA{R: 17, G: 34, B: 51})
-		picture := &jvm.Object{ClassName: "org/kwis/msp/lcdui/Image", Native: withOpacity(bitmap), Fields: make(map[string]jvm.Value)}
+		picture := &jvm.Object{ClassName: "org/kwis/msp/lcdui/Image", Native: wipicrt.WithOpacity(bitmap), Fields: make(map[string]jvm.Value)}
 		if _, err := runtime.imageFramebufferHandle(picture); err != nil {
 			t.Fatal(err)
 		}
@@ -283,15 +284,15 @@ func newContinuationFixture(t *testing.T, epoch int64, options continuationFixtu
 		file := &runtimeGuestFile{name: "fixture.bin", data: []byte("cursor"), position: 2}
 		object.SetFieldValue("snapshotFile", jvm.ReferenceValue(&jvm.Object{ClassName: "org/kwis/msp/io/File", Native: file}))
 		object.SetFieldValue("snapshotStream", jvm.ReferenceValue(&jvm.Object{ClassName: runtimeFileInputStreamClass, Native: file}))
-		cFile := &runtimeCFile{name: "fixture-c", data: []byte("stream")}
-		runtime.cFiles = map[string]*runtimeCFile{"fixture-c": cFile}
-		runtime.cFileHandles = map[uint32]*runtimeCFileHandle{0x1003: {store: cFile, position: 2}}
-		runtime.nextCDatabaseHandle = 5
+		cFile := &wipicrt.RuntimeCFile{Name: "fixture-c", Data: []byte("stream")}
+		runtime.CFiles = map[string]*wipicrt.RuntimeCFile{"fixture-c": cFile}
+		runtime.CFileHandles = map[uint32]*wipicrt.RuntimeCFileHandle{0x1003: {Store: cFile, Position: 2}}
+		runtime.NextCDatabaseHandle = 5
 		rdb := &runtimeRecordDatabase{name: "fixture-r", records: [][]byte{nil, []byte("middle"), []byte("record")}, recordSize: 19}
 		runtime.recordDatabases = map[string]*runtimeRecordDatabase{"fixture-r": rdb}
 		runtime.recordDatabaseHandles = map[uint32]*runtimeRecordDatabaseHandle{0x2002: {store: rdb}}
 		runtime.nextRecordDatabaseHandle = 8
-		runtime.removedFiles = map[string]bool{"deleted": true}
+		runtime.RemovedFiles = map[string]bool{"deleted": true}
 	}
 	if options.Platform {
 		field := &jvm.Object{ClassName: "test/CheckpointEditor", Fields: make(map[string]jvm.Value)}
@@ -301,7 +302,7 @@ func newContinuationFixture(t *testing.T, epoch int64, options continuationFixtu
 		object.SetFieldValue("snapshotText", jvm.ReferenceValue(field))
 		runtime.dockedCard = field
 		runtime.pendingSerial = []*jvm.Object{field}
-		runtime.serialDueAt = client.now().Add(time.Hour)
+		runtime.serialDueAt = client.Now().Add(time.Hour)
 		runtime.serialPaintOwners = map[*jvm.Object]*jvm.Object{field: object}
 		runtime.runtimeObjects["snapshot-text"] = field
 	}
@@ -346,14 +347,14 @@ func defineContinuationFixtureClasses(t *testing.T, client *Client, options cont
 // continuationStorageSaves is what the Storage option's tables hold, as a save
 // store holds it. Each fixture gets a store of its own with this content: the
 // same disk, seen by another process.
-func continuationStorageSaves(t *testing.T) SaveStore {
+func continuationStorageSaves(t *testing.T) wipicrt.SaveStore {
 	t.Helper()
 	return testSaveStore(t, map[string][]byte{
-		"jdb/fixture":       encodeSaveRecords([][]byte{[]byte("saved"), nil, []byte("third")}),
+		"jdb/fixture":       wipicrt.EncodeSaveRecords([][]byte{[]byte("saved"), nil, []byte("third")}),
 		"fs/fixture.bin":    []byte("cursor"),
 		"db/fixture-c":      []byte("stream"),
-		"rdb/fixture-r":     encodeSaveRecords([][]byte{nil, []byte("middle"), []byte("record")}),
-		guestFileRemovedKey: joinRemovalList([]string{"deleted"}),
+		"rdb/fixture-r":     wipicrt.EncodeSaveRecords([][]byte{nil, []byte("middle"), []byte("record")}),
+		guestFileRemovedKey: wipicrt.JoinRemovalList([]string{"deleted"}),
 	})
 }
 
@@ -363,8 +364,8 @@ func newContinuationRestoreFixture(t *testing.T, epoch int64, options continuati
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock := NewManualClock(time.Unix(epoch, 0))
-	client.clock = clock
+	clock := wipicrt.NewManualClock(time.Unix(epoch, 0))
+	client.Clock = clock
 	client.module = options.Module
 	client.SetSpeed(1)
 	if options.Storage {
@@ -374,7 +375,7 @@ func newContinuationRestoreFixture(t *testing.T, epoch int64, options continuati
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.runtime = runtime
+	client.setRuntimes(runtime, client.prepared)
 	defineContinuationFixtureClasses(t, client, options)
 	t.Cleanup(client.StopThreads)
 	return continuationFixture{client: client, runtime: runtime, clock: clock, options: options}
@@ -404,11 +405,11 @@ func (fixture continuationFixture) start(t *testing.T) *guestWorker {
 	}
 	if !fixture.options.Module {
 		for offset, value := range map[uint32]uint32{javaExceptionHead: fixture.handler, nativeReturnTagOffset: 2, nativeReturnValueOffset: 75} {
-			if err := fixture.client.core.SetThreadLocalWord(worker.armThread, fixture.runtime.exceptionContext+offset, value); err != nil {
+			if err := fixture.client.Core().SetThreadLocalWord(worker.armThread, fixture.runtime.exceptionContext+offset, value); err != nil {
 				t.Fatal(err)
 			}
 		}
-	} else if err := fixture.client.core.SetThreadLocalWord(worker.armThread, fixture.runtime.exceptionHead(), fixture.handler); err != nil {
+	} else if err := fixture.client.Core().SetThreadLocalWord(worker.armThread, fixture.runtime.exceptionHead(), fixture.handler); err != nil {
 		t.Fatal(err)
 	}
 	if serviced, err := fixture.client.ServiceThreads(t.Context(), 1); err != nil || serviced != 1 {
@@ -456,15 +457,15 @@ func fixtureARM(t *testing.T, runtime *initializationRuntime, build func(*contin
 		code.words[literal.index] = 0xe59f0000 | uint32(literal.register)<<12 | uint32(offset)
 		code.words = append(code.words, literal.value)
 	}
-	address := uint32((runtime.codeCursor + 3) &^ 3)
+	address := uint32((runtime.CodeCursor + 3) &^ 3)
 	data := make([]byte, len(code.words)*4)
 	for i, word := range code.words {
 		binary.LittleEndian.PutUint32(data[i*4:], word)
 	}
-	if err := runtime.client.core.Memory().Load(address, data); err != nil {
+	if err := runtime.client.Core().Memory().Load(address, data); err != nil {
 		t.Fatal(err)
 	}
-	runtime.codeCursor = uint64(address) + uint64(len(data))
+	runtime.CodeCursor = uint64(address) + uint64(len(data))
 	return address
 }
 
@@ -485,8 +486,8 @@ type continuationFixtureState struct {
 func (fixture continuationFixture) capture(t *testing.T) continuationFixtureState {
 	t.Helper()
 	client := fixture.client
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	if len(client.workers) != 1 {
 		t.Fatalf("parked workers = %d", len(client.workers))
 	}
@@ -495,11 +496,11 @@ func (fixture continuationFixture) capture(t *testing.T) continuationFixtureStat
 	if err != nil {
 		t.Fatal(err)
 	}
-	coreState, err := client.core.CaptureState()
+	coreState, err := client.Core().CaptureState()
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := client.core.CaptureRootThread(worker.armThread)
+	root, err := client.Core().CaptureRootThread(worker.armThread)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,14 +514,14 @@ func (fixture continuationFixture) capture(t *testing.T) continuationFixtureStat
 	}
 	saved := continuationFixtureState{Options: fixture.options, Continuation: continuation, Core: coreState, Root: root,
 		Heap: heap, Metadata: metadata, Probe: fixture.probe, Container: fixture.container, Handler: fixture.handler,
-		StackBase: worker.stackBase, WaitRemaining: worker.wakeAt.Sub(client.now())}
+		StackBase: worker.stackBase, WaitRemaining: worker.wakeAt.Sub(client.Now())}
 	return saved
 }
 
 func (fixture *continuationFixture) restore(t *testing.T, saved continuationFixtureState) *guestWorker {
 	t.Helper()
 	client := fixture.client
-	if client.core.Steps() != 0 {
+	if client.Core().Steps() != 0 {
 		t.Fatal("fresh fixture executed guest startup")
 	}
 	core, err := armcore.NewCoreFromState(saved.Core, armcore.CoreOptions{})
@@ -531,7 +532,7 @@ func (fixture *continuationFixture) restore(t *testing.T, saved continuationFixt
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.core = core
+	client.AttachCore(core, client.Thread)
 	if err := fixture.runtime.restoreMetadataState(saved.Metadata); err != nil {
 		t.Fatal(err)
 	}
@@ -558,7 +559,7 @@ func (fixture *continuationFixture) restore(t *testing.T, saved continuationFixt
 		fixture.checkRelay(t)
 	}
 	worker := &guestWorker{javaThread: fixture.object, armThread: root, stackBase: saved.StackBase,
-		grant: make(chan struct{}), events: make(chan workerEvent, 1), finished: make(chan struct{}), wakeAt: client.now().Add(saved.WaitRemaining), continuation: &saved.Continuation}
+		grant: make(chan struct{}), events: make(chan workerEvent, 1), finished: make(chan struct{}), wakeAt: client.Now().Add(saved.WaitRemaining), continuation: &saved.Continuation}
 	worker.armThread.SetStepBudget(defaultThreadSliceSteps)
 	worker.armThread.SetLimitHook(func(context.Context) error { return worker.parkSlice(true) })
 	client.workers = []*guestWorker{worker}
@@ -652,14 +653,14 @@ func (fixture continuationFixture) checkStorage(t *testing.T) {
 	if !ok || stream.Native != state || state.position != 2 || string(state.data) != "cursor" {
 		t.Fatal("restored file cursor or stream sharing differs")
 	}
-	cFile := fixture.runtime.cFiles["fixture-c"]
-	openFile := fixture.runtime.cFileHandles[0x1003]
+	cFile := fixture.runtime.CFiles["fixture-c"]
+	openFile := fixture.runtime.CFileHandles[0x1003]
 	rdb := fixture.runtime.recordDatabases["fixture-r"]
 	openRecord := fixture.runtime.recordDatabaseHandles[0x2002]
-	if cFile == nil || openFile == nil || openFile.store != cFile || string(cFile.data) != "stream" || openFile.position != 2 || cFile.packaged != 0 || fixture.runtime.nextCDatabaseHandle != 5 {
+	if cFile == nil || openFile == nil || openFile.Store != cFile || string(cFile.Data) != "stream" || openFile.Position != 2 || cFile.Packaged != 0 || fixture.runtime.NextCDatabaseHandle != 5 {
 		t.Fatal("restored C file table differs")
 	}
-	if rdb == nil || openRecord == nil || openRecord.store != rdb || rdb.recordSize != 19 || len(rdb.records) != 3 || rdb.records[0] != nil || string(rdb.records[1]) != "middle" || string(rdb.records[2]) != "record" || fixture.runtime.nextRecordDatabaseHandle != 8 || !fixture.runtime.removedFiles["deleted"] {
+	if rdb == nil || openRecord == nil || openRecord.store != rdb || rdb.recordSize != 19 || len(rdb.records) != 3 || rdb.records[0] != nil || string(rdb.records[1]) != "middle" || string(rdb.records[2]) != "record" || fixture.runtime.nextRecordDatabaseHandle != 8 || !fixture.runtime.RemovedFiles["deleted"] {
 		t.Fatal("restored C record table or removal cache differs")
 	}
 }
@@ -676,7 +677,7 @@ func (fixture continuationFixture) checkGraphics(t *testing.T) {
 		t.Fatal("restored transparent image lost its color")
 	}
 	handle, err := picture.Fields["guestFramebuffer:I"].Int32()
-	if err != nil || imageOpacityOf(decoded) == nil || fixture.runtime.framebufferOpacityOf(uint32(handle)) != imageOpacityOf(decoded) {
+	if err != nil || wipicrt.ImageOpacityOf(decoded) == nil || fixture.runtime.FramebufferOpacityOf(uint32(handle)) != wipicrt.ImageOpacityOf(decoded) {
 		t.Fatal("restored image mask sharing differs")
 	}
 	if state, ok := graphics.Native.(*runtimeGraphicsState); !ok || state.color != 0x1234 {
@@ -754,7 +755,7 @@ func testAOTCallCheckpoint(t *testing.T, options continuationFixtureOptions) {
 			fresh.client.StopThreads()
 			continue
 		}
-		if len(fresh.client.workers) != 0 || len(fresh.runtime.nativeReturnScopes) != 0 || len(fresh.runtime.aotCallDepth) != 0 {
+		if len(fresh.client.workers) != 0 || len(fresh.runtime.nativeReturnScopes) != 0 || len(fresh.runtime.AOTCallDepth) != 0 {
 			t.Fatal("completed restored call retained execution state")
 		}
 		wantResult, wantHigh := uint32(42), uint32(0)
@@ -771,7 +772,7 @@ func testAOTCallCheckpoint(t *testing.T, options continuationFixtureOptions) {
 			t.Fatalf("native high word = %d", high)
 		}
 		if !options.Module {
-			if value, err := fresh.client.core.ThreadLocalWord(worker.armThread, fresh.runtime.exceptionContext+nativeReturnValueOffset); err != nil || value != 75 {
+			if value, err := fresh.client.Core().ThreadLocalWord(worker.armThread, fresh.runtime.exceptionContext+nativeReturnValueOffset); err != nil || value != 75 {
 				t.Fatalf("native cleanup = %d, %v", value, err)
 			}
 		}
@@ -827,7 +828,7 @@ func TestAOTCallCheckpointSubprocess(t *testing.T) {
 			t.Fatalf("subprocess word %d = %d, want %d", i, got, want)
 		}
 	}
-	if len(fresh.client.workers) != 0 || len(fresh.runtime.nativeReturnScopes) != 0 || len(fresh.runtime.aotCallDepth) != 0 {
+	if len(fresh.client.workers) != 0 || len(fresh.runtime.nativeReturnScopes) != 0 || len(fresh.runtime.AOTCallDepth) != 0 {
 		t.Fatal("subprocess leaked execution state")
 	}
 	if saved.Options.Runnable {
@@ -870,18 +871,18 @@ func TestAOTCallCheckpointRefusesIncompleteRecordsBeforeExecution(t *testing.T) 
 			if _, err := fresh.runtime.resumeAOTCalls(t.Context(), root, calls); err == nil {
 				t.Fatal("invalid call record was accepted")
 			}
-			if fresh.client.core.Steps() != 0 || len(root.LiveContexts()) != 1 || len(fresh.runtime.nativeReturnScopes) != 0 || len(fresh.runtime.aotCallDepth) != 0 {
+			if fresh.client.Core().Steps() != 0 || len(root.LiveContexts()) != 1 || len(fresh.runtime.nativeReturnScopes) != 0 || len(fresh.runtime.AOTCallDepth) != 0 {
 				t.Fatal("refusal executed or retained a call")
 			}
 		})
 	}
 	// Refusing an unknown live remainder also leaves the original run usable.
-	source.client.run.Lock()
+	source.client.Run.Lock()
 	pending := worker.javaWait
 	worker.javaWait = nil
 	_, captureErr := source.runtime.captureAOTCalls(worker)
 	worker.javaWait = pending
-	source.client.run.Unlock()
+	source.client.Run.Unlock()
 	if captureErr == nil {
 		t.Fatal("unrecorded wait was accepted")
 	}
@@ -907,9 +908,9 @@ func TestAOTCallCheckpointCaptureKeepsWaitReceiverWeak(t *testing.T) {
 		t.Fatal("fixture receiver is unbound")
 	}
 	fixture.client.vm.ReleaseAOTObject(address)
-	fixture.client.run.Lock()
+	fixture.client.Run.Lock()
 	_, err := fixture.runtime.captureWorkerContinuation(worker)
-	fixture.client.run.Unlock()
+	fixture.client.Run.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -950,12 +951,12 @@ func TestModuleCheckpointRefusesInvalidRemaindersWithoutChangingSource(t *testin
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			calls := test.change(append([]aotCallCheckpoint(nil), saved.Continuation.Calls...))
-			before := source.client.core.Steps()
+			before := source.client.Core().Steps()
 			root := armcore.NewThread(saved.Root.Context)
 			if _, err := source.runtime.resumeAOTCalls(t.Context(), root, calls); err == nil {
 				t.Fatal("invalid module continuation was accepted")
 			}
-			if source.client.core.Steps() != before || len(root.LiveContexts()) != 1 {
+			if source.client.Core().Steps() != before || len(root.LiveContexts()) != 1 {
 				t.Fatal("refused module continuation executed guest code")
 			}
 		})

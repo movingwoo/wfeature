@@ -13,6 +13,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // finishesWithin runs a drawing call that extreme guest arguments once turned
@@ -47,7 +48,7 @@ func gfxReviewThread(t *testing.T, rt *initializationRuntime, arguments ...uint3
 		for index, value := range arguments[4:] {
 			binary.LittleEndian.PutUint32(stack[index*4:], value)
 		}
-		address, err := rt.allocateBytes(stack)
+		address, err := rt.AllocateBytes(stack)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,55 +63,55 @@ func gfxReviewThread(t *testing.T, rt *initializationRuntime, arguments ...uint3
 // three clip words the context starts with.
 func gfxReviewContext(t *testing.T, rt *initializationRuntime, pixel uint32, clip [3]uint32) uint32 {
 	t.Helper()
-	record := make([]byte, wipicGraphicsContextSize)
+	record := make([]byte, wipicrt.WIPICGraphicsContextSize)
 	for index, word := range clip {
 		binary.LittleEndian.PutUint32(record[index*4:], word)
 	}
 	binary.LittleEndian.PutUint32(record[12:], pixel)
-	address, err := rt.allocateBytes(record)
+	address, err := rt.AllocateBytes(record)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return address
 }
 
-func gfxReviewSurface(t *testing.T, rt *initializationRuntime, width, height uint32) (uint32, wipicFramebuffer) {
+func gfxReviewSurface(t *testing.T, rt *initializationRuntime, width, height uint32) (uint32, wipicrt.WIPICFramebuffer) {
 	t.Helper()
-	handle, err := rt.newWIPICFramebufferRecord(width, height)
+	handle, err := rt.NewWIPICFramebufferRecord(width, height)
 	if err != nil {
 		t.Fatal(err)
 	}
-	framebuffer, err := rt.readWIPICFramebuffer(handle)
+	framebuffer, err := rt.ReadWIPICFramebuffer(handle)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return handle, framebuffer
 }
 
-func readSurfacePixels(t *testing.T, rt *initializationRuntime, framebuffer wipicFramebuffer) []uint16 {
+func readSurfacePixels(t *testing.T, rt *initializationRuntime, framebuffer wipicrt.WIPICFramebuffer) []uint16 {
 	t.Helper()
-	data := make([]byte, framebuffer.bpl*framebuffer.height)
-	if err := rt.client.core.Memory().Read(framebuffer.pixels, data); err != nil {
+	data := make([]byte, framebuffer.Bpl*framebuffer.Height)
+	if err := rt.client.Core().Memory().Read(framebuffer.Pixels, data); err != nil {
 		t.Fatal(err)
 	}
-	pixels := make([]uint16, framebuffer.width*framebuffer.height)
-	for y := uint32(0); y < framebuffer.height; y++ {
-		for x := uint32(0); x < framebuffer.width; x++ {
-			pixels[y*framebuffer.width+x] = binary.LittleEndian.Uint16(data[y*framebuffer.bpl+x*2:])
+	pixels := make([]uint16, framebuffer.Width*framebuffer.Height)
+	for y := uint32(0); y < framebuffer.Height; y++ {
+		for x := uint32(0); x < framebuffer.Width; x++ {
+			pixels[y*framebuffer.Width+x] = binary.LittleEndian.Uint16(data[y*framebuffer.Bpl+x*2:])
 		}
 	}
 	return pixels
 }
 
-func writeSurfacePixels(t *testing.T, rt *initializationRuntime, framebuffer wipicFramebuffer, pixels []uint16) {
+func writeSurfacePixels(t *testing.T, rt *initializationRuntime, framebuffer wipicrt.WIPICFramebuffer, pixels []uint16) {
 	t.Helper()
-	data := make([]byte, framebuffer.bpl*framebuffer.height)
-	for y := uint32(0); y < framebuffer.height; y++ {
-		for x := uint32(0); x < framebuffer.width; x++ {
-			binary.LittleEndian.PutUint16(data[y*framebuffer.bpl+x*2:], pixels[y*framebuffer.width+x])
+	data := make([]byte, framebuffer.Bpl*framebuffer.Height)
+	for y := uint32(0); y < framebuffer.Height; y++ {
+		for x := uint32(0); x < framebuffer.Width; x++ {
+			binary.LittleEndian.PutUint16(data[y*framebuffer.Bpl+x*2:], pixels[y*framebuffer.Width+x])
 		}
 	}
-	if err := rt.client.core.Memory().Write(framebuffer.pixels, data); err != nil {
+	if err := rt.client.Core().Memory().Write(framebuffer.Pixels, data); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -181,7 +182,7 @@ func TestClippedLineMatchesTheUnclippedLoop(t *testing.T) {
 				want = append(want, [2]int64{x, y})
 			}
 		})
-		err := clippedLine(x0, y0, x1, y1, left, top, right, bottom, func(x, y int32) error {
+		err := wipicrt.ClippedLine(x0, y0, x1, y1, left, top, right, bottom, func(x, y int32) error {
 			if int64(x) >= left && int64(x) < right && int64(y) >= top && int64(y) < bottom {
 				got = append(got, [2]int64{int64(x), int64(y)})
 			}
@@ -206,24 +207,24 @@ func TestWIPICDrawLineKeepsOrdinaryPixels(t *testing.T) {
 	random := rand.New(rand.NewSource(2))
 	for trial := 0; trial < 1500; trial++ {
 		var words [3]uint32
-		var clip wipicClip
+		var clip wipicrt.WIPICClip
 		if trial%3 == 0 {
 			left, top := random.Intn(30), random.Intn(20)
 			right, bottom := left+random.Intn(30), top+random.Intn(25)
 			words = [3]uint32{1, uint32(left) | uint32(top)<<16, uint32(right) | uint32(bottom)<<16}
-			clip = wipicClip{enabled: true, left: int32(left), top: int32(top), right: int32(right), bottom: int32(bottom)}
+			clip = wipicrt.WIPICClip{Enabled: true, Left: int32(left), Top: int32(top), Right: int32(right), Bottom: int32(bottom)}
 		}
 		context := gfxReviewContext(t, rt, 0x1234, words)
 		x0, y0 := int32(random.Intn(160)-60), int32(random.Intn(160)-60)
 		x1, y1 := int32(random.Intn(160)-60), int32(random.Intn(160)-60)
 		writeSurfacePixels(t, rt, framebuffer, blank)
 		thread := gfxReviewThread(t, rt, handle, uint32(x0), uint32(y0), uint32(x1), uint32(y1), context)
-		if _, err := rt.wipicDrawLine(thread); err != nil {
+		if _, err := rt.WIPICDrawLine(thread); err != nil {
 			t.Fatal(err)
 		}
 		want := make([]uint16, width*height)
 		referenceLine(int64(x0), int64(y0), int64(x1), int64(y1), func(x, y int64) {
-			if x >= 0 && y >= 0 && x < width && y < height && clip.contains(int32(x), int32(y)) {
+			if x >= 0 && y >= 0 && x < width && y < height && clip.Contains(int32(x), int32(y)) {
 				want[y*width+x] = 0x1234
 			}
 		})
@@ -255,7 +256,7 @@ func TestWIPICDrawLineFarEndpointsFinish(t *testing.T) {
 		writeSurfacePixels(t, rt, framebuffer, make([]uint16, width*height))
 		thread := gfxReviewThread(t, rt, handle, uint32(line[0]), uint32(line[1]), uint32(line[2]), uint32(line[3]), context)
 		finishesWithin(t, 5*time.Second, func() error {
-			_, err := rt.wipicDrawLine(thread)
+			_, err := rt.WIPICDrawLine(thread)
 			return err
 		})
 		pixels := readSurfacePixels(t, rt, framebuffer)
@@ -303,7 +304,7 @@ func gfxReviewGraphics(t *testing.T, rt *initializationRuntime, width, height in
 func randomGraphicsWindow(random *rand.Rand, state *runtimeGraphicsState) {
 	state.translateX, state.translateY = int32(random.Intn(30)-15), int32(random.Intn(30)-15)
 	state.clipX, state.clipY = 0, 0
-	state.clipWidth, state.clipHeight = int32(state.target.width), int32(state.target.height)
+	state.clipWidth, state.clipHeight = int32(state.target.Width), int32(state.target.Height)
 	if random.Intn(2) == 0 {
 		state.clipX, state.clipY = int32(random.Intn(40)-10), int32(random.Intn(30)-10)
 		state.clipWidth, state.clipHeight = int32(random.Intn(40)), int32(random.Intn(30))
@@ -481,7 +482,7 @@ func TestGraphicsFillPolygonExtremeRowsFinish(t *testing.T) {
 // that lands inside both surfaces and the clip takes the source pixel, read
 // either before the copy began (a blit, which snapshots an overlapping
 // source) or as the copy reaches it (MC_grpCopyFrameBuffer, which does not).
-func modelCopy(destination, source []uint16, destinationWidth, destinationHeight, sourceWidth, sourceHeight int64, clip wipicClip, destinationX, destinationY, width, height, sourceX, sourceY int64, live bool) []uint16 {
+func modelCopy(destination, source []uint16, destinationWidth, destinationHeight, sourceWidth, sourceHeight int64, clip wipicrt.WIPICClip, destinationX, destinationY, width, height, sourceX, sourceY int64, live bool) []uint16 {
 	result := slices.Clone(destination)
 	read := slices.Clone(source)
 	if live {
@@ -495,7 +496,7 @@ func modelCopy(destination, source []uint16, destinationWidth, destinationHeight
 				toX < 0 || toY < 0 || toX >= destinationWidth || toY >= destinationHeight {
 				continue
 			}
-			if !clip.contains(int32(toX), int32(toY)) {
+			if !clip.Contains(int32(toX), int32(toY)) {
 				continue
 			}
 			result[toY*destinationWidth+toX] = read[fromY*sourceWidth+fromX]
@@ -514,12 +515,12 @@ func TestWIPICCopiesKeepOrdinaryPixels(t *testing.T) {
 	random := rand.New(rand.NewSource(5))
 	for trial := 0; trial < 1200; trial++ {
 		var words [3]uint32
-		var clip wipicClip
+		var clip wipicrt.WIPICClip
 		if trial%3 == 0 {
 			left, top := random.Intn(20), random.Intn(15)
 			right, bottom := left+random.Intn(20), top+random.Intn(15)
 			words = [3]uint32{1, uint32(left) | uint32(top)<<16, uint32(right) | uint32(bottom)<<16}
-			clip = wipicClip{enabled: true, left: int32(left), top: int32(top), right: int32(right), bottom: int32(bottom)}
+			clip = wipicrt.WIPICClip{Enabled: true, Left: int32(left), Top: int32(top), Right: int32(right), Bottom: int32(bottom)}
 		}
 		context := gfxReviewContext(t, rt, 0, words)
 		from, fromHandle := source, sourceHandle
@@ -532,11 +533,11 @@ func TestWIPICCopiesKeepOrdinaryPixels(t *testing.T) {
 			// MC_grpCopyArea copies within one surface.
 			from, fromHandle = to, toHandle
 		}
-		fromPixels := randomSurfacePixels(random, from.width*from.height)
+		fromPixels := randomSurfacePixels(random, from.Width*from.Height)
 		writeSurfacePixels(t, rt, from, fromPixels)
 		toPixels := fromPixels
 		if toHandle != fromHandle {
-			toPixels = randomSurfacePixels(random, to.width*to.height)
+			toPixels = randomSurfacePixels(random, to.Width*to.Height)
 			writeSurfacePixels(t, rt, to, toPixels)
 		}
 		destinationX, destinationY := int32(random.Intn(60)-20), int32(random.Intn(50)-20)
@@ -545,18 +546,18 @@ func TestWIPICCopiesKeepOrdinaryPixels(t *testing.T) {
 		var err error
 		switch mode {
 		case 0:
-			err = rt.wipicBlitClipped(to, clip, wipicPixelOp{}, destinationX, destinationY, width, height, from, sourceX, sourceY, blitOpacity{})
+			err = rt.WIPICBlitClipped(to, clip, wipicrt.WIPICPixelOp{}, destinationX, destinationY, width, height, from, sourceX, sourceY, wipicrt.BlitOpacity{})
 		case 1:
 			thread := gfxReviewThread(t, rt, toHandle, uint32(destinationX), uint32(destinationY), uint32(width), uint32(height), fromHandle, uint32(sourceX), uint32(sourceY), context)
-			_, err = rt.wipicCopyFramebuffer(thread)
+			_, err = rt.WIPICCopyFramebuffer(thread)
 		case 2:
 			thread := gfxReviewThread(t, rt, toHandle, uint32(destinationX), uint32(destinationY), uint32(width), uint32(height), uint32(sourceX), uint32(sourceY), context)
-			_, err = rt.wipicCopyArea(thread)
+			_, err = rt.WIPICCopyArea(thread)
 		}
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := modelCopy(toPixels, fromPixels, int64(to.width), int64(to.height), int64(from.width), int64(from.height), clip,
+		want := modelCopy(toPixels, fromPixels, int64(to.Width), int64(to.Height), int64(from.Width), int64(from.Height), clip,
 			int64(destinationX), int64(destinationY), int64(width), int64(height), int64(sourceX), int64(sourceY),
 			mode == 1 && toHandle == fromHandle)
 		if got := readSurfacePixels(t, rt, to); !slices.Equal(got, want) {
@@ -579,17 +580,17 @@ func TestWIPICCopiesWithGarbageSizesFinish(t *testing.T) {
 	context := gfxReviewContext(t, rt, 0, [3]uint32{})
 
 	finishesWithin(t, 5*time.Second, func() error {
-		return rt.wipicBlitClipped(destination, wipicClip{}, wipicPixelOp{}, 0, 0, math.MaxInt32, height, source, 0, 0, blitOpacity{})
+		return rt.WIPICBlitClipped(destination, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{}, 0, 0, math.MaxInt32, height, source, 0, 0, wipicrt.BlitOpacity{})
 	})
 	if got := readSurfacePixels(t, rt, destination); !slices.Equal(got, sourcePixels) {
 		t.Fatal("a blit wider than both surfaces did not copy the whole surface")
 	}
 	finishesWithin(t, 5*time.Second, func() error {
-		return rt.wipicBlitClipped(destination, wipicClip{}, wipicPixelOp{}, math.MinInt32, 0, math.MaxInt32, height, source, math.MinInt32, 0, blitOpacity{})
+		return rt.WIPICBlitClipped(destination, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{}, math.MinInt32, 0, math.MaxInt32, height, source, math.MinInt32, 0, wipicrt.BlitOpacity{})
 	})
 	thread := gfxReviewThread(t, rt, destinationHandle, 0, 0, math.MaxInt32, math.MaxInt32, sourceHandle, 0, 0, context)
 	finishesWithin(t, 5*time.Second, func() error {
-		_, err := rt.wipicCopyFramebuffer(thread)
+		_, err := rt.WIPICCopyFramebuffer(thread)
 		return err
 	})
 
@@ -599,7 +600,7 @@ func TestWIPICCopiesWithGarbageSizesFinish(t *testing.T) {
 	goruntime.ReadMemStats(&before)
 	thread = gfxReviewThread(t, rt, destinationHandle, 0, 0, 0x10000, 0x4000, 1, 0, context)
 	finishesWithin(t, 5*time.Second, func() error {
-		_, err := rt.wipicCopyArea(thread)
+		_, err := rt.WIPICCopyArea(thread)
 		return err
 	})
 	goruntime.ReadMemStats(&after)
@@ -702,14 +703,14 @@ func TestNativeBlitFarNegativePositionsFinish(t *testing.T) {
 func TestWIPICSurfaceRejectsAWidthThatWrapsTheLineCheck(t *testing.T) {
 	_, rt := newTestRuntime(t)
 	handle, _ := gfxReviewSurface(t, rt, 4, 1)
-	fields := handle + wipicAllocationOverhead
+	fields := handle + wipicrt.WIPICAllocationOverhead
 	writeGuestWords(t, rt, fields, 0x80000001, 1, 2)
-	if framebuffer, err := rt.readWIPICFramebuffer(handle); err == nil {
-		t.Fatalf("accepted a %d-wide frame buffer with %d bytes per line", framebuffer.width, framebuffer.bpl)
+	if framebuffer, err := rt.ReadWIPICFramebuffer(handle); err == nil {
+		t.Fatalf("accepted a %d-wide frame buffer with %d bytes per line", framebuffer.Width, framebuffer.Bpl)
 	}
 	// The same record with a width its line holds still reads.
 	writeGuestWords(t, rt, fields, 1, 1, 2)
-	if _, err := rt.readWIPICFramebuffer(handle); err != nil {
+	if _, err := rt.ReadWIPICFramebuffer(handle); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -718,13 +719,13 @@ func TestWIPICSurfaceRejectsAWidthThatWrapsTheLineCheck(t *testing.T) {
 // allocated before the range was known to exist.
 func TestWIPICDrawStringLengthIsCheckedBeforeAllocating(t *testing.T) {
 	_, rt := newTestRuntime(t)
-	pointer, err := rt.allocateBytes([]byte{'a', 0, 'b', 0})
+	pointer, err := rt.AllocateBytes([]byte{'a', 0, 'b', 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var before, after goruntime.MemStats
 	goruntime.ReadMemStats(&before)
-	_, err = rt.wipicReadString(pointer, math.MaxInt32, true)
+	_, err = rt.WIPICReadString(pointer, math.MaxInt32, true)
 	goruntime.ReadMemStats(&after)
 	if err == nil {
 		t.Fatal("read a string running past mapped memory")
@@ -732,7 +733,7 @@ func TestWIPICDrawStringLengthIsCheckedBeforeAllocating(t *testing.T) {
 	if grown := after.TotalAlloc - before.TotalAlloc; grown > 16<<20 {
 		t.Fatalf("allocated %d bytes before checking the range", grown)
 	}
-	text, err := rt.wipicReadString(pointer, 2, true)
+	text, err := rt.WIPICReadString(pointer, 2, true)
 	if err != nil || string(text) != "ab" {
 		t.Fatalf("ordinary string = %q, %v", string(text), err)
 	}
@@ -780,8 +781,8 @@ func TestImageSurfacesMadeLazilyOrByCopyAreReclaimed(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		handle := orphanDecodedImageSurface(t, rt)
 		goruntime.GC()
-		rt.collectHostResources()
-		if _, exists := rt.wipicAllocations[handle]; exists {
+		rt.collectHostObjects()
+		if _, exists := rt.WIPICAllocations[handle]; exists {
 			t.Fatal("a dead decoded image kept the frame buffer it was rasterized into")
 		}
 	}
@@ -798,11 +799,11 @@ func TestImageSurfacesMadeLazilyOrByCopyAreReclaimed(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			handle := orphanCopiedImageSurface(t, rt, source, sub)
 			goruntime.GC()
-			rt.collectHostResources()
-			if _, exists := rt.wipicAllocations[handle]; exists {
+			rt.collectHostObjects()
+			if _, exists := rt.WIPICAllocations[handle]; exists {
 				t.Fatalf("a dead copied image (sub-image %v) kept its frame buffer", sub)
 			}
-			if _, exists := rt.wipicAllocations[sourceHandle]; !exists {
+			if _, exists := rt.WIPICAllocations[sourceHandle]; !exists {
 				t.Fatal("a live source image lost its frame buffer")
 			}
 		}

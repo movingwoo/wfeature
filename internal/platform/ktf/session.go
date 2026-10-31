@@ -11,6 +11,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // ErrGuestExited reports that guest code called MC_knlExit: the game ended on
@@ -37,7 +38,7 @@ func (session *Session) Vibration() backend.Vibration {
 	if session == nil || session.Client == nil {
 		return backend.Vibration{}
 	}
-	return session.Client.vibrator.State()
+	return session.Client.Vibrator.State()
 }
 
 // SessionOptions bound guest execution for one session.
@@ -68,7 +69,7 @@ type SessionOptions struct {
 	ServiceWait time.Duration
 	// SaveStore persists guest saves. When nil and SaveRoot is set, a
 	// directory store scoped by the archive PID is attached instead.
-	SaveStore SaveStore
+	SaveStore wipicrt.SaveStore
 	// SaveRoot is the directory Hosts with filesystem access use for saves;
 	// each game persists under <SaveRoot>/<PID>. See SaveOwner for why the
 	// PID and not the AID.
@@ -78,7 +79,7 @@ type SessionOptions struct {
 	// wants: the game then runs at the speed it was written for. A Host that
 	// runs ticks in a batch passes a ManualClock and drives it with
 	// SkipToNextDeadline so the waits cost no real time.
-	Clock Clock
+	Clock wipicrt.Clock
 	// Speed scales the game's pace. Zero and 1 both select the original
 	// speed; see Client.SetSpeed for the range.
 	Speed float64
@@ -114,8 +115,7 @@ const (
 	// call there — decompressing what they load before they draw anything.
 	// Both finish in under a second of Host time, so the old fifty million
 	// was not protecting against a runaway; it was cutting off a loader.
-	sessionDefaultMaxSteps   = 100_000_000
-	sessionDefaultTimerLimit = 4
+	sessionDefaultMaxSteps = 100_000_000
 	// startupSliceSteps bounds guest execution between PendingSession pumps.
 	startupSliceSteps = 8_000_000
 )
@@ -220,7 +220,7 @@ type StartFailure struct {
 	// Diagnostics is the boundary trace of the run that failed. It is empty
 	// when the failure came before the runtime existed, and when the Host did
 	// not ask for tracing.
-	Diagnostics Diagnostics
+	Diagnostics wipicrt.Diagnostics
 }
 
 func (failure *StartFailure) Error() string {
@@ -240,12 +240,12 @@ func (failure *StartFailure) Unwrap() error {
 // StartDiagnostics reports the boundary trace carried by a failed start, if the
 // error is one. A caller that has only an error uses this rather than reaching
 // for the type.
-func StartDiagnostics(err error) (Diagnostics, bool) {
+func StartDiagnostics(err error) (wipicrt.Diagnostics, bool) {
 	var failure *StartFailure
 	if errors.As(err, &failure) && failure != nil {
 		return failure.Diagnostics, true
 	}
-	return Diagnostics{}, false
+	return wipicrt.Diagnostics{}, false
 }
 
 func startSession(ctx context.Context, data []byte, options SessionOptions, startupHook func(context.Context) error) (*Session, error) {
@@ -257,33 +257,33 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	if err != nil {
 		return nil, err
 	}
-	client.log("KTF session loading",
+	client.Log("KTF session loading",
 		"aid", archive.Descriptor.AID,
 		"main_class", archive.Descriptor.MainClass,
 		"client", archive.JAR.Client.Name,
-		"max_steps", client.core.MaxSteps())
+		"max_steps", client.Core().MaxSteps())
 	// Said here rather than where the client is built, because a restore
 	// builds one the same way and then puts back the screen its record was
 	// taken on: a line naming the descriptor's screen there would describe a
 	// screen the restored title is not running on.
 	if width, height, declared := sessionScreen(archive.Descriptor, options); declared {
-		client.log("KTF screen taken from the descriptor", "width", width, "height", height)
+		client.Log("KTF screen taken from the descriptor", "width", width, "height", height)
 	}
 	if startupHook != nil {
 		// Startup guest runs park every slice so a Host event loop stays
 		// responsive during the long DRM/initialization phase; the hook and
 		// budget come off before the session's normal service loop begins.
-		client.thread.SetStepBudget(startupSliceSteps)
-		client.thread.SetLimitHook(startupHook)
+		client.Thread.SetStepBudget(startupSliceSteps)
+		client.Thread.SetLimitHook(startupHook)
 		defer func() {
-			client.thread.SetStepBudget(0)
-			client.thread.SetLimitHook(nil)
+			client.Thread.SetStepBudget(0)
+			client.Thread.SetLimitHook(nil)
 		}()
 	}
 	if !options.DisableAuthentication {
 		client.authentication = backend.AuthenticationUnsupported
-		if certificate, ok := authenticationCertificate(archive, client.subscriberNumber); ok {
-			client.AttachSaveStore(newCertificateSaveStore(client.saveStore, certificate))
+		if certificate, ok := authenticationCertificate(archive, client.SubscriberNumber); ok {
+			client.AttachSaveStore(newCertificateSaveStore(client.SaveStore, certificate))
 			client.authentication = backend.AuthenticationKTFCertificate23
 		}
 	}
@@ -300,22 +300,22 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	if client.IsModule() {
 		entrySummary, err := client.ExecuteModuleEntry(ctx)
 		if err != nil {
-			client.log("KTF module entry failed", "error", err)
+			client.Log("KTF module entry failed", "error", err)
 			return failed(err)
 		}
-		client.log("KTF module started", "steps", entrySummary.Steps)
+		client.Log("KTF module started", "steps", entrySummary.Steps)
 	} else {
 		entrySummary, err := client.ExecuteEntry(ctx, nil)
 		if err != nil {
-			client.log("KTF entry failed", "error", err)
+			client.Log("KTF entry failed", "error", err)
 			return failed(err)
 		}
-		client.log("KTF entry executed", "steps", entrySummary.Steps)
+		client.Log("KTF entry executed", "steps", entrySummary.Steps)
 		if _, err := client.Initialize(ctx, entrySummary.Context.Registers[0]); err != nil {
-			client.log("KTF initialization failed", "error", err)
+			client.Log("KTF initialization failed", "error", err)
 			return failed(err)
 		}
-		client.log("KTF initialized")
+		client.Log("KTF initialized")
 	}
 	// The 52-byte reader obtains its cipher through the relocated pointer
 	// table. Inspect it before constructing the application, after the loader
@@ -324,17 +324,17 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 		files := archive.GuestFiles()
 		if client.authentication == backend.AuthenticationUnsupported && (len(files[certificateName]) == 52 || len(files["prefs"]) == 64) {
 			if image, err := client.ImageBytes(); err == nil {
-				if certificate, ok := authenticationCertificate52(archive, image, client.subscriberNumber); ok {
-					client.AttachSaveStore(newCertificateSaveStore(client.saveStore, certificate))
+				if certificate, ok := authenticationCertificate52(archive, image, client.SubscriberNumber); ok {
+					client.AttachSaveStore(newCertificateSaveStore(client.SaveStore, certificate))
 					client.authentication = backend.AuthenticationKTFCertificate52
 				} else if number, ok := authenticationSubscriber(archive, image); ok {
-					client.subscriberNumber = number
-					client.AttachSaveStore(authenticationSubscriberReceipt(client.saveStore, archive, number))
+					client.SubscriberNumber = number
+					client.AttachSaveStore(authenticationSubscriberReceipt(client.SaveStore, archive, number))
 					client.authentication = backend.AuthenticationKTFSubscriber
 				}
 			}
 		}
-		client.log("authentication compatibility", "status", client.authentication)
+		client.Log("authentication compatibility", "status", client.authentication)
 	}
 	// The main class's constructor and startApp are the first Host service
 	// call, and they get the allowance every later one does. Two local titles
@@ -343,11 +343,11 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	// gets; the ceiling alone called them broken. A start that pumps its own
 	// slices keeps its hook, which already renews every window.
 	if startupHook == nil {
-		defer client.beginHostService(ctx)()
+		defer client.BeginHostService(ctx)()
 	}
 	object, _, err := client.NewObject(ctx, archive.Descriptor.MainClass, "()V")
 	if err != nil {
-		client.log("KTF main class construction failed", "class", archive.Descriptor.MainClass, "error", err)
+		client.Log("KTF main class construction failed", "class", archive.Descriptor.MainClass, "error", err)
 		return failed(fmt.Errorf("construct KTF main class %s: %w", archive.Descriptor.MainClass, err))
 	}
 	arguments, err := client.newStringArrayObject()
@@ -355,10 +355,10 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 		return failed(err)
 	}
 	if _, err := client.InvokeVirtual(ctx, object, "startApp", "([Ljava/lang/String;)V", jvm.ReferenceValue(arguments)); err != nil {
-		client.log("KTF startApp failed", "class", archive.Descriptor.MainClass, "error", err)
+		client.Log("KTF startApp failed", "class", archive.Descriptor.MainClass, "error", err)
 		return failed(fmt.Errorf("start KTF main class %s: %w", archive.Descriptor.MainClass, err))
 	}
-	client.log("KTF startApp returned", "class", archive.Descriptor.MainClass)
+	client.Log("KTF startApp returned", "class", archive.Descriptor.MainClass)
 	return &Session{Archive: archive, Client: client, options: options, archiveIdentity: backend.SaveIdentity(data)}, nil
 }
 
@@ -394,32 +394,32 @@ func (session *Session) Tick(ctx context.Context) (bool, error) {
 	}
 	timerLimit := session.options.TimerLimit
 	if timerLimit <= 0 {
-		timerLimit = sessionDefaultTimerLimit
+		timerLimit = wipicrt.SessionDefaultTimerLimit
 	}
 	client := session.Client
-	client.costs.Rounds++
+	client.Costs.Rounds++
 
-	phase := client.phaseClock()
+	phase := client.PhaseClock()
 	ranTimers, timerErr := client.ServiceTimers(ctx, timerLimit)
-	client.sincePhase(phase, &client.costs.Timers)
+	client.SincePhase(phase, &client.Costs.Timers)
 	if timerErr = client.absorbUncaughtCallback("timer", timerErr); timerErr != nil {
-		client.log("KTF timer service failed", "error", timerErr)
+		client.Log("KTF timer service failed", "error", timerErr)
 		return ranTimers > 0, timerErr
 	}
 
-	phase = client.phaseClock()
+	phase = client.PhaseClock()
 	ranThreads, threadErr := client.ServiceThreads(ctx, 1)
-	client.sincePhase(phase, &client.costs.Threads)
+	client.SincePhase(phase, &client.Costs.Threads)
 	if threadErr = client.absorbUncaughtCallback("thread", threadErr); threadErr != nil {
-		client.log("KTF thread service failed", "error", threadErr)
+		client.Log("KTF thread service failed", "error", threadErr)
 		return ranTimers+ranThreads > 0, threadErr
 	}
 
-	phase = client.phaseClock()
+	phase = client.PhaseClock()
 	ranEvents, eventErr := client.ServiceEvents(ctx)
-	client.sincePhase(phase, &client.costs.Events)
+	client.SincePhase(phase, &client.Costs.Events)
 	if eventErr = client.absorbUncaughtCallback("event", eventErr); eventErr != nil {
-		client.log("KTF event service failed", "error", eventErr)
+		client.Log("KTF event service failed", "error", eventErr)
 		return ranTimers+ranThreads+ranEvents > 0, eventErr
 	}
 
@@ -436,7 +436,7 @@ func (session *Session) Tick(ctx context.Context) (bool, error) {
 	}
 	painted := false
 	if !client.skipPaint {
-		phase = client.phaseClock()
+		phase = client.PhaseClock()
 		// This one phase is timed whether or not a report asked for phase
 		// timing, because what a paint costs is half of the decision to drop
 		// one and a decision that only worked while someone was taking a
@@ -449,30 +449,30 @@ func (session *Session) Tick(ctx context.Context) (bool, error) {
 		var paintErr error
 		painted, paintErr = client.ServicePaint(ctx)
 		client.notePaintCost(time.Since(paintStarted))
-		client.sincePhase(phase, &client.costs.Paint)
+		client.SincePhase(phase, &client.Costs.Paint)
 		if paintErr = client.absorbUncaughtCallback("paint", paintErr); paintErr != nil {
-			client.log("KTF paint failed", "error", paintErr)
+			client.Log("KTF paint failed", "error", paintErr)
 			return true, paintErr
 		}
 	}
 
-	phase = client.phaseClock()
+	phase = client.PhaseClock()
 	cheatErr := session.serviceCheat()
-	client.sincePhase(phase, &client.costs.Cheat)
+	client.SincePhase(phase, &client.Costs.Cheat)
 	if cheatErr != nil {
 		return true, cheatErr
 	}
 
-	phase = client.phaseClock()
-	audioErr := client.serviceAudio()
-	client.sincePhase(phase, &client.costs.Audio)
+	phase = client.PhaseClock()
+	audioErr := client.ServiceAudio()
+	client.SincePhase(phase, &client.Costs.Audio)
 	if audioErr != nil {
 		return true, audioErr
 	}
 
-	phase = client.phaseClock()
+	phase = client.PhaseClock()
 	collectErr := session.collectGuestObjects()
-	client.sincePhase(phase, &client.costs.Collect)
+	client.SincePhase(phase, &client.Costs.Collect)
 	if collectErr != nil {
 		return true, collectErr
 	}
@@ -500,15 +500,15 @@ func (session *Session) TickFor(ctx context.Context, budget time.Duration) (bool
 	}
 	progressed := false
 	client := session.Client
-	entered := client.now()
+	entered := client.Now()
 	deadline := entered.Add(budget)
 	for {
 		client.skipPaint = session.behindOnPaint()
 		ran, err := session.Tick(ctx)
 		if client.skipPaint {
-			client.paintsDrop++
+			client.PaintsDrop++
 		} else {
-			client.lastPaint = client.now()
+			client.lastPaint = client.Now()
 		}
 		client.skipPaint = false
 		progressed = progressed || ran
@@ -518,13 +518,13 @@ func (session *Session) TickFor(ctx context.Context, budget time.Duration) (bool
 		// Nothing is due until the guest's own next deadline, so the Host can
 		// sleep exactly that long instead of polling until it arrives.
 		if wait, parked := session.waitBeforeNextRound(); parked {
-			client.noteEntryLoad(client.now().Sub(entered), wait)
+			client.noteEntryLoad(client.Now().Sub(entered), wait)
 			return progressed, wait, nil
 		}
-		if !client.now().Before(deadline) {
+		if !client.Now().Before(deadline) {
 			// The entry stopped on its budget with work still due, which is
 			// saturation by definition: there was no wait to spend.
-			client.noteEntryLoad(client.now().Sub(entered), budget)
+			client.noteEntryLoad(client.Now().Sub(entered), budget)
 			return progressed, 0, nil
 		}
 	}
@@ -600,12 +600,12 @@ func (client *Client) noteEntryLoad(cost, wait time.Duration) {
 		return
 	}
 	load := cost.Seconds() / wait.Seconds()
-	if client.paintLoad == 0 {
-		client.paintLoad, client.entryCost = load, cost
+	if client.PaintLoad == 0 {
+		client.PaintLoad, client.EntryCost = load, cost
 		return
 	}
-	client.paintLoad += paintLoadSmoothing * (load - client.paintLoad)
-	client.entryCost += time.Duration(paintLoadSmoothing * float64(cost-client.entryCost))
+	client.PaintLoad += paintLoadSmoothing * (load - client.PaintLoad)
+	client.EntryCost += time.Duration(paintLoadSmoothing * float64(cost-client.EntryCost))
 }
 
 // notePaintCost records what one card paint ran to. Only a paint that actually
@@ -613,11 +613,11 @@ func (client *Client) noteEntryLoad(cost, wait time.Duration) {
 // stretch of dropped ones — an average that fell while paints were being
 // dropped would stop the dropping, restore it, and oscillate.
 func (client *Client) notePaintCost(cost time.Duration) {
-	if client.paintCost == 0 {
-		client.paintCost = cost
+	if client.PaintCost == 0 {
+		client.PaintCost = cost
 		return
 	}
-	client.paintCost += time.Duration(paintLoadSmoothing * float64(cost-client.paintCost))
+	client.PaintCost += time.Duration(paintLoadSmoothing * float64(cost-client.PaintCost))
 }
 
 // behindOnPaint answers whether this round should skip its paint: the host is
@@ -626,7 +626,7 @@ func (client *Client) notePaintCost(cost time.Duration) {
 // freeze.
 func (session *Session) behindOnPaint() bool {
 	client := session.Client
-	if client.paintLoad < paintSaturationBias {
+	if client.PaintLoad < paintSaturationBias {
 		return false
 	}
 	// The host is over its schedule; this asks whether the paint is what it is
@@ -634,11 +634,11 @@ func (session *Session) behindOnPaint() bool {
 	// paint's share — but a saturated entry is the case that matters and that
 	// one is a single round which overran the budget, so the two agree exactly
 	// where the answer counts.
-	if client.entryCost > 0 &&
-		client.paintCost.Seconds() < paintShareFloor*client.entryCost.Seconds() {
+	if client.EntryCost > 0 &&
+		client.PaintCost.Seconds() < paintShareFloor*client.EntryCost.Seconds() {
 		return false
 	}
-	now := client.now()
+	now := client.Now()
 	return !client.lastPaint.IsZero() && now.Sub(client.lastPaint) < maxPaintInterval
 }
 
@@ -651,7 +651,7 @@ func (session *Session) waitBeforeNextRound() (time.Duration, bool) {
 	if !parked {
 		return 0, false
 	}
-	wait := deadline.Sub(session.Client.now())
+	wait := deadline.Sub(session.Client.Now())
 	if wait <= 0 {
 		return 0, false
 	}
@@ -665,7 +665,7 @@ func (session *Session) GuestElapsed() time.Duration {
 	if session == nil || session.Client == nil {
 		return 0
 	}
-	return session.Client.runtime.guestElapsed()
+	return session.Client.runtime.GuestElapsed()
 }
 
 // Pause and Resume are the Jlet lifecycle a Host drives when the page that was
@@ -707,9 +707,9 @@ func (session *Session) lifecycleResult(err error, callback string) error {
 	case errors.Is(err, ErrGuestExited):
 		return err
 	}
-	session.Client.log("KTF lifecycle callback failed", "callback", callback, "error", err)
+	session.Client.Log("KTF lifecycle callback failed", "callback", callback, "error", err)
 	if runtime := session.Client.runtime; runtime != nil {
-		runtime.countDiagnostic("lifecycle callback failed")
+		runtime.CountDiagnostic("lifecycle callback failed")
 	}
 	return nil
 }
@@ -784,11 +784,11 @@ func (session *Session) Close() {
 	// sounding stops with the session, and the outer defer still stops workers
 	// if stopping an audio sink also panics.
 	defer session.Client.StopThreads()
-	defer session.Client.audio.StopAll()
+	defer session.Client.Audio.StopAll()
 	// WIPI transitions a Jlet to destroyed through destroyApp. A callback
 	// failure cannot refuse an unconditional close, but keeping it in the
 	// lifecycle diagnostics explains cleanup a title could not finish.
-	timeout := min(session.Client.waitAllowance(), backend.EndingBound)
+	timeout := min(session.Client.WaitAllowance(), backend.EndingBound)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	_ = session.lifecycleResult(session.Client.DestroyApp(ctx), jletDestroyApp)
@@ -805,7 +805,7 @@ func (session *Session) Frame() ([]byte, int, int, uint32) {
 // Screen answers the screen the title is running on; see Client.Screen.
 func (session *Session) Screen() (int, int) {
 	if session == nil {
-		return runtimeDisplayPixelWidth, runtimeDisplayPixelHeight
+		return wipicrt.RuntimeDisplayPixelWidth, wipicrt.RuntimeDisplayPixelHeight
 	}
 	return session.Client.Screen()
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // goTimerCallback gives a test a timer callback that is real guest code — a
@@ -42,10 +43,10 @@ func kernelTimerCall(t *testing.T, call func(*armcore.Thread) (uint32, error), r
 	}
 }
 
-func queuedTimersFor(runtime *initializationRuntime, record uint32) []wipicTimer {
-	var found []wipicTimer
-	for _, timer := range runtime.pendingTimers {
-		if timer.task == nil && timer.pointer == record {
+func queuedTimersFor(runtime *initializationRuntime, record uint32) []wipicrt.WIPICTimer {
+	var found []wipicrt.WIPICTimer
+	for _, timer := range runtime.PendingTimers {
+		if guestObject(timer.Task) == nil && timer.Pointer == record {
 			found = append(found, timer)
 		}
 	}
@@ -64,13 +65,13 @@ func TestTimerCallbackCancelsALaterTimerInTheSameRound(t *testing.T) {
 			name = "pending"
 		}
 		t.Run(name, func(t *testing.T) {
-			clock := NewManualClock(time.Unix(1700000000, 0))
+			clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 			client, runtime := newPacedTestRuntime(t, clock, 1)
 			first, _ := newArmedTimerRecord(t, runtime)
 			second, _ := newArmedTimerRecord(t, runtime)
 			secondRan := 0
 			cancel := goTimerCallback(t, client, runtime, "cancel", func() error {
-				kernelTimerCall(t, runtime.wipicUnsetTimer, second)
+				kernelTimerCall(t, runtime.WIPICUnsetTimer, second)
 				return nil
 			})
 			cancelled := goTimerCallback(t, client, runtime, "cancelled", func() error {
@@ -108,12 +109,12 @@ func TestTimerCallbackCancelsALaterTimerInTheSameRound(t *testing.T) {
 // timer with the deadline the re-arm declared, instead of a new entry beside
 // the stale one that the round then put back as well.
 func TestTimerCallbackRearmsALaterTimerInTheSameRound(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 	first, _ := newArmedTimerRecord(t, runtime)
 	second, secondCallback := newArmedTimerRecord(t, runtime)
 	rearm := goTimerCallback(t, client, runtime, "rearm", func() error {
-		kernelTimerCall(t, runtime.wipicSetTimer, second, 5000, 0, 7)
+		kernelTimerCall(t, runtime.WIPICSetTimer, second, 5000, 0, 7)
 		return nil
 	})
 	if err := armTimerRecord(t, client, runtime, first, rearm, 0, 0); err != nil {
@@ -132,8 +133,8 @@ func TestTimerCallbackRearmsALaterTimerInTheSameRound(t *testing.T) {
 	if len(queued) != 1 {
 		t.Fatalf("re-arming a later timer left %d entries for it, want 1", len(queued))
 	}
-	if queued[0].param != 7 || queued[0].delay != 5000 {
-		t.Fatalf("queued timer = param %d delay %d, want the re-arm's param 7 delay 5000", queued[0].param, queued[0].delay)
+	if queued[0].Param != 7 || queued[0].Delay != 5000 {
+		t.Fatalf("queued timer = param %d delay %d, want the re-arm's param 7 delay 5000", queued[0].Param, queued[0].Delay)
 	}
 }
 
@@ -142,7 +143,7 @@ func TestTimerCallbackRearmsALaterTimerInTheSameRound(t *testing.T) {
 // timers queued behind it are still there for the next round rather than
 // silently dropped with it.
 func TestFailingTimerCallbackKeepsTheRestOfTheRound(t *testing.T) {
-	clock := NewManualClock(time.Unix(1700000000, 0))
+	clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
 	client, runtime := newPacedTestRuntime(t, clock, 1)
 	first, _ := newArmedTimerRecord(t, runtime)
 	second, secondCallback := newArmedTimerRecord(t, runtime)

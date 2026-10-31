@@ -1,6 +1,9 @@
 package ktf
 
-import "testing"
+import (
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"testing"
+)
 
 // The earlier package's titles compare a key event against a pressed and a
 // released application event, and there is no repeated one. A Host that
@@ -12,9 +15,9 @@ func TestARepeatIsNotASecondPress(t *testing.T) {
 		pressed   bool
 		deliver   bool
 	}{
-		{KeyPressed, true, true},
-		{KeyReleased, false, true},
-		{KeyRepeated, false, false},
+		{wipicrt.KeyPressed, true, true},
+		{wipicrt.KeyReleased, false, true},
+		{wipicrt.KeyRepeated, false, false},
 	} {
 		pressed, deliver, ok := nativeKeyEvent(test.eventType)
 		if !ok {
@@ -26,7 +29,7 @@ func TestARepeatIsNotASecondPress(t *testing.T) {
 				test.eventType, pressed, deliver, test.pressed, test.deliver)
 		}
 	}
-	if _, _, ok := nativeKeyEvent(KeyRepeated + 1); ok {
+	if _, _, ok := nativeKeyEvent(wipicrt.KeyRepeated + 1); ok {
 		t.Fatal("an event type this platform has no key event for was translated")
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // NativeSession drives one game from the earlier KTF package the way a Host
@@ -38,8 +39,8 @@ type NativeSession struct {
 	// clock is the title's own clock, which a speed setting moves faster or
 	// slower than the Host's; source is the Host's, which is what a probe
 	// jumps and what a deadline has to be expressed on to be waited for.
-	clock   Clock
-	source  Clock
+	clock   wipicrt.Clock
+	source  wipicrt.Clock
 	started time.Time
 	logger  *slog.Logger
 
@@ -54,11 +55,11 @@ type NativeSessionOptions struct {
 	MaxSteps uint64
 	// SaveStore persists what the title writes. Nil keeps writes for the
 	// session only, which is what a probe wants and not what a player does.
-	SaveStore SaveStore
+	SaveStore wipicrt.SaveStore
 	// Clock is the time source the title's frame interval is measured
 	// against. Nil selects the wall clock, which runs the game at the speed it
 	// was written for; a Host running ticks in a batch passes a ManualClock.
-	Clock Clock
+	Clock wipicrt.Clock
 	// Logger receives session lifecycle events at debug level. Nil is silent.
 	Logger *slog.Logger
 	// AudioSink is where the title's music goes. Nil is silent, which is what
@@ -280,11 +281,11 @@ func (session *NativeSession) SendKey(ctx context.Context, eventType, key int32)
 // because the title tracks the press and the release itself.
 func nativeKeyEvent(eventType int32) (pressed, deliver, ok bool) {
 	switch eventType {
-	case KeyPressed:
+	case wipicrt.KeyPressed:
 		return true, true, true
-	case KeyReleased:
+	case wipicrt.KeyReleased:
 		return false, true, true
-	case KeyRepeated:
+	case wipicrt.KeyRepeated:
 		return false, false, true
 	}
 	return false, false, false
@@ -343,7 +344,7 @@ func (session *NativeSession) SkipToNextDeadline() bool {
 	}
 	session.run.Lock()
 	defer session.run.Unlock()
-	manual, ok := session.source.(*ManualClock)
+	manual, ok := session.source.(*wipicrt.ManualClock)
 	if !ok {
 		return false
 	}

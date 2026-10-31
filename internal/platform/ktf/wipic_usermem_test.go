@@ -4,14 +4,15 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // userMemoryPoolAddress is a scratch region of the platform data area used as
 // the guest buffer a caller hands to the library.
 const (
-	userMemoryPoolAddress = platformDataBase + 0x9000
+	userMemoryPoolAddress = wipicrt.PlatformDataBase + 0x9000
 	userMemoryPoolSize    = 0x1000
-	userMemoryNameAddress = platformDataBase + 0x8800
+	userMemoryNameAddress = wipicrt.PlatformDataBase + 0x8800
 )
 
 func callUserMemory(t *testing.T, runtime *initializationRuntime, function, pool, argument uint32) uint32 {
@@ -22,7 +23,7 @@ func callUserMemory(t *testing.T, runtime *initializationRuntime, function, pool
 			t.Fatal(err)
 		}
 	}
-	result, err := runtime.handleUserMemoryCall(thread, function)
+	result, err := runtime.HandleUserMemoryCall(thread, function)
 	if err != nil {
 		t.Fatalf("user memory function %d error = %v", function, err)
 	}
@@ -31,7 +32,7 @@ func callUserMemory(t *testing.T, runtime *initializationRuntime, function, pool
 
 func getLibraryInterface(t *testing.T, runtime *initializationRuntime, name string) uint32 {
 	t.Helper()
-	if err := runtime.client.core.Memory().Write(userMemoryNameAddress, append([]byte(name), 0)); err != nil {
+	if err := runtime.client.Core().Memory().Write(userMemoryNameAddress, append([]byte(name), 0)); err != nil {
 		t.Fatal(err)
 	}
 	thread := armcore.NewThread(armcore.Context{})
@@ -42,13 +43,13 @@ func getLibraryInterface(t *testing.T, runtime *initializationRuntime, name stri
 	}
 	// The stacked rtnMinor argument is read from the stack pointer, so it has
 	// to address something readable.
-	if err := thread.SetRegister(armcore.RegisterSP, ThreadStackBase+uint32(ThreadStackSize)-4); err != nil {
+	if err := thread.SetRegister(armcore.RegisterSP, wipicrt.ThreadStackBase+uint32(wipicrt.ThreadStackSize)-4); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.writeGuestWord(ThreadStackBase+uint32(ThreadStackSize)-4, 0); err != nil {
+	if err := runtime.WriteGuestWord(wipicrt.ThreadStackBase+uint32(wipicrt.ThreadStackSize)-4, 0); err != nil {
 		t.Fatal(err)
 	}
-	address, err := runtime.wipicGetDLLInterface(thread)
+	address, err := runtime.WIPICGetDLLInterface(thread)
 	if err != nil {
 		t.Fatalf("MC_knlGetDLLInterface(%q) error = %v", name, err)
 	}
@@ -70,11 +71,11 @@ func TestUnknownLibraryIsRefused(t *testing.T) {
 // see two different libraries.
 func TestUserMemoryLibraryIsOneTable(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	first := getLibraryInterface(t, runtime, userMemoryLibrary)
+	first := getLibraryInterface(t, runtime, wipicrt.UserMemoryLibrary)
 	if first == 0 {
 		t.Fatal("user memory library answered 0")
 	}
-	if second := getLibraryInterface(t, runtime, userMemoryLibrary); second != first {
+	if second := getLibraryInterface(t, runtime, wipicrt.UserMemoryLibrary); second != first {
 		t.Fatalf("second lookup = %#x, first = %#x", second, first)
 	}
 }
@@ -84,13 +85,13 @@ func TestUserMemoryLibraryIsOneTable(t *testing.T) {
 // overlap, and they are aligned.
 func TestUserMemoryCutsBlocksFromTheCallersBuffer(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	if result := callUserMemory(t, runtime, userMemoryCreate, userMemoryPoolAddress, userMemoryPoolSize); result != 0 {
+	if result := callUserMemory(t, runtime, wipicrt.UserMemoryCreate, userMemoryPoolAddress, userMemoryPoolSize); result != 0 {
 		t.Fatalf("create = %#x, want 0", result)
 	}
 	sizes := []uint32{1, 100, 7, 256}
 	var end uint32
 	for _, size := range sizes {
-		block := callUserMemory(t, runtime, userMemoryAlloc, userMemoryPoolAddress, size)
+		block := callUserMemory(t, runtime, wipicrt.UserMemoryAlloc, userMemoryPoolAddress, size)
 		if block == 0 {
 			t.Fatalf("alloc(%d) = 0 in a pool with room", size)
 		}
@@ -104,7 +105,7 @@ func TestUserMemoryCutsBlocksFromTheCallersBuffer(t *testing.T) {
 			t.Fatalf("alloc(%d) = %#x runs past the end of the pool", size, block)
 		}
 		// The block has to be writable guest memory, not just an address.
-		if err := runtime.writeGuestWord(block&^3, 0x5a5a5a5a); err != nil {
+		if err := runtime.WriteGuestWord(block&^3, 0x5a5a5a5a); err != nil {
 			t.Fatalf("block at %#x is not writable: %v", block, err)
 		}
 		end = block + size - userMemoryPoolAddress
@@ -116,14 +117,14 @@ func TestUserMemoryCutsBlocksFromTheCallersBuffer(t *testing.T) {
 // game keeps after it, and the game's own error path reads null.
 func TestUserMemoryRefusesWhatTheBufferCannotHold(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	callUserMemory(t, runtime, userMemoryCreate, userMemoryPoolAddress, userMemoryPoolSize)
-	if block := callUserMemory(t, runtime, userMemoryAlloc, userMemoryPoolAddress, userMemoryPoolSize+1); block != 0 {
+	callUserMemory(t, runtime, wipicrt.UserMemoryCreate, userMemoryPoolAddress, userMemoryPoolSize)
+	if block := callUserMemory(t, runtime, wipicrt.UserMemoryAlloc, userMemoryPoolAddress, userMemoryPoolSize+1); block != 0 {
 		t.Fatalf("oversized alloc = %#x, want 0", block)
 	}
-	if block := callUserMemory(t, runtime, userMemoryAlloc, userMemoryPoolAddress, userMemoryPoolSize); block == 0 {
+	if block := callUserMemory(t, runtime, wipicrt.UserMemoryAlloc, userMemoryPoolAddress, userMemoryPoolSize); block == 0 {
 		t.Fatal("an allocation of exactly the pool size was refused")
 	}
-	if block := callUserMemory(t, runtime, userMemoryAlloc, userMemoryPoolAddress, 1); block != 0 {
+	if block := callUserMemory(t, runtime, wipicrt.UserMemoryAlloc, userMemoryPoolAddress, 1); block != 0 {
 		t.Fatalf("alloc from an exhausted pool = %#x, want 0", block)
 	}
 }
@@ -133,7 +134,7 @@ func TestUserMemoryRefusesWhatTheBufferCannotHold(t *testing.T) {
 // rather than an address into memory nobody reserved.
 func TestUserMemoryAllocWithoutAPoolAnswersNull(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	if block := callUserMemory(t, runtime, userMemoryAlloc, userMemoryPoolAddress, 16); block != 0 {
+	if block := callUserMemory(t, runtime, wipicrt.UserMemoryAlloc, userMemoryPoolAddress, 16); block != 0 {
 		t.Fatalf("alloc without create = %#x, want 0", block)
 	}
 }
@@ -149,7 +150,7 @@ func TestUserMemoryRejectsAnUnmappedPool(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := runtime.handleUserMemoryCall(thread, userMemoryCreate); err == nil {
+	if _, err := runtime.HandleUserMemoryCall(thread, wipicrt.UserMemoryCreate); err == nil {
 		t.Fatal("create accepted a pool that is not guest memory")
 	}
 }

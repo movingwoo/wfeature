@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // kernelCall drives one kernel slot with the arguments a guest would pass.
@@ -13,7 +14,7 @@ func kernelCall(t *testing.T, runtime *initializationRuntime, id uint32, argumen
 	for index, value := range arguments {
 		context.Registers[index] = value
 	}
-	result, err := runtime.handleWIPICCall(armcore.NewThread(context), id)
+	result, err := runtime.HandleWIPICCall(armcore.NewThread(context), id)
 	if err != nil {
 		t.Fatalf("kernel slot %d error = %v", id, err)
 	}
@@ -27,14 +28,14 @@ func TestWIPICSetSystemPropertyIsRefused(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	name := guestBytes(t, runtime, []byte("PHONENUMBER\x00"))
 	value := guestBytes(t, runtime, []byte("01099999999\x00"))
-	if result := kernelCall(t, runtime, wipicKernelSetSysProperty, name, value); result != wipicErrorInvalid {
+	if result := kernelCall(t, runtime, wipicrt.WIPICKernelSetSysProperty, name, value); result != wipicrt.WIPICErrorInvalid {
 		t.Fatalf("set system property answered %#x, want M_E_INVALID", result)
 	}
 	out := guestBytes(t, runtime, make([]byte, 32))
-	if result := kernelCall(t, runtime, wipicKernelGetSysProperty, name, out, 32); result != 0 {
+	if result := kernelCall(t, runtime, wipicrt.WIPICKernelGetSysProperty, name, out, 32); result != 0 {
 		t.Fatalf("get system property answered %#x", result)
 	}
-	want, _ := client.systemProperty("PHONENUMBER")
+	want, _ := client.SystemProperty("PHONENUMBER")
 	if got := string(readTestBytes(t, client, out, len(want))); got != want {
 		t.Fatalf("PHONENUMBER after a refused set = %q, want %q", got, want)
 	}
@@ -47,7 +48,7 @@ func TestWIPICLoadFindsNoLibrary(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	for _, name := range []string{"", "FastLibrary"} {
 		address := guestBytes(t, runtime, append([]byte(name), 0))
-		if result := kernelCall(t, runtime, wipicKernelLoad, address, 0); result != wipicErrorInvalid {
+		if result := kernelCall(t, runtime, wipicrt.WIPICKernelLoad, address, 0); result != wipicrt.WIPICErrorInvalid {
 			t.Fatalf("load %q answered %#x, want M_E_INVALID", name, result)
 		}
 	}

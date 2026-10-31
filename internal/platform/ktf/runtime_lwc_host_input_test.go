@@ -9,6 +9,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func focusedLWCField(t *testing.T, class string, constraint int32, text string) (*Session, *jvm.Object) {
@@ -429,7 +430,7 @@ func drawnFieldCard(t *testing.T, session *Session, class string, fail *bool, fi
 	runtime.displayCards = append(runtime.displayCards, &jvm.Object{ClassName: class, Fields: make(map[string]jvm.Value)})
 	return func() {
 		t.Helper()
-		runtime.repaintPending = true
+		runtime.RepaintPending = true
 		if _, err := runtime.paintTopCard(); err != nil && (fail == nil || !*fail) {
 			t.Fatal(err)
 		}
@@ -677,7 +678,7 @@ func TestTextInputKeepsTheFirstRulesAheadOfTheRelaxedOnes(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		runtime.repaintPending = true
+		runtime.RepaintPending = true
 		if _, err := runtime.paintTopCard(); err != nil {
 			t.Fatal(err)
 		}
@@ -686,14 +687,14 @@ func TestTextInputKeepsTheFirstRulesAheadOfTheRelaxedOnes(t *testing.T) {
 		}
 		// A press the widget does not take closes the editor under the first
 		// rules; the relaxed rules then find the drawn field first.
-		if err := session.SendKey(t.Context(), KeyPressed, KeyRight); err != nil {
+		if err := session.SendKey(t.Context(), wipicrt.KeyPressed, wipicrt.KeyRight); err != nil {
 			t.Fatal(err)
 		}
 		edit, err := session.TextInput(t.Context())
 		if err != nil || edit.Append || edit.Text != "drawn" {
 			t.Fatalf("drawn field after the editor closed: %+v %v", edit, err)
 		}
-		if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 3); err != nil {
+		if _, err := cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 3); err != nil {
 			t.Fatal(err)
 		}
 		if err := edit.Commit(t.Context(), "late"); !errors.Is(err, backend.ErrTextInputChanged) || componentText(field) != "drawn" {

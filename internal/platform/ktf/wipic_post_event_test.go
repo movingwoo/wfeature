@@ -5,6 +5,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // postEventThroughSVC drives MC_grpPostEvent(id, type, param1, param2) the way
@@ -17,7 +18,7 @@ func postEventThroughSVC(t *testing.T, runtime *initializationRuntime, program, 
 	callContext.Registers[1] = kind
 	callContext.Registers[2] = first
 	callContext.Registers[3] = second
-	answer, err := runtime.handleWIPICCall(armcore.NewThread(callContext), wipicTableGraphics<<16|36)
+	answer, err := runtime.HandleWIPICCall(armcore.NewThread(callContext), wipicrt.WIPICTableGraphics<<16|36)
 	if err != nil {
 		t.Fatalf("MC_grpPostEvent error = %v", err)
 	}
@@ -26,7 +27,7 @@ func postEventThroughSVC(t *testing.T, runtime *initializationRuntime, program, 
 
 func currentProgramIDThroughSVC(t *testing.T, runtime *initializationRuntime) uint32 {
 	t.Helper()
-	identity, err := runtime.handleWIPICCall(armcore.NewThread(armcore.NewContext()), wipicKernelGetCurProgramID)
+	identity, err := runtime.HandleWIPICCall(armcore.NewThread(armcore.NewContext()), wipicrt.WIPICKernelGetCurProgramID)
 	if err != nil {
 		t.Fatalf("MC_knlGetCurProgramID error = %v", err)
 	}
@@ -74,8 +75,8 @@ func TestPostedEventReachesTheJletListener(t *testing.T) {
 	}
 	runtime.jletListeners = append(runtime.jletListeners, &jvm.Object{ClassName: "test/Listener", Fields: make(map[string]jvm.Value)})
 
-	if answer := postEventThroughSVC(t, runtime, currentProgramIDThroughSVC(t, runtime), 0xa600, 7, 9); answer != wipicPostEventQueued {
-		t.Fatalf("MC_grpPostEvent answered %d, want %d", answer, wipicPostEventQueued)
+	if answer := postEventThroughSVC(t, runtime, currentProgramIDThroughSVC(t, runtime), 0xa600, 7, 9); answer != wipicrt.WIPICPostEventQueued {
+		t.Fatalf("MC_grpPostEvent answered %d, want %d", answer, wipicrt.WIPICPostEventQueued)
 	}
 	// Nothing is delivered inside the call: a title posts from inside its own
 	// paint, and delivering there would re-enter the card while it is drawing.
@@ -93,8 +94,8 @@ func TestPostedEventReachesTheJletListener(t *testing.T) {
 	if len(seen) != 3 || seen[0] != 0xa600 || seen[1] != 7 || seen[2] != 9 {
 		t.Fatalf("listener received %v, want [%d 7 9]", seen, 0xa600)
 	}
-	if len(runtime.events) != 0 {
-		t.Fatalf("%d events are still queued", len(runtime.events))
+	if len(runtime.Events) != 0 {
+		t.Fatalf("%d events are still queued", len(runtime.Events))
 	}
 }
 
@@ -102,7 +103,7 @@ func TestPostedEventReachesTheJletListener(t *testing.T) {
 // Draining it from the Host as well would deliver every event twice.
 func TestPostedEventStaysQueuedForAGuestEventLoop(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.guestEventLoop = true
+	runtime.GuestEventLoop = true
 
 	postEventThroughSVC(t, runtime, currentProgramIDThroughSVC(t, runtime), 0xa002, 0, 0)
 	delivered, err := client.ServiceEvents(t.Context())
@@ -112,8 +113,8 @@ func TestPostedEventStaysQueuedForAGuestEventLoop(t *testing.T) {
 	if delivered != 0 {
 		t.Fatalf("delivered %d events, want none", delivered)
 	}
-	if len(runtime.events) != 1 {
-		t.Fatalf("%d events are queued, want the posted one", len(runtime.events))
+	if len(runtime.Events) != 1 {
+		t.Fatalf("%d events are queued, want the posted one", len(runtime.Events))
 	}
 }
 
@@ -125,7 +126,7 @@ func TestServiceEventsDeliversOnlyWhatWasWaiting(t *testing.T) {
 	posts := 0
 	if err := client.JVM().RegisterNative("test/Listener", "notifyEvent", "(III)V", func(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
 		posts++
-		runtime.postGuestEvent(guestEvent{kind: eventKindNotify, param1: 1})
+		runtime.PostGuestEvent(wipicrt.GuestEvent{Kind: wipicrt.EventKindNotify, Param1: 1})
 		return jvm.VoidValue(), nil
 	}); err != nil {
 		t.Fatal(err)
@@ -140,7 +141,7 @@ func TestServiceEventsDeliversOnlyWhatWasWaiting(t *testing.T) {
 	if delivered != 1 || posts != 1 {
 		t.Fatalf("delivered %d events with %d handler runs, want 1 and 1", delivered, posts)
 	}
-	if len(runtime.events) != 1 {
-		t.Fatalf("%d events are queued, want the one the handler posted", len(runtime.events))
+	if len(runtime.Events) != 1 {
+		t.Fatalf("%d events are queued, want the one the handler posted", len(runtime.Events))
 	}
 }

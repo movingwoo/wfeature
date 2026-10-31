@@ -12,6 +12,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"golang.org/x/text/encoding/korean"
 )
 
@@ -26,7 +27,7 @@ func cInputCall(t *testing.T, runtime *initializationRuntime, function uint32, a
 		}
 	}
 	if len(args) > 4 {
-		stack, err := runtime.allocateWords(args[4:])
+		stack, err := runtime.AllocateWords(args[4:])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -34,55 +35,55 @@ func cInputCall(t *testing.T, runtime *initializationRuntime, function uint32, a
 			t.Fatal(err)
 		}
 	}
-	return runtime.handleWIPICTableCall(thread, wipicTableInputMethod, function)
+	return runtime.HandleWIPICTableCall(thread, wipicrt.WIPICTableInputMethod, function)
 }
 
 func TestCInputModesAndNumericBuffers(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	if got, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 3); err != nil || got != 1 {
+	if got, err := cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 3); err != nil || got != 1 {
 		t.Fatalf("set mode: %d %v", got, err)
 	}
-	if got, err := cInputCall(t, runtime, wipicIMGetCurrentMode); err != nil || got != 3 {
+	if got, err := cInputCall(t, runtime, wipicrt.WIPICIMGetCurrentMode); err != nil || got != 3 {
 		t.Fatalf("get mode: %d %v", got, err)
 	}
-	if got, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 99); err != nil || got != 0 || runtime.cInput.mode != 3 {
+	if got, err := cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 99); err != nil || got != 0 || runtime.CInput.Mode != 3 {
 		t.Fatalf("invalid mode: %d %v", got, err)
 	}
-	completed, _ := runtime.allocateBytes([]byte("stale!"))
-	composing, _ := runtime.allocateBytes([]byte("stale!!!"))
-	size1, _ := runtime.allocateWords([]uint32{6})
-	size2, _ := runtime.allocateWords([]uint32{8})
+	completed, _ := runtime.AllocateBytes([]byte("stale!"))
+	composing, _ := runtime.AllocateBytes([]byte("stale!!!"))
+	size1, _ := runtime.AllocateWords([]uint32{6})
+	size2, _ := runtime.AllocateWords([]uint32{8})
 	for _, test := range []struct {
 		key, kind uint32
 		text      string
-	}{{'4', 2, "4"}, {'4', 3, ""}, {uint32(cInputFlush), 2, ""}} {
+	}{{'4', 2, "4"}, {'4', 3, ""}, {uint32(wipicrt.CInputFlush), 2, ""}} {
 		writeWord(t, runtime, size1, 6)
 		writeWord(t, runtime, size2, 8)
-		got, err := cInputCall(t, runtime, wipicIMHandleInput, test.key, test.kind, completed, size1, composing, size2)
+		got, err := cInputCall(t, runtime, wipicrt.WIPICIMHandleInput, test.key, test.kind, completed, size1, composing, size2)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if (got != 0) != (test.text != "") {
 			t.Fatalf("handled=%d", got)
 		}
-		words, err := runtime.readAOTWords(size1, 1, "test size")
+		words, err := runtime.ReadAOTWords(size1, 1, "test size")
 		if err != nil || words[0] != uint32(len(test.text)) {
 			t.Fatalf("size=%v %v", words, err)
 		}
 		b := make([]byte, len(test.text)+1)
-		if err := runtime.client.core.Memory().Read(completed, b); err != nil {
+		if err := runtime.client.Core().Memory().Read(completed, b); err != nil {
 			t.Fatal(err)
 		}
 		if string(b) != test.text+"\x00" {
 			t.Fatalf("completed=%q", b)
 		}
 		b = make([]byte, 1)
-		runtime.client.core.Memory().Read(composing, b)
+		runtime.client.Core().Memory().Read(composing, b)
 		if b[0] != 0 {
 			t.Fatal("stale composition")
 		}
 	}
-	if _, err := cInputCall(t, runtime, wipicIMHandleInput, '0', 2, completed, 0xfffffff0, composing, size2); err == nil {
+	if _, err := cInputCall(t, runtime, wipicrt.WIPICIMHandleInput, '0', 2, completed, 0xfffffff0, composing, size2); err == nil {
 		t.Fatal("invalid size pointer accepted")
 	}
 }
@@ -97,16 +98,16 @@ func cInputFixture(t *testing.T) (*Session, *[]byte, *bool) {
 func cInputFixtureCapacity(t *testing.T, capacity uint32) (*Session, *[]byte, *bool) {
 	t.Helper()
 	client, runtime := newTestRuntime(t)
-	completed, _ := runtime.allocateBytes(make([]byte, 6))
-	composing, _ := runtime.allocateBytes(make([]byte, 8))
-	size1, _ := runtime.allocateWords([]uint32{capacity})
-	size2, _ := runtime.allocateWords([]uint32{8})
+	completed, _ := runtime.AllocateBytes(make([]byte, 6))
+	composing, _ := runtime.AllocateBytes(make([]byte, 8))
+	size1, _ := runtime.AllocateWords([]uint32{capacity})
+	size2, _ := runtime.AllocateWords([]uint32{8})
 	text := []byte{}
 	visible := true
 	if err := client.vm.RegisterNative("test/CInputCard", "keyNotify", "(II)Z", func(_ *jvm.VM, args []jvm.Value) (jvm.Value, error) {
 		kind, _ := args[1].Int32()
 		key, _ := args[2].Int32()
-		if visible && kind == KeyPressed && key == KeyClear {
+		if visible && kind == wipicrt.KeyPressed && key == wipicrt.KeyClear {
 			if len(text) > 0 {
 				size := 1
 				if text[len(text)-1] >= 0x80 {
@@ -114,39 +115,39 @@ func cInputFixtureCapacity(t *testing.T, capacity uint32) (*Session, *[]byte, *b
 				}
 				text = text[:len(text)-size]
 			}
-			_, err := cInputCall(t, runtime, wipicIMHandleInput, uint32(cInputFlush), 2, 0, 0, 0, 0)
+			_, err := cInputCall(t, runtime, wipicrt.WIPICIMHandleInput, uint32(wipicrt.CInputFlush), 2, 0, 0, 0, 0)
 			return jvm.IntValue(0), err
 		}
-		if !visible || kind != KeyPressed || key < '0' || key > '9' {
+		if !visible || kind != wipicrt.KeyPressed || key < '0' || key > '9' {
 			return jvm.IntValue(0), nil
 		}
 		writeWord(t, runtime, size1, capacity)
 		writeWord(t, runtime, size2, 8)
-		result, err := cInputCall(t, runtime, wipicIMHandleInput, uint32(key), 2, completed, size1, composing, size2)
+		result, err := cInputCall(t, runtime, wipicrt.WIPICIMHandleInput, uint32(key), 2, completed, size1, composing, size2)
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
 		if result != 0 {
-			words, err := runtime.readAOTWords(size1, 1, "test length")
+			words, err := runtime.ReadAOTWords(size1, 1, "test length")
 			if err != nil {
 				return jvm.VoidValue(), err
 			}
 			b := make([]byte, words[0])
-			if err := client.core.Memory().Read(completed, b); err != nil {
+			if err := client.Core().Memory().Read(completed, b); err != nil {
 				return jvm.VoidValue(), err
 			}
 			text = append(text, b...)
 		} else {
 			// An unhandled key causes this widget to flush. A capacity rejection
 			// must consume the carrier without inserting anything or flushing.
-			_, err = cInputCall(t, runtime, wipicIMHandleInput, uint32(cInputFlush), 2, completed, size1, composing, size2)
+			_, err = cInputCall(t, runtime, wipicrt.WIPICIMHandleInput, uint32(wipicrt.CInputFlush), 2, completed, size1, composing, size2)
 		}
 		return jvm.IntValue(0), err
 	}); err != nil {
 		t.Fatal(err)
 	}
 	runtime.displayCards = append(runtime.displayCards, newWidget("test/CInputCard"))
-	if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 3); err != nil {
+	if _, err := cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 3); err != nil {
 		t.Fatal(err)
 	}
 	return &Session{Client: client}, &text, &visible
@@ -204,19 +205,19 @@ func TestCInputHostRejectsStaleTargets(t *testing.T) {
 			}
 			switch name {
 			case "key":
-				err = s.SendKey(t.Context(), KeyPressed, KeyRight)
+				err = s.SendKey(t.Context(), wipicrt.KeyPressed, wipicrt.KeyRight)
 			case "mode":
-				_, err = cInputCall(t, runtime, wipicIMSetCurrentMode, 2)
+				_, err = cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 2)
 			case "card":
 				runtime.displayCards[0] = newWidget("test/OtherCard")
 			case "runtime":
-				s.Client.runtime = nil
+				s.Client.setRuntimes(nil, s.Client.prepared)
 			case "closed":
 				s.Client.workersStopped = true
 			case "queued":
-				runtime.guestEventLoop = true
+				runtime.GuestEventLoop = true
 			case "flush":
-				_, err = cInputCall(t, runtime, wipicIMHandleInput, uint32(cInputFlush), 2, 0, 0, 0, 0)
+				_, err = cInputCall(t, runtime, wipicrt.WIPICIMHandleInput, uint32(wipicrt.CInputFlush), 2, 0, 0, 0, 0)
 			case "focus":
 				runtime.runtimeObjects["lwc:focus"] = newWidget(runtimeTextFieldComponentClass)
 			case "ignored":
@@ -228,7 +229,7 @@ func TestCInputHostRejectsStaleTargets(t *testing.T) {
 			if err := edit.Commit(t.Context(), "A"); !errors.Is(err, backend.ErrTextInputChanged) {
 				t.Fatalf("stale commit: %v", err)
 			}
-			if len(*text) != 0 || len(runtime.cInput.pending) != 0 {
+			if len(*text) != 0 || len(runtime.CInput.Pending) != 0 {
 				t.Fatal("stale input escaped")
 			}
 		})
@@ -252,7 +253,7 @@ func TestCInputHostCancellationAndAQuietUnknownEditor(t *testing.T) {
 	if len(*text) != 0 {
 		t.Fatal("cancelled input changed value")
 	}
-	s.Client.runtime.cInput.active = false
+	s.Client.runtime.CInput.Active = false
 	edit, err = s.TextInput(t.Context())
 	if err != nil {
 		t.Fatalf("quiet editor of an unknown caller: %v", err)
@@ -298,11 +299,11 @@ func TestCInputUnknownEditorIsOfferedOnANewCard(t *testing.T) {
 	if err := edit.Commit(t.Context(), "A"); !errors.Is(err, backend.ErrTextInputChanged) {
 		t.Fatalf("commit through a card that does not take it: %v", err)
 	}
-	if want := [][2]int32{{KeyPressed, cInputCarrier}, {KeyReleased, cInputCarrier}}; !reflect.DeepEqual(*events, want) {
+	if want := [][2]int32{{wipicrt.KeyPressed, wipicrt.CInputCarrier}, {wipicrt.KeyReleased, wipicrt.CInputCarrier}}; !reflect.DeepEqual(*events, want) {
 		t.Fatalf("overlay key events = %v, want %v", *events, want)
 	}
-	if len(*text) != 0 || len(s.Client.runtime.cInput.pending) != 0 {
-		t.Fatalf("an unreached carrier left text %q pending %x", *text, s.Client.runtime.cInput.pending)
+	if len(*text) != 0 || len(s.Client.runtime.CInput.Pending) != 0 {
+		t.Fatalf("an unreached carrier left text %q pending %x", *text, s.Client.runtime.CInput.Pending)
 	}
 	if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
 		t.Fatalf("offer right after an unreached carrier: %v", err)
@@ -310,7 +311,7 @@ func TestCInputUnknownEditorIsOfferedOnANewCard(t *testing.T) {
 	if err := edit.Commit(t.Context(), "A"); !errors.Is(err, backend.ErrTextInputChanged) || len(*events) != 2 {
 		t.Fatalf("the spent edit answered %v and sent %v", err, *events)
 	}
-	pressCardKey(t, s.Client.runtime, KeyDown)
+	pressCardKey(t, s.Client.runtime, wipicrt.KeyDown)
 	if _, err := s.TextInput(t.Context()); err != nil {
 		t.Fatalf("offer after the player's press: %v", err)
 	}
@@ -322,8 +323,8 @@ func TestCInputRecognizedEditorIsNotInheritedByANewCard(t *testing.T) {
 	fixture := newDeferredCInputFixture(t)
 	runtime := fixture.session.Client.runtime
 	thread, state, _ := inputOwnerCaller(t, runtime)
-	runtime.rememberCInputOwner(thread)
-	if runtime.cInput.owner.address != state {
+	runtime.RememberCInputOwner(thread)
+	if runtime.CInput.Owner.Address != state {
 		t.Fatal("authored controller was not recognized")
 	}
 	if _, err := fixture.session.TextInput(t.Context()); err != nil {
@@ -344,10 +345,10 @@ func TestCInputUnknownEditorStaysOfferedAfterAPress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SendKey(t.Context(), KeyPressed, KeyRight); err != nil {
+	if err := s.SendKey(t.Context(), wipicrt.KeyPressed, wipicrt.KeyRight); err != nil {
 		t.Fatal(err)
 	}
-	if s.Client.runtime.cInput.active {
+	if s.Client.runtime.CInput.Active {
 		t.Fatal("a press without input-method activity left the editor live")
 	}
 	if err := before.Commit(t.Context(), "A"); !errors.Is(err, backend.ErrTextInputChanged) || len(*text) != 0 {
@@ -376,7 +377,7 @@ func TestCInputUnreachedCarrierIsReleasedAndWithdrawsTheOffer(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	s := &Session{Client: client}
 	events := keyRecordingCard(t, s, "test/IgnoringCInputCard")
-	if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 3); err != nil {
+	if _, err := cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 3); err != nil {
 		t.Fatal(err)
 	}
 	commit := func() {
@@ -390,22 +391,22 @@ func TestCInputUnreachedCarrierIsReleasedAndWithdrawsTheOffer(t *testing.T) {
 		}
 	}
 	commit()
-	if want := [][2]int32{{KeyPressed, cInputCarrier}, {KeyReleased, cInputCarrier}}; !reflect.DeepEqual(*events, want) {
+	if want := [][2]int32{{wipicrt.KeyPressed, wipicrt.CInputCarrier}, {wipicrt.KeyReleased, wipicrt.CInputCarrier}}; !reflect.DeepEqual(*events, want) {
 		t.Fatalf("key events = %v, want %v", *events, want)
 	}
-	if len(runtime.cInput.pending) != 0 || runtime.cInput.active {
-		t.Fatalf("after the unreached carrier: pending %x active %v", runtime.cInput.pending, runtime.cInput.active)
+	if len(runtime.CInput.Pending) != 0 || runtime.CInput.Active {
+		t.Fatalf("after the unreached carrier: pending %x active %v", runtime.CInput.Pending, runtime.CInput.Active)
 	}
 	if _, err := s.TextInput(t.Context()); !errors.Is(err, backend.ErrNoTextInput) {
 		t.Fatalf("offer right after an unreached carrier: %v", err)
 	}
-	pressCardKey(t, runtime, KeyDown)
+	pressCardKey(t, runtime, wipicrt.KeyDown)
 	*events = nil
 	commit()
-	if want := [][2]int32{{KeyPressed, cInputCarrier}, {KeyReleased, cInputCarrier}}; !reflect.DeepEqual(*events, want) {
+	if want := [][2]int32{{wipicrt.KeyPressed, wipicrt.CInputCarrier}, {wipicrt.KeyReleased, wipicrt.CInputCarrier}}; !reflect.DeepEqual(*events, want) {
 		t.Fatalf("key events after a press = %v, want %v", *events, want)
 	}
-	if _, err := cInputCall(t, runtime, wipicIMGetCurrentMode); err != nil {
+	if _, err := cInputCall(t, runtime, wipicrt.WIPICIMGetCurrentMode); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.TextInput(t.Context()); err != nil {
@@ -422,15 +423,15 @@ func TestCInputUseIsReadOffWhatACheckpointKeeps(t *testing.T) {
 		used  bool
 	}{
 		{"nothing", func(*initializationRuntime) {}, false},
-		{"flag", func(runtime *initializationRuntime) { runtime.cInput.used = true }, true},
-		{"calls", func(runtime *initializationRuntime) { runtime.cInput.calls = 1 }, true},
-		{"activations", func(runtime *initializationRuntime) { runtime.cInput.activations = 1 }, true},
-		{"mode table", func(runtime *initializationRuntime) { runtime.inputModeTableAddress = 0x1000 }, true},
+		{"flag", func(runtime *initializationRuntime) { runtime.CInput.Used = true }, true},
+		{"calls", func(runtime *initializationRuntime) { runtime.CInput.Calls = 1 }, true},
+		{"activations", func(runtime *initializationRuntime) { runtime.CInput.Activations = 1 }, true},
+		{"mode table", func(runtime *initializationRuntime) { runtime.InputModeTableAddress = 0x1000 }, true},
 	} {
 		t.Run(probe.name, func(t *testing.T) {
 			_, runtime := newTestRuntime(t)
 			probe.state(runtime)
-			if got := runtime.cInputUsed(); got != probe.used {
+			if got := runtime.CInputUsed(); got != probe.used {
 				t.Fatalf("cInputUsed() = %v, want %v", got, probe.used)
 			}
 		})
@@ -438,7 +439,7 @@ func TestCInputUseIsReadOffWhatACheckpointKeeps(t *testing.T) {
 
 	_, source := newTestRuntime(t)
 	source.displayCards = []*jvm.Object{newWidget("test/CInputCard")}
-	if _, err := cInputCall(t, source, wipicIMSetCurrentMode, 3); err != nil {
+	if _, err := cInputCall(t, source, wipicrt.WIPICIMSetCurrentMode, 3); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := source.captureHeapState(nil)
@@ -457,10 +458,10 @@ func TestCInputUseIsReadOffWhatACheckpointKeeps(t *testing.T) {
 	if _, err := fresh.restoreHeapState(parsed); err != nil {
 		t.Fatal(err)
 	}
-	if fresh.cInput.used || !fresh.cInputUsed() {
-		t.Fatalf("restored use: flag %v, derived %v", fresh.cInput.used, fresh.cInputUsed())
+	if fresh.CInput.Used || !fresh.CInputUsed() {
+		t.Fatalf("restored use: flag %v, derived %v", fresh.CInput.Used, fresh.CInputUsed())
 	}
-	fresh.cInput.active = false
+	fresh.CInput.Active = false
 	if _, err := (&Session{Client: freshClient}).TextInput(t.Context()); err != nil {
 		t.Fatalf("restored quiet editor: %v", err)
 	}
@@ -495,10 +496,10 @@ func TestCInputClearKeepsEditorAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SendKey(t.Context(), KeyPressed, KeyClear); err != nil {
+	if err := s.SendKey(t.Context(), wipicrt.KeyPressed, wipicrt.KeyClear); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SendKey(t.Context(), KeyReleased, KeyClear); err != nil {
+	if err := s.SendKey(t.Context(), wipicrt.KeyReleased, wipicrt.KeyClear); err != nil {
 		t.Fatal(err)
 	}
 	edit, err := s.TextInput(t.Context())
@@ -539,24 +540,24 @@ func TestCInputTooSmallBufferCanRetryASCII(t *testing.T) {
 
 func TestCInputCompositionStopsWhenGuestChangesMode(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	complete, _ := runtime.allocateBytes(make([]byte, 6))
-	composing, _ := runtime.allocateBytes(make([]byte, 8))
-	size1, _ := runtime.allocateWords([]uint32{6})
-	size2, _ := runtime.allocateWords([]uint32{8})
+	complete, _ := runtime.AllocateBytes(make([]byte, 6))
+	composing, _ := runtime.AllocateBytes(make([]byte, 8))
+	size1, _ := runtime.AllocateWords([]uint32{6})
+	size2, _ := runtime.AllocateWords([]uint32{8})
 	calls := 0
 	if err := client.vm.RegisterNative("test/ChangingCInputCard", "keyNotify", "(II)Z", func(_ *jvm.VM, args []jvm.Value) (jvm.Value, error) {
 		calls++
 		key, _ := args[2].Int32()
-		_, err := cInputCall(t, runtime, wipicIMHandleInput, uint32(key), 2, complete, size1, composing, size2)
+		_, err := cInputCall(t, runtime, wipicrt.WIPICIMHandleInput, uint32(key), 2, complete, size1, composing, size2)
 		if err == nil {
-			_, err = cInputCall(t, runtime, wipicIMSetCurrentMode, 1)
+			_, err = cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 1)
 		}
 		return jvm.IntValue(0), err
 	}); err != nil {
 		t.Fatal(err)
 	}
 	runtime.displayCards = append(runtime.displayCards, newWidget("test/ChangingCInputCard"))
-	if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 3); err != nil {
+	if _, err := cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 3); err != nil {
 		t.Fatal(err)
 	}
 	s := &Session{Client: client}
@@ -567,8 +568,8 @@ func TestCInputCompositionStopsWhenGuestChangesMode(t *testing.T) {
 	if err := edit.Commit(t.Context(), "ab"); !errors.Is(err, backend.ErrTextInputChanged) {
 		t.Fatalf("changed widget: %v", err)
 	}
-	if calls != 1 || len(runtime.cInput.pending) != 0 {
-		t.Fatalf("calls=%d pending=%x", calls, runtime.cInput.pending)
+	if calls != 1 || len(runtime.CInput.Pending) != 0 {
+		t.Fatalf("calls=%d pending=%x", calls, runtime.CInput.Pending)
 	}
 	if err := edit.Commit(t.Context(), "ab"); !errors.Is(err, backend.ErrTextInputChanged) {
 		t.Fatalf("retrying consumed prefix: %v", err)
@@ -582,41 +583,41 @@ func TestCInputCompositionStopsWhenGuestChangesMode(t *testing.T) {
 // letter, and the page reported the field as changed.
 func TestCInputHostDeliveryToleratesAFlushInsideTheCarrier(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	completed, _ := runtime.allocateBytes(make([]byte, 6))
-	composing, _ := runtime.allocateBytes(make([]byte, 8))
-	size1, _ := runtime.allocateWords([]uint32{6})
-	size2, _ := runtime.allocateWords([]uint32{8})
+	completed, _ := runtime.AllocateBytes(make([]byte, 6))
+	composing, _ := runtime.AllocateBytes(make([]byte, 8))
+	size1, _ := runtime.AllocateWords([]uint32{6})
+	size2, _ := runtime.AllocateWords([]uint32{8})
 	text := []byte{}
 	if err := client.vm.RegisterNative("test/FlushingCInputCard", "keyNotify", "(II)Z", func(_ *jvm.VM, args []jvm.Value) (jvm.Value, error) {
 		kind, _ := args[1].Int32()
 		key, _ := args[2].Int32()
-		if kind != KeyPressed {
+		if kind != wipicrt.KeyPressed {
 			return jvm.IntValue(0), nil
 		}
 		writeWord(t, runtime, size1, 6)
 		writeWord(t, runtime, size2, 8)
-		result, err := cInputCall(t, runtime, wipicIMHandleInput, uint32(key), 2, completed, size1, composing, size2)
+		result, err := cInputCall(t, runtime, wipicrt.WIPICIMHandleInput, uint32(key), 2, completed, size1, composing, size2)
 		if err != nil {
 			return jvm.VoidValue(), err
 		}
 		if result != 0 {
-			words, err := runtime.readAOTWords(size1, 1, "test length")
+			words, err := runtime.ReadAOTWords(size1, 1, "test length")
 			if err != nil {
 				return jvm.VoidValue(), err
 			}
 			b := make([]byte, words[0])
-			if err := client.core.Memory().Read(completed, b); err != nil {
+			if err := client.Core().Memory().Read(completed, b); err != nil {
 				return jvm.VoidValue(), err
 			}
 			text = append(text, b...)
 		}
-		_, err = cInputCall(t, runtime, wipicIMHandleInput, uint32(cInputFlush), 2, completed, size1, composing, size2)
+		_, err = cInputCall(t, runtime, wipicrt.WIPICIMHandleInput, uint32(wipicrt.CInputFlush), 2, completed, size1, composing, size2)
 		return jvm.IntValue(0), err
 	}); err != nil {
 		t.Fatal(err)
 	}
 	runtime.displayCards = append(runtime.displayCards, newWidget("test/FlushingCInputCard"))
-	if _, err := cInputCall(t, runtime, wipicIMSetCurrentMode, 2); err != nil {
+	if _, err := cInputCall(t, runtime, wipicrt.WIPICIMSetCurrentMode, 2); err != nil {
 		t.Fatal(err)
 	}
 	s := &Session{Client: client}
@@ -639,7 +640,7 @@ func TestCInputHostDeliveryToleratesAFlushInsideTheCarrier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.dispatchKeyToCards(KeyPressed, KeyClear); err != nil {
+	if err := runtime.dispatchKeyToCards(wipicrt.KeyPressed, wipicrt.KeyClear); err != nil {
 		t.Fatal(err)
 	}
 	if err := edit.Commit(t.Context(), "a"); !errors.Is(err, backend.ErrTextInputChanged) {

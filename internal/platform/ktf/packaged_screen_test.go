@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -71,7 +72,7 @@ func TestADescriptorCutShortSaysNothingAboutItsHandset(t *testing.T) {
 	if width, height, ok := PackagedScreen(descriptor); ok {
 		t.Fatalf("a descriptor cut short answered %dx%d", width, height)
 	}
-	if width, height := AutomaticScreen(descriptor); width != runtimeDisplayPixelWidth || height != runtimeDisplayPixelHeight {
+	if width, height := AutomaticScreen(descriptor); width != wipicrt.RuntimeDisplayPixelWidth || height != wipicrt.RuntimeDisplayPixelHeight {
 		t.Fatalf("a descriptor cut short starts on %dx%d, want the platform's own", width, height)
 	}
 
@@ -95,8 +96,8 @@ func TestAutomaticScreenIsTheDeclarationOrThePlatforms(t *testing.T) {
 	}{
 		{"declared", map[string]string{"DISPLAYSIZE": "176*220", "RESIZETYPE": "0"}, 176, 220},
 		{"an earlier descriptor", map[string]string{"AID": "fixture"}, 176, 220},
-		{"unreadable", map[string]string{"DISPLAYSIZE": "wide"}, runtimeDisplayPixelWidth, runtimeDisplayPixelHeight},
-		{"left out", map[string]string{"RESIZETYPE": "1"}, runtimeDisplayPixelWidth, runtimeDisplayPixelHeight},
+		{"unreadable", map[string]string{"DISPLAYSIZE": "wide"}, wipicrt.RuntimeDisplayPixelWidth, wipicrt.RuntimeDisplayPixelHeight},
+		{"left out", map[string]string{"RESIZETYPE": "1"}, wipicrt.RuntimeDisplayPixelWidth, wipicrt.RuntimeDisplayPixelHeight},
 	} {
 		if width, height := AutomaticScreen(Descriptor{Properties: test.properties}); width != test.width || height != test.height {
 			t.Errorf("%s: AutomaticScreen = %dx%d, want %dx%d", test.name, width, height, test.width, test.height)
@@ -132,10 +133,10 @@ func TestAScreenThatIsNotTwoSidesNamesNothing(t *testing.T) {
 		if width != 176 || height != 220 || !fromDescriptor {
 			t.Errorf("%dx%d became %dx%d (descriptor %v), want the declared 176x220", named.width, named.height, width, height, fromDescriptor)
 		}
-		client := &Client{}
+		client := &Client{Client: &wipicrt.Client{}}
 		client.SetScreen(named.width, named.height)
-		if client.screenWidth != 0 || client.screenHeight != 0 {
-			t.Errorf("SetScreen(%d, %d) kept %dx%d, want nothing named", named.width, named.height, client.screenWidth, client.screenHeight)
+		if client.ScreenWidth != 0 || client.ScreenHeight != 0 {
+			t.Errorf("SetScreen(%d, %d) kept %dx%d, want nothing named", named.width, named.height, client.ScreenWidth, client.ScreenHeight)
 		}
 	}
 
@@ -173,7 +174,7 @@ func TestAStartedTitleRunsOnTheHandsetItDeclares(t *testing.T) {
 		{"declared smaller", "DisplaySize:176*220\n", SessionOptions{}, 176, 220},
 		{"declared larger", "DisplaySize:240*320\n", SessionOptions{}, 240, 320},
 		{"an earlier descriptor", "", SessionOptions{}, 176, 220},
-		{"unreadable", "DisplaySize:wide\n", SessionOptions{}, runtimeDisplayPixelWidth, runtimeDisplayPixelHeight},
+		{"unreadable", "DisplaySize:wide\n", SessionOptions{}, wipicrt.RuntimeDisplayPixelWidth, wipicrt.RuntimeDisplayPixelHeight},
 		{"named by the Host", "DisplaySize:176*220\n", SessionOptions{Width: 240, Height: 400}, 240, 400},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -207,7 +208,7 @@ func TestARestoredClientKeepsTheScreenItWasSavedOn(t *testing.T) {
 	source := newContinuationFixture(t, 1700000000, continuationFixtureOptions{Runnable: true})
 	source.start(t)
 	saved := captureClientForTest(t, source.client)
-	adapters, _, err := captureSaveAdapters(source.client.saveStore)
+	adapters, _, err := captureSaveAdapters(source.client.SaveStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,13 +219,13 @@ func TestARestoredClientKeepsTheScreenItWasSavedOn(t *testing.T) {
 	archive := &Archive{Descriptor: Descriptor{AID: "ABCDEF12", Properties: map[string]string{"DISPLAYSIZE": "176*220"}},
 		JAR: &JAR{Client: source.client.image}}
 	restored, err := restoreSessionClient(archive, saved, adapters, SessionOptions{MaxSteps: saved.Core.MaxSteps,
-		Clock: NewManualClock(time.Unix(1800000000, 0)), SaveStore: make(memorySaveStore)})
+		Clock: wipicrt.NewManualClock(time.Unix(1800000000, 0)), SaveStore: make(memorySaveStore)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(restored.StopThreads)
-	if width, height := restored.Screen(); width != runtimeDisplayPixelWidth || height != runtimeDisplayPixelHeight {
+	if width, height := restored.Screen(); width != wipicrt.RuntimeDisplayPixelWidth || height != wipicrt.RuntimeDisplayPixelHeight {
 		t.Fatalf("restored onto %dx%d, want the %dx%d it was saved on", width, height,
-			runtimeDisplayPixelWidth, runtimeDisplayPixelHeight)
+			wipicrt.RuntimeDisplayPixelWidth, wipicrt.RuntimeDisplayPixelHeight)
 	}
 }

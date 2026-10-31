@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"encoding/binary"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"testing"
 )
 
@@ -20,8 +21,8 @@ func subscriberFixture(shift int) (*Archive, []byte) {
 	put(0x170, 0x800-0x10e)
 	put(0x17c, 0)
 	put(0x184, 4)
-	put(0x800, ImageBase+uint32(shift+0x900))
-	put(0x804, ImageBase+uint32(shift+0xa00))
+	put(0x800, wipicrt.ImageBase+uint32(shift+0x900))
+	put(0x804, wipicrt.ImageBase+uint32(shift+0xa00))
 	copy(image[shift+0x900:], "PHONENUMBER\x00")
 	copy(image[shift+0xa00:], "01024681357\x00")
 	return &Archive{Files: map[string][]byte{"P/prefs": make([]byte, 64)}}, image

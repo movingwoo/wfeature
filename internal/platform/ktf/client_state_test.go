@@ -15,12 +15,13 @@ import (
 	"github.com/movingwoo/wfeature/internal/audio/smaf"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func captureClientForTest(t *testing.T, client *Client) clientState {
 	t.Helper()
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	saved, err := client.captureClientState()
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +45,7 @@ func roundTripClientState(t *testing.T, saved clientState) clientState {
 func restoreClientForTest(t *testing.T, saved clientState, epoch int64, options continuationFixtureOptions) continuationFixture {
 	t.Helper()
 	fresh := newContinuationRestoreFixture(t, epoch, options)
-	fresh.client.vibrator.SetClock(fresh.clock.Now)
+	fresh.client.Vibrator.SetClock(fresh.clock.Now)
 	if err := fresh.client.restoreClientState(saved, armcore.CoreOptions{}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -61,45 +62,45 @@ func TestClientCheckpointResumesWorkersAndLogicalDevices(t *testing.T) {
 	worker.publishedFrame, worker.paintedCard = true, source.object
 	source.client.SetSpeed(1.25)
 	source.clock.Advance(8 * time.Millisecond)
-	source.client.clientWakeAt = source.clock.Now().Add(12 * time.Millisecond)
+	source.client.ClientWakeAt = source.clock.Now().Add(12 * time.Millisecond)
 	source.client.lastPaint = source.clock.Now().Add(-7 * time.Millisecond)
-	source.client.nextRoundPaint = source.clock.Now().Add(9 * time.Millisecond)
-	source.client.paintLoad, source.client.paintCost, source.client.entryCost = 1.5, 3*time.Millisecond, 4*time.Millisecond
-	source.client.workBaseline = source.client.core.Steps() - 1
-	if err := source.runtime.convertScreen(); err != nil {
+	source.client.NextRoundPaint = source.clock.Now().Add(9 * time.Millisecond)
+	source.client.PaintLoad, source.client.PaintCost, source.client.EntryCost = 1.5, 3*time.Millisecond, 4*time.Millisecond
+	source.client.WorkBaseline = source.client.Core().Steps() - 1
+	if err := source.runtime.ConvertScreen(); err != nil {
 		t.Fatal(err)
 	}
-	source.client.frame[0], source.client.partialFrame = 17, true
-	source.client.framePending, source.client.flushCount, source.client.forcedSlice = false, 19, true
-	source.client.vibrator.SetClock(source.clock.Now)
-	source.client.vibrator.Vibrate(60, 150)
-	source.client.audio = backend.NewAudioWithClock(nil, source.clock.Now)
-	handle, err := source.client.audio.LoadEvents([]smaf.Event{{Time: 0, Type: smaf.EventNoteOn, Channel: 0, Note: 60, Velocity: 100}, {Time: 100, Type: smaf.EventEnd}})
+	source.client.FrameRGBA[0], source.client.PartialFrame = 17, true
+	source.client.FramePending, source.client.FlushCount, source.client.forcedSlice = false, 19, true
+	source.client.Vibrator.SetClock(source.clock.Now)
+	source.client.Vibrator.Vibrate(60, 150)
+	source.client.Audio = backend.NewAudioWithClock(nil, source.clock.Now)
+	handle, err := source.client.Audio.LoadEvents([]smaf.Event{{Time: 0, Type: smaf.EventNoteOn, Channel: 0, Note: 60, Velocity: 100}, {Time: 100, Type: smaf.EventEnd}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	source.client.audio.Play(handle, 0, true)
-	source.client.audio.Advance(10 * time.Millisecond)
-	source.client.audio.SetVolume(25)
+	source.client.Audio.Play(handle, 0, true)
+	source.client.Audio.Advance(10 * time.Millisecond)
+	source.client.Audio.SetVolume(25)
 	saved := roundTripClientState(t, captureClientForTest(t, source.client))
 	if len(saved.Workers) != 1 || saved.Workers[0].Continuation == nil || saved.Workers[0].Wake.Remaining != 22*time.Millisecond {
 		t.Fatal("worker continuation or relative wake was lost")
 	}
-	wantTime := source.runtime.guestElapsed()
-	wantVibration := source.client.vibrator.State()
+	wantTime := source.runtime.GuestElapsed()
+	wantVibration := source.client.Vibrator.State()
 	source.client.StopThreads()
 	fresh := restoreClientForTest(t, saved, 1800000000, options)
-	if fresh.runtime.guestElapsed() != wantTime || fresh.client.Speed() != 1.25 || fresh.client.vibrator.State() != wantVibration {
+	if fresh.runtime.GuestElapsed() != wantTime || fresh.client.Speed() != 1.25 || fresh.client.Vibrator.State() != wantVibration {
 		t.Fatal("restored clocks or vibration changed")
 	}
-	if fresh.client.workBaseline != saved.WorkBaseline || fresh.client.paintLoad != 1.5 || fresh.client.paintCost != 3*time.Millisecond || fresh.client.entryCost != 4*time.Millisecond || fresh.client.clientWakeAt.Sub(fresh.clock.Now()) != 12*time.Millisecond || fresh.client.lastPaint.Sub(fresh.clock.Now()) != -7*time.Millisecond || fresh.client.nextRoundPaint.Sub(fresh.clock.Now()) != 9*time.Millisecond {
+	if fresh.client.WorkBaseline != saved.WorkBaseline || fresh.client.PaintLoad != 1.5 || fresh.client.PaintCost != 3*time.Millisecond || fresh.client.EntryCost != 4*time.Millisecond || fresh.client.ClientWakeAt.Sub(fresh.clock.Now()) != 12*time.Millisecond || fresh.client.lastPaint.Sub(fresh.clock.Now()) != -7*time.Millisecond || fresh.client.NextRoundPaint.Sub(fresh.clock.Now()) != 9*time.Millisecond {
 		t.Fatal("restored pacing differs")
 	}
 	frame, width, height, flushes := fresh.client.Frame()
-	if len(frame) == 0 || frame[0] != 17 || width != saved.FrameWidth || height != saved.FrameHeight || flushes != 19 || !fresh.client.partialFrame || !fresh.client.forcedSlice {
+	if len(frame) == 0 || frame[0] != 17 || width != saved.FrameWidth || height != saved.FrameHeight || flushes != 19 || !fresh.client.PartialFrame || !fresh.client.forcedSlice {
 		t.Fatal("restoration exposed unflushed pixels or lost frame state")
 	}
-	if got, err := fresh.client.audio.CaptureState(); err != nil || !reflect.DeepEqual(got, *saved.Audio) {
+	if got, err := fresh.client.Audio.CaptureState(); err != nil || !reflect.DeepEqual(got, *saved.Audio) {
 		t.Fatalf("restored logical audio differs: %v", err)
 	}
 	if fresh.client.workers[0].paintedCard != fresh.object || !fresh.client.workers[0].publishedFrame {
@@ -138,7 +139,7 @@ func TestClientCheckpointResumesWorkersAndLogicalDevices(t *testing.T) {
 	if binary.LittleEndian.Uint32(probe[4:]) != 42 || binary.LittleEndian.Uint32(probe[12:]) != 2 {
 		t.Fatalf("restored result or second wait differs: %x", probe)
 	}
-	if len(last.runtime.nativeReturnScopes) != 0 || len(last.runtime.aotCallDepth) != 0 {
+	if len(last.runtime.nativeReturnScopes) != 0 || len(last.runtime.AOTCallDepth) != 0 {
 		t.Fatal("completed client kept active call ownership")
 	}
 }
@@ -149,15 +150,15 @@ func TestClientActivationExcludesDetachedPreparationTime(t *testing.T) {
 	source.start(t)
 	source.client.SetSpeed(1.25)
 	source.clock.Advance(8 * time.Millisecond)
-	source.client.clientWakeAt = source.clock.Now().Add(12 * time.Millisecond)
+	source.client.ClientWakeAt = source.clock.Now().Add(12 * time.Millisecond)
 	source.client.lastPaint = source.clock.Now().Add(-7 * time.Millisecond)
-	source.client.nextRoundPaint = source.clock.Now().Add(9 * time.Millisecond)
-	source.client.vibrator.SetClock(source.clock.Now)
-	source.client.vibrator.Vibrate(60, 150)
+	source.client.NextRoundPaint = source.clock.Now().Add(9 * time.Millisecond)
+	source.client.Vibrator.SetClock(source.clock.Now)
+	source.client.Vibrator.Vibrate(60, 150)
 	saved := roundTripClientState(t, captureClientForTest(t, source.client))
 	source.client.StopThreads()
 	fresh := newContinuationRestoreFixture(t, 1800000000, options)
-	fresh.client.vibrator.SetClock(fresh.clock.Now)
+	fresh.client.Vibrator.SetClock(fresh.clock.Now)
 	var activation clientActivation
 	if err := fresh.client.restoreClientStateForActivation(saved, armcore.CoreOptions{}, nil, &activation); err != nil {
 		t.Fatal(err)
@@ -254,7 +255,9 @@ func TestClientCheckpointRejectsInvalidStateBeforeLaunchingWorkers(t *testing.T)
 		{"root budget", func(s *clientState) { s.Thread.StepBudget = 1 }},
 		{"stack partition", func(s *clientState) { s.WorkerStackCount++ }},
 		{"stack alias", func(s *clientState) { s.WorkerStackCount++; s.FreeWorkerStacks = []uint32{s.Workers[0].StackBase} }},
-		{"stack pointer", func(s *clientState) { s.Workers[0].Root.Context.Registers[armcore.RegisterSP] = ThreadStackBase }},
+		{"stack pointer", func(s *clientState) {
+			s.Workers[0].Root.Context.Registers[armcore.RegisterSP] = wipicrt.ThreadStackBase
+		}},
 		{"call budget", func(s *clientState) { s.Workers[0].Continuation.Calls[0].ARM.Budget++ }},
 		{"execution ID", func(s *clientState) { s.Workers[0].Continuation.Execution.ID = s.Heap.JVM.NextExecution + 1 }},
 		{"JVM policy", func(s *clientState) { s.Workers[0].Continuation.Execution.MaxSteps++ }},
@@ -313,7 +316,7 @@ func TestClientCheckpointMultipleParkedWorkers(t *testing.T) {
 		}
 	}
 	probe := readTestBytes(t, fresh.client, source.probe, 16)
-	if len(fresh.client.workers) != 0 || len(fresh.client.freeWorkerStacks) != 2 || binary.LittleEndian.Uint32(probe) != 2 || binary.LittleEndian.Uint32(probe[8:]) != 2 || binary.LittleEndian.Uint32(probe[12:]) != 4 || len(fresh.runtime.nativeReturnScopes) != 0 || len(fresh.runtime.aotCallDepth) != 0 {
+	if len(fresh.client.workers) != 0 || len(fresh.client.freeWorkerStacks) != 2 || binary.LittleEndian.Uint32(probe) != 2 || binary.LittleEndian.Uint32(probe[8:]) != 2 || binary.LittleEndian.Uint32(probe[12:]) != 4 || len(fresh.runtime.nativeReturnScopes) != 0 || len(fresh.runtime.AOTCallDepth) != 0 {
 		t.Fatalf("multiple-worker continuation or cleanup differs: %x", probe)
 	}
 }

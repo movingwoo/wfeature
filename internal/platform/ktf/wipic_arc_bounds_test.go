@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/curve"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // An arc's box comes from the guest. One as wide as an int used to be walked
 // whole, every span clipped away one at a time, and the call never returned.
 func TestWIPICArcsWithBoxesFarLargerThanTheSurfaceFinish(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.currentThread, runtime.currentContext = client.thread, context.Background()
+	runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
 	handle, _, contextAddress := arcFixture(t, runtime, 0xffff)
 
 	for _, function := range []uint32{15, 16} {
@@ -33,10 +34,10 @@ func TestWIPICArcsWithBoxesFarLargerThanTheSurfaceFinish(t *testing.T) {
 // with and without a clip, for arcs inside, across and beyond the surface.
 func TestWIPICArcsDrawWhatTheWholeWalkDrew(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	runtime.currentThread, runtime.currentContext = client.thread, context.Background()
+	runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
 	_, buffer, _ := arcFixture(t, runtime, 0)
 
-	clips := []wipicClip{{}, {left: 2, top: 1, right: 7, bottom: 6, enabled: true}}
+	clips := []wipicrt.WIPICClip{{}, {Left: 2, Top: 1, Right: 7, Bottom: 6, Enabled: true}}
 	boxes := [][4]int32{{0, 0, 8, 8}, {-3, -2, 12, 9}, {5, 5, 9, 9}, {-20, 3, 40, 3}, {2, -6, 3, 20}}
 	angles := [][2]int32{{0, 360}, {30, 100}, {-45, 270}, {200, -90}}
 	for _, clip := range clips {
@@ -51,9 +52,9 @@ func TestWIPICArcsDrawWhatTheWholeWalkDrew(t *testing.T) {
 					}, clip)
 					got := arcPixels(t, runtime, buffer, func(emit curve.Emit) error {
 						if fill {
-							return curve.FillArcWithin(buffer.curveBounds(clip), box[0], box[1], box[2], box[3], angle[0], angle[1], emit)
+							return curve.FillArcWithin(buffer.CurveBounds(clip), box[0], box[1], box[2], box[3], angle[0], angle[1], emit)
 						}
-						return curve.DrawArcWithin(buffer.curveBounds(clip), box[0], box[1], box[2], box[3], angle[0], angle[1], emit)
+						return curve.DrawArcWithin(buffer.CurveBounds(clip), box[0], box[1], box[2], box[3], angle[0], angle[1], emit)
 					}, clip)
 					if got != want {
 						t.Fatalf("clip %+v box %v angles %v fill %v: bounded walk drew\n%s\nwant\n%s", clip, box, angle, fill, got, want)
@@ -66,17 +67,17 @@ func TestWIPICArcsDrawWhatTheWholeWalkDrew(t *testing.T) {
 
 // arcPixels clears the surface, draws through the framebuffer's own clipped
 // fill, and answers the result as text.
-func arcPixels(t *testing.T, runtime *initializationRuntime, buffer wipicFramebuffer, draw func(curve.Emit) error, clip wipicClip) string {
+func arcPixels(t *testing.T, runtime *initializationRuntime, buffer wipicrt.WIPICFramebuffer, draw func(curve.Emit) error, clip wipicrt.WIPICClip) string {
 	t.Helper()
-	if err := runtime.fillFramebufferRect(buffer, wipicClip{}, wipicPixelOp{}, 0, 0, 0, int32(buffer.width), int32(buffer.height)); err != nil {
+	if err := runtime.FillFramebufferRect(buffer, wipicrt.WIPICClip{}, wipicrt.WIPICPixelOp{}, 0, 0, 0, int32(buffer.Width), int32(buffer.Height)); err != nil {
 		t.Fatal(err)
 	}
-	if err := draw(runtime.framebufferCurveEmit(buffer, clip, wipicPixelOp{}, 1)); err != nil {
+	if err := draw(runtime.FramebufferCurveEmit(buffer, clip, wipicrt.WIPICPixelOp{}, 1)); err != nil {
 		t.Fatal(err)
 	}
-	text := make([]byte, 0, (buffer.width+1)*buffer.height)
-	for y := uint32(0); y < uint32(buffer.height); y++ {
-		for x := uint32(0); x < uint32(buffer.width); x++ {
+	text := make([]byte, 0, (buffer.Width+1)*buffer.Height)
+	for y := uint32(0); y < uint32(buffer.Height); y++ {
+		for x := uint32(0); x < uint32(buffer.Width); x++ {
 			if arcPixel(t, runtime, buffer, x, y) != 0 {
 				text = append(text, '#')
 			} else {

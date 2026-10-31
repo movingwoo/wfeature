@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 type checkpointStoreProbe struct {
@@ -60,9 +61,9 @@ func TestSaveAdapterBindFollowsTheLiveRemovalList(t *testing.T) {
 			[]string{"unrelated", certificateName}, []string{"next"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			sourceBase := memorySaveStore{databaseRemovedKey: joinRemovalList([]string{certificateName, "old"})}
+			sourceBase := memorySaveStore{wipicrt.DatabaseRemovedKey: wipicrt.JoinRemovalList([]string{certificateName, "old"})}
 			source := newCertificateSaveStore(sourceBase, []byte("initial certificate"))
-			if err := source.StoreSaves(map[string][]byte{certificateSaveKey: []byte("changed certificate"), databaseRemovedKey: joinRemovalList(test.guest)}); err != nil {
+			if err := source.StoreSaves(map[string][]byte{certificateSaveKey: []byte("changed certificate"), wipicrt.DatabaseRemovedKey: wipicrt.JoinRemovalList(test.guest)}); err != nil {
 				t.Fatal(err)
 			}
 			saved, base, err := captureSaveAdapters(source)
@@ -83,22 +84,22 @@ func TestSaveAdapterBindFollowsTheLiveRemovalList(t *testing.T) {
 			if err := json.Unmarshal(data, &decoded); err != nil {
 				t.Fatal(err)
 			}
-			destination := &checkpointStoreProbe{memorySaveStore: memorySaveStore{databaseRemovedKey: joinRemovalList(test.live)}}
+			destination := &checkpointStoreProbe{memorySaveStore: memorySaveStore{wipicrt.DatabaseRemovedKey: wipicrt.JoinRemovalList(test.live)}}
 			restored, err := bindSaveAdapters(decoded, destination)
 			if err != nil || destination.reads != 1 || destination.writes != 0 {
 				t.Fatalf("binding made %d reads and %d writes: %v", destination.reads, destination.writes, err)
 			}
 			certificate, present := restored.LoadSave(certificateSaveKey)
-			removed, _ := restored.LoadSave(databaseRemovedKey)
-			if !present || string(certificate) != "changed certificate" || !bytes.Equal(removed, joinRemovalList(test.view)) {
-				t.Fatalf("the bound adapter answers certificate %q and list %q, want the record's certificate and %q", certificate, removed, joinRemovalList(test.view))
+			removed, _ := restored.LoadSave(wipicrt.DatabaseRemovedKey)
+			if !present || string(certificate) != "changed certificate" || !bytes.Equal(removed, wipicrt.JoinRemovalList(test.view)) {
+				t.Fatalf("the bound adapter answers certificate %q and list %q, want the record's certificate and %q", certificate, removed, wipicrt.JoinRemovalList(test.view))
 			}
-			if err := restored.StoreSave(databaseRemovedKey, joinRemovalList([]string{"next"})); err != nil {
+			if err := restored.StoreSave(wipicrt.DatabaseRemovedKey, wipicrt.JoinRemovalList([]string{"next"})); err != nil {
 				t.Fatal(err)
 			}
-			persisted, _ := destination.memorySaveStore.LoadSave(databaseRemovedKey)
-			if !bytes.Equal(persisted, joinRemovalList(test.afterAWrite)) {
-				t.Fatalf("a later write of the list stored %q, want %q", persisted, joinRemovalList(test.afterAWrite))
+			persisted, _ := destination.memorySaveStore.LoadSave(wipicrt.DatabaseRemovedKey)
+			if !bytes.Equal(persisted, wipicrt.JoinRemovalList(test.afterAWrite)) {
+				t.Fatalf("a later write of the list stored %q, want %q", persisted, wipicrt.JoinRemovalList(test.afterAWrite))
 			}
 			if err := restored.StoreSave(certificateSaveKey, nil); err != nil {
 				t.Fatal(err)
@@ -114,7 +115,7 @@ func TestSaveAdapterBindFollowsTheLiveRemovalList(t *testing.T) {
 // A removal list that cannot be read refuses the bind, and nothing is written.
 func TestSaveAdapterBindRefusesAFailedRead(t *testing.T) {
 	saved := saveAdapterState{Version: saveAdapterVersion, Layers: []saveAdapterLayer{{Kind: "certificate", Certificate: []byte("certificate")}}}
-	destination := &unreadableStore{key: databaseRemovedKey, checkpointStoreProbe: checkpointStoreProbe{memorySaveStore: memorySaveStore{}}}
+	destination := &unreadableStore{key: wipicrt.DatabaseRemovedKey, checkpointStoreProbe: checkpointStoreProbe{memorySaveStore: memorySaveStore{}}}
 	if _, err := bindSaveAdapters(saved, destination); err == nil || destination.writes != 0 {
 		t.Fatalf("a bind over an unreadable removal list = %v after %d writes", err, destination.writes)
 	}
@@ -177,7 +178,7 @@ func TestSaveAdapterCheckpointRejectsMalformedRecordsWithoutIO(t *testing.T) {
 		t.Fatal("captured cyclic adapter chain")
 	}
 	// Moving a chain onto another store walks it too, and has to come back.
-	if rebaseSaveAdapters(cycle, memorySaveStore{}) != SaveStore(cycle) {
+	if rebaseSaveAdapters(cycle, memorySaveStore{}) != wipicrt.SaveStore(cycle) {
 		t.Fatal("a cyclic adapter chain was not answered as its own top")
 	}
 }
@@ -191,7 +192,7 @@ func TestSaveAdaptersMoveOntoAnotherStore(t *testing.T) {
 	}
 	chain := newCertificateSaveStore(first, []byte("certificate"))
 	top := rebaseSaveAdapters(chain, second)
-	if top != SaveStore(chain) {
+	if top != wipicrt.SaveStore(chain) {
 		t.Fatal("the chain's top changed")
 	}
 	if data, _ := top.LoadSave("db/slot"); string(data) != "second" {

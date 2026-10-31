@@ -11,6 +11,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 const nativeStateRecordLimit = 1 << 16
@@ -165,7 +166,7 @@ func (session *NativeSession) captureNativeState(now time.Time) (nativeState, er
 	if saved.Thread, err = client.core.CaptureRootThread(client.thread); err != nil {
 		return nativeState{}, err
 	}
-	if saved.Arena, err = client.arena.captureState(); err != nil {
+	if saved.Arena, err = captureArenaState(client.arena); err != nil {
 		return nativeState{}, err
 	}
 	for _, address := range slices.Sorted(maps.Keys(client.blocks)) {
@@ -247,7 +248,7 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 	spans := slices.Clone(saved.Arena.Free)
 	for i, block := range saved.Blocks {
 		end := uint64(block.Address) + block.Size
-		if block.Size == 0 || block.Size > maxPlatformAllocation || block.Address%nativeBlockAlignment != 0 || block.Size%nativeBlockAlignment != 0 || uint64(block.Address) < uint64(nativeArenaBase) || end > saved.Arena.Cursor || i > 0 && saved.Blocks[i-1].Address >= block.Address {
+		if block.Size == 0 || block.Size > wipicrt.MaxPlatformAllocation || block.Address%nativeBlockAlignment != 0 || block.Size%nativeBlockAlignment != 0 || uint64(block.Address) < uint64(nativeArenaBase) || end > saved.Arena.Cursor || i > 0 && saved.Blocks[i-1].Address >= block.Address {
 			return invalid()
 		}
 		spans = append(spans, arenaBlockState{uint64(block.Address), end})
@@ -272,7 +273,7 @@ func (saved nativeState) validate(memory *armcore.Memory) error {
 		return invalid()
 	}
 	sp := saved.Thread.Context.Registers[armcore.RegisterSP]
-	if sp < ThreadStackBase || uint64(sp) > uint64(ThreadStackBase)+ThreadStackSize || sp&3 != 0 {
+	if sp < wipicrt.ThreadStackBase || uint64(sp) > uint64(wipicrt.ThreadStackBase)+wipicrt.ThreadStackSize || sp&3 != 0 {
 		return invalid()
 	}
 	checkObject := func(address uint32) error {

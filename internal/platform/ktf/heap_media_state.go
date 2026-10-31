@@ -64,7 +64,7 @@ func (runtime *initializationRuntime) captureMediaRoots() (*jvm.Object, error) {
 	}
 	type ownerState struct {
 		object *jvm.Object
-		state  *clipState
+		state  *javaClipState
 	}
 	var loaded []ownerState
 	for key, state := range runtime.clips {
@@ -82,9 +82,9 @@ func (runtime *initializationRuntime) captureMediaRoots() (*jvm.Object, error) {
 		if err := runtime.validateClipObject(object, listener != nil); err != nil {
 			return nil, err
 		}
-		if state.loaded {
+		if state.Loaded {
 			loaded = append(loaded, ownerState{object, state})
-		} else if state.owner != nil || state.completed != 0 {
+		} else if state.owner != nil || state.Completed != 0 {
 			return nil, fmt.Errorf("KTF unloaded Clip retains playback state")
 		}
 	}
@@ -94,14 +94,14 @@ func (runtime *initializationRuntime) captureMediaRoots() (*jvm.Object, error) {
 	if len(loaded) == 0 && len(runtime.mediaEvents) == 0 {
 		return nil, nil
 	}
-	slices.SortFunc(loaded, func(a, b ownerState) int { return cmp.Compare(a.state.handle, b.state.handle) })
+	slices.SortFunc(loaded, func(a, b ownerState) int { return cmp.Compare(a.state.Handle, b.state.Handle) })
 	payload := &heapMediaPayload{}
 	for _, clip := range loaded {
 		active := clip.state.owner != nil
-		if audio := runtime.client.audio; audio != nil {
-			active = audio.Playing(clip.state.handle) || audio.Paused(clip.state.handle)
+		if audio := runtime.client.Audio; audio != nil {
+			active = audio.Playing(clip.state.Handle) || audio.Paused(clip.state.Handle)
 		}
-		payload.state.Clips = append(payload.state.Clips, heapMediaClip{clip.state.handle, clip.state.completed, active})
+		payload.state.Clips = append(payload.state.Clips, heapMediaClip{clip.state.Handle, clip.state.Completed, active})
 		payload.references = append(payload.references, clip.object)
 	}
 	for _, event := range runtime.mediaEvents {
@@ -282,7 +282,7 @@ func (runtime *initializationRuntime) adoptMediaRoots(payload *heapMediaPayload)
 	for i, record := range payload.state.Clips {
 		object := payload.references[i]
 		state := runtime.clips[weak.Make(object)]
-		state.completed = record.Completed
+		state.Completed = record.Completed
 		if record.Active {
 			state.owner = object
 		}

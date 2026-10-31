@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"strconv"
 	"testing"
 	"unicode/utf16"
@@ -41,7 +42,7 @@ func readBoundedStringBefore(memory *armcore.Memory, address, limit uint32) ([]b
 func guestStringLengthBefore(memory *armcore.Memory, start uint32) (uint32, error) {
 	const chunk = 256
 	buffer := make([]byte, chunk)
-	for length := uint32(0); length < maxGuestStringLength; {
+	for length := uint32(0); length < wipicrt.MaxGuestStringLength; {
 		if err := memory.Read(start+length, buffer); err != nil {
 			for index := 0; index < chunk; index++ {
 				single := buffer[:1]
@@ -59,7 +60,7 @@ func guestStringLengthBefore(memory *armcore.Memory, start uint32) (uint32, erro
 		}
 		length += chunk
 	}
-	return 0, fmt.Errorf("KTF guest string at %#x is not terminated within %d bytes", start, maxGuestStringLength)
+	return 0, fmt.Errorf("KTF guest string at %#x is not terminated within %d bytes", start, wipicrt.MaxGuestStringLength)
 }
 
 // wipicReadTerminatedBefore is wipicReadString for a length of -1: a unit at
@@ -90,7 +91,7 @@ func wipicReadTerminatedBefore(memory *armcore.Memory, pointer uint32, unicode b
 		}
 		return utf16.Decode(units), nil
 	}
-	return []rune(decodeEUCKR(data)), nil
+	return []rune(wipicrt.DecodeEUCKR(data)), nil
 }
 
 // nativeReadStringBefore is NativePlatform.readString: a byte at a time.
@@ -198,7 +199,7 @@ func guestStringLayout(t testing.TB) (*armcore.Core, []uint32) {
 	starts = append(starts, 0)
 
 	const long = uint32(0x40000000)
-	const reach = uint32(maxGuestStringLength)
+	const reach = uint32(wipicrt.MaxGuestStringLength)
 	far := bytes.Repeat([]byte{'x'}, int(reach)+0x1000)
 	far[reach], far[reach+1] = 0, 0
 	place(long, far)
@@ -253,14 +254,14 @@ type guestStringReader struct {
 
 func guestStringReaders(core *armcore.Core) []guestStringReader {
 	memory := core.Memory()
-	runtime := &initializationRuntime{client: &Client{core: core}}
+	runtime := detachedRuntime(wipicrt.NewClient(ktfPlatform, core, nil, 0))
 	platform := &NativePlatform{client: &NativeClient{core: core}}
 	var readers []guestStringReader
 	for _, limit := range []uint32{0, 1, 63, 64, 65, 128, 255, 256, 257, 512, 1024, 4096, 65536} {
 		readers = append(readers, guestStringReader{
 			name: fmt.Sprintf("readCString(%d)", limit), limit: limit, unit: 1,
 			now: func(start uint32) (string, error) {
-				return runtime.readCString(start, limit)
+				return runtime.ReadCString(start, limit)
 			},
 			before: func(start uint32) (string, error) {
 				return readCStringBefore(memory, start, limit)
@@ -271,7 +272,7 @@ func guestStringReaders(core *armcore.Core) []guestStringReader {
 		readers = append(readers, guestStringReader{
 			name: fmt.Sprintf("readBoundedString(%d)", limit), limit: limit, unit: 1,
 			now: func(start uint32) (string, error) {
-				data, err := runtime.readBoundedString(start, limit)
+				data, err := runtime.ReadBoundedString(start, limit)
 				return string(data), err
 			},
 			before: func(start uint32) (string, error) {
@@ -281,7 +282,7 @@ func guestStringReaders(core *armcore.Core) []guestStringReader {
 		})
 	}
 	readers = append(readers, guestStringReader{
-		name: "guestStringLength", limit: maxGuestStringLength, unit: 1,
+		name: "guestStringLength", limit: wipicrt.MaxGuestStringLength, unit: 1,
 		now: func(start uint32) (string, error) {
 			length, err := guestStringLength(memory, start)
 			return strconv.FormatUint(uint64(length), 10), err
@@ -299,7 +300,7 @@ func guestStringReaders(core *armcore.Core) []guestStringReader {
 		readers = append(readers, guestStringReader{
 			name: fmt.Sprintf("wipicReadString(unicode %t)", unicode), limit: 1024 * unit, unit: unit,
 			now: func(start uint32) (string, error) {
-				text, err := runtime.wipicReadString(start, -1, unicode)
+				text, err := runtime.WIPICReadString(start, -1, unicode)
 				return string(text), err
 			},
 			before: func(start uint32) (string, error) {
@@ -377,7 +378,7 @@ func TestAGuestStringRunningOffTheTopOfTheAddressSpaceIsRefused(t *testing.T) {
 				continue
 			}
 			refused++
-			if text, err := reader.now(start); !errors.Is(err, errGuestStringOverflow) {
+			if text, err := reader.now(start); !errors.Is(err, wipicrt.ErrGuestStringOverflow) {
 				t.Errorf("%s at %#x answered %s, want the string refused", reader.name, start, shortened(described(text, err)))
 			}
 		}
@@ -422,7 +423,7 @@ func nineteenByteGuestString(t testing.TB) (*armcore.Core, uint32, uint32) {
 func TestReadingAShortGuestStringAllocatesOnlyWhatItAnswers(t *testing.T) {
 	core, address, wide := nineteenByteGuestString(t)
 	memory := core.Memory()
-	runtime := &initializationRuntime{client: &Client{core: core}}
+	runtime := detachedRuntime(wipicrt.NewClient(ktfPlatform, core, nil, 0))
 	platform := &NativePlatform{client: &NativeClient{core: core}}
 	allocations := func(name string, read func() (int, error)) float64 {
 		t.Helper()
@@ -437,11 +438,11 @@ func TestReadingAShortGuestStringAllocatesOnlyWhatItAnswers(t *testing.T) {
 		read func() (int, error)
 	}{
 		{"readCString", 1, func() (int, error) {
-			text, err := runtime.readCString(address, 128)
+			text, err := runtime.ReadCString(address, 128)
 			return len(text), err
 		}},
 		{"readBoundedString", 1, func() (int, error) {
-			data, err := runtime.readBoundedString(address, 64)
+			data, err := runtime.ReadBoundedString(address, 64)
 			return len(data), err
 		}},
 		{"guestStringLength", 0, func() (int, error) {
@@ -466,19 +467,19 @@ func TestReadingAShortGuestStringAllocatesOnlyWhatItAnswers(t *testing.T) {
 	// the conversion would cost nothing here.
 	sample := []byte("nineteen bytes long")
 	var decoded []rune
-	decoding := testing.AllocsPerRun(100, func() { decoded = []rune(decodeEUCKR(sample)) })
+	decoding := testing.AllocsPerRun(100, func() { decoded = []rune(wipicrt.DecodeEUCKR(sample)) })
 	if string(decoded) != string(sample) {
 		t.Fatalf("decoded %q", string(decoded))
 	}
 	drawn := allocations("wipicReadString", func() (int, error) {
-		text, err := runtime.wipicReadString(address, -1, false)
+		text, err := runtime.WIPICReadString(address, -1, false)
 		return len(text), err
 	})
 	if drawn > decoding+1 {
 		t.Errorf("wipicReadString allocated %.0f times, decoding alone %.0f", drawn, decoding)
 	}
 	widened := allocations("wipicReadString unicode", func() (int, error) {
-		text, err := runtime.wipicReadString(wide, -1, true)
+		text, err := runtime.WIPICReadString(wide, -1, true)
 		return len(text), err
 	})
 	before := allocations("wipicReadString unicode before", func() (int, error) {
@@ -493,7 +494,7 @@ func TestReadingAShortGuestStringAllocatesOnlyWhatItAnswers(t *testing.T) {
 func BenchmarkNineteenByteGuestString(b *testing.B) {
 	core, address, wide := nineteenByteGuestString(b)
 	memory := core.Memory()
-	runtime := &initializationRuntime{client: &Client{core: core}}
+	runtime := detachedRuntime(wipicrt.NewClient(ktfPlatform, core, nil, 0))
 	platform := &NativePlatform{client: &NativeClient{core: core}}
 	check := func(b *testing.B, length int, err error) {
 		if err != nil || length != 19 {
@@ -503,14 +504,14 @@ func BenchmarkNineteenByteGuestString(b *testing.B) {
 	b.Run("readCString", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			text, err := runtime.readCString(address, 128)
+			text, err := runtime.ReadCString(address, 128)
 			check(b, len(text), err)
 		}
 	})
 	b.Run("readBoundedString", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			data, err := runtime.readBoundedString(address, 64)
+			data, err := runtime.ReadBoundedString(address, 64)
 			check(b, len(data), err)
 		}
 	})
@@ -524,14 +525,14 @@ func BenchmarkNineteenByteGuestString(b *testing.B) {
 	b.Run("wipicReadString", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			text, err := runtime.wipicReadString(address, -1, false)
+			text, err := runtime.WIPICReadString(address, -1, false)
 			check(b, len(text), err)
 		}
 	})
 	b.Run("wipicReadStringUnicode", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			text, err := runtime.wipicReadString(wide, -1, true)
+			text, err := runtime.WIPICReadString(wide, -1, true)
 			check(b, len(text), err)
 		}
 	})

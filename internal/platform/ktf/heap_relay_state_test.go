@@ -131,7 +131,7 @@ func TestRelayHeapRejectsMalformedOwnershipBeforeAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sentinelAddress, err := runtime.allocate(4)
+	sentinelAddress, err := runtime.Allocate(4)
 	if err != nil {
 		t.Fatal(err)
 	}

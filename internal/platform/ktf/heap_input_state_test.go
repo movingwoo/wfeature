@@ -6,14 +6,15 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/textinput"
 )
 
 func TestHeapInputKeepsFocusedEditorAndNativeSharing(t *testing.T) {
 	client, source := newTestRuntime(t)
 	now := time.Unix(1700000000, 0)
-	clock := NewManualClock(now)
-	client.clock = clock
+	clock := wipicrt.NewManualClock(now)
+	client.Clock = clock
 	field := &jvm.Object{ClassName: jvm.ObjectClass, Fields: map[string]jvm.Value{componentTextField: jvm.ReferenceValue(client.vm.NewString(""))}}
 	client.FocusTextComponent(field)
 	if !client.TypeKey('2') {
@@ -34,8 +35,8 @@ func TestHeapInputKeepsFocusedEditorAndNativeSharing(t *testing.T) {
 		t.Fatal(err)
 	}
 	freshClient, fresh := newTestRuntime(t)
-	freshClock := NewManualClock(time.Unix(1900000000, 0))
-	freshClient.clock = freshClock
+	freshClock := wipicrt.NewManualClock(time.Unix(1900000000, 0))
+	freshClient.Clock = freshClock
 	roots, err := fresh.restoreHeapState(parsed)
 	if err != nil {
 		t.Fatal(err)

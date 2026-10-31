@@ -32,8 +32,8 @@ func (session *Session) TextInput(ctx context.Context) (*backend.TextInput, erro
 		return nil, err
 	}
 	client := session.Client
-	client.run.Lock()
-	defer client.run.Unlock()
+	client.Run.Lock()
+	defer client.Run.Unlock()
 	if client.runtime == nil || client.workersStopped {
 		return nil, backend.ErrNoTextInput
 	}
@@ -265,8 +265,8 @@ func (client *Client) componentTextInput(target textInputTarget) *backend.TextIn
 			if err := commitCtx.Err(); err != nil {
 				return err
 			}
-			client.run.Lock()
-			defer client.run.Unlock()
+			client.Run.Lock()
+			defer client.Run.Unlock()
 			if client.runtime != runtime || client.workersStopped {
 				return backend.ErrTextInputChanged
 			}
@@ -311,8 +311,8 @@ func (client *Client) componentTextInput(target textInputTarget) *backend.TextIn
 			// a key would have: a card whose worker owns its cadence kept the
 			// old text on screen until the next press. Request it the way a
 			// component repaints after its contents change.
-			runtime.repaintPending = true
-			runtime.postRepaintEvent()
+			runtime.RepaintPending = true
+			runtime.PostRepaintEvent()
 			return nil
 		},
 	}
@@ -383,7 +383,7 @@ func (runtime *initializationRuntime) forgetRemovedCardText() {
 
 // noteTextRead records a text component read while a card paints.
 func (runtime *initializationRuntime) noteTextRead(component *jvm.Object) {
-	if runtime == nil || !runtime.repaintServicing || runtime.paintTextOverflow || slices.Contains(runtime.paintTextReads, component) {
+	if runtime == nil || !runtime.RepaintServicing || runtime.paintTextOverflow || slices.Contains(runtime.paintTextReads, component) {
 		return
 	}
 	if len(runtime.paintTextReads) == maxPaintTextReads {

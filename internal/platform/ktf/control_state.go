@@ -3,6 +3,7 @@ package ktf
 import (
 	"bytes"
 	"fmt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"maps"
 	"math"
 	"slices"
@@ -44,49 +45,49 @@ type runtimeCClipState struct {
 }
 type restoredRuntimeControl struct {
 	saved     runtimeControlState
-	input     cInputState
-	network   []wipicNetCallback
-	clips     map[uint32]*wipicMediaClip
+	input     wipicrt.CInputState
+	network   []wipicrt.WIPICNetCallback
+	clips     map[uint32]*wipicrt.WIPICMediaClip
 	clipOrder []uint32
 	muted     map[uint32]bool
 }
 
 func (runtime *initializationRuntime) captureControlState(now time.Time) (runtimeControlState, error) {
-	if runtime.cInput.pendingValid != nil || runtime.cInput.delivering || runtime.javaInput.pending != nil || runtime.repaintServicing || runtime.resultBindingDepth != 0 {
+	if runtime.CInput.PendingValid != nil || runtime.CInput.Delivering || runtime.javaInput.pending != nil || runtime.RepaintServicing || runtime.resultBindingDepth != 0 {
 		return runtimeControlState{}, fmt.Errorf("KTF control capture has an active Host input, paint or binding operation")
 	}
-	if len(runtime.pendingNetCallbacks) > maxPendingNetCallbacks || len(runtime.wipicClips) > maxWIPICMediaClips || len(runtime.wipicClipOrder) > maxWIPICMediaClips || len(runtime.cInput.pending) > 2 {
+	if len(runtime.PendingNetCallbacks) > wipicrt.MaxPendingNetCallbacks || len(runtime.WIPICClips) > wipicrt.MaxWIPICMediaClips || len(runtime.WIPICClipOrder) > wipicrt.MaxWIPICMediaClips || len(runtime.CInput.Pending) > 2 {
 		return runtimeControlState{}, fmt.Errorf("KTF control state exceeds queue limits")
 	}
-	age := now.Sub(runtime.clockBase)
-	if age == time.Duration(math.MinInt64) || !runtime.clockBase.Add(age).Equal(now) {
+	age := now.Sub(runtime.ClockBase)
+	if age == time.Duration(math.MinInt64) || !runtime.ClockBase.Add(age).Equal(now) {
 		return runtimeControlState{}, fmt.Errorf("KTF clock anchor exceeds duration range")
 	}
-	input := &runtime.cInput
-	saved := runtimeControlState{VirtualBaseMillis: runtime.virtualBaseMillis, ClockAge: age,
-		RepaintPending: runtime.repaintPending, GuestFlushedOwnFrame: runtime.guestFlushedOwnFrame, GuestHasPainted: runtime.guestHasPainted,
-		RoundsSinceGuestPaint: int64(runtime.roundsSinceGuestPaint), GuestEventLoop: runtime.guestEventLoop, DestroyCallbackStarted: runtime.destroyCallbackStarted,
-		CInput: runtimeCInputState{OwnerAddress: input.owner.address, OwnerValue: input.owner.value, Mode: input.mode,
-			Revision: input.revision, Calls: input.calls, Activations: input.activations, Active: input.active,
-			DiscardCarrier: input.discardCarrier, ClearPending: input.clearPending, Pending: bytes.Clone(input.pending), TimerPointer: input.timerPointer, TimerCallback: input.timerCallback},
-		ClipOrder: slices.Clone(runtime.wipicClipOrder)}
-	for _, callback := range runtime.pendingNetCallbacks {
-		saved.Network = append(saved.Network, runtimeNetCallbackState{Callback: callback.callback, Param: callback.param})
+	input := &runtime.CInput
+	saved := runtimeControlState{VirtualBaseMillis: runtime.VirtualBaseMillis, ClockAge: age,
+		RepaintPending: runtime.RepaintPending, GuestFlushedOwnFrame: runtime.GuestFlushedOwnFrame, GuestHasPainted: runtime.guestHasPainted,
+		RoundsSinceGuestPaint: int64(runtime.roundsSinceGuestPaint), GuestEventLoop: runtime.GuestEventLoop, DestroyCallbackStarted: runtime.destroyCallbackStarted,
+		CInput: runtimeCInputState{OwnerAddress: input.Owner.Address, OwnerValue: input.Owner.Value, Mode: input.Mode,
+			Revision: input.Revision, Calls: input.Calls, Activations: input.Activations, Active: input.Active,
+			DiscardCarrier: input.DiscardCarrier, ClearPending: input.ClearPending, Pending: bytes.Clone(input.Pending), TimerPointer: input.TimerPointer, TimerCallback: input.TimerCallback},
+		ClipOrder: slices.Clone(runtime.WIPICClipOrder)}
+	for _, callback := range runtime.PendingNetCallbacks {
+		saved.Network = append(saved.Network, runtimeNetCallbackState{Callback: callback.Callback, Param: callback.Param})
 	}
-	for _, source := range slices.Sorted(maps.Keys(runtime.wipicMutedSources)) {
-		if runtime.wipicMutedSources[source] {
+	for _, source := range slices.Sorted(maps.Keys(runtime.WIPICMutedSources)) {
+		if runtime.WIPICMutedSources[source] {
 			saved.MutedSources = append(saved.MutedSources, source)
 		}
 	}
-	seen := make(map[*wipicMediaClip]bool)
-	for _, address := range metadataKeys(runtime.wipicClips) {
-		clip := runtime.wipicClips[address]
-		if clip == nil || seen[clip] || len(clip.mediaType) > 64 || len(clip.state.data) > maxClipBufferBytes {
+	seen := make(map[*wipicrt.WIPICMediaClip]bool)
+	for _, address := range metadataKeys(runtime.WIPICClips) {
+		clip := runtime.WIPICClips[address]
+		if clip == nil || seen[clip] || len(clip.MediaType) > 64 || len(clip.State.Data) > wipicrt.MaxClipBufferBytes {
 			return runtimeControlState{}, fmt.Errorf("KTF C clip has invalid ownership or size")
 		}
 		seen[clip] = true
-		saved.Clips = append(saved.Clips, runtimeCClipState{Address: address, MediaType: []byte(clip.mediaType), Data: bytes.Clone(clip.state.data),
-			Handle: clip.state.handle, Loaded: clip.state.loaded, Played: clip.state.played, Volume: clip.volume})
+		saved.Clips = append(saved.Clips, runtimeCClipState{Address: address, MediaType: []byte(clip.MediaType), Data: bytes.Clone(clip.State.Data),
+			Handle: clip.State.Handle, Loaded: clip.State.Loaded, Played: clip.State.Played, Volume: clip.Volume})
 	}
 	if _, err := runtime.decodeControlState(saved); err != nil {
 		return runtimeControlState{}, err
@@ -101,10 +102,10 @@ func (runtime *initializationRuntime) decodeControlState(saved runtimeControlSta
 	if saved.ClockAge == time.Duration(math.MinInt64) || saved.RoundsSinceGuestPaint < 0 || uint64(saved.RoundsSinceGuestPaint) > uint64(^uint(0)>>1) {
 		return invalid("control clock or paint counter is invalid")
 	}
-	if saved.CInput.Mode >= uint32(len(inputModes)) || len(saved.CInput.Pending) > 2 || len(saved.Network) > maxPendingNetCallbacks || len(saved.Clips) > maxWIPICMediaClips || len(saved.ClipOrder) != len(saved.Clips) || len(saved.MutedSources) > maxWIPICMutedSources {
+	if saved.CInput.Mode >= uint32(len(wipicrt.InputModes)) || len(saved.CInput.Pending) > 2 || len(saved.Network) > wipicrt.MaxPendingNetCallbacks || len(saved.Clips) > wipicrt.MaxWIPICMediaClips || len(saved.ClipOrder) != len(saved.Clips) || len(saved.MutedSources) > wipicrt.MaxWIPICMutedSources {
 		return invalid("control state exceeds queue limits")
 	}
-	memory := runtime.client.core.Memory()
+	memory := runtime.client.Core().Memory()
 	input := saved.CInput
 	for _, address := range []uint32{input.OwnerAddress, input.TimerPointer} {
 		if address == 0 {
@@ -123,10 +124,10 @@ func (runtime *initializationRuntime) decodeControlState(saved runtimeControlSta
 		}
 	}
 	result := restoredRuntimeControl{saved: saved,
-		input: cInputState{owner: cInputOwner{address: input.OwnerAddress, value: input.OwnerValue}, mode: input.Mode,
-			revision: input.Revision, calls: input.Calls, activations: input.Activations, active: input.Active,
-			discardCarrier: input.DiscardCarrier, clearPending: input.ClearPending, pending: bytes.Clone(input.Pending), timerPointer: input.TimerPointer, timerCallback: input.TimerCallback},
-		clips: make(map[uint32]*wipicMediaClip, len(saved.Clips)), clipOrder: slices.Clone(saved.ClipOrder)}
+		input: wipicrt.CInputState{Owner: wipicrt.CInputOwner{Address: input.OwnerAddress, Value: input.OwnerValue}, Mode: input.Mode,
+			Revision: input.Revision, Calls: input.Calls, Activations: input.Activations, Active: input.Active,
+			DiscardCarrier: input.DiscardCarrier, ClearPending: input.ClearPending, Pending: bytes.Clone(input.Pending), TimerPointer: input.TimerPointer, TimerCallback: input.TimerCallback},
+		clips: make(map[uint32]*wipicrt.WIPICMediaClip, len(saved.Clips)), clipOrder: slices.Clone(saved.ClipOrder)}
 	for _, callback := range saved.Network {
 		if callback.Callback == 0 {
 			return invalid("network callback is null")
@@ -134,20 +135,20 @@ func (runtime *initializationRuntime) decodeControlState(saved runtimeControlSta
 		if err := memory.ValidateRange(callback.Callback&^1, 2, armcore.PermissionExecute); err != nil {
 			return restoredRuntimeControl{}, err
 		}
-		result.network = append(result.network, wipicNetCallback{callback: callback.Callback, param: callback.Param})
+		result.network = append(result.network, wipicrt.WIPICNetCallback{Callback: callback.Callback, Param: callback.Param})
 	}
 	for i, clip := range saved.Clips {
-		if clip.Address == 0 || clip.Address&3 != 0 || i > 0 && saved.Clips[i-1].Address >= clip.Address || len(clip.MediaType) > 64 || bytes.IndexByte(clip.MediaType, 0) >= 0 || len(clip.Data) > maxClipBufferBytes || clip.Loaded && clip.Handle == 0 {
+		if clip.Address == 0 || clip.Address&3 != 0 || i > 0 && saved.Clips[i-1].Address >= clip.Address || len(clip.MediaType) > 64 || bytes.IndexByte(clip.MediaType, 0) >= 0 || len(clip.Data) > wipicrt.MaxClipBufferBytes || clip.Loaded && clip.Handle == 0 {
 			return invalid("C clip has invalid address, handle or data")
 		}
-		if clip.Volume < 0 || clip.Volume > wipicClipFullVolume {
+		if clip.Volume < 0 || clip.Volume > wipicrt.WIPICClipFullVolume {
 			return invalid("C clip volume is out of range")
 		}
-		if err := memory.ValidateRange(clip.Address, wipicMediaClipRecordSize, armcore.PermissionReadWrite); err != nil {
+		if err := memory.ValidateRange(clip.Address, wipicrt.WIPICMediaClipRecordSize, armcore.PermissionReadWrite); err != nil {
 			return restoredRuntimeControl{}, err
 		}
-		result.clips[clip.Address] = &wipicMediaClip{mediaType: string(clip.MediaType), volume: clip.Volume,
-			state: clipState{data: bytes.Clone(clip.Data), handle: clip.Handle, loaded: clip.Loaded, played: clip.Played}}
+		result.clips[clip.Address] = &wipicrt.WIPICMediaClip{MediaType: string(clip.MediaType), Volume: clip.Volume,
+			State: wipicrt.ClipState{Data: bytes.Clone(clip.Data), Handle: clip.Handle, Loaded: clip.Loaded, Played: clip.Played}}
 	}
 	seen := make(map[uint32]bool, len(saved.ClipOrder))
 	for _, address := range saved.ClipOrder {
@@ -170,13 +171,13 @@ func (runtime *initializationRuntime) decodeControlState(saved runtimeControlSta
 
 func (restored restoredRuntimeControl) adopt(runtime *initializationRuntime, now time.Time) {
 	saved := restored.saved
-	runtime.virtualBaseMillis, runtime.clockBase = saved.VirtualBaseMillis, now.Add(-saved.ClockAge)
-	runtime.repaintPending, runtime.guestFlushedOwnFrame, runtime.guestHasPainted = saved.RepaintPending, saved.GuestFlushedOwnFrame, saved.GuestHasPainted
-	runtime.roundsSinceGuestPaint, runtime.guestEventLoop, runtime.destroyCallbackStarted = int(saved.RoundsSinceGuestPaint), saved.GuestEventLoop, saved.DestroyCallbackStarted
-	// The JVM card reference was adopted by the shared heap-root component.
-	restored.input.card = runtime.cInput.card
-	runtime.cInput = restored.input
-	runtime.pendingNetCallbacks = restored.network
-	runtime.wipicClips, runtime.wipicClipOrder = restored.clips, restored.clipOrder
-	runtime.wipicMutedSources = restored.muted
+	runtime.VirtualBaseMillis, runtime.ClockBase = saved.VirtualBaseMillis, now.Add(-saved.ClockAge)
+	runtime.RepaintPending, runtime.GuestFlushedOwnFrame, runtime.guestHasPainted = saved.RepaintPending, saved.GuestFlushedOwnFrame, saved.GuestHasPainted
+	runtime.roundsSinceGuestPaint, runtime.GuestEventLoop, runtime.destroyCallbackStarted = int(saved.RoundsSinceGuestPaint), saved.GuestEventLoop, saved.DestroyCallbackStarted
+	// The card the input method belongs to is the runtime's own field, which
+	// the shared heap-root component restored.
+	runtime.CInput = restored.input
+	runtime.PendingNetCallbacks = restored.network
+	runtime.WIPICClips, runtime.WIPICClipOrder = restored.clips, restored.clipOrder
+	runtime.WIPICMutedSources = restored.muted
 }

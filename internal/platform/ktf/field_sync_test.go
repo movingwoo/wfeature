@@ -163,7 +163,7 @@ func TestAdoptReportsAGuestWriteToAPublishedField(t *testing.T) {
 	payload := make([]byte, 12)
 	binary.LittleEndian.PutUint32(payload[0:], value)
 	binary.LittleEndian.PutUint32(payload[8:], 5)
-	if err := client.core.Memory().Write(address+javaInstanceSize+javaInstanceHeader, payload); err != nil {
+	if err := client.Core().Memory().Write(address+javaInstanceSize+javaInstanceHeader, payload); err != nil {
 		t.Fatal(err)
 	}
 	if diverged, err := adoptGuestString(runtime, address, object); err != nil {
