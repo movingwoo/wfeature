@@ -9,9 +9,8 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"golang.org/x/text/encoding/korean"
-
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // Text: `java/lang/String` and `java/lang/StringBuffer`.
@@ -123,25 +122,6 @@ func (client *Client) readJavaArrayChars(object uint32) ([]uint16, error) {
 	return units, nil
 }
 
-// decodeEUCKR turns handset bytes into text. The handset's default encoding is
-// the one its own text is written in, and every archive here is Korean, so the
-// bytes a title hands over — whether out of a `byte[]` or out of the buffer it
-// gives `MC_grpDrawString` — are EUC-KR; bytes that are not decode as
-// themselves rather than as an error, which is what keeps a byte array of
-// digits readable.
-//
-// **It is not applied to every string read out of guest memory**, only to the
-// ones that are text. A file name, a resource name and a property key are
-// looked up by their bytes on both sides, so decoding one would turn a match
-// into a miss.
-func decodeEUCKR(data []byte) string {
-	decoded, err := korean.EUCKR.NewDecoder().Bytes(data)
-	if err != nil {
-		return strings.ToValidUTF8(string(data), "�")
-	}
-	return string(decoded)
-}
-
 // javaStringConstructor is `String([B)`, `String([BII)` and `String([CII)`
 // together: the receiver is the object the module allocated, and what it is
 // given is the array to read the characters out of.
@@ -160,7 +140,7 @@ func javaStringConstructor(
 		}
 		data = data[offset : offset+count]
 	}
-	client.setJavaText(object, decodeEUCKR(data))
+	client.setJavaText(object, backend.DecodeEUCKR(data))
 	return 0, nil
 }
 
@@ -619,7 +599,7 @@ func javaStringBytes(
 	if !ok {
 		return 0, fmt.Errorf("the object at %#x holds no text", arguments[0])
 	}
-	return client.newJavaByteArray(encodeEUCKR(held))
+	return client.newJavaByteArray(backend.EncodeEUCKR(held))
 }
 
 // javaTextPair reads a text method's receiver and its one String argument.
@@ -658,18 +638,6 @@ func utf16Units(text string) []uint16 {
 		}
 	}
 	return units
-}
-
-// encodeEUCKR is decodeEUCKR's inverse. Text this handset's encoding cannot
-// hold is refused by the encoder rather than replaced, and the UTF-8 bytes are
-// the fallback — a title that gets those back hands them to a String
-// constructor that reads them the same way.
-func encodeEUCKR(text string) []byte {
-	encoded, err := korean.EUCKR.NewEncoder().Bytes([]byte(text))
-	if err != nil {
-		return []byte(text)
-	}
-	return encoded
 }
 
 // javaStringCharAt is `charAt(int)`, slot 11: one UTF-16 code unit, which is

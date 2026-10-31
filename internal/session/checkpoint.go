@@ -67,7 +67,7 @@ func lgtOptions(options Options) lgt.SessionOptions {
 // CanCheckpoint reports whether the current execution variant has a codec.
 // Capture can still refuse a busy or unsupported continuation or save store.
 func (s *Session) CanCheckpoint() bool {
-	return s != nil && (s.ktf != nil || s.ktfNative != nil || s.cletSession != nil && s.cletSession.CanCheckpoint() || s.lgt != nil && s.lgt.CanCheckpoint() || s.script != nil && s.script.CanCheckpoint() || s.runtime != nil && s.runtime.CanCheckpoint())
+	return s != nil && s.engine != nil && s.engine.canCheckpoint()
 }
 
 // ArchiveIdentity names the immutable archive a checkpoint must reopen.
@@ -79,23 +79,8 @@ func (s *Session) Speed() float64 { return backend.ClampSpeed(s.speed) }
 // ResumeCheckpointOutput reconstructs logical audio after the Host invalidates
 // its previous frame/audio queues. It does not run guest code.
 func (s *Session) ResumeCheckpointOutput() {
-	if s != nil && s.ktf != nil {
-		s.ktf.ResumeCheckpointOutput()
-	}
-	if s != nil && s.ktfNative != nil {
-		s.ktfNative.ResumeCheckpointOutput()
-	}
-	if s != nil && s.cletSession != nil {
-		s.cletSession.ResumeCheckpointOutput()
-	}
-	if s != nil && s.lgt != nil {
-		s.lgt.ResumeCheckpointOutput()
-	}
-	if s != nil && s.script != nil {
-		s.script.ResumeCheckpointOutput()
-	}
-	if s != nil && s.runtime != nil {
-		s.runtime.ResumeCheckpointOutput()
+	if s != nil && s.engine != nil {
+		s.engine.resumeCheckpointOutput()
 	}
 }
 
@@ -189,21 +174,7 @@ func (s *Session) CaptureCheckpoint(ctx context.Context) (data []byte, err error
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		var guestSpeed float64
-		switch {
-		case s.ktf != nil:
-			guestSpeed = s.ktf.Speed()
-		case s.ktfNative != nil:
-			guestSpeed = s.ktfNative.Speed()
-		case s.cletSession != nil:
-			guestSpeed = s.cletSession.Speed()
-		case s.script != nil:
-			guestSpeed = s.script.Speed()
-		case s.runtime != nil:
-			guestSpeed = s.runtime.Speed()
-		default:
-			guestSpeed = s.lgt.Speed()
-		}
+		guestSpeed := s.engine.speed()
 		if backend.ClampSpeed(s.speed) != guestSpeed {
 			return fmt.Errorf("session checkpoint guest and repeat speeds disagree")
 		}
@@ -214,22 +185,7 @@ func (s *Session) CaptureCheckpoint(ctx context.Context) (data []byte, err error
 			}
 			return backend.EncodeCheckpointRecord(shared)
 		}
-		var checkpoint backend.Checkpoint
-		var err error
-		switch {
-		case s.ktf != nil:
-			checkpoint, err = s.ktf.CaptureCheckpointWithSession(ctx, captureShared)
-		case s.ktfNative != nil:
-			checkpoint, err = s.ktfNative.CaptureCheckpointWithSession(ctx, captureShared)
-		case s.cletSession != nil:
-			checkpoint, err = s.cletSession.CaptureCheckpointWithSession(ctx, captureShared)
-		case s.script != nil:
-			checkpoint, err = s.script.CaptureCheckpointWithSession(ctx, captureShared)
-		case s.runtime != nil:
-			checkpoint, err = s.runtime.CaptureCheckpointWithSession(ctx, captureShared)
-		default:
-			checkpoint, err = s.lgt.CaptureCheckpointWithSession(ctx, captureShared)
-		}
+		checkpoint, err := s.engine.captureCheckpoint(ctx, captureShared)
 		if err != nil {
 			return err
 		}
@@ -349,7 +305,26 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 	// displaced. Each platform validates against a placeholder store and is
 	// handed the live one only by Commit, which is the single place a restored
 	// runtime meets the saves.
-	if checkpoint.Variant == backend.CheckpointSKTScript {
+	if restored.engine, err = restoreEngine(ctx, archive, checkpoint, platform, saved, options, previous); err != nil {
+		return nil, err
+	}
+	restored.options.Speed = saved.Speed
+	now := restored.checkpointNow()
+	restored.startedAt = now
+	if saved.LastTickSet {
+		restored.lastTick = now.Add(-saved.LastTickAge)
+	}
+	return restored, nil
+}
+
+// restoreEngine prepares the platform session a checkpoint records and
+// commits it in place of the one previous was running, which has to be the
+// same kind. Each kind first refuses the holds it cannot have: a pointer on
+// every platform but KTF's descriptor package, and a repeat or pad on the ones
+// whose keys are a press and a release.
+func restoreEngine(ctx context.Context, archive []byte, checkpoint backend.Checkpoint, platform detect.Platform, saved checkpointSessionState, options Options, previous *Session) (engine, error) {
+	switch {
+	case checkpoint.Variant == backend.CheckpointSKTScript:
 		if saved.Pointer.Down || saved.Pad.Down || saved.Repeat.Held {
 			return nil, fmt.Errorf("SGS checkpoint has unsupported pointer or repeat ownership")
 		}
@@ -361,26 +336,21 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 		if prepared.Speed() != backend.ClampSpeed(saved.Speed) || prepared.Paused() != saved.Paused {
 			return nil, fmt.Errorf("SGS checkpoint settings disagree with session")
 		}
-		frame, flushes := prepared.Frame()
-		restored.surface, err = newCaptureFramebuffer(frame.Width, frame.Height)
+		surface, err := restoredSurface(prepared.Frame())
 		if err != nil {
 			return nil, err
 		}
-		copy(restored.surface.rgba, frame.RGBA)
-		restored.surface.flushes = flushes
-		var old *skt.ScriptSession
-		if previous != nil {
-			old = previous.script
-			if old == nil {
-				return nil, ErrCheckpointUnsupported
-			}
+		old, err := displaced[sktScriptEngine](previous)
+		if err != nil {
+			return nil, err
 		}
 		warnPreparationStoreCalls(options, prepared)
-		restored.script, err = prepared.Commit(ctx, old, options.SaveStore, restored.surface)
+		script, err := prepared.Commit(ctx, old.script, options.SaveStore, surface)
 		if err != nil {
 			return nil, err
 		}
-	} else if checkpoint.Variant == backend.CheckpointSKTJava {
+		return sktScriptEngine{script, surface}, nil
+	case checkpoint.Variant == backend.CheckpointSKTJava:
 		if saved.Pointer.Down || saved.Pad.Down {
 			return nil, fmt.Errorf("SKT checkpoint has unsupported shared pointer or pad ownership")
 		}
@@ -392,26 +362,21 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 		if prepared.Speed() != backend.ClampSpeed(saved.Speed) {
 			return nil, fmt.Errorf("SKT checkpoint guest and repeat speeds disagree")
 		}
-		frame, flushes := prepared.Frame()
-		restored.surface, err = newCaptureFramebuffer(frame.Width, frame.Height)
+		surface, err := restoredSurface(prepared.Frame())
 		if err != nil {
 			return nil, err
 		}
-		copy(restored.surface.rgba, frame.RGBA)
-		restored.surface.flushes = flushes
-		var old *skt.Runtime
-		if previous != nil {
-			old = previous.runtime
-			if old == nil {
-				return nil, ErrCheckpointUnsupported
-			}
+		old, err := displaced[sktJavaEngine](previous)
+		if err != nil {
+			return nil, err
 		}
 		warnPreparationStoreCalls(options, prepared)
-		restored.runtime, err = prepared.Commit(ctx, old, options.SaveStore, restored.surface, options.AudioSink)
+		runtime, err := prepared.Commit(ctx, old.runtime, options.SaveStore, surface, options.AudioSink)
 		if err != nil {
 			return nil, err
 		}
-	} else if checkpoint.Variant == backend.CheckpointSKTClet {
+		return sktJavaEngine{runtime, surface}, nil
+	case checkpoint.Variant == backend.CheckpointSKTClet:
 		// A Clet's events are a press and a release: it takes no pointer and
 		// has no repeat event, so neither can be held at this layer.
 		if saved.Pointer.Down || saved.Repeat.Held {
@@ -426,21 +391,21 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 			return nil, err
 		}
 		defer prepared.Discard()
-		if prepared.Speed() != backend.ClampSpeed(saved.Speed) {
-			return nil, fmt.Errorf("session checkpoint guest and repeat speeds disagree")
-		}
-		var old *clet.Session
-		if previous != nil {
-			if old = previous.cletSession; old == nil {
-				return nil, ErrCheckpointUnsupported
-			}
-		}
-		warnPreparationStoreCalls(options, prepared)
-		if restored.cletSession, err = prepared.Commit(ctx, old, options.SaveStore); err != nil {
+		if err := sameSpeed(prepared, saved); err != nil {
 			return nil, err
 		}
-		restored.cletSession.TimeHostPhases(options.TraceLimit > 0)
-	} else if platform == detect.LGT {
+		old, err := displaced[cletEngine](previous)
+		if err != nil {
+			return nil, err
+		}
+		warnPreparationStoreCalls(options, prepared)
+		committed, err := prepared.Commit(ctx, old.session, options.SaveStore)
+		if err != nil {
+			return nil, err
+		}
+		committed.TimeHostPhases(options.TraceLimit > 0)
+		return cletEngine{committed}, nil
+	case platform == detect.LGT:
 		// This platform has no repeat event and no pointer, and its pad is the
 		// platform's own: none of the three can be held at this layer.
 		if saved.Pointer.Down || saved.Pad.Down || saved.Repeat.Held {
@@ -451,20 +416,20 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 			return nil, err
 		}
 		defer prepared.Discard()
-		if prepared.Speed() != backend.ClampSpeed(saved.Speed) {
-			return nil, fmt.Errorf("session checkpoint guest and repeat speeds disagree")
-		}
-		var old *lgt.Session
-		if previous != nil {
-			if old = previous.lgt; old == nil {
-				return nil, ErrCheckpointUnsupported
-			}
-		}
-		warnPreparationStoreCalls(options, prepared)
-		if restored.lgt, err = prepared.Commit(ctx, old, options.SaveStore); err != nil {
+		if err := sameSpeed(prepared, saved); err != nil {
 			return nil, err
 		}
-	} else if checkpoint.Variant == backend.CheckpointKTFNative {
+		old, err := displaced[lgtEngine](previous)
+		if err != nil {
+			return nil, err
+		}
+		warnPreparationStoreCalls(options, prepared)
+		committed, err := prepared.Commit(ctx, old.session, options.SaveStore)
+		if err != nil {
+			return nil, err
+		}
+		return lgtEngine{committed}, nil
+	case checkpoint.Variant == backend.CheckpointKTFNative:
 		if saved.Pointer.Down || saved.Pad.Down || saved.Repeat.Held {
 			return nil, fmt.Errorf("native checkpoint has unsupported pointer or repeat ownership")
 		}
@@ -473,51 +438,61 @@ func restoreCheckpoint(ctx context.Context, archive, data []byte, options Option
 			return nil, err
 		}
 		defer prepared.Discard()
-		if prepared.Speed() != backend.ClampSpeed(saved.Speed) {
-			return nil, fmt.Errorf("session checkpoint guest and repeat speeds disagree")
+		if err := sameSpeed(prepared, saved); err != nil {
+			return nil, err
 		}
-		var old *ktf.NativeSession
-		if previous != nil {
-			old = previous.ktfNative
-			if old == nil {
-				return nil, ErrCheckpointUnsupported
-			}
-		}
-		warnPreparationStoreCalls(options, prepared)
-		restored.ktfNative, err = prepared.Commit(ctx, old, options.SaveStore)
+		old, err := displaced[ktfNativeEngine](previous)
 		if err != nil {
 			return nil, err
 		}
-	} else {
+		warnPreparationStoreCalls(options, prepared)
+		committed, err := prepared.Commit(ctx, old.session, options.SaveStore)
+		if err != nil {
+			return nil, err
+		}
+		return ktfNativeEngine{committed}, nil
+	default:
 		prepared, err := ktf.PrepareSessionCheckpoint(archive, checkpoint, ktfOptions(options))
 		if err != nil {
 			return nil, err
 		}
 		defer prepared.Discard()
-		if prepared.Speed() != backend.ClampSpeed(saved.Speed) {
-			return nil, fmt.Errorf("session checkpoint guest and repeat speeds disagree")
+		if err := sameSpeed(prepared, saved); err != nil {
+			return nil, err
 		}
-		var old *ktf.Session
-		if previous != nil {
-			old = previous.ktf
-			if old == nil {
-				return nil, ErrCheckpointUnsupported
-			}
-		}
-		warnPreparationStoreCalls(options, prepared)
-		restored.ktf, err = prepared.Commit(ctx, old, options.SaveStore)
+		old, err := displaced[ktfEngine](previous)
 		if err != nil {
 			return nil, err
 		}
-		restored.ktf.TimeHostPhases(options.TraceLimit > 0)
+		warnPreparationStoreCalls(options, prepared)
+		committed, err := prepared.Commit(ctx, old.session, options.SaveStore)
+		if err != nil {
+			return nil, err
+		}
+		committed.TimeHostPhases(options.TraceLimit > 0)
+		return ktfEngine{committed}, nil
 	}
-	restored.options.Speed = saved.Speed
-	now := restored.checkpointNow()
-	restored.startedAt = now
-	if saved.LastTickSet {
-		restored.lastTick = now.Add(-saved.LastTickAge)
+}
+
+// sameSpeed refuses a checkpoint whose platform record and session record were
+// taken at two different paces.
+func sameSpeed(prepared interface{ Speed() float64 }, saved checkpointSessionState) error {
+	if prepared.Speed() != backend.ClampSpeed(saved.Speed) {
+		return fmt.Errorf("session checkpoint guest and repeat speeds disagree")
 	}
-	return restored, nil
+	return nil
+}
+
+// restoredSurface is the capture surface a MIDP checkpoint's last picture is
+// put back into, with the flush count it had.
+func restoredSurface(frame backend.Frame, flushes uint64) (*captureFramebuffer, error) {
+	surface, err := newCaptureFramebuffer(frame.Width, frame.Height)
+	if err != nil {
+		return nil, err
+	}
+	copy(surface.rgba, frame.RGBA)
+	surface.flushes = flushes
+	return surface, nil
 }
 
 // warnPreparationStoreCalls says in the log when validating a checkpoint

@@ -14,6 +14,7 @@ import (
 	// KTF archives carry BMP assets, including ones renamed to .dat.
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/curve"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
@@ -518,7 +519,7 @@ func (runtime *Runtime) WIPICReadString(pointer uint32, length int32, unicode bo
 		}
 		return utf16.Decode(units), nil
 	}
-	return []rune(DecodeEUCKR(data)), nil
+	return []rune(backend.DecodeEUCKR(data)), nil
 }
 
 // wipicDrawString implements MC_grpDrawString and its unicode variant: text

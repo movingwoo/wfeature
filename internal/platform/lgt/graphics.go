@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"math/bits"
-	"sort"
 	"sync"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/curve"
 	"github.com/movingwoo/wfeature/internal/glyph"
 )
 
@@ -645,9 +645,11 @@ func (context *graphicsContext) rect(x, y, width, height int, color uint16) {
 }
 
 // polygon outlines or fills a closed polygon given as the parallel coordinate
-// arrays the API passes. The fill is the even-odd scanline rule, the same one
-// the KTF runtime's polygon takes, so a shape drawn through either platform
-// covers the same pixels.
+// arrays the API passes. The fill is the KTF runtime's own, the even-odd
+// scanline rule of curve.FillPolygonWithin, so a shape drawn through either
+// platform covers the same pixels — including one whose vertices sit at the
+// ends of int32, where an edge's crossing no longer fits the arithmetic this
+// platform's copy of the rule used to do it in.
 func (context *graphicsContext) polygon(xs, ys []int, color uint16, fill bool) {
 	count := min(len(xs), len(ys))
 	if count < 2 {
@@ -660,34 +662,20 @@ func (context *graphicsContext) polygon(xs, ys []int, color uint16, fill bool) {
 		}
 		return
 	}
-	top, bottom := ys[0], ys[0]
-	for _, y := range ys[:count] {
-		top, bottom = min(top, y), max(bottom, y)
-	}
-	// A row outside the drawable band fills nothing, so the rows are clipped
-	// to it before they are walked. See drawable.
-	_, drawTop, _, drawBottom, ok := context.drawable()
+	// Only the drawable band is walked: a row outside it fills nothing, and a
+	// span is cut to it before it is filled. See drawable.
+	left, top, right, bottom, ok := context.drawable()
 	if !ok {
 		return
 	}
-	top, bottom = int(max(int64(top), drawTop)), int(min(int64(bottom), drawBottom-1))
-	crossings := make([]int, 0, count)
-	for y := top; y <= bottom; y++ {
-		crossings = crossings[:0]
-		for index := 0; index < count; index++ {
-			next := (index + 1) % count
-			y0, y1 := ys[index], ys[next]
-			if y0 == y1 || y < min(y0, y1) || y >= max(y0, y1) {
-				continue
-			}
-			x0, x1 := xs[index], xs[next]
-			crossings = append(crossings, x0+(y-y0)*(x1-x0)/(y1-y0))
-		}
-		sort.Ints(crossings)
-		for index := 0; index+1 < len(crossings); index += 2 {
-			context.fill(crossings[index], y, crossings[index+1]-crossings[index]+1, 1, color)
-		}
+	vertexXs, vertexYs := make([]int32, count), make([]int32, count)
+	for index := range count {
+		vertexXs[index], vertexYs[index] = int32(xs[index]), int32(ys[index])
 	}
+	_ = curve.FillPolygonWithin(curve.Bounds{Left: left, Top: top, Right: right, Bottom: bottom}, vertexXs, vertexYs, func(span curve.Span) error {
+		context.fill(int(span.X), int(span.Y), int(span.Width), 1, color)
+		return nil
+	})
 }
 
 // textFace is the pixel face every LGT title's text is drawn and measured

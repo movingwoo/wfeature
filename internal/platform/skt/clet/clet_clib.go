@@ -11,6 +11,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 // The SKT root's slot 14 is the C library the specification requires a
@@ -54,9 +55,6 @@ const (
 	clibLocaltime
 	clibGmtime
 )
-
-// clibTimeRecordSize is a struct tm: nine ints, seconds to the daylight flag.
-const clibTimeRecordSize = 36
 
 func (runtime *initializationRuntime) handleCletLibraryCall(thread *armcore.Thread, function uint32) (uint32, error) {
 	memory := runtime.client.Core().Memory()
@@ -517,22 +515,13 @@ func clibParseFloat(text []byte) (float64, int) {
 func (runtime *initializationRuntime) clibWriteTime(memory *armcore.Memory, moment time.Time) (uint32, error) {
 	state := runtime.client.clet
 	if state.timeRecord == 0 {
-		address, err := runtime.Allocate(clibTimeRecordSize)
+		address, err := runtime.Allocate(wipic.TimeRecordSize)
 		if err != nil {
 			return 0, err
 		}
 		state.timeRecord = address
 	}
-	fields := []int32{
-		int32(moment.Second()), int32(moment.Minute()), int32(moment.Hour()),
-		int32(moment.Day()), int32(moment.Month()) - 1, int32(moment.Year() - 1900),
-		int32(moment.Weekday()), int32(moment.YearDay() - 1), 0,
-	}
-	record := make([]byte, clibTimeRecordSize)
-	for index, value := range fields {
-		binary.LittleEndian.PutUint32(record[index*4:], uint32(value))
-	}
-	if err := memory.Write(state.timeRecord, record); err != nil {
+	if err := memory.Write(state.timeRecord, wipic.TimeRecord(moment)); err != nil {
 		return 0, err
 	}
 	return state.timeRecord, nil
@@ -547,16 +536,7 @@ func (runtime *initializationRuntime) clibMktime(memory *armcore.Memory, address
 	}
 	field := func(index int) int { return int(int32(words[index])) }
 	moment := time.Date(field(5)+1900, time.Month(field(4)+1), field(3), field(2), field(1), field(0), 0, time.Local)
-	record := []int32{
-		int32(moment.Second()), int32(moment.Minute()), int32(moment.Hour()),
-		int32(moment.Day()), int32(moment.Month()) - 1, int32(moment.Year() - 1900),
-		int32(moment.Weekday()), int32(moment.YearDay() - 1), 0,
-	}
-	data := make([]byte, clibTimeRecordSize)
-	for index, value := range record {
-		binary.LittleEndian.PutUint32(data[index*4:], uint32(value))
-	}
-	if err := memory.Write(address, data); err != nil {
+	if err := memory.Write(address, wipic.TimeRecord(moment)); err != nil {
 		return 0, err
 	}
 	return uint32(moment.Unix()), nil

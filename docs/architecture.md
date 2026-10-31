@@ -24,7 +24,7 @@ apps wrap the same server. There is no desktop shell.
 | `cmd/server` | Serves the PWA, the game archives, the save and debug-log APIs and the emulation sessions; its `status` and `stop` subcommands manage a running server. See [running](running.md). |
 | `cmd/cli` | Drives a game from a terminal for development and diagnostics. See [CLI](cli.md). |
 | `internal/webhost` | The server's HTTP routes and session protocol, testable without a process. See [sessions](session.md). |
-| `internal/session` | The platform-agnostic session driver: inspect, start, tick, input, frames and checkpoints, so no Host switches on platform. |
+| `internal/session` | The platform-agnostic session driver: inspect, start, tick, input, frames and checkpoints, so no Host switches on platform. Every kind of platform session answers one interface (`engine.go`), so a question asked of one platform does not compile until all six have answered it. |
 | `internal/wsproto` | WebSocket framing ([below](#session-transport)). |
 | `internal/vp8l` | Lossless WebP encoder for protocol 2 pictures. |
 | `internal/filter/hqx` | hq2x, hq3x and hq4x magnification for protocol 1, `Session.Frame` and the CLI. See [hqx](hqx.md). |
@@ -50,7 +50,7 @@ each is written once:
 | `internal/audio/smaf` | Parses SMAF (`.mmf`) and translates it into timed MIDI and PCM events. See [audio](audio.md). |
 | `internal/keypad` | Turns Host key holds into a handset's single direction pad and runs the handset's key-repeat clock. |
 | `internal/textinput` | Keypad multi-tap text entry for MIDP `TextBox` and `TextField` and KTF lwc text components. |
-| `internal/wipic` | What the platforms share below the call boundary: format strings, handset bitmaps and tolerant picture decoders. |
+| `internal/wipic` | What the platforms share below the call boundary: format strings, handset bitmaps, tolerant picture decoders, the free list every guest arena reuses blocks from, and the C library's `struct tm`. |
 | `internal/curve` | Arcs and rounded rectangles for every drawing surface. |
 | `internal/glyph` | Runtime-authored 5x7 glyphs; an unsupported character becomes a codepoint-marked box. |
 | `fonts` | The runtime's embedded font assets. |
@@ -77,6 +77,7 @@ the Runtime and an API surface for each carrier.
 | `internal/platform/lgt` | LGT: Clets and AOT Java titles on the ARM core. See [LGT](lgt.md). |
 | `internal/platform/skt` | SKT: SKVM/MIDP and WIPI Java on the JVM, GNEX/GVM scripts on `internal/sgsvm`, and native WIPI-C programs (Clets) through `internal/platform/skt/clet` on `internal/platform/wipicrt`. See [SKT Java](skvm.md) and [SKT native](skt-native.md). |
 | `internal/platform/wipicrt` | The WIPI-C engine KTF titles and SKT Clets run on ([below](#the-wipi-c-engine)). |
+| `internal/platform/armcheat` | The cheat engine's adapter for every guest on the ARM core — KTF, its earlier native package and LGT — which differ only in how their memory map is named. |
 | `internal/platform/compatibility` | The embedded registry of code-revision exceptions. See [code-revision compatibility](platform-compatibility.md). |
 | `internal/api/midp`, `internal/api/skvm`, `internal/api/wipi` | Java class libraries declared in Go and installed on a VM by `Define`: MIDP, SKT's extensions (`com.skt.m`, `com.skt.m3d`, `com.xce`) and WIPI Java (`org.kwis.msp`, `org.kwis.msf`). See [JVM](jvm.md#the-class-library-is-declared-not-compiled). |
 | `internal/zipentry` | Entry-name conventions the loaders share ([below](#archive-entry-names)). |
@@ -311,7 +312,14 @@ observed to differ; otherwise the shared behavior is the rule. A defect of one
 title's revision stays in the [compatibility registry](platform-compatibility.md).
 LGT's C engine is not on it: LGT allocates with direct pointers, lays out its
 framebuffer and graphics context differently and draws through a Host-side copy
-of the surface, so what it shares with the other two is rules rather than code.
+of the surface. What it shares with the other two is below the handlers: the
+arena's free list (`wipic.TakeFirstFit`, `wipic.InsertFreeBlock`), the C
+library's `struct tm` (`wipic.TimeFields`), the polygon fill
+(`curve.FillPolygonWithin`) and the cheat adapter. Where the three carriers'
+handlers and Java classes differ only in how they are written, the shared form
+is one function the platforms call; where they differ in what a title sees, they
+stay apart until a decision says which is right. Both lists, with the reasons,
+are in [the maintenance history](history/maintenance.md#maintenance-shared-core-2026-10-31).
 
 Titles run rather than only start: input, timers, guest threads, archive
 resources, sound and persistence are on the path a played game takes. This

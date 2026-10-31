@@ -26,7 +26,7 @@ func startSpeedChangeFixture(t *testing.T, speed float64) (*Session, *ktf.Manual
 		t.Fatal(err)
 	}
 	t.Cleanup(running.Close)
-	if running.ktf == nil {
+	if running.KTF() == nil {
 		t.Fatal("speed fixture did not start the KTF Java runtime")
 	}
 	return running, clock
@@ -40,15 +40,15 @@ func TestSpeedChangeRefusalPreservesPublicAndRepeatRate(t *testing.T) {
 	// This elapsed time fits a duration at 1x, but retaining it at 0.1x
 	// would require a clock origin more than a duration into the past.
 	clock.Advance(50 * 365 * 24 * time.Hour)
-	before := running.ktf.GuestElapsed()
+	before := running.KTF().GuestElapsed()
 	running.SetSpeed(0.1)
-	if got := running.ktf.Speed(); got != 1 {
+	if got := running.KTF().Speed(); got != 1 {
 		t.Fatalf("unrepresentable speed change was accepted: %v", got)
 	}
-	if got := running.ktf.GuestElapsed(); got != before {
+	if got := running.KTF().GuestElapsed(); got != before {
 		t.Errorf("refused speed change moved guest time: got %v, want %v", got, before)
 	}
-	if got, want := running.Speed(), running.ktf.Speed(); got != want {
+	if got, want := running.Speed(), running.KTF().Speed(); got != want {
 		t.Errorf("public speed differs from accepted guest speed: got %v, want %v", got, want)
 	}
 
@@ -103,7 +103,7 @@ func TestSpeedChangeNormalizesPublicAndRepeatRate(t *testing.T) {
 				if got := running.Speed(); got != test.want {
 					t.Errorf("public speed: got %v, want %v", got, test.want)
 				}
-				if got := running.ktf.Speed(); got != test.want {
+				if got := running.KTF().Speed(); got != test.want {
 					t.Errorf("guest speed: got %v, want %v", got, test.want)
 				}
 				running.lastTick = clock.Now()

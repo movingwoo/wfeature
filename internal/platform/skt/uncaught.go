@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
@@ -39,9 +40,8 @@ import (
 // `startApp` that throws is a MIDlet that failed to start, and a start failure
 // is what a Host has to be told.
 type uncaughtCallbacks struct {
-	mu    sync.Mutex
-	count uint64
-	first string
+	mu       sync.Mutex
+	recorded backend.UncaughtCallbacks
 }
 
 func (runtime *Runtime) absorbUncaughtCallback(callback string, err error) error {
@@ -57,10 +57,7 @@ func (runtime *Runtime) absorbUncaughtCallback(callback string, err error) error
 		name = guest.Object.ClassName
 	}
 	runtime.uncaught.mu.Lock()
-	runtime.uncaught.count++
-	if runtime.uncaught.first == "" {
-		runtime.uncaught.first = callback + ": " + err.Error()
-	}
+	runtime.uncaught.recorded.Note(callback, err)
 	runtime.uncaught.mu.Unlock()
 	if runtime.logger != nil {
 		runtime.logger.Warn("MIDP guest exception ended a callback", "callback", callback, "class", name, "error", err)
@@ -79,7 +76,7 @@ func (runtime *Runtime) UncaughtCallbacks() (uint64, string) {
 	}
 	runtime.uncaught.mu.Lock()
 	defer runtime.uncaught.mu.Unlock()
-	return runtime.uncaught.count, runtime.uncaught.first
+	return runtime.uncaught.recorded.Report()
 }
 
 // guestCallback runs one guest callback entered from a Host pass and absorbs

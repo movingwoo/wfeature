@@ -420,5 +420,5 @@ func archiveText(data []byte) string {
 	if utf8.Valid(data) {
 		return string(data)
 	}
-	return decodeEUCKR(data)
+	return backend.DecodeEUCKR(data)
 }

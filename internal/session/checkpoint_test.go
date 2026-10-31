@@ -65,13 +65,13 @@ func TestCheckpointNativeRestoresInputPauseAndContinuation(t *testing.T) {
 			if err := s.SendKey(t.Context(), KeyRelease, '5'); err != nil {
 				t.Fatal(err)
 			}
-			released, err := s.ktfNative.Client.ReadWord(testfixture.KTFNativeCheckpointLastEvent)
+			released, err := s.ktfNativeSession().Client.ReadWord(testfixture.KTFNativeCheckpointLastEvent)
 			if err != nil {
 				t.Fatal(err)
 			}
 			advance(5)
 			expected, width, height, flushes := s.Frame()
-			steps := s.ktfNative.Client.Steps()
+			steps := s.ktfNativeSession().Client.Steps()
 			if err := store.StoreSave("progress", []byte("later")); err != nil {
 				t.Fatal(err)
 			}
@@ -92,12 +92,12 @@ func TestCheckpointNativeRestoresInputPauseAndContinuation(t *testing.T) {
 			if err := s.ReleaseHeldInput(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			if event, err := s.ktfNative.Client.ReadWord(testfixture.KTFNativeCheckpointLastEvent); err != nil || event != released || len(s.HeldKeys()) != 0 {
+			if event, err := s.ktfNativeSession().Client.ReadWord(testfixture.KTFNativeCheckpointLastEvent); err != nil || event != released || len(s.HeldKeys()) != 0 {
 				t.Fatal("restored native key was not released")
 			}
 			advance(5)
 			actual, w, h, f := s.Frame()
-			if !bytes.Equal(actual, expected) || w != width || h != height || f != flushes || s.ktfNative.Client.Steps() != steps {
+			if !bytes.Equal(actual, expected) || w != width || h != height || f != flushes || s.ktfNativeSession().Client.Steps() != steps {
 				t.Fatal("shared native continuation changed")
 			}
 			if saved, _ := store.LoadSave("progress"); string(saved) != "later" {
@@ -183,12 +183,12 @@ func TestCheckpointNativeRejectsMalformedAudioAndLeavesSaves(t *testing.T) {
 			if err := s.SendKey(t.Context(), KeyPress, '5'); err != nil {
 				t.Fatal(err)
 			}
-			previous, client := s.ktfNative, s.ktfNative.Client
+			previous, client := s.ktfNativeSession(), s.ktfNativeSession().Client
 			steps := client.Steps()
 			if err := s.LoadCheckpoint(t.Context(), archive, bad); err == nil {
 				t.Fatal("malformed native audio was adopted")
 			}
-			if s.ktfNative != previous || s.ktfNative.Client != client || client.Steps() != steps || !s.Running() || s.Failed() != nil || !reflect.DeepEqual(s.HeldKeys(), []int32{'5'}) {
+			if s.ktfNativeSession() != previous || s.ktfNativeSession().Client != client || client.Steps() != steps || !s.Running() || s.Failed() != nil || !reflect.DeepEqual(s.HeldKeys(), []int32{'5'}) {
 				t.Fatal("refused native audio changed the live session")
 			}
 			if current, found, err := store.ReadSave("progress"); err != nil || !found || string(current) != "current" {

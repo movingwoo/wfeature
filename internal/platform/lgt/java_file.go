@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // `org/kwis/msp/io/File`, which is the same filesystem a Clet writes its save
@@ -331,7 +332,7 @@ func javaFileCString(
 	if !ok {
 		return 0, fmt.Errorf("the string at %#x is not one this platform built", arguments[0])
 	}
-	return client.newJavaByteArray(append(encodeEUCKR(text), 0))
+	return client.newJavaByteArray(append(backend.EncodeEUCKR(text), 0))
 }
 
 // javaFileSystemTotal is `totalSpace`, MC_fsTotalSpace's storageQuotaBytes,

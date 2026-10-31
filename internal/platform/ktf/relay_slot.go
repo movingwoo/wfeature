@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // slotRelay implements the recovered slot-service conversation, not general
@@ -59,11 +61,11 @@ func (service *slotRelay) respond(payload []byte) ([]byte, error) {
 	case kind == 5 && command == 1410 && service.phase == 2 && len(body) == 1 && body[0] <= 127:
 		service.slot = body[0]
 		service.phase = 3
-		message := encodeEUCKR("이 기기에 슬롯을 생성합니다.")
+		message := backend.EncodeEUCKR("이 기기에 슬롯을 생성합니다.")
 		return reply(append([]byte{1, byte(len(message))}, message...))
 	case kind == 5 && command == 1420 && service.phase == 3 && len(body) == 0:
 		service.phase = 4
-		message := encodeEUCKR("비용은 청구되지 않습니다.")
+		message := backend.EncodeEUCKR("비용은 청구되지 않습니다.")
 		return reply(append([]byte{byte(len(message))}, message...))
 	case kind == 5 && command == 1430 && service.phase >= 4 && len(body) == 0:
 		service.phase = max(service.phase, 5)

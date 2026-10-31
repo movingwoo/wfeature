@@ -2,25 +2,17 @@ package skt
 
 import (
 	"fmt"
-	"os"
-	"sort"
 
 	"github.com/movingwoo/wfeature/internal/gameroot"
 )
 
 // SaveOwnerClaim is one archive's claim on a save directory.
-type SaveOwnerClaim struct {
-	Path       string
-	Descriptor Descriptor
-}
+type SaveOwnerClaim = gameroot.Claim[Descriptor]
 
 // SaveOwnerCollision is a save directory that titles which are not the same
 // title all claim. Members are ordered by path so a report reads the same way
 // twice.
-type SaveOwnerCollision struct {
-	Owner  string
-	Claims []SaveOwnerClaim
-}
+type SaveOwnerCollision = gameroot.Collision[Descriptor]
 
 // ReadDescriptor reads a title's identity without loading the title. A save
 // owner is the only thing some callers want, and parsing the main class to
@@ -61,37 +53,10 @@ func ReadDescriptor(data []byte) (Descriptor, error) {
 // The scan stops where the Host's picker stops, and reads both shapes an SKT
 // title arrives in — the container and the bare MIDlet JAR.
 func SaveOwnerCollisions(root string) ([]SaveOwnerCollision, error) {
-	claims := make(map[string][]SaveOwnerClaim)
-	for _, name := range gameroot.Paths(root, ".zip", ".jar") {
-		data, readErr := os.ReadFile(name)
-		if readErr != nil {
-			return nil, readErr
-		}
+	read := func(data []byte) (Descriptor, bool) {
 		descriptor, err := ReadDescriptor(data)
-		if err != nil {
-			// Archives of other platforms sit in neighbouring directories and
-			// are not this check's business.
-			continue
-		}
-		owner := SaveOwner(descriptor)
-		if owner == "" {
-			continue
-		}
-		claims[owner] = append(claims[owner], SaveOwnerClaim{Path: name, Descriptor: descriptor})
+		return descriptor, err == nil && SaveOwner(descriptor) != ""
 	}
-
-	var collisions []SaveOwnerCollision
-	for owner, owned := range claims {
-		distinct := make(map[string]bool, len(owned))
-		for _, claim := range owned {
-			distinct[claim.Descriptor.MainClass] = true
-		}
-		if len(distinct) < 2 {
-			continue
-		}
-		sort.Slice(owned, func(left, right int) bool { return owned[left].Path < owned[right].Path })
-		collisions = append(collisions, SaveOwnerCollision{Owner: owner, Claims: owned})
-	}
-	sort.Slice(collisions, func(left, right int) bool { return collisions[left].Owner < collisions[right].Owner })
-	return collisions, nil
+	return gameroot.OwnerCollisions(root, []string{".zip", ".jar"}, read, SaveOwner,
+		func(descriptor Descriptor) string { return descriptor.MainClass })
 }

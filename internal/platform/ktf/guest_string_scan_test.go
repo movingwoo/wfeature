@@ -5,12 +5,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"strconv"
 	"testing"
 	"unicode/utf16"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The readers below are the terminated-string readers as they were before
@@ -91,7 +92,7 @@ func wipicReadTerminatedBefore(memory *armcore.Memory, pointer uint32, unicode b
 		}
 		return utf16.Decode(units), nil
 	}
-	return []rune(wipicrt.DecodeEUCKR(data)), nil
+	return []rune(backend.DecodeEUCKR(data)), nil
 }
 
 // nativeReadStringBefore is NativePlatform.readString: a byte at a time.
@@ -467,7 +468,7 @@ func TestReadingAShortGuestStringAllocatesOnlyWhatItAnswers(t *testing.T) {
 	// the conversion would cost nothing here.
 	sample := []byte("nineteen bytes long")
 	var decoded []rune
-	decoding := testing.AllocsPerRun(100, func() { decoded = []rune(wipicrt.DecodeEUCKR(sample)) })
+	decoding := testing.AllocsPerRun(100, func() { decoded = []rune(backend.DecodeEUCKR(sample)) })
 	if string(decoded) != string(sample) {
 		t.Fatalf("decoded %q", string(decoded))
 	}

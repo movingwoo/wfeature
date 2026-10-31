@@ -4,6 +4,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/movingwoo/wfeature/internal/api/skvm"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
@@ -96,7 +97,7 @@ func (runtime *Runtime) byteToCharConvert(vm *jvm.VM, arguments []jvm.Value) (jv
 	if err := setConverterPending(vm, converter, held); err != nil {
 		return jvm.VoidValue(), err
 	}
-	return writeConvertedChars(vm, arguments, utf16.Encode([]rune(decodePlatformBytes(bytes))))
+	return writeConvertedChars(vm, arguments, utf16.Encode([]rune(backend.DecodeEUCKR(bytes))))
 }
 
 // byteToCharFlush empties what a split character left behind. There is nothing

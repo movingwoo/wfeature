@@ -514,8 +514,8 @@ func TestCTextInputPassesACompleteHostCompositionThroughTheGuestWidget(t *testin
 			if err := session.client.core.Memory().Read(fixtureInputCompleted, got); err != nil {
 				t.Fatal(err)
 			}
-			if string(got) != string(encoded) || decodeEUCKR(got) != want {
-				t.Fatalf("completed text = %x (%q), want %x (%q)", got, decodeEUCKR(got), encoded, want)
+			if string(got) != string(encoded) || backend.DecodeEUCKR(got) != want {
+				t.Fatalf("completed text = %x (%q), want %x (%q)", got, backend.DecodeEUCKR(got), encoded, want)
 			}
 			if composing, err := session.client.readWord(fixtureInputSizes + 4); err != nil || composing != 0 {
 				t.Fatalf("composing length = %d, want 0: %v", composing, err)
@@ -561,7 +561,7 @@ func TestCTextInputValidatesEncodingAndCapacityBeforeInsertion(t *testing.T) {
 	if got := session.client.cTextInput.calls - calls; got != 2 {
 		t.Fatalf("carriers taken = %d, want 2", got)
 	}
-	if got, err := session.client.readCString(fixtureInputCompleted); err != nil || decodeEUCKR([]byte(got)) != "가" {
+	if got, err := session.client.readCString(fixtureInputCompleted); err != nil || backend.DecodeEUCKR([]byte(got)) != "가" {
 		t.Fatalf("last completion = %q: %v", got, err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
@@ -35,7 +36,7 @@ func TestPlatformCharsetIsTheHandsets(t *testing.T) {
 
 	// The other direction is the same charset, because a title also builds
 	// Strings out of the bytes it packed itself.
-	if decoded := decodePlatformBytes(want); decoded != text {
-		t.Fatalf("decodePlatformBytes(% x) = %q, want %q", want, decoded, text)
+	if decoded := backend.DecodeEUCKR(want); decoded != text {
+		t.Fatalf("backend.DecodeEUCKR(% x) = %q, want %q", want, decoded, text)
 	}
 }

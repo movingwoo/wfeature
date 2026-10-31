@@ -56,10 +56,7 @@ func (client *Client) absorbUncaughtCallback(callback string, err error) error {
 	if client.runtime != nil {
 		client.runtime.CountDiagnostic(fmt.Sprintf("uncaught %s in %s", name, callback))
 	}
-	client.uncaughtCallbacks++
-	if client.uncaughtFirst == "" {
-		client.uncaughtFirst = callback + ": " + err.Error()
-	}
+	client.uncaught.Note(callback, err)
 	if client.Logger != nil {
 		client.Logger.Warn("KTF guest exception ended a callback", "callback", callback, "class", name, "error", err)
 	}
@@ -73,5 +70,5 @@ func (client *Client) UncaughtCallbacks() (uint64, string) {
 	if client == nil {
 		return 0, ""
 	}
-	return client.uncaughtCallbacks, client.uncaughtFirst
+	return client.uncaught.Report()
 }

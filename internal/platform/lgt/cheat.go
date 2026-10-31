@@ -1,101 +1,40 @@
 package lgt
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/cheat"
+	"github.com/movingwoo/wfeature/internal/platform/armcheat"
 )
 
-// cheatTarget adapts the client's guest address space to the cheat engine.
-// Scans cover only committed writable pages: game state the guest can mutate
-// lives there, and the lazily committed reservations would make every sweep
-// orders of magnitude slower.
-//
-// It is the same adapter shape the other ARM platform uses, because the engine
-// asks the same three questions of both — what can be read, what can be
+// cheatTarget adapts the client's guest address space to the cheat engine,
+// with the adapter every platform on the ARM core shares: the engine asks the
+// same three questions of all of them — what can be read, what can be
 // written, and which regions are worth sweeping.
-type cheatTarget struct {
-	client *Client
+func (client *Client) cheatTarget() armcheat.Target {
+	return armcheat.Target{Core: func() *armcore.Core { return client.core }, Label: client.cheatLabel}
 }
 
-func (target cheatTarget) ReadMemory(address uint32, destination []byte) error {
-	return target.client.core.Memory().Read(address, destination)
-}
-
-// WriteMemory deliberately does not go through the watched write path: the
-// engine's own freeze rewrites land every tick, and recording them would make
-// the cheat the loudest writer of every address it holds.
-func (target cheatTarget) WriteMemory(address uint32, data []byte) error {
-	return target.client.core.Memory().WriteUntracked(address, data)
-}
-
-func (target cheatTarget) Regions() []cheat.Region {
-	committed := target.client.core.Memory().CommittedRegions(armcore.PermissionWrite)
-	regions := make([]cheat.Region, 0, len(committed))
-	for _, region := range committed {
-		regions = append(regions, cheat.Region{
-			Base:  region.Base,
-			Size:  uint32(min(region.Size, 0xffffffff)),
-			Label: target.label(region.Base),
-		})
-	}
-	return regions
-}
-
-// label names a region so a hit reads as something. Unlike the other platform
-// the module is not at a fixed base — an ELF keeps whatever addresses it names
-// — so the module's own span is asked of the loaded module rather than
-// compared against a constant.
-func (target cheatTarget) label(base uint32) string {
-	low, high := target.client.module.Span()
+// cheatLabel names a region so a hit reads as something. Unlike the other
+// platform the module is not at a fixed base — an ELF keeps whatever addresses
+// it names — so the module's own span is asked of the loaded module rather
+// than compared against a constant. Nothing here is marked as code a scan
+// keeps out of.
+func (client *Client) cheatLabel(base uint32) (string, bool) {
+	low, high := client.module.Span()
 	switch {
 	case base >= low && base < high:
-		return "module"
+		return "module", false
 	case uint64(base) >= uint64(heapBase) && uint64(base) < uint64(heapBase)+heapSize:
-		return "heap"
+		return "heap", false
 	case uint64(base) >= uint64(platformCodeBase) && uint64(base) < uint64(platformCodeBase)+platformCodeSize:
-		return "stubs"
+		return "stubs", false
 	case uint64(base) >= uint64(platformDataBase) && uint64(base) < uint64(platformDataBase)+platformDataSize:
-		return "platform"
+		return "platform", false
 	case uint64(base) >= uint64(stackBase) && uint64(base) < uint64(stackBase)+stackSize:
-		return "stack"
+		return "stack", false
 	default:
-		return "data"
+		return "data", false
 	}
-}
-
-// The watch methods forward to the ARM core's store instrumentation, which is
-// what makes cheatTarget a cheat.WatchTarget.
-func (target cheatTarget) Watch(address uint32)   { target.client.core.Watch(address) }
-func (target cheatTarget) Unwatch(address uint32) { target.client.core.Unwatch(address) }
-func (target cheatTarget) ClearWatches()          { target.client.core.ClearWatches() }
-func (target cheatTarget) Watches() []uint32      { return target.client.core.Watches() }
-
-func (target cheatTarget) WatchHits() []cheat.WatchHit {
-	hits := target.client.core.WatchHits()
-	converted := make([]cheat.WatchHit, len(hits))
-	for index, hit := range hits {
-		converted[index] = cheat.WatchHit{
-			Address: hit.Address, PC: hit.PC, Origin: writeOrigin(hit.Origin),
-			Value: hit.Value, Size: hit.Size, Count: hit.Count,
-		}
-	}
-	return converted
-}
-
-func (target cheatTarget) WatchHitsOverflowed() bool { return target.client.core.WatchHitsOverflowed() }
-
-// writeOrigin translates the core's answer for the cheat engine, which is kept
-// free of the ARM core so a platform without one can still hold a session.
-// Translating rather than sharing the type is what keeps that true.
-func writeOrigin(origin armcore.WriteOrigin) cheat.WriteOrigin {
-	if origin == armcore.OriginHost {
-		return cheat.OriginHost
-	}
-	return cheat.OriginGuest
 }
 
 // ImageHash is the SHA-256 of the executable image this session loaded, in
@@ -113,17 +52,7 @@ func (session *Session) ImageHash() string {
 	if session == nil || session.archive == nil {
 		return ""
 	}
-	return imageHash(session.archive.Module)
-}
-
-// imageHash is the shared spelling of that identity, so every caller answers
-// the same kind of value.
-func imageHash(data []byte) string {
-	if len(data) == 0 {
-		return ""
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	return armcheat.ImageHash(session.archive.Module)
 }
 
 // Cheat returns the session's attached cheat engine, creating it on first use.
@@ -133,7 +62,7 @@ func (session *Session) Cheat() *cheat.Session {
 		return nil
 	}
 	if session.cheat == nil {
-		session.cheat = cheat.NewSession(cheatTarget{client: session.client})
+		session.cheat = cheat.NewSession(session.client.cheatTarget())
 	}
 	return session.cheat
 }
@@ -144,18 +73,16 @@ func (session *Session) CheatConsole() *cheat.Console {
 		return nil
 	}
 	if session.cheatConsole == nil {
-		session.cheatConsole = cheat.NewConsole(session.Cheat())
-		// A saved table names the game it was made against, which is the only
-		// thing that lets one be placed months later. This platform gives every
-		// title its own PID, so that is the name worth saving.
+		// This platform gives every title its own PID, so that is the name a
+		// saved table is worth saving under. The key beside it is the hash of
+		// the image actually loaded, so a table made against one packaging of a
+		// title is found again by another. The Host fills in the other half of
+		// the key, which is the file it read.
+		var game string
 		if session.archive != nil {
-			session.cheatConsole.SetGame(SaveOwner(session.archive.Descriptor))
+			game = SaveOwner(session.archive.Descriptor)
 		}
-		// The name is the label; the key beside it is the hash of the image
-		// actually loaded, so a table made against one packaging of a title is
-		// found again by another. The Host fills in the other half of the key,
-		// which is the file it read.
-		session.cheatConsole.SetTableKey(cheat.TableKey{Image: session.ImageHash()})
+		session.cheatConsole = armcheat.NewConsole(session.Cheat(), game, session.ImageHash())
 	}
 	return session.cheatConsole
 }
@@ -164,13 +91,7 @@ func (session *Session) CheatConsole() *cheat.Console {
 // the game just wrote. Freeze failures surface as an error because a cheat
 // that silently stops applying is worse than a visible fault.
 func (session *Session) serviceCheat() error {
-	if session.cheat == nil {
-		return nil
-	}
-	if failed := session.cheat.Tick(); len(failed) > 0 {
-		return fmt.Errorf("LGT cheat freeze failed at %#x", failed[0])
-	}
-	return nil
+	return armcheat.Reapply(session.cheat, "LGT")
 }
 
 // frozenAddresses lists the guest addresses the cheat engine rewrites every

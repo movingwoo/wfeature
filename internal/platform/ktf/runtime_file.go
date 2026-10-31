@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
@@ -779,7 +780,7 @@ func runtimeFileSystemCString(_ *initializationRuntime, _ *jvm.VM, arguments []j
 	if !ok {
 		return jvm.VoidValue(), fmt.Errorf("FileSystem.toCString argument is not a string")
 	}
-	return jvm.ReferenceValue(jvm.NewByteArray(append(encodeEUCKR(text), 0))), nil
+	return jvm.ReferenceValue(jvm.NewByteArray(append(backend.EncodeEUCKR(text), 0))), nil
 }
 
 func runtimeFileSystemName(value jvm.Value) (string, error) {

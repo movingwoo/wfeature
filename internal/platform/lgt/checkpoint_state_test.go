@@ -835,9 +835,9 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"framebuffers": recorded, "timers": recorded, "nextHandle": recorded,
 			"pixelOps": recorded, "installedPixelOps": recorded, "uninstalledPixelOps": diagnostic,
 			"netConnects": recorded, "netGeneration": recorded, "clock": recorded, "events": recorded,
-			"uncaughtCallbacks": diagnostic, "uncaughtFirst": diagnostic,
+			"uncaught": diagnostic, "vibrator": recorded,
 			"audio": recorded, "clips": recorded, "volume": recorded, "sourceVolume": recorded, "sourceMuted": recorded,
-			"vibrator": recorded, "files": recorded, "removed": store, "created": store,
+			"files": recorded, "removed": store, "created": store,
 			"removedLegacy": store, "createdLegacy": store,
 			// The two lists are stored before a checkpoint is taken, and one
 			// the store will not take refuses it.

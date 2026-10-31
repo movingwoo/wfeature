@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"path"
 	"strings"
+
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // An earlier KTF download package carries no descriptor and no JAR. Where the
@@ -307,7 +308,7 @@ func ParseNativeInfo(data []byte) (NativeInfo, error) {
 			}
 			info.Icons = append(info.Icons, icon)
 		case nativeSpanText:
-			text := wipicrt.DecodeEUCKR(span[2:])
+			text := backend.DecodeEUCKR(span[2:])
 			if len(text) > maxNativeInfoText {
 				return NativeInfo{}, fmt.Errorf("span %d text is %d bytes, limit %d", index, len(text), maxNativeInfoText)
 			}

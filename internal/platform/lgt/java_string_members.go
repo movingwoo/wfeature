@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // The rest of `java/lang/String` and `java/lang/StringBuffer` that is not about
@@ -62,7 +63,7 @@ func (charset javaCharset) decode(data []byte) string {
 	if charset == javaCharsetUTF8 {
 		return strings.ToValidUTF8(string(data), "�")
 	}
-	return decodeEUCKR(data)
+	return backend.DecodeEUCKR(data)
 }
 
 func (charset javaCharset) encode(text string) []byte {
@@ -71,7 +72,7 @@ func (charset javaCharset) encode(text string) []byte {
 		// side; UTF-8 has no form for one and the class library writes '?'.
 		return []byte(strings.ToValidUTF8(text, "?"))
 	}
-	return encodeEUCKR(text)
+	return backend.EncodeEUCKR(text)
 }
 
 // javaCharsetNamed reads the encoding argument a String method takes, throwing

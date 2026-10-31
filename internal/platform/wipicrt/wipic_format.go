@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -98,6 +99,6 @@ func (runtime *Runtime) wipicPrintk(thread *armcore.Thread) (uint32, error) {
 		return 0, nil
 	}
 	runtime.CountDiagnostic("printk " + format)
-	runtime.Client.GuestPrint(DecodeEUCKR(rendered))
+	runtime.Client.GuestPrint(backend.DecodeEUCKR(rendered))
 	return 0, nil
 }

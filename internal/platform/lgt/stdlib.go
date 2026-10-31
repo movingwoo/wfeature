@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 // LGT provides the C standard library through an import table instead of
@@ -726,24 +727,10 @@ func (client *Client) writeLocaltime(pointer uint32) (uint32, error) {
 		}
 		client.tmStorage = address
 	}
-	moment := time.Unix(seconds, 0).In(time.Local)
-	fields := map[uint32]int32{
-		tmSeconds: int32(moment.Second()),
-		tmMinutes: int32(moment.Minute()),
-		tmHours:   int32(moment.Hour()),
-		tmDay:     int32(moment.Day()),
-		// ANSI C counts months from zero and years from 1900.
-		tmMonth:   int32(moment.Month()) - 1,
-		tmYear:    int32(moment.Year()) - 1900,
-		tmWeekday: int32(moment.Weekday()),
-		tmYearDay: int32(moment.YearDay()) - 1,
-		// No daylight saving is reported, as the SKT Clet C library reports
-		// none: the handsets these titles ran on kept Korean time, which has
-		// none to report.
-		tmIsDST: 0,
-	}
-	for offset, value := range fields {
-		if err := client.writeWord(client.tmStorage+offset, uint32(value)); err != nil {
+	// The members are the ones the SKT Clet C library answers with
+	// (wipic.TimeFields), in the order the offsets above name them.
+	for index, value := range wipic.TimeFields(time.Unix(seconds, 0).In(time.Local)) {
+		if err := client.writeWord(client.tmStorage+uint32(index*4), uint32(value)); err != nil {
 			return 0, err
 		}
 	}

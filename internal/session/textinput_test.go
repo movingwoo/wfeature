@@ -12,10 +12,10 @@ import (
 
 func TestTextInputCommitReportsGuestExit(t *testing.T) {
 	platform := &ktf.Session{}
-	running := &Session{ktf: platform}
+	running := &Session{engine: ktfEngine{platform}}
 	want := fmt.Errorf("notify text listener: %w", ktf.ErrGuestExited)
 	called := 0
-	err := running.commitTextInput(context.Background(), platform, func(context.Context, string) error {
+	err := running.commitTextInput(context.Background(), running.engine, func(context.Context, string) error {
 		called++
 		return want
 	}, "complete text")

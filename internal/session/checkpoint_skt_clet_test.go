@@ -37,7 +37,7 @@ func sktCletStart(t *testing.T, archive []byte, store backend.SaveStore) *Sessio
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.cletSession == nil {
+	if s.cletPlatform() == nil {
 		t.Fatal("the fixture did not start as an SKT Clet")
 	}
 	return s
@@ -46,7 +46,7 @@ func sktCletStart(t *testing.T, archive []byte, store backend.SaveStore) *Sessio
 func sktCletMemory(t *testing.T, s *Session, address, size uint32) []byte {
 	t.Helper()
 	data := make([]byte, size)
-	if err := s.cletSession.Client.Core().Memory().Read(address, data); err != nil {
+	if err := s.cletPlatform().Client.Core().Memory().Read(address, data); err != nil {
 		t.Fatal(err)
 	}
 	return data
@@ -477,7 +477,7 @@ func TestTheAuthenticationACletStartedUnderIsReported(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		running := &Session{cletSession: started}
+		running := &Session{engine: cletEngine{started}}
 		got := running.Authentication()
 		running.Close()
 		if got != test.want {

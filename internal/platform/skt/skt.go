@@ -213,7 +213,7 @@ func readArchiveEntry(reader *zip.Reader, name string, spent *budget) ([]byte, e
 	return data, nil
 }
 
-// decodeEUCKR converts descriptor text to UTF-8, leaving bytes that are not
+// backend.DecodeEUCKR converts descriptor text to UTF-8, leaving bytes that are not
 // EUC-KR as they are: a repacked archive can carry an ASCII or UTF-8 .msd, and
 // those decode unchanged.
 func decodeArchiveText(data []byte) []byte {
@@ -222,27 +222,6 @@ func decodeArchiveText(data []byte) []byte {
 		return data
 	}
 	return decoded
-}
-
-// decodePlatformBytes and encodePlatformString are the handset's default
-// charset, which is what `new String(byte[])` and `String.getBytes()` mean on
-// these titles. Bytes that are not EUC-KR are left as they are rather than
-// replaced, because a title also builds Strings out of content it packed
-// itself.
-func decodePlatformBytes(data []byte) string {
-	decoded, err := korean.EUCKR.NewDecoder().Bytes(data)
-	if err != nil {
-		return strings.ToValidUTF8(string(data), "�")
-	}
-	return string(decoded)
-}
-
-func encodePlatformString(value string) []byte {
-	encoded, err := korean.EUCKR.NewEncoder().Bytes([]byte(value))
-	if err != nil {
-		return []byte(value)
-	}
-	return encoded
 }
 
 // SaveOwner names the directory this title's saves live in.

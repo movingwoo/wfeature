@@ -168,7 +168,7 @@ func wipiToCString(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	array, err := newByteArray(vm, append(encodePlatformString(text), 0))
+	array, err := newByteArray(vm, append(backend.EncodeEUCKR(text), 0))
 	if err != nil {
 		return jvm.VoidValue(), err
 	}

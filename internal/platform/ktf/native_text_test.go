@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
@@ -90,7 +91,7 @@ func TestNativeTextReadsBothShapesOfARun(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read text: %v", err)
 			}
-			if got := wipicrt.DecodeEUCKR(raw); got != testCase.want {
+			if got := backend.DecodeEUCKR(raw); got != testCase.want {
 				t.Errorf("read %q, want %q", got, testCase.want)
 			}
 		})

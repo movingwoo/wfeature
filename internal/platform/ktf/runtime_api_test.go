@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
@@ -311,7 +312,7 @@ func TestFileSystemListsRenamesAndEncodesNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bytes) == 0 || bytes[len(bytes)-1] != 0 || wipicrt.DecodeEUCKR(bytes[:len(bytes)-1]) != "가.dat" {
+	if len(bytes) == 0 || bytes[len(bytes)-1] != 0 || backend.DecodeEUCKR(bytes[:len(bytes)-1]) != "가.dat" {
 		t.Fatalf("toCString() = %v", bytes)
 	}
 }
