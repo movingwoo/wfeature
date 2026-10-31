@@ -42,22 +42,22 @@ func TestCheckpointScriptRestoresExecutionWithoutTouchingLaterSaves(t *testing.T
 				t.Fatal(err)
 			}
 			frame, w, h, ok := s.Frame()
-			flushes := s.surface.Flushes()
+			flushes := s.captureSurface().Flushes()
 			if !ok {
 				t.Fatal("fixture has no presented frame")
 			}
 			if err = store.StoreSave("nv/data", []byte{9, 0}); err != nil {
 				t.Fatal(err)
 			}
-			old := s.script
+			old := s.sktScript()
 			if err = s.LoadCheckpoint(t.Context(), archive, saved); err != nil {
 				t.Fatal(err)
 			}
-			if s.script == old || s.Paused() != paused || s.Speed() != 2 || !reflect.DeepEqual(s.HeldKeys(), []int32{'5'}) {
+			if s.sktScript() == old || s.Paused() != paused || s.Speed() != 2 || !reflect.DeepEqual(s.HeldKeys(), []int32{'5'}) {
 				t.Fatal("shared script state not restored")
 			}
 			got, gw, gh, gok := s.Frame()
-			if !bytes.Equal(frame, got) || gw != w || gh != h || gok != ok || s.surface.Flushes() != flushes {
+			if !bytes.Equal(frame, got) || gw != w || gh != h || gok != ok || s.captureSurface().Flushes() != flushes {
 				t.Fatal("last presented script frame changed")
 			}
 			current, found := store.LoadSave("nv/data")
@@ -75,7 +75,7 @@ func TestCheckpointScriptRestoresExecutionWithoutTouchingLaterSaves(t *testing.T
 			if err = s.ReleaseHeldInput(t.Context()); err != nil || len(s.HeldKeys()) != 0 {
 				t.Fatalf("release: %v", err)
 			}
-			if _, err = s.script.Advance(t.Context(), 5*time.Millisecond); err != nil {
+			if _, err = s.sktScript().Advance(t.Context(), 5*time.Millisecond); err != nil {
 				t.Fatal(err)
 			}
 			if pixels, _, _, _ := s.Frame(); pixels[0] != 255 {
@@ -135,11 +135,11 @@ func TestCheckpointScriptRefusesDamageWithoutDisplacingGame(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			old, flushes := s.script, s.surface.Flushes()
+			old, flushes := s.sktScript(), s.captureSurface().Flushes()
 			if err = s.LoadCheckpoint(t.Context(), archive, bad); err == nil {
 				t.Fatal("damaged script state accepted")
 			}
-			if s.script != old || s.Failed() != nil || !s.Running() || s.surface.Flushes() != flushes {
+			if s.sktScript() != old || s.Failed() != nil || !s.Running() || s.captureSurface().Flushes() != flushes {
 				t.Fatal("refused slot changed live script")
 			}
 			current, _ := store.LoadSave("nv/data")

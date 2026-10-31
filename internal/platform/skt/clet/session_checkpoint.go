@@ -62,6 +62,9 @@ func (session *Session) CaptureCheckpointWithSession(ctx context.Context, captur
 	if session == nil || session.Client == nil || session.archiveIdentity == ([32]byte{}) {
 		return backend.Checkpoint{}, fmt.Errorf("SKT Clet checkpoint session is not started")
 	}
+	if session.cheat != nil && (session.cheat.Freezes().Len() != 0 || len(session.cheat.Patches()) != 0) {
+		return backend.Checkpoint{}, fmt.Errorf("SKT Clet checkpoint cannot capture active cheat freezes or patches")
+	}
 	client := session.Client
 	if !client.Run.TryLock() {
 		return backend.Checkpoint{}, ErrCheckpointBusy
@@ -306,7 +309,7 @@ func (prepared *PreparedSession) Commit(ctx context.Context, previous *Session, 
 			old.Audio.SetSink(nil)
 		}
 		unlock()
-		previous.Client = nil
+		previous.Client, previous.cheat, previous.cheatConsole = nil, nil, nil
 	}
 	session := prepared.session
 	session.options.SaveStore, session.options.SaveRoot = live, ""

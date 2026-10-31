@@ -17,7 +17,6 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/detect"
-	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/zipentry"
 )
 
@@ -229,7 +228,7 @@ func ParseDescriptor(data []byte) (Descriptor, error) {
 			}
 			// Descriptors are written on Korean handsets, so a free-form field
 			// such as the application title arrives in the platform charset.
-			values[key] = wipicrt.DecodeEUCKR(valueBytes)
+			values[key] = backend.DecodeEUCKR(valueBytes)
 			continue
 		}
 		if _, duplicate := values[key]; duplicate && identifying {

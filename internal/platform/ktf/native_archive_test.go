@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/gameroot"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
@@ -57,7 +58,7 @@ func buildNativeInfo(t *testing.T, spans [][]byte, trailer []uint32) []byte {
 }
 
 func nativeTextSpan(text string) []byte {
-	return append([]byte{0xfe, 0xfe}, encodeEUCKR(text)...)
+	return append([]byte{0xfe, 0xfe}, backend.EncodeEUCKR(text)...)
 }
 
 func nativeTypedSpan(mime string, payload []byte) []byte {

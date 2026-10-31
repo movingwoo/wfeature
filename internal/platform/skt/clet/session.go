@@ -7,6 +7,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
@@ -18,17 +19,15 @@ var ErrGuestExited = errors.New("SKT Clet guest requested exit")
 const sessionDefaultMaxSteps = 100_000_000
 
 // Session is a running Clet and the Host boundaries attached to it. A Clet has
-// no archive and no cheat console wired yet, so it keeps only the client, the
-// options and the save identity a diagnostic report names.
+// no archive, so it keeps the client, the options, the save identity a
+// diagnostic report names and the cheat engine attached to it.
 type Session struct {
 	Client          *Client
 	options         SessionOptions
 	archiveIdentity [32]byte
+	cheat           *cheat.Session
+	cheatConsole    *cheat.Console
 }
-
-// serviceCheat is a no-op for a Clet: the cheat console is not wired to a native
-// program. It exists so the service round reads the same as a KTF title's.
-func (session *Session) serviceCheat() error { return nil }
 
 // SessionOptions configures a Clet session. The fields mirror the KTF session's
 // so a Host drives both the same way.

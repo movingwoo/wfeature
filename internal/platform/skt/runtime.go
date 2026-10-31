@@ -414,10 +414,10 @@ func newRuntime(archive *Archive, options Options) (*Runtime, error) {
 	// while the labels beside it, byte arrays out of the title's own resources,
 	// drew correctly. See "The default charset is the handset's" in docs/history/skt.md.
 	if options.JVM.ByteDecoder == nil {
-		options.JVM.ByteDecoder = decodePlatformBytes
+		options.JVM.ByteDecoder = backend.DecodeEUCKR
 	}
 	if options.JVM.ByteEncoder == nil {
-		options.JVM.ByteEncoder = encodePlatformString
+		options.JVM.ByteEncoder = backend.EncodeEUCKR
 	}
 	// A MIDlet leaves through notifyDestroyed, but titles of this era call
 	// System.exit on the way out of an error dialog or a quit menu. It means

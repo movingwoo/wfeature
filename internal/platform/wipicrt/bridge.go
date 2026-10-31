@@ -12,7 +12,6 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/glyph"
 	"github.com/movingwoo/wfeature/internal/wipic"
-	"golang.org/x/text/encoding/korean"
 )
 
 // This file collects the small helpers the WIPI-C handlers share: guest memory
@@ -247,16 +246,6 @@ func (runtime *Runtime) FontBaseline() int32 {
 	return int32(runtime.FontFace().Ascent)
 }
 
-// serviceTimersLocked also lets a Host text commit finish a timer-owned key
-// delivery without releasing the guest execution lock between characters.
-
-func DecodeEUCKR(data []byte) string {
-	decoded, err := korean.EUCKR.NewDecoder().Bytes(data)
-	if err != nil {
-		return strings.ToValidUTF8(string(data), "�")
-	}
-	return string(decoded)
-}
 func (runtime *Runtime) ReadWord(address uint32) (uint32, error) {
 	words, err := runtime.ReadAOTWords(address, 1, "module word")
 	if err != nil {

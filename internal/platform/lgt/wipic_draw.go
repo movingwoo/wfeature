@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/curve"
 )
 
@@ -275,13 +276,13 @@ func (client *Client) readString(pointer uint32, length int32) (string, error) {
 	if err := client.core.Memory().Read(pointer, text); err != nil {
 		return "", err
 	}
-	return decodeEUCKR(text), nil
+	return backend.DecodeEUCKR(text), nil
 }
 
 // readCText is readCString for a run of text rather than for a name: the bytes
 // a handset draws are EUC-KR, and rendering them as themselves puts a
 // codepoint-marked box on the screen for every half of every syllable. One
-// title's whole notice screen read that way. See decodeEUCKR for why the plain
+// title's whole notice screen read that way. See backend.DecodeEUCKR for why the plain
 // reader does not do this.
 // maxUnicodeTextUnits bounds a terminated UTF-16 string, the same 4,096 a
 // terminated C string is read to (readCString).
@@ -328,7 +329,7 @@ func (client *Client) readCText(address uint32) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return decodeEUCKR([]byte(text)), nil
+	return backend.DecodeEUCKR([]byte(text)), nil
 }
 
 func readArguments(read func(int) (int32, error), count int) ([]int32, error) {

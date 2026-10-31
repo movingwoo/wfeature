@@ -34,14 +34,14 @@ func TestCheckpointSKTJavaRestoresPresentedFrameAndInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := s.runtime
+	old := s.sktRuntime()
 	if err = store.StoreSave("later", []byte("current")); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.LoadCheckpoint(t.Context(), archive, saved); err != nil {
 		t.Fatal(err)
 	}
-	if s.runtime == old || !s.Running() || s.Speed() != 2 || len(s.HeldKeys()) != 1 {
+	if s.sktRuntime() == old || !s.Running() || s.Speed() != 2 || len(s.HeldKeys()) != 1 {
 		t.Fatal("Java shared state not restored")
 	}
 	got, gw, gh, gshown := s.Frame()
@@ -85,12 +85,12 @@ func waitSharedJavaCheckpointInt(t *testing.T, s *Session, field string, want in
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if sharedJavaCheckpointInt(t, s.runtime.VM, field) == want {
+		if sharedJavaCheckpointInt(t, s.sktRuntime().VM, field) == want {
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("checkpoint fixture %s = %d, want %d", field, sharedJavaCheckpointInt(t, s.runtime.VM, field), want)
+	t.Fatalf("checkpoint fixture %s = %d, want %d", field, sharedJavaCheckpointInt(t, s.sktRuntime().VM, field), want)
 }
 
 func startSharedJavaCheckpoint(t *testing.T, archive []byte, store backend.SaveStore) *Session {
@@ -101,7 +101,7 @@ func startSharedJavaCheckpoint(t *testing.T, archive []byte, store backend.SaveS
 	}
 	t.Cleanup(s.Close)
 	waitSharedJavaCheckpointInt(t, s, "before", 1)
-	if !s.CanCheckpoint() || sharedJavaCheckpointInt(t, s.runtime.VM, "value") != 0 {
+	if !s.CanCheckpoint() || sharedJavaCheckpointInt(t, s.sktRuntime().VM, "value") != 0 {
 		t.Fatal("Java checkpoint fixture did not initialize")
 	}
 	if err := s.SendKey(t.Context(), KeyPress, '5'); err != nil {
@@ -131,7 +131,7 @@ func sharedJavaCheckpointFrameOf(t *testing.T, s *Session) sharedJavaCheckpointF
 	if !shown || width != 32 || height != 24 {
 		t.Fatal("checkpoint fixture did not present a frame")
 	}
-	return sharedJavaCheckpointFrame{RGBA: bytes.Clone(frame), Flushes: s.surface.Flushes(), Paused: s.Paused()}
+	return sharedJavaCheckpointFrame{RGBA: bytes.Clone(frame), Flushes: s.captureSurface().Flushes(), Paused: s.Paused()}
 }
 
 func checkSharedJavaCheckpointContinuation(t *testing.T, s *Session, expected sharedJavaCheckpointFrame) {
@@ -143,14 +143,14 @@ func checkSharedJavaCheckpointContinuation(t *testing.T, s *Session, expected sh
 		t.Fatal("restored Java session changed its last presented frame")
 	}
 	for field, want := range map[string]int32{"starts": 1, "destroys": 0, "before": 1, "after": 0, "value": 1} {
-		if got := sharedJavaCheckpointInt(t, s.runtime.VM, field); got != want {
+		if got := sharedJavaCheckpointInt(t, s.sktRuntime().VM, field); got != want {
 			t.Fatalf("restored %s = %d, want %d without callback or worker prefix replay", field, got, want)
 		}
 	}
-	if _, err := s.runtime.VM.InvokeStatic("CheckpointMIDlet", "readCurrent", "()V"); err != nil {
+	if _, err := s.sktRuntime().VM.InvokeStatic("CheckpointMIDlet", "readCurrent", "()V"); err != nil {
 		t.Fatal(err)
 	}
-	if got := sharedJavaCheckpointInt(t, s.runtime.VM, "readValue"); got != 909 {
+	if got := sharedJavaCheckpointInt(t, s.sktRuntime().VM, "readValue"); got != 909 {
 		t.Fatalf("restored RMS and input stream read %d, want current save data 909", got)
 	}
 	if err := s.ReleaseHeldInput(t.Context()); err != nil || len(s.HeldKeys()) != 0 {
@@ -163,11 +163,11 @@ func checkSharedJavaCheckpointContinuation(t *testing.T, s *Session, expected sh
 		if err := s.Resume(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		if got := sharedJavaCheckpointInt(t, s.runtime.VM, "starts"); got != 2 {
+		if got := sharedJavaCheckpointInt(t, s.sktRuntime().VM, "starts"); got != 2 {
 			t.Fatalf("explicit resume called startApp %d times, want 2 total", got)
 		}
 	}
-	value, err := s.runtime.VM.StaticField("CheckpointMIDlet", "worker", "Ljava/lang/Thread;")
+	value, err := s.sktRuntime().VM.StaticField("CheckpointMIDlet", "worker", "Ljava/lang/Thread;")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,11 +175,11 @@ func checkSharedJavaCheckpointContinuation(t *testing.T, s *Session, expected sh
 	if err != nil || worker == nil {
 		t.Fatalf("restored worker reference: %v", err)
 	}
-	if _, err := s.runtime.VM.InvokeVirtual(worker, "interrupt", "()V"); err != nil {
+	if _, err := s.sktRuntime().VM.InvokeVirtual(worker, "interrupt", "()V"); err != nil {
 		t.Fatal(err)
 	}
 	waitSharedJavaCheckpointInt(t, s, "after", 1)
-	if got := sharedJavaCheckpointInt(t, s.runtime.VM, "before"); got != 1 {
+	if got := sharedJavaCheckpointInt(t, s.sktRuntime().VM, "before"); got != 1 {
 		t.Fatalf("restored worker prefix executed %d times, want 1", got)
 	}
 	if _, err := s.Tick(t.Context(), 0); err != nil {
@@ -211,11 +211,11 @@ func TestCheckpointSKTJavaRestoresWorkersOverCurrentSaves(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			old, writes := s.runtime, store.writes
+			old, writes := s.sktRuntime(), store.writes
 			if err := s.LoadCheckpoint(t.Context(), archive, data); err != nil {
 				t.Fatal(err)
 			}
-			if s.runtime == old || sharedJavaCheckpointInt(t, old.VM, "destroys") != 0 {
+			if s.sktRuntime() == old || sharedJavaCheckpointInt(t, old.VM, "destroys") != 0 {
 				t.Fatal("load retained the source or called its destroyApp")
 			}
 			checkSharedJavaCheckpointContinuation(t, s, expected)
@@ -269,12 +269,12 @@ func TestCheckpointSKTJavaRefusesMalformedStateWithoutDisplacingSource(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			old, frame, writes := s.runtime, sharedJavaCheckpointFrameOf(t, s), store.writes
+			old, frame, writes := s.sktRuntime(), sharedJavaCheckpointFrameOf(t, s), store.writes
 			if err := s.LoadCheckpoint(t.Context(), archive, broken); err == nil {
 				t.Fatal("malformed Java checkpoint was accepted")
 			}
-			if s.runtime != old || !s.Running() || s.Failed() != nil || !reflect.DeepEqual(sharedJavaCheckpointFrameOf(t, s), frame) ||
-				!reflect.DeepEqual(s.HeldKeys(), []int32{'5'}) || sharedJavaCheckpointInt(t, s.runtime.VM, "destroys") != 0 {
+			if s.sktRuntime() != old || !s.Running() || s.Failed() != nil || !reflect.DeepEqual(sharedJavaCheckpointFrameOf(t, s), frame) ||
+				!reflect.DeepEqual(s.HeldKeys(), []int32{'5'}) || sharedJavaCheckpointInt(t, s.sktRuntime().VM, "destroys") != 0 {
 				t.Fatal("refused checkpoint displaced or changed the source")
 			}
 			after, err := store.base.SnapshotSaves()
@@ -283,7 +283,7 @@ func TestCheckpointSKTJavaRefusesMalformedStateWithoutDisplacingSource(t *testin
 			}
 		})
 	}
-	if err := s.SendKey(t.Context(), KeyPress, '6'); err != nil || sharedJavaCheckpointInt(t, s.runtime.VM, "value") != 2 {
+	if err := s.SendKey(t.Context(), KeyPress, '6'); err != nil || sharedJavaCheckpointInt(t, s.sktRuntime().VM, "value") != 2 {
 		t.Fatalf("source input after refusal: %v", err)
 	}
 	if err := s.LoadCheckpoint(t.Context(), archive, data); err != nil {

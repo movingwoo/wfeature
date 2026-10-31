@@ -6,36 +6,16 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 )
 
-type textInputProvider interface {
-	TextInput(context.Context) (*backend.TextInput, error)
-}
-
 // TextInput obtains a short-lived edit for the current guest field. Hosts call
 // both this method and the returned Commit on their serialized session loop.
 func (s *Session) TextInput(ctx context.Context) (edit *backend.TextInput, err error) {
 	err = s.guarded("session text input", func() error {
-		if s.paused {
+		if s.paused || s.engine == nil {
 			return backend.ErrNoTextInput
 		}
-		var platform any
-		switch {
-		case s.ktf != nil:
-			platform = s.ktf
-		case s.cletSession != nil:
-			platform = s.cletSession
-		case s.lgt != nil:
-			platform = s.lgt
-		case s.runtime != nil:
-			platform = s.runtime
-		default:
-			return backend.ErrNoTextInput
-		}
-		provider, ok := platform.(textInputProvider)
-		if !ok {
-			return backend.ErrNoTextInput
-		}
+		platform := s.engine
 		var failure error
-		edit, failure = provider.TextInput(ctx)
+		edit, failure = platform.textInput(ctx)
 		if failure != nil {
 			return failure
 		}
@@ -51,10 +31,11 @@ func (s *Session) TextInput(ctx context.Context) (edit *backend.TextInput, err e
 	return edit, err
 }
 
-func (s *Session) commitTextInput(ctx context.Context, platform any, commit func(context.Context, string) error, text string) error {
+// commitTextInput commits an edit only to the platform session that offered
+// it: a load or a close since then has put another one in its place, or none.
+func (s *Session) commitTextInput(ctx context.Context, platform engine, commit func(context.Context, string) error, text string) error {
 	return s.guarded("session text commit", func() error {
-		if s.paused || ctx.Err() != nil ||
-			(platform != s.ktf && platform != s.cletSession && platform != s.lgt && platform != s.runtime) {
+		if s.paused || ctx.Err() != nil || s.engine != platform {
 			return backend.ErrTextInputChanged
 		}
 		if err := backend.ValidateTextInput(text); err != nil {

@@ -6,8 +6,8 @@ import (
 	"image/color"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/glyph"
-	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // The screen draws text, and until now this platform did not.
@@ -170,7 +170,7 @@ func (platform *NativePlatform) measureText(thread *armcore.Thread) (uint32, err
 		// nothing.
 		if raw, err := platform.readText(address, count); err == nil {
 			face := platform.textFace()
-			for _, character := range wipicrt.DecodeEUCKR(raw) {
+			for _, character := range backend.DecodeEUCKR(raw) {
 				advance := face.Render(character).Advance
 				if int32(most) >= 0 && width+advance > int(int32(most)) {
 					break
@@ -240,7 +240,7 @@ func (platform *NativePlatform) drawText(thread *armcore.Thread) (uint32, error)
 		// better than a session missing its end.
 		return 1, nil
 	}
-	text := wipicrt.DecodeEUCKR(raw)
+	text := backend.DecodeEUCKR(raw)
 	// The messages a run reports are what they always were. They are the same
 	// text, and a report that lists what the title said is worth keeping now
 	// that the screen shows it too.

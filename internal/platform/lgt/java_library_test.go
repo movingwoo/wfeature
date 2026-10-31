@@ -1,6 +1,10 @@
 package lgt
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/movingwoo/wfeature/internal/backend"
+)
 
 // The class-library members a sweep of a local archive set reached for and this
 // platform did not have. Each is here because a title stopped on it, and each
@@ -102,7 +106,7 @@ func TestJavaStringBytesRoundTripThroughTheDecoder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded := decodeEUCKR(data); decoded != text {
+	if decoded := backend.DecodeEUCKR(data); decoded != text {
 		t.Fatalf("getBytes then decode = %q, want %q", decoded, text)
 	}
 }

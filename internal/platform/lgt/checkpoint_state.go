@@ -290,7 +290,7 @@ func unpackBools(data []byte, count int) []bool {
 func (a *arena) captureState() arenaState {
 	saved := arenaState{Cursor: a.cursor}
 	for _, block := range a.free {
-		saved.Free = append(saved.Free, arenaSpanState{block.start, block.end})
+		saved.Free = append(saved.Free, arenaSpanState{block.Start, block.End})
 	}
 	saved.Blocks = make([]byte, 0, len(a.sizes)*8)
 	for _, address := range slices.Sorted(maps.Keys(a.sizes)) {
@@ -340,7 +340,7 @@ func restoreArena(saved arenaState, base uint32, size uint64) (*arena, error) {
 		if block.End <= block.Start || index > 0 && saved.Free[index-1].End >= block.Start {
 			return invalid()
 		}
-		restored.free = append(restored.free, arenaBlock{start: block.Start, end: block.End})
+		restored.free = append(restored.free, arenaBlock{Start: block.Start, End: block.End})
 		spans = append(spans, span{block.Start, block.End})
 	}
 	slices.SortFunc(spans, func(a, b span) int { return cmp.Compare(a.start, b.start) })

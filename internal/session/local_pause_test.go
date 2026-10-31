@@ -61,8 +61,8 @@ func TestLocalPauseResumeObservation(t *testing.T) {
 		}
 	}
 	elapsed := func() time.Duration {
-		if running.runtime != nil {
-			return running.runtime.GuestElapsed()
+		if running.sktRuntime() != nil {
+			return running.sktRuntime().GuestElapsed()
 		}
 		value, _ := running.GuestElapsed()
 		return value

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // LGT's WIPI C slots are a flat index whose module bases follow the spec's
@@ -457,7 +458,7 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		// encoding, and it is often longer than the buffer a title offers.
 		// The specification answers that with M_E_SHORTBUF and says nothing
 		// about the buffer, so the buffer is left as the caller prepared it.
-		name := encodeEUCKR(client.archive.Descriptor.Fields["Name"])
+		name := backend.EncodeEUCKR(client.archive.Descriptor.Fields["Name"])
 		if uint64(len(name))+1 > uint64(size) {
 			return answerCode(thread, wipiShortBuffer)
 		}

@@ -8,11 +8,11 @@ import (
 
 // sktNativeProgram lays an SKT native package out for the Clet runtime that
 // runs it. Both the package and the runtime are SKT's: an SKT native executable
-// is a WIPI-C program, and `internal/platform/skt/clet` is SKT's own WIPI-C
-// engine, independent of the other vendors (see docs/skt-native.md). The
-// package's code is placed at the engine's image base and its data at the same
-// distance from the code it was linked at, which is the placement the
-// executable's own relocations describe.
+// is a WIPI-C program, and `internal/platform/skt/clet` runs it on the WIPI-C
+// engine KTF titles run on too (see docs/skt-native.md). The package's code is
+// placed at the engine's image base and its data at the same distance from the
+// code it was linked at, which is the placement the executable's own
+// relocations describe.
 //
 // Unless authentication compatibility is turned off, a recognized executable's
 // identity comparison is accepted here, in the code before it is loaded; see

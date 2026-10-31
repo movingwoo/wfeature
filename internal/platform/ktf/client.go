@@ -11,7 +11,6 @@ import (
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/textinput"
-	"golang.org/x/text/encoding/korean"
 )
 
 const (
@@ -81,12 +80,11 @@ type Client struct {
 	// logic instead of its screen; see behindOnPaint.
 	skipPaint bool
 	lastPaint time.Time
-	// uncaughtCallbacks counts the guest exceptions that ended a callback this
-	// Host started, and uncaughtFirst keeps what the first one said. Absorbing
-	// one keeps the session alive, so without a count a title that fails every
-	// paint reads exactly like a title that plays. See uncaught.go.
-	uncaughtCallbacks uint64
-	uncaughtFirst     string
+	// uncaught counts the guest exceptions that ended a callback this Host
+	// started, and keeps what the first one said. Absorbing one keeps the
+	// session alive, so without a count a title that fails every paint reads
+	// exactly like a title that plays. See uncaught.go.
+	uncaught backend.UncaughtCallbacks
 }
 
 // ServiceThreads grants one step slice to up to limit live guest Java
@@ -746,8 +744,8 @@ func LoadClient(image ClientImage, options armcore.CoreOptions) (*Client, error)
 	// kernel's MC_knlCurrentTime read one timeline; a game that measures a
 	// frame with one and waits with the other stays consistent.
 	client.vm = jvm.New(nil, jvm.Options{
-		ByteDecoder: wipicrt.DecodeEUCKR,
-		ByteEncoder: encodeEUCKR,
+		ByteDecoder: backend.DecodeEUCKR,
+		ByteEncoder: backend.EncodeEUCKR,
 		Clock: func() int64 {
 			if client.runtime == nil {
 				return time.Now().UnixMilli()
@@ -767,14 +765,6 @@ func LoadClient(image ClientImage, options armcore.CoreOptions) (*Client, error)
 		},
 	})
 	return client, nil
-}
-
-func encodeEUCKR(value string) []byte {
-	encoded, err := korean.EUCKR.NewEncoder().Bytes([]byte(value))
-	if err != nil {
-		return []byte(value)
-	}
-	return encoded
 }
 
 func (client *Client) Image() ClientImage {

@@ -133,8 +133,8 @@ func LoadCletClient(program CletProgram, options armcore.CoreOptions) (*Client, 
 	client := &Client{
 		Client: engine,
 		// The image a client is told about is the code alone: it is what a
-		// pixel operation's function pointer has to lie in, what the cheat
-		// panel labels as the client, and what a checkpoint is bound to.
+		// pixel operation's function pointer has to lie in, what a saved
+		// cheat table is keyed by, and what a checkpoint is bound to.
 		image: ClientImage{Name: program.Name, Data: program.Code},
 		clet:  &cletState{program: program},
 	}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
@@ -1713,8 +1714,8 @@ func TestNativeLibraryWidensText(t *testing.T) {
 	// The display reads the wide run back as the text it came from.
 	clear()
 	nativeCall(t, widen, source, 5, destination, 32)
-	if raw, err := platform.readText(destination, -1); err != nil || wipicrt.DecodeEUCKR(raw) != "1 가!" {
-		t.Errorf("the widened run reads as %q (%v), want %q", wipicrt.DecodeEUCKR(raw), err, "1 가!")
+	if raw, err := platform.readText(destination, -1); err != nil || backend.DecodeEUCKR(raw) != "1 가!" {
+		t.Errorf("the widened run reads as %q (%v), want %q", backend.DecodeEUCKR(raw), err, "1 가!")
 	}
 }
 

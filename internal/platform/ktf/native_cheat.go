@@ -1,10 +1,9 @@
 package ktf
 
 import (
-	"fmt"
-
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/cheat"
+	"github.com/movingwoo/wfeature/internal/platform/armcheat"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
@@ -14,37 +13,11 @@ import (
 // title keeps its whole state in what the platform allocated for it, so the
 // arena is where a search for a health bar will find one, and the labels say
 // so.
-type nativeCheatTarget struct {
-	client *NativeClient
+func (client *NativeClient) cheatTarget() armcheat.Target {
+	return armcheat.Target{Core: func() *armcore.Core { return client.core }, Label: client.cheatLabel}
 }
 
-func (target nativeCheatTarget) ReadMemory(address uint32, destination []byte) error {
-	return target.client.core.Memory().Read(address, destination)
-}
-
-// WriteMemory deliberately does not go through the watched write path: the
-// engine's own freeze rewrites land every tick, and recording them would make
-// the cheat the loudest writer of every address it holds.
-func (target nativeCheatTarget) WriteMemory(address uint32, data []byte) error {
-	return target.client.core.Memory().WriteUntracked(address, data)
-}
-
-func (target nativeCheatTarget) Regions() []cheat.Region {
-	committed := target.client.core.Memory().CommittedRegions(armcore.PermissionWrite)
-	regions := make([]cheat.Region, 0, len(committed))
-	for _, region := range committed {
-		label, code := target.label(region.Base)
-		regions = append(regions, cheat.Region{
-			Base:  region.Base,
-			Size:  uint32(min(region.Size, 0xffffffff)),
-			Label: label,
-			Code:  code,
-		})
-	}
-	return regions
-}
-
-// label names a region by where it starts and says whether it holds
+// cheatLabel names a region by where it starts and says whether it holds
 // instructions rather than state. Adjacent pages are reported as one region,
 // so a label has to be right for the run rather than for the page: the word
 // the loader plants sits immediately below the module and comes back merged
@@ -54,9 +27,9 @@ func (target nativeCheatTarget) Regions() []cheat.Region {
 // span of instructions and data with no boundary recorded between them, and it
 // stays swept for that reason; it also stays writable, which is what a byte
 // patch into a check needs.
-func (target nativeCheatTarget) label(base uint32) (string, bool) {
+func (client *NativeClient) cheatLabel(base uint32) (string, bool) {
 	switch {
-	case base == nativeHeaderBase || (base >= wipicrt.ImageBase && uint64(base) < uint64(wipicrt.ImageBase)+uint64(target.client.mapped)):
+	case base == nativeHeaderBase || (base >= wipicrt.ImageBase && uint64(base) < uint64(wipicrt.ImageBase)+uint64(client.mapped)):
 		return "module", false
 	case uint64(base) >= uint64(wipicrt.ThreadStackBase) && uint64(base) < uint64(wipicrt.ThreadStackBase)+wipicrt.ThreadStackSize:
 		return "stack", false
@@ -74,27 +47,6 @@ func (target nativeCheatTarget) label(base uint32) (string, bool) {
 	}
 }
 
-func (target nativeCheatTarget) Watch(address uint32)   { target.client.core.Watch(address) }
-func (target nativeCheatTarget) Unwatch(address uint32) { target.client.core.Unwatch(address) }
-func (target nativeCheatTarget) ClearWatches()          { target.client.core.ClearWatches() }
-func (target nativeCheatTarget) Watches() []uint32      { return target.client.core.Watches() }
-
-func (target nativeCheatTarget) WatchHits() []cheat.WatchHit {
-	hits := target.client.core.WatchHits()
-	converted := make([]cheat.WatchHit, len(hits))
-	for index, hit := range hits {
-		converted[index] = cheat.WatchHit{
-			Address: hit.Address, PC: hit.PC, Origin: writeOrigin(hit.Origin),
-			Value: hit.Value, Size: hit.Size, Count: hit.Count,
-		}
-	}
-	return converted
-}
-
-func (target nativeCheatTarget) WatchHitsOverflowed() bool {
-	return target.client.core.WatchHitsOverflowed()
-}
-
 // Cheat returns the session's attached cheat engine, creating it on first use.
 // ImageHash is the SHA-256 of the module this session loaded, in lower-case
 // hex — the same identity the other generation of package answers with, so a
@@ -103,7 +55,7 @@ func (session *NativeSession) ImageHash() string {
 	if session == nil || session.Client == nil || session.Client.archive == nil {
 		return ""
 	}
-	return imageHash(session.Client.archive.Module)
+	return armcheat.ImageHash(session.Client.archive.Module)
 }
 
 // Tick reapplies its frozen values after every frame.
@@ -112,7 +64,7 @@ func (session *NativeSession) Cheat() *cheat.Session {
 		return nil
 	}
 	if session.cheat == nil {
-		session.cheat = cheat.NewSession(nativeCheatTarget{client: session.Client})
+		session.cheat = cheat.NewSession(session.Client.cheatTarget())
 	}
 	return session.cheat
 }
@@ -123,14 +75,11 @@ func (session *NativeSession) CheatConsole() *cheat.Console {
 		return nil
 	}
 	if session.cheatConsole == nil {
-		session.cheatConsole = cheat.NewConsole(session.Cheat())
-		// A saved table names the game it was made against, which is the only
-		// thing that lets one be placed months later. There is no main class
-		// here, so the title's own name is what names it. The key beside the
-		// name is the hash of the module actually loaded, which is what a byte
-		// patch is true of whatever the package around it was called.
-		session.cheatConsole.SetGame(session.Name())
-		session.cheatConsole.SetTableKey(cheat.TableKey{Image: session.ImageHash()})
+		// There is no main class here, so the title's own name is what names a
+		// saved table; the key beside it is the hash of the module actually
+		// loaded, which is what a byte patch is true of whatever the package
+		// around it was called.
+		session.cheatConsole = armcheat.NewConsole(session.Cheat(), session.Name(), session.ImageHash())
 	}
 	return session.cheatConsole
 }
@@ -138,11 +87,5 @@ func (session *NativeSession) CheatConsole() *cheat.Console {
 // serviceCheat rewrites frozen values after a frame so they win over whatever
 // the title just wrote.
 func (session *NativeSession) serviceCheat() error {
-	if session.cheat == nil {
-		return nil
-	}
-	if failed := session.cheat.Tick(); len(failed) > 0 {
-		return fmt.Errorf("KTF native cheat freeze failed at %#x", failed[0])
-	}
-	return nil
+	return armcheat.Reapply(session.cheat, "KTF native")
 }

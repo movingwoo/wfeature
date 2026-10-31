@@ -6,6 +6,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // drawFixtureContext answers a context written into guest memory over a
@@ -63,7 +64,7 @@ func TestDrawUnicodeStringDrawsWhatDrawStringDraws(t *testing.T) {
 	wide, wideContext := drawFixtureContext(t, client, 40, 20, colour)
 	empty, emptyContext := drawFixtureContext(t, client, 40, 20, colour)
 
-	text, err := client.allocateBytes(append(encodeEUCKR("A가"), 0))
+	text, err := client.allocateBytes(append(backend.EncodeEUCKR("A가"), 0))
 	if err != nil {
 		t.Fatal(err)
 	}

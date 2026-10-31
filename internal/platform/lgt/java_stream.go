@@ -10,6 +10,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // Resource streams: `Class.getResourceAsStream` and what a title reads out of
@@ -1176,7 +1177,7 @@ func javaReaderRead(
 		if stream.Data[stream.Read] >= 0x81 && stream.Read+1 < len(stream.Data) {
 			step = 2
 		}
-		symbols := []rune(decodeEUCKR(stream.Data[stream.Read : stream.Read+step]))
+		symbols := []rune(backend.DecodeEUCKR(stream.Data[stream.Read : stream.Read+step]))
 		if written+uint32(len(symbols)) > length {
 			break
 		}
@@ -1202,10 +1203,10 @@ func javaReaderStep(data []byte) (uint16, int) {
 	if data[0] >= 0x81 && len(data) > 1 {
 		step = 2
 	}
-	symbols := []rune(decodeEUCKR(data[:step]))
+	symbols := []rune(backend.DecodeEUCKR(data[:step]))
 	if len(symbols) != 1 && step == 2 {
 		step = 1
-		symbols = []rune(decodeEUCKR(data[:1]))
+		symbols = []rune(backend.DecodeEUCKR(data[:1]))
 	}
 	if len(symbols) == 0 {
 		return 0xfffd, step

@@ -121,7 +121,7 @@ func TestScriptSessionLifecycle(t *testing.T) {
 	}
 	assertSaved(1)
 	s.SetSpeed(2)
-	if _, err := s.script.Advance(ctx, 10*time.Millisecond); err != nil {
+	if _, err := s.sktScript().Advance(ctx, 10*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	assertFrame(true)

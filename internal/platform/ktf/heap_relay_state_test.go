@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
@@ -174,11 +175,11 @@ func TestRelayHeapRejectsMalformedOwnershipBeforeAdoption(t *testing.T) {
 // A quick save taken on the name screen or after the name went in comes back
 // as it was, and so does one an earlier build took after its own receipt.
 func TestRelayHeapCarriesTheRegisteredNamePhase(t *testing.T) {
-	name := encodeEUCKR("홍길동")
+	name := backend.EncodeEUCKR("홍길동")
 	for _, service := range []slotRelay{
 		{phase: 5, identity: []byte{1}, slot: 2},
 		{phase: 6, identity: []byte{1}, slot: 2, label: name},
-		{phase: 5, identity: []byte{1}, slot: 2, label: encodeEUCKR(" 로컬3")},
+		{phase: 5, identity: []byte{1}, slot: 2, label: backend.EncodeEUCKR(" 로컬3")},
 	} {
 		payload, err := captureHeapRelay(&relaySocket{service: service})
 		if err != nil {

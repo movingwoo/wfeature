@@ -22,6 +22,7 @@ consolidation adds no execution or acceptance evidence.
 - [Quick save implementation measurements (2026-10-01 to 2026-10-02)](#quick-save-implementation-measurements)
 - [Earlier snapshot feasibility record](#snapshot-feasibility)
 - [Quick-save and quick-load review — 2026-10-07](#quicksave-review-2026-10-07)
+- [What the three carriers share — 2026-10-31](#maintenance-shared-core-2026-10-31)
 
 <a id="implementation-maintenance-review-2026-09-10"></a>
 
@@ -1161,3 +1162,130 @@ The overlays contain absolute paths for that checkout and are diagnostic
 artifacts, not portable fixtures; the trigger sequences and results above are
 the durable record if the ignored artifacts are removed. The repairs turned
 these cases into maintained regression tests at the responsible layers.
+
+<a id="maintenance-shared-core-2026-10-31"></a>
+
+## What the three carriers share — 2026-10-31
+
+The WIPI-C engine (`docs/history/skt.md`, "One WIPI-C engine for KTF and SKT")
+removed the one place two carriers ran copies of the same code. A scope review
+the day before had sorted the rest into what the three carriers could share
+without any title seeing a difference and what would change one of them. This
+step is the first kind only: one interface over the session's six platform
+sessions, and the pieces below the call boundary that each carrier had written
+for itself. Nothing a title reads, draws or stores changed; the two exceptions
+are listed where they occur.
+
+<a id="maintenance-shared-core-2026-10-31-session"></a>
+
+### The session asks one interface
+
+`internal/session.Session` held six platform pointers — KTF's descriptor
+package, its earlier native package, an SKT Clet, LGT, an SKT MIDlet and an SKT
+script — and answered every Host call through a switch over them: 100 branches
+in `session.go`, `checkpoint.go` and `textinput.go`. A branch left out compiles,
+and three had been: a Clet's ending was a failure on every path but its tick,
+its authentication read as unsupported (both fixed with the engine), and it had
+no cheat engine at all, because `Session.Cheat` had no Clet branch.
+
+Each kind of platform session now has an adapter in `engine.go`, and every
+question the session asks is a method of one `engine` interface, so a question
+added for one platform does not compile until all six answer it. A platform
+with nothing to say answers so in its own adapter, with the reason beside it:
+the earlier native package has no pause entry and no vibrator, a Clet and LGT
+have no repeat event, the MIDP runtimes own their surface's size. What stays
+per platform stays per platform: the holds a restored checkpoint may not carry,
+LGT's press-and-release keys, the MIDP runtime's own pad. Restoring a
+checkpoint prepares and commits one platform session per variant
+(`restoreEngine`), and the session it displaces has to be the same kind
+(`displaced`), as before.
+
+`Session.UncaughtCallbacks` is the one new question: the debug report used to
+reach the count of callbacks an uncaught exception ended through `KTF()` and
+`LGT()`, so an SKT MIDlet's was never shown. It is now shown for every platform
+that runs Java.
+
+<a id="maintenance-shared-core-2026-10-31-shared"></a>
+
+### Shared below the call boundary
+
+| What | Now | Was |
+| --- | --- | --- |
+| The cheat engine's adapter for a guest on the ARM core | `internal/platform/armcheat` | Three copies (KTF, the earlier KTF package, LGT); a Clet had none |
+| The save-owner collision scan behind `checkgames` | `gameroot.OwnerCollisions` | Three copies; what tells two titles apart is the AID on KTF and LGT and the main class on SKT |
+| The count of callbacks an uncaught exception ended | `backend.UncaughtCallbacks` | Three copies; SKT's callbacks run on goroutines and it keeps its own lock around the record |
+| Lenient EUC-KR text, the handset's default charset | `backend.DecodeEUCKR`, `backend.EncodeEUCKR` | Four copies: KTF, LGT, SKT Java and the WIPI-C engine |
+| Display's game-action table | `wipi.GameAction`, `wipi.GameActionKey` | KTF's table and LGT's two switches, the same twelve pairs; an SKT Jlet keeps the vendor's codes and its own table |
+| An arena's free list | `wipic.TakeFirstFit`, `wipic.InsertFreeBlock` | The engine's arena and LGT's ran the same first-fit loop and coalesced the same way |
+| A C library's `struct tm` | `wipic.TimeFields`, `wipic.TimeRecord` | The Clet library's localtime, gmtime and mktime and LGT's localtime each built it |
+| LGT's polygon fill | `curve.FillPolygonWithin` | A copy of the rule the KTF runtime fills with |
+
+Each arena keeps what is its own around the shared list: 4-byte alignment and
+a release at the top that lowers the cursor on the engine's, 8-byte alignment,
+the sizes a release is looked up by and a batch release on LGT's. No record a
+checkpoint writes changed shape. `TestTheSharedFreeListPlacesBlocksAsEachArenaDid`
+runs the two copies as they were beside the shared list over random allocation
+and release sequences at both alignments and requires the same addresses and
+the same list after every step.
+
+The two places a title could see a difference:
+
+- **A Clet has cheats.** The adapter is the one every native title uses; the
+  program's code and data are both swept as the client's, because the loader
+  maps them side by side and adjacent pages come back as one region. A quick
+  save is refused while a freeze or a patch is active, as on every other
+  platform; the first cut of this change left that check out, and a slot taken
+  under a freeze kept the frozen value as the program's own. See
+  [SKT native](../skt-native.md#skt-native-cheats).
+- **LGT's polygon fill is the shared one.** Its copy worked a crossing out in
+  machine integers, which overflow when a guest puts vertices at both ends of
+  int32 on both axes; the shared rule works that case in a `big.Int`. Every
+  other polygon covers the same pixels, which the randomized clipping test
+  (`TestClippedPolygonDrawsWhatTheFullWalkDrew`) still checks against its own
+  full walk.
+
+LGT's stub region is still not marked as code a search keeps out of, as the
+engine's is. That is a difference in what a search sweeps and was left as it
+was.
+
+<a id="maintenance-shared-core-2026-10-31-apart"></a>
+
+### Left apart, and why
+
+These do the same job on more than one carrier and were read for sharing.
+Each differs in something a title can see, so making them one means choosing
+which carrier is right, which this step does not do.
+
+- **The C library's functions.** LGT's (`lgt/stdlib.go`) and the Clet's
+  (`skt/clet/clet_clib.go`) implement the same ANSI functions under different
+  slot tables and different limits: LGT ends a counted read where a mapping
+  ends and refuses a length over 16 MiB, the Clet's faults on the read and
+  bounds strings at the engine's string limit. A title can tell them apart in
+  `atoi`, whose leading space is space, tab, CR and LF on LGT and also VT and FF
+  on the Clet, and which answers 0 on LGT for digits past int64 where the Clet
+  saturates; in `localtime(NULL)`, which reads the clock on LGT and answers
+  NULL on the Clet; and in `strncmp` across an unmapped page. Only `struct tm`
+  is shared.
+- **Guest string readers and the printf glue.** The formatter is already
+  shared (`internal/wipic`); the readers around it are not the same reader.
+  LGT's reads a null pointer as an empty string and bounds a name at 4,096
+  bytes, and its counted reader stops at an unreadable byte; the engine's
+  faults on both and bounds a string at its own limit.
+- **File names and the lists behind them.** The rules are one contract
+  ([WIPI storage](../wipi-storage.md)), but the lists are kept in each
+  platform's own format — `db/.removed` and `db/.dirs` on the engine,
+  `fs/.removed`, `.created` and `.directories` with earlier lower-case entries
+  on LGT — and only LGT reads a backslash as a separator in every list key.
+  Moving one onto another's is a save migration.
+- **WIPI Java `DataBase`.** Three on-disk layouts (KTF's `jdb/.sizes`, SKT's
+  strict `jdb/.index`, LGT's versioned `.db` and `.index`), and KTF sorts
+  records with an insertion sort that calls a title's comparator a different
+  number of times than the merge sort LGT and SKT use.
+- **`Clip` and `Player`.** The state is already the shared `backend.Audio`'s;
+  how a clip is owned and how its events reach a listener differ by design
+  ([audio](../audio.md)).
+
+The graphics primitives, the LCD flush, timers, the network refusal, archive
+limits and the Java differences the scope review listed (`showNotify`,
+`removeAllCards`, the BASELINE anchor, an unknown handset property,
+`URL.find`) change what a title sees by construction and were not touched.

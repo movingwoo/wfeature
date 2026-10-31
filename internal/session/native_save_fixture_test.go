@@ -83,7 +83,7 @@ func TestNativeSaveFixtureThroughTheSharedSession(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			if s.Platform() != "ktf" || s.ktfNative == nil || s.Summary().SaveOwner != testfixture.KTFNativeSaveOwner || !s.CanCheckpoint() {
+			if s.Platform() != "ktf" || s.ktfNativeSession() == nil || s.Summary().SaveOwner != testfixture.KTFNativeSaveOwner || !s.CanCheckpoint() {
 				t.Fatalf("the fixture did not start as a native package a Host can checkpoint: %+v", s.Summary())
 			}
 			frame := func() {

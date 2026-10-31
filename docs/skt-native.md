@@ -274,6 +274,22 @@ path is covered by an authored native package instead
 (`internal/testfixture.SKTCletArchive`), whose field takes keys either in its
 event entry or on its frame timer.
 
+<a id="skt-native-cheats"></a>
+
+## Cheats
+
+A Clet runs on the ARM core like the other native titles, so the cheat panel
+and the CLI's `-cheat` attach to it through the adapter they all share
+(`internal/platform/armcheat`): a search sweeps the committed writable pages,
+a freeze is rewritten after every service round, and a watch reports the store
+that moved an address. The program's code and its data are both labelled as
+the client's and both swept, because the loader maps them side by side and
+adjacent pages come back as one region; the engine's own regions are named the
+way a KTF title's are. A saved table is named after the program and keyed by
+the hash of its code. A quick save is refused while a freeze or a patch is
+active, as on every platform, because the slot would keep the cheat's values as
+the program's own.
+
 ## Limitations
 
 A change to the WIPI-C engine reaches KTF titles and Clets alike, which is the

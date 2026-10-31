@@ -1,6 +1,10 @@
 package lgt
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/movingwoo/wfeature/internal/backend"
+)
 
 func TestExecutableJARSelection(t *testing.T) {
 	files := map[string][]byte{
@@ -22,7 +26,7 @@ func TestExecutableJARSelection(t *testing.T) {
 }
 
 func TestArchiveKoreanNamesAndResourceAliases(t *testing.T) {
-	for _, encode := range []func(string) []byte{func(s string) []byte { return []byte(s) }, encodeEUCKR} {
+	for _, encode := range []func(string) []byte{func(s string) []byte { return []byte(s) }, backend.EncodeEUCKR} {
 		archive, err := Open(zipOf(t, map[string][]byte{
 			"app_info":               encode("AID=한글\nName=자료\n"),
 			string(encode("한글.jar")): fixtureJAR(t),

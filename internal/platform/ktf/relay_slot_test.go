@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 func TestSlotRelayConversationAndRegisteredName(t *testing.T) {
@@ -32,7 +33,7 @@ func TestSlotRelayConversationAndRegisteredName(t *testing.T) {
 	if len(offer) < 3 || offer[0] != 1 || int(offer[1]) != len(offer)-2 || offer[1] > 127 {
 		t.Fatalf("invalid offer %x", offer)
 	}
-	if got := wipicrt.DecodeEUCKR(offer[2:]); got != "\uC774 \uAE30\uAE30\uC5D0 \uC2AC\uB86F\uC744 \uC0DD\uC131\uD569\uB2C8\uB2E4." {
+	if got := backend.DecodeEUCKR(offer[2:]); got != "\uC774 \uAE30\uAE30\uC5D0 \uC2AC\uB86F\uC744 \uC0DD\uC131\uD569\uB2C8\uB2E4." {
 		t.Fatalf("unexpected offer encoding %x", offer)
 	}
 	quote := exchange(5, 1420, nil)
@@ -50,7 +51,7 @@ func TestSlotRelayConversationAndRegisteredName(t *testing.T) {
 	if got := exchange(0, 10, nil); len(got) != 0 {
 		t.Fatal("heartbeat changed payload")
 	}
-	name := encodeEUCKR("\uD64D\uAE38\uB3D9")
+	name := backend.EncodeEUCKR("\uD64D\uAE38\uB3D9")
 	if got := exchange(5, 1440, append([]byte{byte(len(name))}, name...)); !bytes.Equal(got, make([]byte, 8)) {
 		t.Fatalf("registration reply = %x, want the eight-byte field alone", got)
 	}
@@ -70,7 +71,7 @@ func TestSlotRelayConversationAndRegisteredName(t *testing.T) {
 // A conversation an earlier build answered with its own display name stays on
 // that name: it was never asked for one, and the guest has the label already.
 func TestSlotRelayKeepsAnEarlierBuildsDisplayName(t *testing.T) {
-	label := encodeEUCKR(" \uB85C\uCEEC3")
+	label := backend.EncodeEUCKR(" \uB85C\uCEEC3")
 	service := slotRelay{phase: 5, identity: []byte{1, 2, 3}, slot: 2, label: label}
 	reply, err := service.respond(slotMessage(5, 1430, nil))
 	if err != nil {
@@ -79,7 +80,7 @@ func TestSlotRelayKeepsAnEarlierBuildsDisplayName(t *testing.T) {
 	if reply[12] != 1 || !bytes.Equal(reply[14:len(reply)-8], label) {
 		t.Fatalf("receipt = %x, want the earlier label", reply[12:])
 	}
-	name := encodeEUCKR("\uD64D\uAE38\uB3D9")
+	name := backend.EncodeEUCKR("\uD64D\uAE38\uB3D9")
 	if _, err := service.respond(slotMessage(5, 1440, append([]byte{byte(len(name))}, name...))); err == nil {
 		t.Fatal("a slot that already has a name took another")
 	}
@@ -89,7 +90,7 @@ func TestSlotRelayKeepsAnEarlierBuildsDisplayName(t *testing.T) {
 }
 
 func TestSlotRelayRejectsMalformedOrOutOfOrderRequests(t *testing.T) {
-	name := encodeEUCKR("\uD64D\uAE38\uB3D9")
+	name := backend.EncodeEUCKR("\uD64D\uAE38\uB3D9")
 	register := func(name []byte) []byte { return slotMessage(5, 1440, append([]byte{byte(len(name))}, name...)) }
 	for _, test := range []struct {
 		name    string
@@ -136,7 +137,7 @@ func TestSlotRelayCreatesZeroBasedSlots(t *testing.T) {
 	for _, slot := range []byte{0, 1, 2, 3, 4, 5} {
 		t.Run(fmt.Sprint(slot), func(t *testing.T) {
 			var service slotRelay
-			name := encodeEUCKR(fmt.Sprintf("NAME%d", slot))
+			name := backend.EncodeEUCKR(fmt.Sprintf("NAME%d", slot))
 			requests := [][]byte{
 				slotMessage(1, 1000, []byte{30}),
 				slotMessage(5, 1400, []byte{3, 1, 2, 3}),

@@ -11,6 +11,7 @@ import (
 	"unicode/utf16"
 	"weak"
 
+	"github.com/movingwoo/wfeature/internal/api/wipi"
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
@@ -1590,39 +1591,8 @@ func runtimeDisplayCallSerially(runtime *initializationRuntime, _ *jvm.VM, argum
 	return jvm.VoidValue(), nil
 }
 
-// The game actions this platform's Display answers with, each paired with the
-// key code it stands for. The five pad actions are the numbers every runtime
-// of this era uses; the soft keys, the volume pair, and clear sit in a block
-// of this platform's own above them.
-//
-// **One table, read in both directions.** `getGameAction` and `getKeyCode` are
-// inverses, and they used to be two switches — the forward one knowing six
-// pairs and the reverse one twelve. A title that asks what a key means and
-// then indexes its own table by the answer is handed the key code straight
-// back for every pair only the reverse knew, and a key code here is negative.
-// Deriving both directions from one list is what stops the two disagreeing
-// again; see docs/history/ktf.md, "A game action is a subscript, and only one
-// direction of the table knew it", on what a title did with the answer.
-var runtimeDisplayActions = []struct{ action, key int32 }{
-	{1, wipicrt.KeyUp},
-	{2, wipicrt.KeyLeft},
-	{5, wipicrt.KeyRight},
-	{6, wipicrt.KeyDown},
-	{8, wipicrt.KeyFire},
-	{90, wipicrt.KeyLeftSoft},
-	{91, wipicrt.KeyRightSoft},
-	{92, wipicrt.KeyThirdSoft},
-	{96, wipicrt.KeyVolumeUp},
-	{97, wipicrt.KeyVolumeDown},
-	// Which key this pair names is not something this project has identified.
-	// It is what the original reverse table answered for 98, and it is kept
-	// so that the two directions stay inverses of each other.
-	{98, -15},
-	{99, wipicrt.KeyClear},
-}
-
 // runtimeDisplayGameAction maps a WIPI key code to its game action with the
-// original Display::getGameAction table. A key with no action reports itself,
+// table WIPI's Display answers from (wipi.GameAction). A key with no action reports itself,
 // which is what leaves the digits, star, and hash reaching a title's own
 // branches as the characters they are.
 func runtimeDisplayGameAction(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -1633,12 +1603,7 @@ func runtimeDisplayGameAction(_ *initializationRuntime, _ *jvm.VM, arguments []j
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	for _, pair := range runtimeDisplayActions {
-		if pair.key == key {
-			return jvm.IntValue(pair.action), nil
-		}
-	}
-	return jvm.IntValue(key), nil
+	return jvm.IntValue(wipi.GameAction(key)), nil
 }
 
 // runtimeDisplayKeyCode reverses game actions to WIPI key codes with the
@@ -1651,12 +1616,7 @@ func runtimeDisplayKeyCode(_ *initializationRuntime, _ *jvm.VM, arguments []jvm.
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
-	for _, pair := range runtimeDisplayActions {
-		if pair.action == action {
-			return jvm.IntValue(pair.key), nil
-		}
-	}
-	return jvm.IntValue(0), nil
+	return jvm.IntValue(wipi.GameActionKey(action)), nil
 }
 
 func runtimeDisplayTrue(_ *initializationRuntime, _ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {

@@ -185,11 +185,10 @@ type Client struct {
 	clock  *guestClock
 	events []pendingEvent
 
-	// uncaughtCallbacks counts the guest callbacks that ended in an exception
-	// the application had nothing left to catch with, and uncaughtFirst is what
-	// the first of them said. See uncaught.go.
-	uncaughtCallbacks uint64
-	uncaughtFirst     string
+	// uncaught counts the guest callbacks that ended in an exception the
+	// application had nothing left to catch with, and keeps what the first of
+	// them said. See uncaught.go.
+	uncaught backend.UncaughtCallbacks
 
 	// audio holds the sounds the game loaded and advances them on the guest's
 	// own clock, so a run batching ticks hears the same sequence as one on the

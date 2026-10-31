@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/platform/armcheat"
 )
 
 // The identity a cheat table is keyed by has to survive a repack, because that
@@ -54,7 +56,7 @@ func TestSessionImageHashIsEmptyWithoutAnArchive(t *testing.T) {
 	if got := session.ImageHash(); got != "" {
 		t.Fatalf("image hash of nothing is %q", got)
 	}
-	if got := imageHash(nil); got != "" {
+	if got := armcheat.ImageHash(nil); got != "" {
 		t.Fatalf("image hash of no bytes is %q", got)
 	}
 }

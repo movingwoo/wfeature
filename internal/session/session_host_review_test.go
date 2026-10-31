@@ -16,7 +16,7 @@ import (
 // an ending with nothing attached reads as a crash.
 func TestAnEndingInsideAKeyRepeatKeepsItsReason(t *testing.T) {
 	running, clock := startSpeedChangeFixture(t, 1)
-	vm := running.ktf.Client.JVM()
+	vm := running.KTF().Client.JVM()
 	const card = "test/QuitOnRepeat"
 	for name, descriptor := range map[string]string{
 		"showNotify": "(Z)V",

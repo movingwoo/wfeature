@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"errors"
 	"slices"
+
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 // ErrGuestExited reports that the game called MC_knlExit. It is not a failure:
@@ -20,6 +22,10 @@ var ErrJavaAppUnsupported = errors.New("LGT Java apps are not supported")
 
 // arena hands out guest memory from a bump cursor and reuses what is freed,
 // so a game that allocates and frees in a loop does not exhaust the region.
+// The free list is the one every arena here keeps (wipic.TakeFirstFit and
+// wipic.InsertFreeBlock); what is this platform's own is the alignment, the
+// sizes it looks a release up by, and that a release at the top of the region
+// stays on the list rather than lowering the cursor.
 type arena struct {
 	base   uint32
 	limit  uint64
@@ -33,10 +39,7 @@ type arena struct {
 	outstanding uint64
 }
 
-type arenaBlock struct {
-	start uint64
-	end   uint64
-}
+type arenaBlock = wipic.ArenaBlock
 
 const arenaAlignment = 8
 
@@ -59,19 +62,11 @@ func alignArenaSize(size uint64) uint64 {
 // allocate reserves size bytes, reusing a freed block when one fits.
 func (a *arena) allocate(size uint64) (uint32, bool) {
 	size = alignArenaSize(size)
-	for index := range a.free {
-		block := &a.free[index]
-		if block.end-block.start < size {
-			continue
-		}
-		address := uint32(block.start)
-		block.start += size
-		if block.start == block.end {
-			a.free = append(a.free[:index], a.free[index+1:]...)
-		}
-		a.sizes[address] = size
+	if free, address, ok := wipic.TakeFirstFit(a.free, size); ok {
+		a.free = free
+		a.sizes[uint32(address)] = size
 		a.outstanding += size
-		return address, true
+		return uint32(address), true
 	}
 	start := (a.cursor + arenaAlignment - 1) &^ uint64(arenaAlignment-1)
 	end := start + size
@@ -94,7 +89,7 @@ func (a *arena) release(address uint32) bool {
 	}
 	delete(a.sizes, address)
 	a.outstanding -= size
-	a.insert(arenaBlock{start: uint64(address), end: uint64(address) + size})
+	a.free = wipic.InsertFreeBlock(a.free, arenaBlock{Start: uint64(address), End: uint64(address) + size})
 	return true
 }
 
@@ -113,52 +108,29 @@ func (a *arena) releaseAll(addresses []uint32) {
 		}
 		delete(a.sizes, address)
 		a.outstanding -= size
-		blocks = append(blocks, arenaBlock{start: uint64(address), end: uint64(address) + size})
+		blocks = append(blocks, arenaBlock{Start: uint64(address), End: uint64(address) + size})
 	}
 	if len(blocks) == 0 {
 		return
 	}
-	slices.SortFunc(blocks, func(x, y arenaBlock) int { return cmp.Compare(x.start, y.start) })
+	slices.SortFunc(blocks, func(x, y arenaBlock) int { return cmp.Compare(x.Start, y.Start) })
 	merged := make([]arenaBlock, 0, len(a.free)+len(blocks))
 	join := func(block arenaBlock) {
-		if last := len(merged) - 1; last >= 0 && merged[last].end == block.start {
-			merged[last].end = block.end
+		if last := len(merged) - 1; last >= 0 && merged[last].End == block.Start {
+			merged[last].End = block.End
 			return
 		}
 		merged = append(merged, block)
 	}
 	free := a.free
 	for len(free) > 0 || len(blocks) > 0 {
-		if len(blocks) == 0 || len(free) > 0 && free[0].start < blocks[0].start {
+		if len(blocks) == 0 || len(free) > 0 && free[0].Start < blocks[0].Start {
 			join(free[0])
 			free = free[1:]
 			continue
 		}
 		join(blocks[0])
 		blocks = blocks[1:]
-	}
-	a.free = merged
-}
-
-// insert adds a block and coalesces it with its neighbours, so repeated
-// allocate/free cycles do not fragment the arena into pieces too small to
-// satisfy the next request.
-func (a *arena) insert(block arenaBlock) {
-	index := 0
-	for index < len(a.free) && a.free[index].start < block.start {
-		index++
-	}
-	a.free = append(a.free, arenaBlock{})
-	copy(a.free[index+1:], a.free[index:])
-	a.free[index] = block
-
-	merged := a.free[:0]
-	for _, current := range a.free {
-		if len(merged) > 0 && merged[len(merged)-1].end == current.start {
-			merged[len(merged)-1].end = current.end
-			continue
-		}
-		merged = append(merged, current)
 	}
 	a.free = merged
 }

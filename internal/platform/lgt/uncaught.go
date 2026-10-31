@@ -42,10 +42,7 @@ func (client *Client) absorbUncaughtCallback(callback string, err error) error {
 	if !errors.As(err, &throw) {
 		return err
 	}
-	client.uncaughtCallbacks++
-	if client.uncaughtFirst == "" {
-		client.uncaughtFirst = callback + ": " + err.Error()
-	}
+	client.uncaught.Note(callback, err)
 	if client.logger != nil {
 		client.logger.Warn("LGT guest exception ended a callback",
 			"callback", callback, "class", throw.Class, "error", err)
@@ -60,7 +57,7 @@ func (client *Client) UncaughtCallbacks() (uint64, string) {
 	if client == nil {
 		return 0, ""
 	}
-	return client.uncaughtCallbacks, client.uncaughtFirst
+	return client.uncaught.Report()
 }
 
 // javaNullImage is the exception the specification gives an image argument that

@@ -1,5 +1,7 @@
 package wipicrt
 
+import "github.com/movingwoo/wfeature/internal/wipic"
+
 // GuestArena hands out the guest memory that platform structures and Java
 // objects live in. New space comes from a bump cursor; space the collector
 // releases is reused. Without the reuse a session's memory use tracks every
@@ -28,10 +30,7 @@ type GuestArena struct {
 	CheckReused    func(address uint32, size uint64)
 }
 
-type ArenaBlock struct {
-	Start uint64
-	End   uint64
-}
+type ArenaBlock = wipic.ArenaBlock
 
 const ArenaAlignment = 4
 
@@ -51,18 +50,9 @@ func AlignArenaSize(size uint64) uint64 {
 // had room.
 func (arena *GuestArena) Allocate(size uint64) (uint32, bool) {
 	size = AlignArenaSize(size)
-	// First fit keeps the scan short in the common case: the collector's
-	// releases coalesce into a few large blocks near the front.
-	for index := range arena.Free {
-		block := &arena.Free[index]
-		if block.End-block.Start < size {
-			continue
-		}
-		address := block.Start
-		block.Start += size
-		if block.Start == block.End {
-			arena.Free = append(arena.Free[:index], arena.Free[index+1:]...)
-		}
+	// First fit, as every arena here reuses its list (wipic.TakeFirstFit).
+	if free, address, ok := wipic.TakeFirstFit(arena.Free, size); ok {
+		arena.Free = free
 		arena.Freed -= size
 		if arena.CheckReused != nil {
 			arena.CheckReused(uint32(address), size)
@@ -106,27 +96,8 @@ func (arena *GuestArena) Release(address uint32, size uint64) {
 		arena.trimTail()
 		return
 	}
-	position := 0
-	for position < len(arena.Free) && arena.Free[position].Start < start {
-		position++
-	}
-	arena.Free = append(arena.Free, ArenaBlock{})
-	copy(arena.Free[position+1:], arena.Free[position:])
-	arena.Free[position] = ArenaBlock{Start: start, End: end}
+	arena.Free = wipic.InsertFreeBlock(arena.Free, ArenaBlock{Start: start, End: end})
 	arena.Freed += size
-	arena.coalesceAt(position)
-}
-
-// coalesceAt merges the block at position with its neighbours.
-func (arena *GuestArena) coalesceAt(position int) {
-	if position+1 < len(arena.Free) && arena.Free[position].End == arena.Free[position+1].Start {
-		arena.Free[position].End = arena.Free[position+1].End
-		arena.Free = append(arena.Free[:position+1], arena.Free[position+2:]...)
-	}
-	if position > 0 && arena.Free[position-1].End == arena.Free[position].Start {
-		arena.Free[position-1].End = arena.Free[position].End
-		arena.Free = append(arena.Free[:position], arena.Free[position+1:]...)
-	}
 }
 
 // trimTail pulls free blocks that now sit at the top of the arena back into

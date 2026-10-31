@@ -243,16 +243,9 @@ type Session struct {
 	options         Options
 	archiveIdentity [32]byte
 
-	ktf         *ktf.Session
-	ktfNative   *ktf.NativeSession
-	cletSession *clet.Session
-	lgt         *lgt.Session
-	runtime     *skt.Runtime
-	script      *skt.ScriptSession
-
-	// surface receives frames on the platforms that draw into one. It also
-	// gives those platforms a flush counter they do not otherwise have.
-	surface *captureFramebuffer
+	// engine is the platform session running the game, or nil once there is
+	// none. See engine.go.
+	engine engine
 
 	// startedAt anchors the guest audio timeline for the MIDP runtimes, which
 	// are advanced by the Host rather than by a clock of their own.
@@ -360,7 +353,7 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 			if err != nil {
 				return nil, startEndedOrFailed(err)
 			}
-			session.ktfNative = started
+			session.engine = ktfNativeEngine{started}
 			session.startedAt = time.Now()
 			return session, nil
 		}
@@ -369,13 +362,13 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 			return nil, startEndedOrFailed(err)
 		}
 		started.TimeHostPhases(options.TraceLimit > 0)
-		session.ktf = started
+		session.engine = ktfEngine{started}
 	case detect.LGT:
 		started, err := lgt.StartSession(ctx, archive, lgtOptions(options))
 		if err != nil {
 			return nil, startEndedOrFailed(err)
 		}
-		session.lgt = started
+		session.engine = lgtEngine{started}
 	case detect.SKT:
 		if skt.IsNativeArchive(archive) {
 			program, _, err := sktNativeProgram(archive, options.DisableAuthentication)
@@ -387,7 +380,7 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 				return nil, startEndedOrFailed(err)
 			}
 			started.TimeHostPhases(options.TraceLimit > 0)
-			session.cletSession = started
+			session.engine = cletEngine{started}
 			break
 		}
 		opened, err := skt.Open(archive)
@@ -401,13 +394,14 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 		if err != nil {
 			return nil, err
 		}
-		session.surface = surface
 		if opened.Script != nil {
 			started, err := skt.StartScript(ctx, opened, skt.ScriptOptions{
 				Framebuffer: surface, SaveStore: options.SaveStore,
 				AudioSink: options.AudioSink, Logger: options.Logger, Speed: options.Speed,
 			})
-			session.script = started
+			if started != nil {
+				session.engine = sktScriptEngine{started, surface}
+			}
 			if err != nil {
 				session.Close()
 				return nil, startEndedOrFailed(err)
@@ -423,7 +417,9 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 		})
 		// A failed start still hands back the runtime it got to, and closing
 		// it is the Host's job either way.
-		session.runtime = runtime
+		if runtime != nil {
+			session.engine = sktJavaEngine{runtime, surface}
+		}
 		if err != nil {
 			session.Close()
 			return nil, startEndedOrFailed(err)
@@ -466,16 +462,7 @@ func sktScreen(opened *skt.Archive, options Options) (width, height int) {
 // SkipToNextDeadline moves a KTF manual clock to pending work. A wall clock or
 // a platform without a manual clock returns false and requires ordinary pacing.
 func (s *Session) SkipToNextDeadline() bool {
-	if s.ktf != nil {
-		return s.ktf.SkipToNextDeadline()
-	}
-	if s.cletSession != nil {
-		return s.cletSession.SkipToNextDeadline()
-	}
-	if s.ktfNative != nil {
-		return s.ktfNative.SkipToNextDeadline()
-	}
-	return false
+	return s.engine != nil && s.engine.skipToNextDeadline()
 }
 
 // VirtualClock reports whether the guest's clock moves only when a tick moves
@@ -484,7 +471,7 @@ func (s *Session) SkipToNextDeadline() bool {
 // game to anybody can run the ticks back to back and get the run a paced Host
 // would have had. The wait a tick reports is then pacing, not something the
 // guest is owed.
-func (s *Session) VirtualClock() bool { return s != nil && s.lgt != nil }
+func (s *Session) VirtualClock() bool { return s != nil && s.engine != nil && s.engine.virtualClock() }
 
 // Platform reports which platform answered for the archive.
 func (s *Session) Platform() string { return string(s.platform) }
@@ -495,20 +482,34 @@ func (s *Session) Summary() Summary { return s.summary }
 // KTF exposes the KTF session for the surfaces that only exist there — the
 // profiler and the diagnostics report. It is nil on every other platform,
 // which is the answer a Host needs anyway.
-func (s *Session) KTF() *ktf.Session { return s.ktf }
+func (s *Session) KTF() *ktf.Session {
+	if e, ok := s.engine.(ktfEngine); ok {
+		return e.session
+	}
+	return nil
+}
 
 // CletDiagnostics is the SKT native (Clet) session's boundary trace, for the
 // probes; the second return is false on every other platform.
 func (s *Session) CletDiagnostics() (clet.Diagnostics, bool) {
-	if s == nil || s.cletSession == nil {
+	if s == nil {
 		return clet.Diagnostics{}, false
 	}
-	return s.cletSession.Diagnostics(), true
+	e, ok := s.engine.(cletEngine)
+	if !ok {
+		return clet.Diagnostics{}, false
+	}
+	return e.session.Diagnostics(), true
 }
 
 // LGT is the LGT session, or nil for anything else. A Host asks for it to read
 // what only that platform reports; see UncaughtCallbacks.
-func (s *Session) LGT() *lgt.Session { return s.lgt }
+func (s *Session) LGT() *lgt.Session {
+	if e, ok := s.engine.(lgtEngine); ok {
+		return e.session
+	}
+	return nil
+}
 
 // Cheat exposes the attached cheat engine. Every platform has one now. The two
 // ARM platforms give the guest a flat address space a scan can sweep; the MIDP
@@ -518,39 +519,31 @@ func (s *Session) LGT() *lgt.Session { return s.lgt }
 // A Host asks this rather than reaching through KTF(), which is what kept the
 // engine LGT already had from ever being reachable from the browser.
 func (s *Session) Cheat() *cheat.Session {
-	switch {
-	case s == nil:
-		return nil
-	case s.ktf != nil:
-		return s.ktf.Cheat()
-	case s.ktfNative != nil:
-		return s.ktfNative.Cheat()
-	case s.lgt != nil:
-		return s.lgt.Cheat()
-	case s.runtime != nil:
-		return s.runtime.Cheat()
-	default:
+	if s == nil || s.engine == nil {
 		return nil
 	}
+	return s.engine.cheat()
 }
 
 // CheatConsole is the text command console bound to Cheat(), and is nil
 // wherever that is.
 func (s *Session) CheatConsole() *cheat.Console {
-	switch {
-	case s == nil:
-		return nil
-	case s.ktf != nil:
-		return s.ktf.CheatConsole()
-	case s.ktfNative != nil:
-		return s.ktfNative.CheatConsole()
-	case s.lgt != nil:
-		return s.lgt.CheatConsole()
-	case s.runtime != nil:
-		return s.runtime.CheatConsole()
-	default:
+	if s == nil || s.engine == nil {
 		return nil
 	}
+	return s.engine.cheatConsole()
+}
+
+// UncaughtCallbacks reports how many guest callbacks ended in an exception
+// nothing caught, and what the first one said. The session survived each of
+// them, so a report that carried only how the game ended would read a title
+// failing every paint as a title that played. A platform that runs no Java
+// answers none.
+func (s *Session) UncaughtCallbacks() (uint64, string) {
+	if s == nil || s.engine == nil {
+		return 0, ""
+	}
+	return s.engine.uncaughtCallbacks()
 }
 
 // Progress is what one tick did.
@@ -637,82 +630,22 @@ func (s *Session) tick(ctx context.Context, budget time.Duration) (Progress, err
 	if progress, ended, err := s.repeatDue(ctx); ended || err != nil {
 		return progress, err
 	}
-	switch {
-	case s.ktf != nil:
-		progressed, wait, err := s.ktf.TickFor(ctx, budget)
-		progress := Progress{Progressed: progressed, Wait: wait, Flushes: uint64(s.ktf.Flushes())}
-		if errors.Is(err, ktf.ErrGuestExited) {
-			progress.Exited = true
-			progress.ExitReason = s.noteExit(err)
-			return progress, nil
-		}
-		return progress, err
-	case s.cletSession != nil:
-		progressed, wait, err := s.cletSession.TickFor(ctx, budget)
-		progress := Progress{Progressed: progressed, Wait: wait, Flushes: uint64(s.cletSession.Flushes())}
-		if errors.Is(err, clet.ErrGuestExited) {
-			progress.Exited = true
-			progress.ExitReason = s.noteExit(err)
-			return progress, nil
-		}
-		return progress, err
-	case s.ktfNative != nil:
-		// The earlier KTF package's title paces itself: it hands the platform
-		// an interval and a function, and what is left of that interval is the
-		// wait. See ktf.NativeSession.TickFor.
-		progressed, wait, err := s.ktfNative.TickFor(ctx, budget)
-		progress := Progress{Progressed: progressed, Wait: wait, Flushes: uint64(s.ktfNative.Flushes())}
-		// The two generations end the same way for a Host, even though no slot
-		// this package serves asks to exit yet: the day one does, a Host that
-		// sorted the ending from a failure for one and not the other would
-		// report a game that finished as a game that broke.
-		if errors.Is(err, ktf.ErrGuestExited) {
-			progress.Exited = true
-			progress.ExitReason = s.noteExit(err)
-			return progress, nil
-		}
-		return progress, err
-	case s.lgt != nil:
-		// LGT paces itself against the wall clock rather than reporting a
-		// frame's worth of wait: its guest clock only moves when a tick moves
-		// it, so the wait is what decides the game's speed. See lgt.TickFor.
-		wait, err := s.lgt.TickFor(ctx)
-		progress := Progress{Progressed: true, Wait: wait, Flushes: s.lgt.Flushes()}
-		if errors.Is(err, lgt.ErrGuestExited) {
-			progress.Exited = true
-			progress.ExitReason = s.noteExit(err)
-			return progress, nil
-		}
-		return progress, err
-	case s.script != nil:
-		wait, err := s.script.Tick(ctx)
-		progress := Progress{Progressed: true, Wait: wait, Flushes: s.surface.Flushes(), Exited: s.script.Exited()}
-		if progress.Exited {
-			progress.ExitReason = "the script requested exit"
-			s.exitReason = progress.ExitReason
-		}
-		return progress, err
-	case s.runtime != nil:
-		// A MIDlet has no tick of its own: it runs on the callbacks the Host
-		// makes and whatever those deferred. Its audio timeline is advanced by
-		// the Host for the same reason, and on the guest's clock rather than
-		// the wall so that a game running fast hears its music at the pace it
-		// is playing at.
-		s.runtime.AdvanceAudio()
-		err := s.runtime.RunPending()
-		// The pace is what the Host comes back at, so it carries the speed the
-		// same way every other platform's wait does.
-		progress := Progress{Progressed: true, Wait: guestPace(FramePace, s.runtime.Speed()), Flushes: s.surface.Flushes()}
-		if state := s.runtime.State(); state == skt.StateDestroyed || state == skt.StateError {
-			progress.Exited = true
-			// A MIDlet has no exit call to name: it is in a terminal state and
-			// which one is the whole of what this platform knows.
-			progress.ExitReason = fmt.Sprintf("the MIDlet reached state %v", state)
-			s.exitReason = progress.ExitReason
-		}
-		return progress, err
+	if s.engine == nil {
+		return Progress{Exited: true}, ErrNotRunning
 	}
-	return Progress{Exited: true}, ErrNotRunning
+	result, err := s.engine.tick(ctx, budget)
+	progress := Progress{Progressed: result.progressed, Wait: result.wait, Flushes: s.engine.flushes()}
+	if guestExited(err) {
+		progress.Exited = true
+		progress.ExitReason = s.noteExit(err)
+		return progress, nil
+	}
+	if result.exited {
+		progress.Exited = true
+		progress.ExitReason = result.reason
+		s.exitReason = result.reason
+	}
+	return progress, err
 }
 
 // Key actions, named the way a Host names them rather than the way any one
@@ -769,94 +702,10 @@ func (s *Session) sendKey(ctx context.Context, action string, code int32) error 
 		}
 		return nil
 	}
-	switch {
-	case s.ktf != nil:
-		eventType, ok := ktfKeyEventType(action)
-		if !ok {
-			return fmt.Errorf("session: unknown key action %q", action)
-		}
-		if err := s.checkKeyHold(action, code); err != nil {
-			return err
-		}
-		// The repeat clock names the key the guest was given, which is this
-		// one: the WIPI Java path delivers what the Host reports.
-		key := ktfKeyCode(code)
-		s.held.Key(action == KeyPress, key)
-		if err := s.endedOrFailed(s.ktf.SendKey(ctx, eventType, key)); err != nil {
-			return err
-		}
-		s.noteKeyHold(action, code)
-		return nil
-	case s.ktfNative != nil:
-		eventType, ok := ktfKeyEventType(action)
-		if !ok {
-			return fmt.Errorf("session: unknown key action %q", action)
-		}
-		if err := s.checkKeyHold(action, code); err != nil {
-			return err
-		}
-		if err := s.endedOrFailed(s.ktfNative.SendKey(ctx, eventType, ktfKeyCode(code))); err != nil {
-			return err
-		}
-		s.noteKeyHold(action, code)
-		return nil
-	case s.cletSession != nil:
-		// An SKT Clet compares against the same key values a KTF game does.
-		eventType, ok := ktfKeyEventType(action)
-		if !ok {
-			return fmt.Errorf("session: unknown key action %q", action)
-		}
-		if err := s.checkKeyHold(action, code); err != nil {
-			return err
-		}
-		key := ktfKeyCode(code)
-		s.held.Key(action == KeyPress, key)
-		if err := s.endedOrFailed(s.cletSession.SendKey(ctx, eventType, key)); err != nil {
-			return err
-		}
-		s.noteKeyHold(action, code)
-		return nil
-	case s.lgt != nil:
-		// A Clet compares against the same key values a KTF game does, so the
-		// translation is shared.
-		pressed, deliver, ok := lgtKeyEvent(action)
-		if !ok {
-			return fmt.Errorf("session: unknown key action %q", action)
-		}
-		if !deliver {
-			return nil
-		}
-		if err := s.checkKeyHold(action, code); err != nil {
-			return err
-		}
-		s.lgt.SendKey(pressed, uint32(ktfKeyCode(code)))
-		s.noteKeyHold(action, code)
-		return nil
-	case s.runtime != nil:
-		// The MIDP runtime takes the page's codes unchanged: they are the MIDP
-		// values, and translating them is the WIPI path's business.
-		if err := s.checkKeyHold(action, code); err != nil {
-			return err
-		}
-		if err := s.runtime.SendKey(skt.KeyEventType(action), code); err != nil {
-			return err
-		}
-		s.noteKeyHold(action, code)
-		return nil
-	case s.script != nil:
-		if action != KeyPress && action != KeyRelease {
-			return fmt.Errorf("session: unknown key action %q", action)
-		}
-		if err := s.checkKeyHold(action, code); err != nil {
-			return err
-		}
-		if err := s.script.SendKey(ctx, action, code); err != nil {
-			return err
-		}
-		s.noteKeyHold(action, code)
-		return nil
+	if s.engine == nil {
+		return ErrNotRunning
 	}
-	return ErrNotRunning
+	return s.engine.sendKey(s, ctx, action, code)
 }
 
 // SendPointer delivers one touch to the game, in the guest's own screen
@@ -882,20 +731,17 @@ func (s *Session) sendPointer(ctx context.Context, action string, x, y int32) er
 	if !ok {
 		return fmt.Errorf("session: unknown pointer action %q", action)
 	}
-	switch {
-	case s.ktf != nil:
-		if err := s.endedOrFailed(s.ktf.SendPointer(ctx, eventType, x, y)); err != nil {
-			return err
-		}
-		s.pointerHeld = checkpointPointerState{Down: true, X: x, Y: y}
-		if action == PointerRelease {
-			s.pointerHeld = checkpointPointerState{}
-		}
-		return nil
-	case s.ktfNative != nil, s.cletSession != nil, s.lgt != nil, s.runtime != nil, s.script != nil:
-		return ErrNoPointer
+	if s.engine == nil {
+		return ErrNotRunning
 	}
-	return ErrNotRunning
+	if err := s.endedOrFailed(s.engine.sendPointer(ctx, eventType, x, y)); err != nil {
+		return err
+	}
+	s.pointerHeld = checkpointPointerState{Down: true, X: x, Y: y}
+	if action == PointerRelease {
+		s.pointerHeld = checkpointPointerState{}
+	}
+	return nil
 }
 
 // HasPointer reports whether a touch would reach the game. A Host asks before
@@ -909,7 +755,7 @@ func (s *Session) sendPointer(ctx context.Context, action string, x, y int32) er
 // games that ignore one, and the page pays for the claim by taking the finger
 // away from the gesture it uses to slide onto the keypad. `ktf.Client.HasPointer`
 // is what decides, out of the title's own class table.
-func (s *Session) HasPointer() bool { return s.ktf != nil && s.ktf.HasPointer() }
+func (s *Session) HasPointer() bool { return s.engine != nil && s.engine.hasPointer() }
 
 // ktfPointerEventType maps the Host's touch vocabulary onto the WIPI values.
 func ktfPointerEventType(action string) (int32, bool) {
@@ -967,24 +813,18 @@ func (s *Session) repeatDue(ctx context.Context) (Progress, bool, error) {
 // repeat event answer false — LGT's Clet events are a press and a release, and
 // so are the earlier KTF package's.
 func (s *Session) heldKey() (int32, bool) {
-	switch {
-	case s.ktf != nil:
-		return s.held.Held()
-	case s.runtime != nil:
-		return s.runtime.HeldKey()
+	if s.engine == nil {
+		return 0, false
 	}
-	return 0, false
+	return s.engine.heldKey(s)
 }
 
 // deliverRepeat hands one repeat to a platform that has the event.
 func (s *Session) deliverRepeat(ctx context.Context, code int32) error {
-	switch {
-	case s.ktf != nil:
-		return s.endedOrFailed(s.ktf.SendKey(ctx, ktf.KeyRepeated, code))
-	case s.runtime != nil:
-		return s.runtime.SendKey(skt.KeyRepeated, code)
+	if s.engine == nil {
+		return nil
 	}
-	return nil
+	return s.endedOrFailed(s.engine.repeat(ctx, code))
 }
 
 // guestSinceLastTick is how much of the guest's time has passed since the last
@@ -1113,23 +953,10 @@ func (s *Session) ExitReason() string { return s.exitReason }
 // there is nothing here for a panic in the interpreter to catch; the vibrator's
 // own mutex is what makes it safe beside a running tick.
 func (s *Session) Vibration() (backend.Vibration, bool) {
-	switch {
-	case s.script != nil:
-		return s.script.Vibration(), true
-	case s.ktf != nil:
-		return s.ktf.Vibration(), true
-	case s.cletSession != nil:
-		return s.cletSession.Vibration(), true
-	case s.runtime != nil:
-		return s.runtime.Vibration(), true
-	case s.lgt != nil:
-		return s.lgt.Vibration(), true
-	default:
-		// The earlier KTF package has no vibration recorded on this side: its
-		// native table has no vibrator call at all. Saying so is what keeps a
-		// Host from buzzing on a request nobody made.
+	if s.engine == nil {
 		return backend.Vibration{}, false
 	}
+	return s.engine.vibration()
 }
 
 func (s *Session) Frame() (rgba []byte, width, height int, ok bool) {
@@ -1169,20 +996,14 @@ func (s *Session) FrameUpdate() (frame backend.FrameUpdate, ok bool) {
 func (s *Session) frameUpdate() (frame backend.FrameUpdate, ok bool) {
 	frame.Scale = s.options.scale()
 	frame.Epoch = s.options.FrameEpoch
-	switch {
-	case s.cletSession != nil:
-		frame.RGBA, frame.Width, frame.Height, _ = s.cletSession.Frame()
-	case s.ktf != nil:
-		frame.RGBA, frame.Width, frame.Height, _ = s.ktf.Frame()
-	case s.ktfNative != nil:
-		frame.RGBA, frame.Width, frame.Height, _ = s.ktfNative.Frame()
-	case s.lgt != nil:
-		frame.RGBA, frame.Width, frame.Height, _ = s.lgt.Frame()
-	case s.surface != nil:
-		frame.RGBA, frame.Width, frame.Height = s.surface.Frame()
-		// The MIDP runtimes own their surface's size, so what they drew is
-		// what is shown.
-		frame.Scale = 1
+	if s.engine != nil {
+		var owned bool
+		frame.RGBA, frame.Width, frame.Height, owned = s.engine.frame()
+		if owned {
+			// The MIDP runtimes own their surface's size, so what they drew is
+			// what is shown.
+			frame.Scale = 1
+		}
 	}
 	return frame, len(frame.RGBA) > 0 && frame.Width > 0 && frame.Height > 0
 }
@@ -1199,31 +1020,10 @@ func (s *Session) frameUpdate() (frame backend.FrameUpdate, ok bool) {
 // where the platform has nothing else to say, and on KTF the handset the
 // descriptor declares when the start named none.
 func (s *Session) Screen() (width, height int) {
-	switch {
-	case s.ktf != nil:
-		// The frame is the answer once there is one, because it is built from
-		// the screen the game was actually given rather than from what was
-		// asked for. Before that, the platform's own: a start that named no
-		// screen took the one the archive's descriptor declares, which the
-		// Host's default does not know. The platform answers both without
-		// copying the frame.
-		return s.ktf.Screen()
-	case s.cletSession != nil:
-		return s.cletSession.Screen()
-	case s.ktfNative != nil:
-		// The earlier package answers the same way: the title asks for its
-		// size once and draws into what it is given, so the frame is what it
-		// actually got.
-		if _, frameWidth, frameHeight, _ := s.ktfNative.Frame(); frameWidth > 0 && frameHeight > 0 {
-			return frameWidth, frameHeight
+	if s.engine != nil {
+		if width, height, ok := s.engine.screen(); ok {
+			return width, height
 		}
-		return s.options.width(), s.options.height()
-	case s.lgt != nil:
-		if _, frameWidth, frameHeight, _ := s.lgt.Frame(); frameWidth > 0 && frameHeight > 0 {
-			return frameWidth, frameHeight
-		}
-	case s.surface != nil:
-		return s.surface.Dimensions()
 	}
 	return s.options.width(), s.options.height()
 }
@@ -1241,37 +1041,19 @@ func (s *Session) Screen() (width, height int) {
 // The MIDP runtimes answer false. They read the wall clock directly rather
 // than being advanced by a Host, so there is no second clock to compare.
 func (s *Session) GuestElapsed() (time.Duration, bool) {
-	switch {
-	case s.script != nil:
-		return s.script.GuestElapsed(), true
-	case s.ktf != nil:
-		return s.ktf.GuestElapsed(), true
-	case s.cletSession != nil:
-		return s.cletSession.GuestElapsed(), true
-	case s.ktfNative != nil:
-		return s.ktfNative.GuestElapsed(), true
-	case s.lgt != nil:
-		return s.lgt.GuestElapsed(), true
+	if s.engine == nil {
+		return 0, false
 	}
-	return 0, false
+	return s.engine.guestElapsed()
 }
 
 // Flushes reports how many frames the game has finished, which is what a Host
 // compares against to decide whether Frame is worth calling.
 func (s *Session) Flushes() uint64 {
-	switch {
-	case s.ktf != nil:
-		return uint64(s.ktf.Flushes())
-	case s.cletSession != nil:
-		return uint64(s.cletSession.Flushes())
-	case s.ktfNative != nil:
-		return uint64(s.ktfNative.Flushes())
-	case s.lgt != nil:
-		return s.lgt.Flushes()
-	case s.surface != nil:
-		return s.surface.Flushes()
+	if s.engine == nil {
+		return 0
 	}
-	return 0
+	return s.engine.flushes()
 }
 
 func (s *Session) magnify(frame []byte, width, height int) ([]byte, int, int, bool) {
@@ -1302,26 +1084,8 @@ func (s *Session) SetSpeed(multiplier float64) {
 	// The repeat clock is scaled by hand because it is this layer's own; every
 	// platform below scales its clock for itself.
 	s.speed = backend.ClampSpeed(multiplier)
-	if s.cletSession != nil {
-		s.cletSession.SetSpeed(s.speed)
-	}
-	if s.ktf != nil {
-		s.ktf.SetSpeed(s.speed)
-		// A KTF origin outside the duration range cannot be rebased. Keep
-		// input repeat and checkpoint metadata at the accepted guest rate.
-		s.speed = s.ktf.Speed()
-	}
-	if s.ktfNative != nil {
-		s.ktfNative.SetSpeed(s.speed)
-	}
-	if s.lgt != nil {
-		s.lgt.SetSpeed(s.speed)
-	}
-	if s.runtime != nil {
-		s.runtime.SetSpeed(s.speed)
-	}
-	if s.script != nil {
-		s.script.SetSpeed(s.speed)
+	if s.engine != nil {
+		s.speed = s.engine.setSpeed(s.speed)
 	}
 }
 
@@ -1346,11 +1110,8 @@ func (s *Session) SetScale(scale int) {
 // Detach before the Host closes that queue, including when parking a session.
 func (s *Session) SetFrameUpdates(output chan<- backend.FrameUpdate) {
 	s.options.FrameUpdates = output
-	if s.ktf != nil {
-		s.ktf.Client.SetFrameSink(backend.FrameSink{Output: output, Scale: s.options.scale(), Epoch: s.options.FrameEpoch})
-	}
-	if s.cletSession != nil {
-		s.cletSession.Client.SetFrameSink(backend.FrameSink{Output: output, Scale: s.options.scale(), Epoch: s.options.FrameEpoch})
+	if s.engine != nil {
+		s.engine.setFrameSink(backend.FrameSink{Output: output, Scale: s.options.scale(), Epoch: s.options.FrameEpoch})
 	}
 }
 
@@ -1364,9 +1125,7 @@ func (s *Session) SetOutputEpoch(epoch uint64) {
 func (s *Session) Scale() int { return s.options.scale() }
 
 // Running reports whether there is still a game to tick.
-func (s *Session) Running() bool {
-	return s.ktf != nil || s.ktfNative != nil || s.cletSession != nil || s.lgt != nil || s.runtime != nil || s.script != nil
-}
+func (s *Session) Running() bool { return s.engine != nil }
 
 // Paused reports whether the guest has been told that nobody is watching. A
 // parked game is not ticked, so this is the Host's own record rather than
@@ -1405,24 +1164,7 @@ func (s *Session) pause(ctx context.Context) error {
 		return nil
 	}
 	s.paused = true
-	switch {
-	case s.ktf != nil:
-		return s.endedOrFailed(s.ktf.Pause(ctx))
-	case s.cletSession != nil:
-		return s.endedOrFailed(s.cletSession.Pause(ctx))
-	case s.lgt != nil:
-		return s.endedOrFailed(s.lgt.Pause(ctx))
-	case s.runtime != nil:
-		return s.endedOrFailed(s.runtime.Pause())
-	case s.script != nil:
-		s.script.Pause()
-		return nil
-	case s.ktfNative != nil:
-		// The earlier KTF package has no lifecycle to call: its module is
-		// entered through one event callback and declares no pause entry.
-		return nil
-	}
-	return ErrNotRunning
+	return s.endedOrFailed(s.engine.pause(ctx))
 }
 
 func (s *Session) Resume(ctx context.Context) error {
@@ -1437,22 +1179,7 @@ func (s *Session) resume(ctx context.Context) error {
 		return nil
 	}
 	s.paused = false
-	switch {
-	case s.ktf != nil:
-		return s.endedOrFailed(s.ktf.Resume(ctx))
-	case s.cletSession != nil:
-		return s.endedOrFailed(s.cletSession.Resume(ctx))
-	case s.lgt != nil:
-		return s.endedOrFailed(s.lgt.Resume(ctx))
-	case s.runtime != nil:
-		return s.endedOrFailed(s.runtime.Resume())
-	case s.script != nil:
-		s.script.Resume()
-		return nil
-	case s.ktfNative != nil:
-		return nil
-	}
-	return ErrNotRunning
+	return s.endedOrFailed(s.engine.resume(ctx))
 }
 
 // closeWait is how long closing a session gives an LGT title's destroyClet:
@@ -1469,41 +1196,17 @@ var closeWait = backend.EndingBound
 // of the session *before* it is closed, so a panic on the way out cannot leave
 // a half-closed game that a second Close would enter again.
 func (s *Session) Close() {
-	ktfSession, nativeSession, lgtSession, runtime := s.ktf, s.ktfNative, s.lgt, s.runtime
-	cletSession := s.cletSession
-	script := s.script
-	s.script = nil
-	s.ktf, s.ktfNative, s.lgt, s.runtime = nil, nil, nil, nil
-	s.cletSession = nil
-	closing := func(where string, run func()) {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				_ = backend.GuestPanic(s.options.Logger, where, recovered)
-			}
+	running := s.engine
+	s.engine = nil
+	if running != nil {
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					_ = backend.GuestPanic(s.options.Logger, "session close", recovered)
+				}
+			}()
+			running.close()
 		}()
-		run()
-	}
-	if ktfSession != nil {
-		closing("session close", ktfSession.Close)
-	}
-	if nativeSession != nil {
-		closing("session close", nativeSession.Close)
-	}
-	if cletSession != nil {
-		closing("session close", cletSession.Close)
-	}
-	if lgtSession != nil {
-		closing("session close", func() {
-			ctx, cancel := context.WithTimeout(context.Background(), closeWait)
-			defer cancel()
-			_ = lgtSession.Close(ctx)
-		})
-	}
-	if runtime != nil {
-		closing("session close", func() { _ = runtime.Destroy(true) })
-	}
-	if script != nil {
-		closing("session close", func() { _ = script.Close() })
 	}
 	// Nothing is held once there is no game to hold it, and a repeat that
 	// outlived its session would name a key on a platform that is gone.
@@ -1511,11 +1214,10 @@ func (s *Session) Close() {
 	s.repeat.Forget()
 	s.held.Forget()
 	s.heldKeys, s.pointerHeld = nil, checkpointPointerState{}
-	// The captured surface goes with it, so a closed session answers the same
-	// way on every platform: there is no frame, because there is no game. A
-	// Host that wants the last picture on screen already has it — it was sent
-	// when it was flushed.
-	s.surface = nil
+	// A captured surface goes with its platform, so a closed session answers
+	// the same way on every platform: there is no frame, because there is no
+	// game. A Host that wants the last picture on screen already has it — it
+	// was sent when it was flushed.
 }
 
 // ktfKeyEventType maps the Host event names shared with the MIDP path to the
@@ -1659,17 +1361,8 @@ func (session *Session) Authentication() backend.AuthenticationStatus {
 	if session.options.DisableAuthentication {
 		return backend.AuthenticationOff
 	}
-	if session.ktf != nil {
-		return session.ktf.Authentication()
-	}
-	if session.runtime != nil {
-		return session.runtime.Authentication()
-	}
-	if session.lgt != nil {
-		return session.lgt.Authentication()
-	}
-	if session.cletSession != nil {
-		return session.cletSession.Authentication()
+	if session.engine != nil {
+		return session.engine.authentication()
 	}
 	return backend.AuthenticationUnsupported
 }
