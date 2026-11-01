@@ -70,8 +70,7 @@ try {
         return createScriptProcessor.apply(this, args);
       };
     }
-    // The FM synthesizer runs in a worklet: count the module it loads and the
-    // notes and voices the page posts to it, with each note's lead.
+    // The FM synthesizer runs in a worklet where it can: record the module.
     if (window.AudioWorklet) {
       const addModule = AudioWorklet.prototype.addModule;
       AudioWorklet.prototype.addModule = function (url, ...rest) {
@@ -80,25 +79,6 @@ try {
         return addModule.call(this, url, ...rest).then(value => { entry.loaded = true; return value; });
       };
     }
-    const postMessage = MessagePort.prototype.postMessage;
-    MessagePort.prototype.postMessage = function (message, ...rest) {
-      if (Array.isArray(message)) {
-        const context = probe.contexts.at(-1);
-        for (const command of message) {
-          if (command?.op === "define") probe.fmVoices++;
-          if (command?.op !== "on") continue;
-          probe.fmNotes++;
-          if (command.slot) probe.fmOwnVoiceNotes++;
-          if (context && command.at > 0) {
-            const lead = command.at - context.currentTime;
-            if (lead < -0.005) probe.fmLateNotes++;
-            probe.fmMinimumLead = probe.fmMinimumLead === null ? lead : Math.min(probe.fmMinimumLead, lead);
-            probe.fmMaximumLead = probe.fmMaximumLead === null ? lead : Math.max(probe.fmMaximumLead, lead);
-          }
-        }
-      }
-      return postMessage.call(this, message, ...rest);
-    };
     const NativeSocket = window.WebSocket;
     window.WebSocket = class extends NativeSocket {
       constructor(...args) {
@@ -194,6 +174,25 @@ try {
   // own presentation times: a late page and a jumping server look different.
   await page.evaluate(async () => {
     const { PageAudio } = await import("/audio.js");
+    // Every command reaches the synthesizer through its host's post, in a
+    // worklet or a ScriptProcessor alike: count the notes and voices there,
+    // with each note's lead.
+    const { FMHost } = await import("/fm-host.js");
+    const post = FMHost.prototype.post;
+    FMHost.prototype.post = function (command) {
+      if (command?.op === "define") audioProbe.fmVoices++;
+      if (command?.op === "on") {
+        audioProbe.fmNotes++;
+        if (command.slot) audioProbe.fmOwnVoiceNotes++;
+        if (command.at > 0) {
+          const lead = command.at - this.context.currentTime;
+          if (lead < -0.005) audioProbe.fmLateNotes++;
+          audioProbe.fmMinimumLead = audioProbe.fmMinimumLead === null ? lead : Math.min(audioProbe.fmMinimumLead, lead);
+          audioProbe.fmMaximumLead = audioProbe.fmMaximumLead === null ? lead : Math.max(audioProbe.fmMaximumLead, lead);
+        }
+      }
+      return post.call(this, command);
+    };
     // The debug log view keeps only its last lines, and a long run pushes the
     // first timing reports out of it, so every report is copied as it lands.
     audioProbe.timingLines = [];

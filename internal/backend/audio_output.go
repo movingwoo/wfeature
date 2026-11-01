@@ -37,6 +37,9 @@ type AudioChannelState struct {
 	BendSemitones, BendCents                  uint8
 	RPNMSB, RPNLSB, NRPNMSB, NRPNLSB          uint8
 	NRPN                                      bool
+	// Modulation is the channel's controller 1, the vibrato depth the page's
+	// synthesizer adds to every note on the channel.
+	Modulation uint8
 }
 
 type AudioVoiceState struct {
@@ -198,6 +201,17 @@ func (output *audioOutput) noteOn(channel, note, velocity, voice, pitch uint8) {
 	}
 }
 
+// rememberVoice keeps an owner's voice for reconstruction. The bytes are
+// borrowed from the owner's immutable events.
+func (output *audioOutput) rememberVoice(owner AudioHandle, slot uint8, data []byte) {
+	voices := output.voices[owner]
+	if voices == nil {
+		voices = make(map[uint8][]byte)
+		output.voices[owner] = voices
+	}
+	voices[slot] = data
+}
+
 // defineVoice records one of the current owner's FM voices and forwards it.
 // A Play restarts its owner with stopSound, which forgets the definitions;
 // the score defines them again from its first instant.
@@ -206,12 +220,7 @@ func (output *audioOutput) defineVoice(slot uint8, data []byte) {
 		output.invalid = true
 		return
 	}
-	voices := output.voices[output.sound]
-	if voices == nil {
-		voices = make(map[uint8][]byte)
-		output.voices[output.sound] = voices
-	}
-	voices[slot] = data
+	output.rememberVoice(output.sound, slot, data)
 	if output.sink != nil {
 		output.destination(output.sound).defineVoice(slot, data)
 	}
@@ -388,7 +397,8 @@ func (output *audioOutput) capture(now time.Time) (AudioOutputState, error) {
 
 func (state AudioChannelState) valid() bool {
 	return state.Program < 128 && state.Volume < 128 && state.Expression < 128 && state.Pan < 128 && state.Sustain < 128 && state.Bend < 16384 &&
-		state.BendSemitones < 128 && state.BendCents < 100 && state.RPNMSB < 128 && state.RPNLSB < 128 && state.NRPNMSB < 128 && state.NRPNLSB < 128
+		state.BendSemitones < 128 && state.BendCents < 100 && state.RPNMSB < 128 && state.RPNLSB < 128 && state.NRPNMSB < 128 && state.NRPNLSB < 128 &&
+		state.Modulation < 128
 }
 
 func (saved AudioOutputState) validate(version uint32) error {
@@ -545,6 +555,7 @@ func replayAudioChannel(sink AudioSink, channel uint8, state AudioChannelState) 
 	sink.MIDIControlChange(channel, 10, state.Pan)
 	sink.MIDIControlChange(channel, 11, state.Expression)
 	sink.MIDIControlChange(channel, 64, state.Sustain)
+	sink.MIDIControlChange(channel, 1, state.Modulation)
 	replayAudioParameters(sink, channel, state)
 	sink.MIDIPitchBend(channel, state.Bend)
 }

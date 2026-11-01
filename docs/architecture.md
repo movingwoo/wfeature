@@ -709,7 +709,7 @@ version 9 records paused cursors, frozen output, note envelope ages, finite
 remaining passes, completion counts, media position, pitch sensitivity, RPN and
 NRPN selectors, released keys held by sustain, independent PCM group controls,
 original wave byte charges and fractional sample-frame positions; version 10
-adds the FM voice each sounding note plays. Genuine version 6, 7, 8 and 9
+adds the FM voice each sounding note plays and each channel's modulation. Genuine version 6, 7, 8 and 9
 records remain readable, versions 6–8 at their saved whole frames; versions
 6 and 7 derive charges from the available tails, and version 6 invents no PCM
 routing. Earlier versions and mixed shapes are refused. New captures write

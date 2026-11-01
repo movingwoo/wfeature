@@ -269,8 +269,8 @@ type voiceDefinition struct {
 // messages by time. A definition takes the next slot, so a voice redefined
 // mid-song gets a new slot and notes before it keep the old one.
 type voiceTable struct {
-	definitions []voiceDefinition
-	voices      [][]byte // Encoded voice per slot; index zero is unused.
+	byKey  map[voiceKey][]voiceDefinition // In definition order.
+	voices [][]byte                       // Encoded voice per slot; index zero is unused.
 }
 
 func (table *voiceTable) define(time uint32, message []byte) (uint8, []byte, bool) {
@@ -287,7 +287,10 @@ func (table *voiceTable) define(time uint32, message []byte) (uint8, []byte, boo
 	slot := uint8(len(table.voices))
 	encoded := voice.Encode()
 	table.voices = append(table.voices, encoded)
-	table.definitions = append(table.definitions, voiceDefinition{time: time, key: key, slot: slot})
+	if table.byKey == nil {
+		table.byKey = make(map[voiceKey][]voiceDefinition)
+	}
+	table.byKey[key] = append(table.byKey[key], voiceDefinition{time: time, key: key, slot: slot})
 	return slot, encoded, true
 }
 
@@ -298,8 +301,8 @@ func (table *voiceTable) lookup(key voiceKey, time uint32) uint8 {
 	}
 	var found uint8
 	var foundTime uint32
-	for _, definition := range table.definitions {
-		if definition.key == key && definition.time <= time && (found == 0 || definition.time >= foundTime) {
+	for _, definition := range table.byKey[key] {
+		if definition.time <= time && (found == 0 || definition.time >= foundTime) {
 			found, foundTime = definition.slot, definition.time
 		}
 	}

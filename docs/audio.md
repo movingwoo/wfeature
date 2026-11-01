@@ -188,15 +188,18 @@ accept five shapes:
 | 7 | Adds the PCM control and routing fields, required |
 | 8 | Adds each wave's original admission charge |
 | 9 | Adds each wave's phase within its first remaining sample frame |
-| 10 | Adds each sounding note's voice slot and pitch |
+| 10 | Adds each sounding note's voice slot and pitch, and each channel's modulation |
 
 Mixed shapes, unrelated missing fields, duplicates, unknown fields and
 unreserved groups are refused before adoption. Reading v6 does not invent
 routing. Versions 6 and 7 derive an initial charge from their saved sample
 tails, because the original pre-trim size cannot be recovered; versions 6–8
-adopt phase zero for the same reason. Versions 6–9 resume their sounding
-notes on the page's stand-in voices; those notes are short-lived, and the score
-names its voices again for every later note. The next capture writes v10.
+adopt phase zero for the same reason. A sound restored from versions 6–9 keeps
+the events it was decoded with, which name no voices: its notes, sounding and
+later, play the page's stand-ins until the game loads the sound again, and its
+next capture keeps those events. A checkpoint holds decoded events, not a
+sound's bytes, so the voices cannot be recovered for it; versions 6–9 may not
+carry voice events at all. The next capture writes v10.
 Versions below 6 are refused. Older binaries refuse v10, so rollback requires a
 pre-upgrade checkpoint or a normal start; checkpoint files and ordinary saves
 are left in place. Debug and release use the same format.
@@ -700,9 +703,15 @@ sound entirely. Sampled sounds go straight into an `AudioBuffer`. MIDI and PCM
 feed separate gain nodes so the page's 🎵 music and 🔊 effects sliders can
 trade against each other.
 
-The synthesizer renders every note into one of 32 mono lanes, one per sound
-channel the page has open, and each lane runs through that channel's volume,
-pan and sound gain as the old per-note oscillators did. In a secure context it
+The synthesizer renders every note into one of 32 mono lanes, and each lane
+runs through one sound channel's volume, pan and sound gain as the old
+per-note oscillators did. A channel claims a lane with its first note; when
+every lane is held, the one whose channel has been idle longest is taken back,
+because a clip that ended on its own keeps its channels for its next play. A
+note that still finds no lane — 32 channels sounding at once — is dropped
+without stealing anything. Channel modulation (controller 1) is the vibrato
+depth the lane adds, and the server keeps it with the other channel state so a
+reconstruction restores it. In a secure context it
 runs in an AudioWorklet on the audio thread. A page opened by the machine's
 address over plain HTTP has no AudioWorklet, so there the same class renders in
 a ScriptProcessor with 2048-frame buffers on the page's thread: the sound is

@@ -99,3 +99,27 @@ test("the session asks for voices and dispatches them with their notes", t => {
   assert.deepEqual([note.slot, note.pitch, note.sound], [4, 48, 11]);
   assert.deepEqual([resumed.slot, resumed.pitch, resumed.age], [4, 50, 0.04]);
 });
+
+test("a finished clip's idle lanes go to channels that need them", t => {
+  const { audio, fm } = setup(t);
+  for (let sound = 1; sound <= 32; sound++) audio.noteOn(0, 60, 100, sound);
+  assert.equal(fm.lanes.filter(Boolean).length, 32);
+  // Thirty-two clips hold every lane while their notes sound: a new channel
+  // gets none, and its note cuts nothing on its way out.
+  const before = fm.commands.length;
+  audio.noteOn(0, 60, 100, 99);
+  assert.equal(fm.notes().length, 32);
+  assert.deepEqual(fm.commands.slice(before).filter(command => command.op === "cut"), [], "no note was stolen for a note that cannot sound");
+  // The first clip's note ends; its idle lane is taken back for the new one.
+  const [first] = fm.notes();
+  fm.end(first.id);
+  audio.noteOn(0, 60, 100, 99);
+  const [latest] = fm.notes().slice(-1);
+  assert.equal(latest.sound, 99);
+  assert.equal(latest.lane, first.lane);
+  assert.ok(fm.released.includes(first.lane));
+  assert.equal(audio.channelOutputs.get(1)[0].lane, null, "the idle channel claims a lane again on its next note");
+  fm.end(fm.notes()[1].id);
+  audio.noteOn(0, 64, 100, 1);
+  assert.equal(fm.notes().at(-1).sound, 1);
+});

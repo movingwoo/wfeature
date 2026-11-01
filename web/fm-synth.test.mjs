@@ -241,3 +241,15 @@ test("percussion keeps its pitch while a lane bends", () => {
   target.handle({ op: "bend", lane: 0, at: 0, ratio: 2 });
   assert.ok(Math.abs(crossings(render(target, 1)) - 880) <= 2);
 });
+
+test("an operator stepping more than a cycle a sample keeps its phase within one cycle", () => {
+  const target = synth();
+  // Pitch 108 with a fifteen-times operator is about 63 kHz.
+  define(target, encode(1, [operator({ multiple: 15 }), operator({ totalLevel: 63 })]));
+  on(target, { pitch: 108 });
+  const samples = render(target, 0.05);
+  assert.ok(samples.every(Number.isFinite));
+  const [operator0] = target.voices.find(voice => voice.active).operators;
+  assert.ok(operator0.step > 1, `step ${operator0.step}`);
+  assert.ok(operator0.phase >= 0 && operator0.phase < 1, `phase ${operator0.phase}`);
+});

@@ -29,6 +29,10 @@ export class FMHost {
     // Notes the synthesizer has not reported ended. If it stops, the page
     // still learns they are over, so their places in its budget come back.
     this.live = new Set();
+    // What a replacement synthesizer needs to carry on: the voices defined
+    // and each claimed lane's pitch ratio and modulation depth.
+    this.definitions = new Map();
+    this.laneStates = new Map();
     this.queued = [];
     this.flushing = false;
     this.node = null;
@@ -62,9 +66,8 @@ export class FMHost {
         this.node = null;
         this.ended([...this.live]);
         this.attachScript();
-        for (const [lane, destination] of this.lanes.entries()) {
-          if (destination !== null) this.post({ op: "lane", lane, ratio: 1, depth: 0 });
-        }
+        for (const command of this.definitions.values()) this.post(command);
+        for (const [lane, state] of this.laneStates) this.post({ op: "lane", lane, ...state });
       };
       this.connect(node);
       this.mode = "worklet";
@@ -129,6 +132,7 @@ export class FMHost {
   // were posted: directly on the page's thread, or in one message per task
   // to the worklet.
   post(command) {
+    this.remember(command);
     if (command.op === "on") this.live.add(command.id);
     if (this.synth) {
       this.synth.handle(command);
@@ -147,6 +151,32 @@ export class FMHost {
     if (this.node && !this.flushing) {
       this.flushing = true;
       queueMicrotask(() => this.flush());
+    }
+  }
+
+  remember(command) {
+    switch (command.op) {
+      case "define":
+        this.definitions.set(`${command.sound}:${command.slot}`, command);
+        break;
+      case "forget":
+        for (const key of [...this.definitions.keys()]) if (key.startsWith(`${command.sound}:`)) this.definitions.delete(key);
+        break;
+      case "reset":
+        this.definitions.clear();
+        break;
+      case "lane":
+        this.laneStates.set(command.lane, { ratio: command.ratio ?? 1, depth: command.depth ?? 0 });
+        break;
+      case "bend":
+        if (this.laneStates.has(command.lane)) this.laneStates.get(command.lane).ratio = command.ratio;
+        break;
+      case "depth":
+        if (this.laneStates.has(command.lane)) this.laneStates.get(command.lane).depth = command.depth;
+        break;
+      case "release":
+        this.laneStates.delete(command.lane);
+        break;
     }
   }
 

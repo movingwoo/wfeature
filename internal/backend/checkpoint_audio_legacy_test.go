@@ -97,9 +97,28 @@ func checkpointAudioVersionDocument(t *testing.T, version uint32) map[string]any
 		for _, note := range output["Notes"].([]any) {
 			remove(note.(map[string]any), "Voice")
 			remove(note.(map[string]any), "Pitch")
+			remove(note.(map[string]any)["StartedWith"].(map[string]any), "Modulation")
+		}
+		for _, channel := range checkpointAudioChannels(output) {
+			remove(channel, "Modulation")
 		}
 	}
 	return record
+}
+
+// checkpointAudioChannels answers every channel state of an output record
+// except the ones notes started with.
+func checkpointAudioChannels(output map[string]any) []map[string]any {
+	var channels []map[string]any
+	for _, channel := range output["Channels"].([]any) {
+		channels = append(channels, channel.(map[string]any))
+	}
+	for _, sound := range output["Sounds"].([]any) {
+		for _, channel := range sound.(map[string]any)["Channels"].([]any) {
+			channels = append(channels, channel.(map[string]any))
+		}
+	}
+	return channels
 }
 
 func checkpointAudioNote(record map[string]any) map[string]any {
@@ -253,6 +272,10 @@ func TestCheckpointAudioRejectsHybridOrMissingFieldsAtomically(t *testing.T) {
 		{"current voice omission", 10, func(r map[string]any) { delete(checkpointAudioNote(r), "Voice") }},
 		{"current pitch omission", 10, func(r map[string]any) { delete(checkpointAudioNote(r), "Pitch") }},
 		{"current voice overflow", 10, func(r map[string]any) { checkpointAudioNote(r)["Voice"] = 256 }},
+		{"v9 modulation addition", 9, func(r map[string]any) { checkpointAudioChannels(r["Output"].(map[string]any))[0]["Modulation"] = 0 }},
+		{"v9 started-with modulation addition", 9, func(r map[string]any) { checkpointAudioNote(r)["StartedWith"].(map[string]any)["Modulation"] = 0 }},
+		{"current modulation omission", 10, func(r map[string]any) { delete(checkpointAudioChannels(r["Output"].(map[string]any))[3], "Modulation") }},
+		{"current modulation overflow", 10, func(r map[string]any) { checkpointAudioChannels(r["Output"].(map[string]any))[0]["Modulation"] = 256 }},
 		{"legacy unknown field", 6, func(r map[string]any) { checkpointAudioEvent(r, 0)["Future"] = 0 }},
 		{"legacy wrong version case", 6, func(r map[string]any) { delete(r, "Version"); r["version"] = 6 }},
 		{"legacy null version", 6, func(r map[string]any) { r["Version"] = nil }},

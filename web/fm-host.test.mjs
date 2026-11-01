@@ -133,7 +133,15 @@ test("a worklet that stops ends its notes and hands over to the page", async t =
   const ended = [], reports = [];
   const host = new FMHost(audio, { onEnded: ids => ended.push(...ids), report: message => reports.push(message) });
   await settle();
+  const voice = Uint8Array.from([1, 1, 0, 1, 1, 0, 0, 15, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 63, 15, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  host.post({ op: "define", sound: 3, slot: 2, data: voice });
+  host.post({ op: "define", sound: 4, slot: 1, data: voice });
+  host.post({ op: "forget", sound: 4 });
   const lane = host.lane(audio.createGain());
+  const released = host.lane(audio.createGain());
+  host.post({ op: "bend", lane, at: 0, ratio: 1.5 });
+  host.post({ op: "depth", lane, at: 0, depth: 0.25 });
+  host.release(released);
   host.post({ op: "on", id: 4, at: 0, lane });
   host.post({ op: "on", id: 5, at: 0, lane });
   nodes[0].port.onmessage({ data: [4] });
@@ -142,6 +150,8 @@ test("a worklet that stops ends its notes and hands over to the page", async t =
   assert.equal(nodes[0].disconnected, true);
   assert.equal(host.mode, "script");
   assert.ok(audio.processor);
-  assert.deepEqual(host.synth.lanes[lane], { ratio: 1, depth: 0 }, "claimed lanes carry over");
+  assert.deepEqual([...host.synth.patches.keys()], ["3:2"], "the voices still defined carry over");
+  assert.deepEqual(host.synth.lanes[lane], { ratio: 1.5, depth: 0.25 }, "a claimed lane keeps its bend and depth");
+  assert.deepEqual(host.synth.lanes[released], { ratio: 1, depth: 0 });
   assert.match(reports[0], /worklet stopped/);
 });

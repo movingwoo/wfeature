@@ -316,8 +316,11 @@ func sequenceEvents(
 			channel, program := tones.setProgram(source, event.Program)
 			events = budget.emit(events, Event{Time: time, Type: EventProgramChange, Channel: channel, Program: program})
 			// The ambience layers stand in for a voice General MIDI lacks.
-			// A file that defines that voice itself needs no stand-in.
-			if !tones.definesVoice(source, time) {
+			// A file that defines that voice itself needs no stand-in, even
+			// when an earlier selection of the voice set one up.
+			if tones.definesVoice(source, time) {
+				tones.atmosphere[tones.pseudoChannel(source)] = false
+			} else {
 				events = budget.emit(events, tones.atmosphereSetup(time, source, event.Program)...)
 			}
 

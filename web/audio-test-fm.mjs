@@ -8,10 +8,13 @@ export const fakeFM = () => {
     lanes: [],
     released: [],
     onEnded: () => {},
+    capacity: 32,
     lane(destination, ratio = 1, depth = 0) {
       let lane = this.lanes.findIndex(entry => entry === null);
       if (lane < 0) lane = this.lanes.length;
+      if (lane >= this.capacity) return null;
       this.lanes[lane] = { destination, ratio, depth };
+      this.commands.push({ op: "lane", lane, ratio, depth });
       return lane;
     },
     release(lane) {

@@ -396,13 +396,15 @@ export const playAudioEvents = (audio, events) => {
     const play = () => {
       const ownership = event.sound === undefined ? [] : [event.sound];
       switch (event.kind) {
+        // A note that plays its sound's own voice names the slot and pitch
+        // after its owner (and, for a note-on, a zero age).
         case "noteOn":
-          if (event.voice) audio.noteOn(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0, event.sound ?? 0, 0, event.voice, event.pitch ?? 0);
-          else audio.noteOn(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0, ...ownership);
+          audio.noteOn(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0,
+            ...(event.voice ? [event.sound ?? 0, 0, event.voice, event.pitch ?? 0] : ownership));
           break;
         case "noteResume":
-          if (event.voice) audio.noteResume(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0, event.age ?? 0, event.sound ?? 0, event.voice, event.pitch ?? 0);
-          else audio.noteResume(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0, event.age ?? 0, ...ownership);
+          audio.noteResume(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0, event.age ?? 0,
+            ...(event.voice ? [event.sound ?? 0, event.voice, event.pitch ?? 0] : ownership));
           break;
         // A sound's own FM voice, which its later notes name by slot.
         case "voice":

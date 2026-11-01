@@ -28,13 +28,12 @@ type toneMap struct {
 	atmosLayers   [maxSMAFChannels][2]atmosphereLayer
 	atmosLayerSet [maxSMAFChannels][2]bool
 
-	// The file's own voices, and each channel's selection as the file wrote
-	// it: the handset bank byte keeps its drum bit and the program is not
-	// replaced by a General MIDI stand-in, because a defined voice is keyed
-	// by exactly those bytes.
+	// The file's own voices, and the parts of each channel's selection the
+	// tone map otherwise changes: the handset bank byte keeps its drum bit and
+	// the program is not replaced by a General MIDI stand-in, because a
+	// defined voice is keyed by exactly those bytes.
 	voices     *voiceTable
 	rawBank    [maxSMAFChannels]uint8
-	rawBankLSB [maxSMAFChannels]uint8
 	rawProgram [maxSMAFChannels]uint8
 }
 
@@ -77,7 +76,7 @@ func (tones *toneMap) reset() {
 		tones.realMapSet[index] = false
 		tones.atmosphere[index] = false
 		tones.atmosLayerSet[index] = [2]bool{}
-		tones.rawBank[index], tones.rawBankLSB[index], tones.rawProgram[index] = 0, 0, 0
+		tones.rawBank[index], tones.rawProgram[index] = 0, 0
 	}
 	tones.reserved = [16]bool{}
 }
@@ -111,7 +110,7 @@ func (tones *toneMap) initTrack(formatType FormatType, statuses []ChannelStatus,
 			tones.forcedRhythm[channel] = false
 			tones.atmosphere[channel] = false
 			tones.atmosLayerSet[channel] = [2]bool{}
-			tones.rawBank[channel], tones.rawBankLSB[channel], tones.rawProgram[channel] = 0, 0, 0
+			tones.rawBank[channel], tones.rawProgram[channel] = 0, 0
 		}
 		return
 	}
@@ -234,7 +233,6 @@ func (tones *toneMap) updateControl(channel, control, value uint8) {
 		tones.rawBank[index] = value & 0x7f
 	case 32:
 		tones.bankLSB[index] = value & 0x7f
-		tones.rawBankLSB[index] = value & 0x7f
 	case 7:
 		tones.volumes[index] = min(value, 0x7f)
 	case 121:
@@ -295,7 +293,7 @@ func (tones *toneMap) voiceFor(channel uint8, note int16, time uint32) (uint8, u
 		}
 		return 0, 0
 	}
-	key := voiceKey{bankMSB: tones.rawBank[index], bankLSB: tones.rawBankLSB[index], program: tones.rawProgram[index]}
+	key := voiceKey{bankMSB: tones.rawBank[index], bankLSB: tones.bankLSB[index], program: tones.rawProgram[index]}
 	if tones.isRhythm(index) {
 		drum := key
 		drum.drumNote = clampNote(note)
@@ -316,7 +314,7 @@ func (tones *toneMap) definesVoice(channel uint8, time uint32) bool {
 		return false
 	}
 	index := tones.pseudoChannel(channel)
-	key := voiceKey{bankMSB: tones.rawBank[index], bankLSB: tones.rawBankLSB[index], program: tones.rawProgram[index]}
+	key := voiceKey{bankMSB: tones.rawBank[index], bankLSB: tones.bankLSB[index], program: tones.rawProgram[index]}
 	return tones.voices.lookup(key, time) != 0
 }
 

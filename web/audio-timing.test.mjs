@@ -354,7 +354,7 @@ const invalidBatches = [
   ["nonfinite frontier", () => [attack(0.060, 62), clock(Infinity)]],
   ["nonfinite event", () => [attack(0.060, 62), attack(NaN, 64), clock(0.070)]],
   ["duplicate frontier", () => [attack(0.060, 62), clock(0.060), clock(0.070)]],
-  ["oversized", () => [attack(0.060, 62), ...Array(65536).fill(controller(0.060, 7, 0)), clock(0.060)]],
+  ["oversized", () => [attack(0.060, 62), ...Array(1 << 18).fill(controller(0.060, 7, 0)), clock(0.060)]],
 ];
 for (const [name, events, current] of invalidBatches) {
   test(`${name}: a timed batch is refused before any sound or controller is applied`, t => {

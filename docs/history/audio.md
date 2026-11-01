@@ -942,6 +942,16 @@ previous build loads in this one on all three platforms, and this build's own
 quick saves round-trip. The live session passes in Chromium and WebKit, and in
 Chromium with the worklet hidden ([live audio](../testing.md#live-audio-session-acceptance)).
 
+A review of the change found that lanes stayed with clips that had ended, so
+a long session could leave a new channel silent; that a reconstruction dropped
+channel modulation, now part of the channel state the server replays (still
+audio state version 10); that a stopped worklet's replacement lost the voices
+and lane bends; that versions 6–9 could restore records carrying voice events;
+and that restored version 6–9 sounds play stand-ins until loaded again, not
+"for one note". Voice lookup became a map, and an operator stepping a cycle or
+more per sample keeps its phase within one cycle. The server's and page's
+reconstruction ceiling rose to 262,144 events for the voice definitions.
+
 What could be checked without a handset is whether the voices sound the notes
 the scores ask for. Twelve handset songs and sixteen mobile songs were rendered
 offline through the synthesizer, one lane per channel, and the chroma of the

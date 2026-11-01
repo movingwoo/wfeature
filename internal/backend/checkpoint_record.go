@@ -35,7 +35,8 @@ type checkpointRecordWalk struct {
 }
 
 // Versions 7, 8, 9 and 10 added PCM controls, retained wave admission charges,
-// frame phases and the FM voice of each sounding note. Track each addition until the enclosing AudioState ends, since
+// frame phases, and the FM voice of each sounding note with each channel's
+// modulation. Track each addition until the enclosing AudioState ends, since
 // Version can follow its children. Unknown versions require the complete current
 // shape; their semantic version checks remain the audio component's responsibility.
 type checkpointAudioShape struct {
@@ -71,6 +72,10 @@ func checkpointAudioAddedField(t reflect.Type, name string) uint8 {
 		}
 	case reflect.TypeFor[AudioVoiceState]():
 		if name == "Voice" || name == "Pitch" {
+			return checkpointAudioVoiceFields
+		}
+	case reflect.TypeFor[AudioChannelState]():
+		if name == "Modulation" {
 			return checkpointAudioVoiceFields
 		}
 	}

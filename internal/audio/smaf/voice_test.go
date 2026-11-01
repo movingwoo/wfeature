@@ -373,3 +373,41 @@ func TestVoiceSlotsStopAtTheirBound(t *testing.T) {
 		t.Fatal("the last slot is missing")
 	}
 }
+
+func TestAmbienceDefinedAfterItsSelectionDropsTheStandIn(t *testing.T) {
+	ambience := mobileVoiceMessage(0x07, 0x7c, 0x01, 0x62, 0, mobileVoiceBody)
+	stream := []byte{
+		0x00, 0xb0, 0x00, 0x7c,
+		0x00, 0xb0, 0x20, 0x01,
+		0x00, 0xc0, 0x62, // selected before the file defines it
+		0x00, 0x90, 60, 0x40, 0x01,
+		0x0a, 0xf0, byte(len(ambience)),
+	}
+	stream = append(stream, ambience...)
+	stream = append(stream,
+		0x0a, 0xc0, 0x62, // selected again once defined
+		0x00, 0x90, 62, 0x40, 0x01,
+		0x00, 0xff, 0x2f, 0x00)
+	events := Play(smafFile(mobileScore(chunk("Mtsq", stream))))
+	var early, late []Event
+	for _, event := range events {
+		if event.Type == EventNoteOn && event.Velocity != 0 {
+			if event.Time == 0 {
+				early = append(early, event)
+			} else {
+				late = append(late, event)
+			}
+		}
+	}
+	if len(early) != 3 {
+		t.Fatalf("the undefined selection played %d notes, want the note and two layers", len(early))
+	}
+	if len(late) != 1 || late[0].Program == 0 {
+		t.Fatalf("the defined voice played %+v, want its own voice alone", late)
+	}
+	for _, event := range events {
+		if event.Type == EventNoteOff && event.Note == 62 && event.Time != late[0].Time+1 {
+			t.Fatalf("the defined voice's gate was extended to %d ms", event.Time-late[0].Time)
+		}
+	}
+}

@@ -570,7 +570,9 @@ export class FMSynth {
     let previous = voice.out1[index], older = voice.out2[index];
     for (let sample = 0; sample < count; sample++) {
       phase += step;
-      if (phase >= 1) phase -= 1; // a step is always below one cycle
+      // An operator above the sampling rate's reach steps a cycle or more,
+      // and aliases as the chips' own phase counters do.
+      if (phase >= 1) phase -= phase | 0;
       let input = modulation === null ? 0 : modulation[sample];
       if (feedback !== 0) input += (previous + older) * feedback;
       let value = 0;

@@ -16,7 +16,10 @@
 import { FMHost } from "./fm-host.js";
 
 const MAX_VOICES = 24;
-const MAX_AUDIO_EVENTS = 65536;
+// A full reconstruction's worst case is about 134,000 events: every owner's
+// channel controls and FM voice definitions, its notes and samples. The
+// server's replay ceiling is the same (maxReplayAudio).
+const MAX_AUDIO_EVENTS = 1 << 18;
 const MAX_PCM_CHANNELS = 2048;
 // Retained native sources include scheduled starts and release/retired tails.
 // A full output reconstruction needs at most 256 PCM sources and 24 notes.
@@ -346,12 +349,39 @@ export class PageAudio {
       } else {
         gain.connect(this.outputFor(sound, "midi"));
       }
-      const state = this.channelsFor(sound)[channel];
-      const fm = this.synthesizer();
-      const lane = fm ? fm.lane(gain, channel === DRUM_CHANNEL ? 1 : this.bendRatio(state), state.modulation / 127) : null;
-      outputs[channel] = { gain, panner, lane, gainRamp: controlRamp(level), panRamp: controlRamp(pan) };
+      // The synthesizer lane is claimed by the first note and given back
+      // when another channel needs it and this one has nothing sounding.
+      outputs[channel] = { gain, panner, lane: null, voices: 0, lastUsed: 0,
+        gainRamp: controlRamp(level), panRamp: controlRamp(pan) };
     }
     return outputs[channel];
+  }
+
+  // laneFor answers the synthesizer lane a channel's notes sound in. With
+  // every lane held, it takes back the one idle longest: a clip that finished
+  // on its own keeps its channels for its next play, not their lanes.
+  laneFor(output, channel, sound) {
+    if (output.lane !== null) return output.lane;
+    const fm = this.synthesizer();
+    if (!fm) return null;
+    const state = this.channelsFor(sound)[channel];
+    const claim = () => fm.lane(output.gain, channel === DRUM_CHANNEL ? 1 : this.bendRatio(state), state.modulation / 127);
+    let lane = claim();
+    if (lane === null) {
+      let idle = null;
+      for (const outputs of this.channelOutputs.values()) {
+        for (const other of outputs) {
+          if (other && other.lane !== null && other.voices === 0 && (!idle || other.lastUsed < idle.lastUsed)) idle = other;
+        }
+      }
+      if (idle) {
+        fm.release(idle.lane);
+        idle.lane = null;
+        lane = claim();
+      }
+    }
+    output.lane = lane;
+    return lane;
   }
 
   releaseChannelOutput(output) {
@@ -715,6 +745,9 @@ export class PageAudio {
     if (this.sources.size >= MAX_AUDIO_SOURCES) return false;
     const context = this.ensure();
     if (!context) return;
+    // A note with nowhere to sound must not cut another one on its way out.
+    const output = this.channelOutputFor(channel, sound);
+    if (this.laneFor(output, channel, sound) === null) return;
     const now = this.eventTime();
     // A percussion note gives its place in the budget back on the score
     // clock, whatever the synthesizer is still rendering.
@@ -730,8 +763,6 @@ export class PageAudio {
 
     const key = voiceKey(sound, channel, note);
     this.stopVoice(key, RETRIGGER_FADE, now);
-    const output = this.channelOutputFor(channel, sound);
-    if (!this.fm || output.lane === null) return;
     const id = ++this.nextVoiceId;
     const source = {
       id,
@@ -740,7 +771,9 @@ export class PageAudio {
     const own = Number.isInteger(voice) && voice > 0 && voice < 256;
     // A resumed envelope predates its source. Keep both times so a clock
     // correction cannot release it before its first rendered sample.
-    const held = { source, kind: "midi", drum, fm: id, started: now - age, sourceStart: now, sound, channel, note, end: Infinity };
+    const held = { source, kind: "midi", drum, fm: id, output, started: now - age, sourceStart: now, sound, channel, note, end: Infinity };
+    output.voices++;
+    output.lastUsed = now;
     if (drum) held.slotEnd = now + DRUM_SLOT - age;
     this.voices.set(key, held);
     this.sources.set(source, held);
@@ -1049,6 +1082,7 @@ export class PageAudio {
     this.sources.delete(source);
     if (voice.fm) {
       this.fmSources.delete(voice.fm);
+      if (voice.output) voice.output.voices--;
       const key = voiceKey(voice.sound, voice.channel, voice.note);
       if (this.drumKeys.get(key) === source) this.drumKeys.delete(key);
     }

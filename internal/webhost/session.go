@@ -2030,8 +2030,12 @@ func (a *audioCollector) SoundGain(sound backend.AudioHandle, gain uint16) {
 }
 
 func (a *audioCollector) ResumeNote(sound backend.AudioHandle, channel, note, velocity uint8, age time.Duration) {
-	milliseconds := uint32(min(max(age.Milliseconds(), 0), int64(1<<32-1)))
-	a.append(audioEvent{Kind: audioNoteResume, Sound: uint32(sound), Channel: channel, Note: note, Velocity: velocity, Age: milliseconds})
+	a.append(audioEvent{Kind: audioNoteResume, Sound: uint32(sound), Channel: channel, Note: note, Velocity: velocity, Age: audioAgeMilliseconds(age)})
+}
+
+// audioAgeMilliseconds is a note's envelope age as the wire carries it.
+func audioAgeMilliseconds(age time.Duration) uint32 {
+	return uint32(min(max(age.Milliseconds(), 0), int64(1<<32-1)))
 }
 
 // Handoffs run between guest calls, never concurrently with a tick or input.

@@ -147,3 +147,80 @@ func TestAudioVoiceEventsAreValidated(t *testing.T) {
 		}
 	}
 }
+
+func TestAudioModulationIsReplayedAndReset(t *testing.T) {
+	sink := &voiceResumeProbe{}
+	audio := NewAudio(sink)
+	handle := loadOwnedAudio(t, audio, []smaf.Event{
+		{Type: smaf.EventControlChange, Channel: 2, Control: 1, Value: 100},
+		{Type: smaf.EventNoteOn, Channel: 2, Note: 60, Velocity: 100},
+		{Time: 10, Type: smaf.EventControlChange, Channel: 3, Control: 1, Value: 40},
+		{Time: 10, Type: smaf.EventControlChange, Channel: 3, Control: 121},
+		{Time: 1000, Type: smaf.EventEnd},
+	})
+	audio.Advance(10 * time.Millisecond)
+	saved := captureOwnedAudio(t, audio)
+	owned := saved.Output.Sounds[0]
+	if owned.Sound != handle || owned.Channels[2].Modulation != 100 || owned.Channels[3].Modulation != 0 {
+		t.Fatalf("modulation state = %d, %d", owned.Channels[2].Modulation, owned.Channels[3].Modulation)
+	}
+	sink.events = nil
+	audio.ResumeOutput()
+	modulation := slices.IndexFunc(sink.events, func(event ownedAudioEvent) bool {
+		return event.event.Type == smaf.EventControlChange && event.event.Channel == 2 && event.event.Control == 1 && event.event.Value == 100
+	})
+	note := slices.IndexFunc(sink.events, func(event ownedAudioEvent) bool { return event.event.Type == smaf.EventNoteOn })
+	if modulation < 0 || note < 0 || modulation > note {
+		t.Fatalf("reconstruction lost the channel's modulation: %+v", sink.events)
+	}
+}
+
+func TestAudioStateBeforeVoicesRefusesVoiceEvents(t *testing.T) {
+	for name, event := range map[string]smaf.Event{
+		"definition":  {Type: smaf.EventVoice, Program: 1, SysEx: testVoiceBytes()},
+		"voiced note": {Type: smaf.EventNoteOn, Note: 60, Velocity: 1, Program: 1, Value: 48},
+	} {
+		state := checkpointAudioVersionFixture(9)
+		state.Sounds[0].Events = append([]smaf.Event{event}, state.Sounds[0].Events...)
+		if err := validateAudioState(state); err == nil {
+			t.Errorf("a version 9 state with a %s was accepted", name)
+		}
+		state.Version = 10
+		state.Output.Notes[0].Voice, state.Output.Notes[0].Pitch = 1, 48
+		if err := validateAudioState(state); err != nil {
+			t.Errorf("a version 10 state with a %s was refused: %v", name, err)
+		}
+	}
+}
+
+// A sound is silenced when it ends or stops, so no path in this package
+// leaves a finished owner with sounding notes today. A record that has one
+// still gets the voices its retained notes name.
+func TestAudioRestoreDefinesVoicesForAStoppedOwnersSoundingNote(t *testing.T) {
+	now := time.Unix(1000, 0)
+	clock := func() time.Time { return now }
+	audio := NewAudioWithClock(&voiceResumeProbe{}, clock)
+	handle := loadOwnedAudio(t, audio, []smaf.Event{
+		{Type: smaf.EventVoice, Program: 1, SysEx: testVoiceBytes()},
+		{Type: smaf.EventNoteOn, Channel: 9, Note: 36, Velocity: 100, Program: 1, Value: 39},
+		{Time: 1000, Type: smaf.EventEnd},
+	})
+	now = now.Add(50 * time.Millisecond)
+	audio.Advance(50 * time.Millisecond)
+	saved := captureOwnedAudio(t, audio)
+	if len(saved.Output.Notes) != 1 || saved.Output.Notes[0].Voice != 1 {
+		t.Fatalf("the drum note is not retained: %+v", saved.Output.Notes)
+	}
+	saved.Sounds[0].Playing, saved.Sounds[0].ActiveNotes, saved.Sounds[0].Cursor = false, nil, 0
+	sink := &voiceResumeProbe{}
+	restored, err := NewAudioFromStateWithClock(saved, sink, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored.ActivateOutputClock()
+	restored.ResumeOutput()
+	definition := slices.IndexFunc(sink.events, func(event ownedAudioEvent) bool { return event.event.Type == smaf.EventVoice && event.sound == handle })
+	if definition < 0 || len(sink.resumed) != 1 || sink.resumed[0].Voice != 1 {
+		t.Fatalf("the sounding drum's voice was not defined again: events %+v, resumed %+v", sink.events, sink.resumed)
+	}
+}
