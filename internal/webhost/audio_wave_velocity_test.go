@@ -7,25 +7,6 @@ import (
 	"github.com/movingwoo/wfeature/internal/audio/smaf"
 )
 
-func TestWaveVelocityNegotiationNeedsOwnershipAndTheStream(t *testing.T) {
-	for _, test := range []struct {
-		value     string
-		ownership bool
-		protocol  int
-		want      bool
-	}{
-		{"1", true, protocolStream, true},
-		{"1", false, protocolStream, false},
-		{"1", true, protocolPictures, false},
-		{"", true, protocolStream, false},
-		{"true", true, protocolStream, false},
-	} {
-		if got := negotiatedWaveVelocity(test.value, test.ownership, test.protocol); got != test.want {
-			t.Errorf("negotiatedWaveVelocity(%q, %t, %d) = %t", test.value, test.ownership, test.protocol, got)
-		}
-	}
-}
-
 // A stream wave's velocity travels as its own operation right before the
 // wave it belongs to; a wave without one is sent exactly as before.
 func TestStreamAudioPrefixesAWaveWithItsVelocity(t *testing.T) {

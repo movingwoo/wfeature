@@ -153,3 +153,100 @@ func TestMobileChannelKeepsOverlappingNotes(t *testing.T) {
 		t.Fatalf("mobile notes:\ngot  %+v\nwant %+v", got, want)
 	}
 }
+
+// A channel 9 note whose wave is in a form this decoder does not play stays a
+// rhythm note rather than falling silent.
+func TestChannelNineNoteWithUnplayableWaveStaysARhythmNote(t *testing.T) {
+	sequence := []byte{0, 0x99, 1, 100, 1, 1, 0xff, 0x2f, 0}
+	stereo := chunk("Mwa\x02", []byte{0x91, 0x1f, 0x40, 0, 128, 255, 128})
+	events, err := Decode(buildSMAF(limitsScore(MobileStandardNoCompress, chunk("Mtsq", sequence), chunk("Mtsp", stereo))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasPlayedFunc(events, func(event Event) bool { return event.Type == EventNoteOn && event.Note == 1 }) ||
+		hasPlayedFunc(events, func(event Event) bool { return event.Type == EventWave }) {
+		t.Fatalf("channel 9 note 1 over a stereo wave 2: %+v", events)
+	}
+}
+
+// A zero gate keys off a millisecond after its note-on: at the same instant
+// the note-off would sort first and leave the note held. On a handset channel
+// the next note then finds it already released.
+func TestZeroGateNoteKeysOffAMillisecondLater(t *testing.T) {
+	tones := newToneMap()
+	tones.initTrack(HandyPhoneStandard, []ChannelStatus{{Kind: ChannelMelody}}, 0)
+	events, _ := sequenceEvents([]SequenceEvent{
+		{Kind: SeqNote, Channel: 0, Note: 24, GateTime: 0},
+		{Kind: SeqNote, Duration: 4, Channel: 0, Note: 26, GateTime: 2},
+	}, 1, 1, 0, true, nil, tones, newDecodeBudget())
+	want := []noteEdge{
+		{0, EventNoteOn, 0, 60},
+		{1, EventNoteOff, 0, 60},
+		{4, EventNoteOn, 0, 62},
+		{6, EventNoteOff, 0, 62},
+	}
+	if got := noteEdges(events); !reflect.DeepEqual(got, want) {
+		t.Fatalf("handset zero gate:\ngot  %+v\nwant %+v", got, want)
+	}
+
+	mobile, err := Decode(mobileWaveFixture([]byte{0, 0x90, 60, 100, 0, 4, 0xff, 0x2f, 0}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := noteEdges(mobile); !reflect.DeepEqual(got, []noteEdge{{0, EventNoteOn, 0, 60}, {1, EventNoteOff, 0, 60}}) {
+		t.Fatalf("mobile zero gate: %+v", got)
+	}
+}
+
+// The ambience voice's layers belong to its note: a handset note that cuts
+// the previous one cuts its layers too, and one that replaces it at its start
+// drops them with it.
+func TestHandsetNoteReleasesTheAmbienceLayersOfThePrevious(t *testing.T) {
+	ambience := []SequenceEvent{
+		{Kind: SeqControlChange, Channel: 0, Control: 0, Value: 0x7c},
+		{Kind: SeqControlChange, Channel: 0, Control: 32, Value: 0x01},
+		{Kind: SeqProgramChange, Channel: 0, Program: 0x62},
+	}
+	for _, test := range []struct {
+		name  string
+		after uint32
+	}{{"cut", 4}, {"replaced", 0}} {
+		t.Run(test.name, func(t *testing.T) {
+			tones := newToneMap()
+			tones.initTrack(HandyPhoneStandard, []ChannelStatus{{Kind: ChannelMelody}}, 0)
+			events, _ := sequenceEvents(append(ambience,
+				SequenceEvent{Kind: SeqNote, Channel: 0, Note: 24, GateTime: 10},
+				SequenceEvent{Kind: SeqNote, Duration: test.after, Channel: 0, Note: 26, GateTime: 2},
+			), 1, 1, 0, true, nil, tones, newDecodeBudget())
+			var layerOns, layerOffs []noteEdge
+			for _, edge := range noteEdges(events) {
+				if edge.Channel != 14 && edge.Channel != 15 {
+					continue
+				}
+				if edge.Type == EventNoteOn {
+					layerOns = append(layerOns, edge)
+				} else {
+					layerOffs = append(layerOffs, edge)
+				}
+			}
+			if len(layerOns) != len(layerOffs) || len(layerOns) == 0 {
+				t.Fatalf("layer notes are unbalanced: on %+v, off %+v", layerOns, layerOffs)
+			}
+			// The second note's layers end at its gate, the ambience
+			// voice's 120 ms and their own extension; the first note's end
+			// where the second starts, or never sound.
+			second := test.after + 2 + 120
+			want := []uint32{second + 220, second + 360}
+			if test.after != 0 {
+				want = []uint32{test.after, test.after, second + 220, second + 360}
+			}
+			var got []uint32
+			for _, off := range layerOffs {
+				got = append(got, off.Time)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("layer note-offs at %v, want %v", got, want)
+			}
+		})
+	}
+}

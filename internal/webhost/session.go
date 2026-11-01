@@ -137,8 +137,8 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 	runner.soundTiming = request.URL.Query().Get("timing") == "1" && runner.soundResume
 	runner.soundPCM = negotiatedPCM(request.URL.Query().Get("pcm"), runner.soundOwnership)
 	runner.soundWavePhase = negotiatedWavePhase(request.URL.Query().Get("phase"), runner.soundOwnership)
-	runner.soundVoice = negotiatedVoice(request.URL.Query().Get("voice"), runner.soundOwnership, runner.protocol)
-	runner.soundWaveVelocity = negotiatedWaveVelocity(request.URL.Query().Get("wavevelocity"), runner.soundOwnership, runner.protocol)
+	runner.soundVoice = negotiatedStreamFeature(request.URL.Query().Get("voice"), runner.soundOwnership, runner.protocol)
+	runner.soundWaveVelocity = negotiatedStreamFeature(request.URL.Query().Get("wavevelocity"), runner.soundOwnership, runner.protocol)
 	runner.run(request.Context())
 }
 

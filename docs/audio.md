@@ -69,13 +69,19 @@ that led here are in the [audit](history/audio.md#sounds-without-audible-events)
 ### A handset channel sounds one note at a time
 
 A handset (HPS) channel is one voice, its rhythm channels included: a note-on
-keys off the note still sounding on the same channel, whatever its key. The
-decoder moves that note's note-off forward to the new note's start rather than
-adding a second one, so the earlier note-off cannot cut a later note of the
-same key. A note replaced at its own instant never sounds and is dropped with
-its note-off: at one instant every note-off is ordered before every note-on,
-so its note-on would otherwise be left held. Mobile channels stay polyphonic.
-The rule is in `releaseHandsetNote` (`internal/audio/smaf/player.go`).
+keys off the note still sounding on the same channel, whatever its key, and
+the ambience layers laid under it. The decoder moves those note-offs forward
+to the new note's start rather than adding second ones, so an earlier note-off
+cannot cut a later note of the same key. A note replaced at its own instant
+never sounds and is dropped with its note-off and its layers: at one instant
+every note-off is ordered before every note-on, so its note-on would otherwise
+be left held. Mobile channels stay polyphonic. The rule is in
+`releaseHandsetNote` (`internal/audio/smaf/player.go`).
+
+For the same ordering reason a note of zero gate, in any dialect, keys off one
+millisecond after its note-on rather than at it; until 2026-11-01 such a note
+stayed held until its key was played again or the sound ended. The library
+has 174 in five handset sounds and three in two mobile ones.
 
 In the local library on 2026-11-01, 166 of the 2,708 sounds with handset notes
 start a note while their channel's previous one still sounds by its gate:
@@ -105,8 +111,10 @@ It adds no saved field; the PCM extension below versions its own state.
 A mobile score note can trigger one of the waves its track attaches (`Mwa`
 chunks) instead of a pitch. Note zero plays the wave numbered one past its
 channel. Channel 9 also numbers waves by note: its note n plays wave n+1
-whenever the track carries that wave, and is a rhythm note otherwise. Note
-zero there without a wave 1 plays nothing, as before (`streamWave` in
+whenever the track carries that wave in a form the decoder plays, and is a
+rhythm note otherwise. Its note zero without such a wave 1 falls back to the
+wave one past the channel, wave 10, which no local file carries, and plays
+nothing without it, as before (`streamWave` in
 `internal/audio/smaf/player.go`).
 
 The library settles the numbering. Read as one past the channel, channel 9's
@@ -132,6 +140,9 @@ before 2026-11-01; a stream note of velocity zero is silent and emits no wave.
 A PCM audio track's waves carry no velocity (zero) and play at full level. In
 the local library 1,290 stream wave triggers, with velocities 1 to 50, play
 quieter than before, in 5 KTF, 40 LGT and 1 SKT sounds; none has velocity zero.
+
+The CLI's recording, which is not an owned sink, receives waves without their
+velocity and records every one at full level.
 
 The velocity reaches the page as operation `0x1a` before its wave, and only a
 page that negotiates `wavevelocity=1` receives it
@@ -843,7 +854,10 @@ measured.
 The page holds 32 notes at once (`MAX_VOICES` in `web/audio.js`, matched by the
 server's `maxOutputNotes`), raised from 24 on 2026-11-01. The densest local
 mobile song holds up to 35; in its first minute 3 of its notes are stolen
-instead of 76, and offline it renders in about 2% more time.
+instead of 76, and offline it renders in about 2% more time. The page does not
+tell the server its budget: a tab still running a page cached from before the
+change keeps 24 until it reloads, so the server's record of held notes can
+then list notes that page has already taken back.
 The synthesizer holds 64 voices: the page's 32 held notes and the release tails
 behind them. When the mobile songs fill it, the quietest released voice is
 taken, at a median of 43 dB below full scale (33 dB for the loudest tenth).

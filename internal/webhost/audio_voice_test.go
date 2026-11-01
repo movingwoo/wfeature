@@ -9,7 +9,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/audio/smaf"
 )
 
-func TestVoiceNegotiationNeedsOwnershipAndTheStream(t *testing.T) {
+func TestStreamFeatureNegotiationNeedsOwnershipAndTheStream(t *testing.T) {
 	for _, test := range []struct {
 		value     string
 		ownership bool
@@ -22,8 +22,8 @@ func TestVoiceNegotiationNeedsOwnershipAndTheStream(t *testing.T) {
 		{"", true, protocolStream, false},
 		{"yes", true, protocolStream, false},
 	} {
-		if got := negotiatedVoice(test.value, test.ownership, test.protocol); got != test.want {
-			t.Errorf("negotiatedVoice(%q, %t, %d) = %t", test.value, test.ownership, test.protocol, got)
+		if got := negotiatedStreamFeature(test.value, test.ownership, test.protocol); got != test.want {
+			t.Errorf("negotiatedStreamFeature(%q, %t, %d) = %t", test.value, test.ownership, test.protocol, got)
 		}
 	}
 }

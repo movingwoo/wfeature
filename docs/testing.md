@@ -2898,11 +2898,12 @@ a sounding wave's velocity through capture, the record codec and replay.
 
 Every SMAF file in the local library (11,175 carrier-local sounds) was decoded
 by the previous and the new decoder and the outputs compared by hash. Note
-events changed in exactly the 166 handset sounds with overlapping notes and
-the 89 with channel 9 notes 1 to 6 on waves; samples changed in every sound
-with a wave; the wave count changed in exactly the 255 sounds with channel 9
-stream notes; no sound's length changed and no other file moved. Silent sounds
-went from 36 to 15. The tools and outputs are in the ignored
+events changed in exactly the 166 handset sounds with overlapping notes, the
+89 with channel 9 notes 1 to 6 on waves and the nine with zero-gate notes;
+samples changed in every sound with a wave; the wave count changed in exactly
+the 255 sounds with channel 9 stream notes; no sound's length changed and no
+other file moved. Silent sounds went from 36 to 15, and no file is newly
+refused by a decode limit. The tools and outputs are in the ignored
 `build/sound-quality/` (`_soundscan`, `_adpcmstat` and `_smafdump` under
 `build/`).
 

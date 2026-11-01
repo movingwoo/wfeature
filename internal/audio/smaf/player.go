@@ -46,17 +46,18 @@ type Event struct {
 	Time uint32
 	Type EventType
 
-	Channel  uint8
-	Note     uint8
+	Channel uint8
+	Note    uint8
+	// Velocity is a note's, or for a wave that of the stream note that
+	// triggered it, 1 to 127. A wave's zero means it has none and plays at
+	// its full level: a PCM audio track's waves, and events made before
+	// waves carried one.
 	Velocity uint8
 	Program  uint8
 	Control  uint8
 	Value    uint8
 	Bend     uint16
 
-	// A wave's Velocity is that of the stream note that triggered it, 1 to
-	// 127. Zero means the wave has none and plays at its full level: a PCM
-	// audio track's waves, and events made before waves carried one.
 	SamplingRate uint32
 	WaveChannels uint8
 	// PCMChannel scopes ATR controls within a sound. Zero retains the
@@ -282,6 +283,9 @@ func sequenceEvents(
 			midiChannel := tones.realChannel(channel)
 			gate := uint64(event.GateTime) * uint64(timebaseG)
 			duration := tones.noteDuration(channel, gate)
+			// A note-off at its note-on's instant sorts before it and would
+			// leave the note held, so a zero gate keys off a millisecond on.
+			duration = max(duration, 1)
 			// Validate the latest generated note-off before narrowing any gate
 			// arithmetic, including the extra tails of an atmosphere voice.
 			layerTail := uint64(0)
@@ -306,10 +310,18 @@ func sequenceEvents(
 			emitted := len(events)
 			events = budget.emit(events, noteOn,
 				Event{Time: time + uint32(duration), Type: EventNoteOff, Channel: midiChannel, Note: note})
-			if handset && len(events) == emitted+2 {
-				sounding[pseudo] = handsetNote{off: emitted + 1, start: time, set: true}
-			}
+			layers := len(events)
 			events = budget.emit(events, tones.atmosphereNotes(time, uint32(duration), channel, note, velocity)...)
+			if handset && layers == emitted+2 {
+				// The note's note-off, then each ambience layer's: every
+				// layer is a note-on followed by its note-off.
+				current := handsetNote{start: time}
+				for off := emitted + 1; off < len(events) && current.count < len(current.offs); off += 2 {
+					current.offs[current.count] = off
+					current.count++
+				}
+				sounding[pseudo] = current
+			}
 
 		case SeqControlChange:
 			// MIDI data bytes are seven bits. A control carrying a wider one
@@ -400,13 +412,14 @@ func sequenceEvents(
 
 // streamWave answers the attached wave a mobile score note triggers. Note zero
 // plays the wave numbered one past its channel. Channel 9 also numbers waves
-// by note: its note n plays wave n+1 whenever the track carries that wave, and
-// is a rhythm note otherwise. That is how the 21 local files whose only stream
-// notes are on channel 9 sound at all (docs/audio.md, "Stream notes on channel
-// 9"). Handset tracks attach no waves.
+// by note: its note n plays wave n+1 whenever the track carries that wave in
+// a form this decoder plays, and is a rhythm note otherwise; its note zero
+// then falls back to wave 10. That is how the 21 local files whose only
+// stream notes are on channel 9 sound at all (docs/audio.md, "Stream notes on
+// channel 9"). Handset tracks attach no waves.
 func streamWave(waves map[uint8]WaveData, channel, note uint8, format FormatType) (WaveData, bool) {
 	if format != HandyPhoneStandard && channel == waveNoteChannel && note < 0xff {
-		if wave, ok := waves[note+1]; ok {
+		if wave, ok := waves[note+1]; ok && streamWaveExpansion(wave) != 0 {
 			return wave, true
 		}
 	}
@@ -421,31 +434,35 @@ func streamWave(waves map[uint8]WaveData, channel, note uint8, format FormatType
 const waveNoteChannel = 9
 
 // handsetNote is the last note a handset channel started: where its note-off
-// sits in the events being built, and when it began.
+// and its ambience layers' note-offs sit in the events being built, and when
+// it began.
 type handsetNote struct {
-	off   int
+	offs  [1 + len(atmosphereSpecs)]int
+	count int
 	start uint32
-	set   bool
 }
 
 // releaseHandsetNote ends a handset channel's previous note when the next one
 // starts. A handset channel sounds one note at a time, rhythm channels too: a
-// new note-on keys off the note still sounding there, whatever its key. The
-// note-off moves forward rather than a second one being added, so the old one
-// cannot cut a later note of the same key. A note replaced at its own start
-// never sounds and is dropped with its note-off: at one instant every note-off
-// sorts before every note-on, which would leave it held.
+// new note-on keys off the note still sounding there, whatever its key, and
+// the ambience layers laid under it. A note-off moves forward rather than a
+// second one being added, so the old one cannot cut a later note of the same
+// key. A note replaced at its own start never sounds and is dropped with its
+// note-off and its layers: at one instant every note-off sorts before every
+// note-on, which would leave it held.
 func releaseHandsetNote(events []Event, previous *handsetNote, time uint32) {
-	if !previous.set || previous.off >= len(events) || events[previous.off].Time <= time {
-		return
+	for _, off := range previous.offs[:previous.count] {
+		if off >= len(events) || events[off].Time <= time {
+			continue
+		}
+		if previous.start == time {
+			events[off-1].Channel = noMIDIChannel
+			events[off].Channel = noMIDIChannel
+		} else {
+			events[off].Time = time
+		}
 	}
-	if previous.start == time {
-		events[previous.off-1].Channel = noMIDIChannel
-		events[previous.off].Channel = noMIDIChannel
-	} else {
-		events[previous.off].Time = time
-	}
-	previous.set = false
+	previous.count = 0
 }
 
 func pcmTrackEvents(track *PCMAudioTrack, base uint16, budget *decodeBudget) []Event {

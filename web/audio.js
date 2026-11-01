@@ -558,6 +558,7 @@ export class PageAudio {
         if ((event.velocity ?? 0) === 0 || ((event.channel ?? 0) & 15) === DRUM_CHANNEL && age >= 200) continue;
       } else if (event.kind === "playWave") {
         if (!validFramePhase(event.framePhase === undefined ? 0 : event.framePhase)) return false;
+        if (!validWaveVelocity(event.velocity === undefined ? 0 : event.velocity)) return false;
         if (!event.samples) continue;
         payload = wavePayloadBytes(event.channels ?? 1, waveSampleLength(event.samples));
         if (payload === null || !validWaveRate(event.rate ?? 8000)) return false;

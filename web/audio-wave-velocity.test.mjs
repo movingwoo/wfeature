@@ -88,3 +88,15 @@ test("a delivered wave keeps its velocity and one without plays at full level", 
   assert.ok(Math.abs(levels[0] - 0.8 * Math.sqrt(20 / 127) * 200 / 127) < 1e-12);
   assert.equal(levels[1], 0.8);
 });
+
+test("a batch with an invalid wave velocity is refused whole before anything plays", t => {
+  const { audio, gains } = setup(t);
+  const samples = Float32Array.of(.25, -.25);
+  for (const velocity of [-1, 128, 1.5, "20", null]) {
+    assert.equal(playAudioEvents(audio, [
+      { kind: "playWave", channels: 1, rate: 8000, samples, cacheable: true, sound: 7 },
+      { kind: "playWave", channels: 1, rate: 8000, samples, cacheable: true, sound: 7, velocity },
+    ]), false, `velocity ${velocity}`);
+  }
+  assert.equal(gains.filter(gain => gain.gain.value !== 1).length, 0, "nothing of the refused batches played");
+});
