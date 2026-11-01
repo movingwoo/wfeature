@@ -8,9 +8,8 @@ import (
 )
 
 // These cover the parser's three sequence dialects and the tone map's
-// conversions, and are the reference implementation's own cases carried over:
-// a port that only proves "does not crash on real files" would not have caught
-// a dialect decoded plausibly but wrongly.
+// conversions: a check that only proves "does not crash on real files" would
+// not have caught a dialect decoded plausibly but wrongly.
 
 func TestHandyVariableNumber(t *testing.T) {
 	for _, testCase := range []struct {
