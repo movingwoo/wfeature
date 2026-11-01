@@ -155,3 +155,44 @@ test("a worklet that stops ends its notes and hands over to the page", async t =
   assert.deepEqual(host.synth.lanes[released], { ratio: 1, depth: 0 });
   assert.match(reports[0], /worklet stopped/);
 });
+
+// **A buffer renders for the time it really plays.** Chromium and WebKit
+// report a callback's playbackTime as the render clock when they posted it
+// plus one buffer, late by however long the posting waited, and a buffer they
+// silenced without a callback shows only as a jump in the next report.
+test("the page's ScriptProcessor renders each buffer for when it plays, not when it was reported", () => {
+  const sine = Uint8Array.from([1, 1, 0, 1, 1, 0, 0, 15, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 63, 15, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  const exact = context(), reported = context();
+  const hosts = [exact, reported].map(audio => new FMHost(audio));
+  for (const host of hosts) {
+    const lane = host.lane(host.context.createGain());
+    host.post({ op: "define", sound: 1, slot: 1, data: sine });
+    host.post({ op: "on", id: 1, at: 0.1, lane, sound: 1, slot: 1, pitch: 69, velocity: 127 });
+    host.post({ op: "cut", id: 1, at: 0.2, fade: 0.001 });
+  }
+  const block = 2048 / 48000;
+  const buffer = () => {
+    const channels = Array.from({ length: FM_LANES }, () => new Float32Array(2048));
+    return { channels, outputBuffer: { numberOfChannels: FM_LANES, length: 2048, getChannelData: index => channels[index] } };
+  };
+  const waits = [0, 0.03, 0.005, 0.021, 0.0001, 0.04, 0.012];
+  waits.forEach((wait, index) => {
+    const playbackTime = index * block;
+    const expected = buffer(), played = buffer();
+    exact.processor.onaudioprocess({ playbackTime, outputBuffer: expected.outputBuffer });
+    reported.processor.onaudioprocess({ playbackTime: playbackTime + wait, outputBuffer: played.outputBuffer });
+    assert.deepEqual(played.channels[0], expected.channels[0], `buffer ${index}`);
+  });
+});
+
+test("a ScriptProcessor's buffer clock steps over buffers the engine silenced", async () => {
+  const { bufferClock } = await import("./fm-host.js");
+  const clock = bufferClock({ sampleRate: 48000, currentTime: 0 });
+  const block = 2048 / 48000;
+  const call = playbackTime => clock({ playbackTime, outputBuffer: { length: 2048 } });
+  assert.equal(call(0.004), 0.004, "the first report is all there is to go on");
+  assert.ok(Math.abs(call(block + 0.03) - (block + 0.004)) < 1e-12, "a longer wait does not move it");
+  assert.ok(Math.abs(call(2 * block + 0.001) - (2 * block + 0.001)) < 1e-12, "a shorter one moves it earlier");
+  // Buffer 3 was silenced without a callback; buffer 4's report comes late too.
+  assert.ok(Math.abs(call(4 * block + 0.01) - (4 * block + 0.001)) < 1e-12, "buffer 4, not 3");
+});

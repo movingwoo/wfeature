@@ -586,6 +586,26 @@ every sounding voice to replay it:
   current output; 0.5.2, which had no lateness check, played them late and
   rebuilt nothing.
 
+The anchor is set by one batch, and both cases move it later together with
+every sound after it. Until 2026-11-01 nothing moved it back: one batch 200 ms
+late left every later sound 0.3 s instead of 0.1 s ahead of the render clock
+for the rest of the session, and a render clock slower than the server's walked
+the lead to the 350 ms horizon and a rebuild. Between those moves the page now
+steers the anchor (`steerAnchor`) so that the median batch of the last two
+seconds lands within 20 ms of the lead. It moves later as soon as batches land
+closer, and earlier once no batch has been late for a hold of two seconds,
+never placing a batch's first event before the last one already scheduled or
+before the render clock, and never so far that the most delayed batch of the
+last ten seconds would land closer than 20 ms. While anything sounds a move is
+at most a tenth of the render time since the batch before, so a run of notes
+plays at most 10% quicker or slower; in silence the anchor moves at once. A
+batch late again within 30 seconds of the last doubles the hold, up to 16
+seconds, so a page whose batches keep arriving late keeps the lead that absorbs
+them. In Chromium and WebKit a 180 ms stall of the page's thread took the lead
+from 0.10 s to 0.23 s and back to about 0.10 s three to four seconds later; an
+ordinary session moves the anchor a few tens of milliseconds as its first
+batches settle ([runs](testing.md#anchor-steering)).
+
 A batch later than 200 ms still asks, because the output it would continue is
 by then further from the truth than a rebuild. The request is negotiated and
 output-epoch checked. Definitions are invalidated too, so a malformed first
@@ -625,11 +645,13 @@ anchor. Keeping them separate prevents a new anchor's intentional lead from
 being read as initial delivery latency.
 
 Each group counts checked and admitted batches, clock-only batches, late
-batches that moved the anchor (`reanchored`: clock-only or at most 200 ms late)
-and the first window-refusal reason (`late`, `future`, or negative/nonfinite
-time `range`). Every non-clock event in a checked batch contributes, including
-events after the first refusal, to one bucket: not late, up to 5 ms, over 5
-through 20 ms, over 20 through 100 ms, and over 100 ms. Invalid mapped times
+batches that moved the anchor (`reanchored`: clock-only or at most 200 ms late),
+how far steering moved it earlier and later in total (`anchor_earlier_ms`,
+`anchor_later_ms`) and the first window-refusal reason (`late`, `future`, or
+negative/nonfinite time `range`). Every non-clock event in a checked batch
+contributes, including events after the first refusal, to one bucket: not late,
+up to 5 ms, over 5 through 20 ms, over 20 through 100 ms, and over 100 ms.
+Invalid mapped times
 and unrepresentable millisecond differences count separately. Event and
 frontier maximum lateness are distinct; the final clock never inflates event
 counts. Legacy, malformed, backward, resource-refused and
@@ -820,7 +842,12 @@ reconstruction restores it. In a secure context it
 runs in an AudioWorklet on the audio thread. A page opened by the machine's
 address over plain HTTP has no AudioWorklet, so there the same class renders in
 a ScriptProcessor with 2048-frame buffers on the page's thread: the sound is
-the same, and only a page busy for longer than a buffer can drop out. Commands
+the same, and only a page busy for longer than a buffer can drop out. Each
+buffer renders for when it plays, counted rather than read (`bufferClock` in
+`fm-host.js`): Chromium and WebKit report a callback's `playbackTime` as the
+render clock when they posted the callback plus one buffer, late by however
+long the posting waited and a buffer later again after one they silenced, so
+rendering at the report placed a buffer's notes early by its wait. Commands
 carry the presentation time the rest of the page schedules with and take effect
 at their sample; a late command starts its note that far into its envelope.
 `fm-host.js` picks the host, `?voice=1` asks the server for the voices, and

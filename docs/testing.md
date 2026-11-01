@@ -2826,7 +2826,14 @@ the worklet, with how many play the score's own voices, and waves are counted
 with how many carry their stream note's velocity. With
 `WFEATURE_AUDIO_NO_WORKLET=1` it hides the AudioWorklet as a plain-HTTP page
 on the network has none, and checks instead that the page's ScriptProcessor
-renders. It folds the debug page's `audio playout timing`
+renders, reporting how many of its buffers were handed over after their
+playback began and how many timed commands arrived for a time it had already
+rendered, with the latest. `WFEATURE_AUDIO_BUSY=30/150` keeps the page's thread busy 30 ms in
+every 150, `WFEATURE_AUDIO_THROTTLE=6` slows Chromium's page thread to a sixth,
+and `WFEATURE_AUDIO_STALL=12000/180` stops it once, 12 s after load for 180 ms,
+and reports the median note lead before, after and in each second from the
+stall. It folds the debug page's
+`audio playout timing`
 reports into totals. A wrapper around the page's own window check records the
 first batches and every refusal with page time, render time and the batch's
 presentation times. It also reports the most sources alive at once and the
@@ -2921,6 +2928,45 @@ with their velocity (the other is a PCM track's), at a mix peak of 0.199. A KTF
 archive whose channel 9 waves now play (30 in 20 seconds, all with their
 velocity) fails the harness's silent-mix check on both builds: its mix reads
 zero with or without the change.
+
+### ScriptProcessor buffer clock
+
+In both engines a ScriptProcessor callback's `playbackTime` is exactly one
+buffer after the render clock read inside the callback, 42.7 ms for 2048
+frames at 48 kHz: the engines compute it when they post the callback, so it is
+not when the buffer plays. `web/fm-host.test.mjs` renders through reports late
+by different waits and past a buffer silenced without a callback, and gets the
+buffers rendered at their real times; both tests failed on the previous code,
+which rendered at the report.
+
+### Anchor steering
+
+`web/audio-catch-up.test.mjs` drives the page's own scheduling through batches
+that arrive on time, late once, late again and again, late again soon, with
+jitter, in silence, behind a slow or a fast render clock, and with two batches
+at one instant. Before the change a 200 ms late batch left every later note 0.3
+s ahead for good, the typical jittered batch stayed 0.28 s ahead, and a render
+clock 0.5% slow was refused after 50 seconds. Now the lead stays where the late
+batch put it for two seconds and is back within 20 ms of 0.1 s about two
+seconds later, at once in silence; spikes every three seconds keep the lead
+that absorbs them without another late batch; a second late batch within 30
+seconds holds four seconds and a third eight; and no note moves before one
+already scheduled or changes its spacing by more than 10%.
+
+`WFEATURE_AUDIO_STALL=12000/180` stops the page's thread once for 180 ms. On the
+LGT archive over 40 seconds with the worklet, the median note lead in each
+second from the stall:
+
+| Engine | Before | 1 s | 2 s | 3 s | 4 s | 5 s | 6 s |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Chromium | 0.103 | 0.231 | 0.215 | 0.123 | 0.085 | 0.117 | 0.086 |
+| WebKit | 0.088 | 0.232 | 0.235 | 0.141 | 0.091 | 0.129 | 0.109 |
+
+Each run re-anchored once and was never rebuilt. A note's lead varies by its
+place in its batch, so the seconds after the return spread over 0.08–0.13 s as
+before the stall. A stall of 250 ms is late past `MAX_REANCHOR_LATE` and asks
+for a rebuild instead, which starts a new anchor. An earlier build that held
+ten seconds and moved at 5% took about fourteen.
 
 ### Native cost of the largest sound loads
 

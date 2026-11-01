@@ -19,6 +19,14 @@ const mash = process.env.WFEATURE_AUDIO_KEYS === "mash";
 // A page opened over plain HTTP on the network has no AudioWorklet; hiding it
 // here exercises the ScriptProcessor the page falls back to.
 const noWorklet = process.env.WFEATURE_AUDIO_NO_WORKLET === "1";
+// "35/250" keeps the page's thread busy for 35 ms every 250 ms, the way a slow
+// phone is busy drawing, to see whether the speaker still gets every buffer.
+const [busyMilliseconds = 0, busyPeriod = 0] = (process.env.WFEATURE_AUDIO_BUSY || "").split("/").map(Number);
+// Chromium only: slow the page's thread down by this factor, as a phone would.
+const throttle = Number(process.env.WFEATURE_AUDIO_THROTTLE || 0);
+// "12000/250" stops the page's thread once, 12 s after load for 250 ms, the way
+// a Wi-Fi spike or a long frame delays one batch, to see the delay it leaves.
+const [stallAt = 0, stallMilliseconds = 0] = (process.env.WFEATURE_AUDIO_STALL || "").split("/").map(Number);
 if (!binary || !archive || !process.env.PLAYWRIGHT_MODULE) {
   throw new Error("Usage: WFEATURE_AUDIO_ARCHIVE=/path/to/archive PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node web/acceptance/audio-live.mjs DEBUG_SERVER [chromium|webkit]");
 }
@@ -55,15 +63,44 @@ try {
   browser = await engine.launch({ headless: true,
     args: engineName === "chromium" ? ["--autoplay-policy=no-user-gesture-required"] : [] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
-  await context.addInitScript(hide => {
+  await context.addInitScript(({ hide, busy, period, stallAt, stall }) => {
     if (hide) {
       Object.defineProperty(BaseAudioContext.prototype, "audioWorklet", { configurable: true, get: () => undefined });
+    }
+    if (stall > 0) {
+      setTimeout(() => {
+        const end = performance.now() + stall;
+        while (performance.now() < end) { /* one long stall */ }
+      }, stallAt);
+    }
+    if (busy > 0 && period > 0) {
+      setInterval(() => {
+        const end = performance.now() + busy;
+        while (performance.now() < end) { /* busy, as a slow frame */ }
+      }, period);
     }
     const probe = window.audioProbe = { sockets: [], sent: {}, soundPackets: 0, soundBytes: 0, errors: [],
       contexts: [], starts: 0, scheduledStarts: 0, lateStarts: 0, minimumLead: null, maximumLead: null,
       live: 0, maximumLive: 0, peak: 0, clippedReads: 0, meters: [],
       modules: [], processors: [], fmNotes: 0, fmOwnVoiceNotes: 0, fmVoices: 0, fmLateNotes: 0, fmMinimumLead: null, fmMaximumLead: null,
-      waves: 0, waveVelocities: 0 };
+      waves: 0, waveVelocities: 0, hostModes: [], timedCommands: 0, renderLate: 0, renderLateMaximum: 0,
+      callbacks: 0, lateCallbacks: 0, noteLeads: [] };
+    // A ScriptProcessor buffer handed over after its playback began is a
+    // dropout, whichever thread rendered it.
+    const handler = window.ScriptProcessorNode && Object.getOwnPropertyDescriptor(ScriptProcessorNode.prototype, "onaudioprocess");
+    if (handler?.set) {
+      Object.defineProperty(ScriptProcessorNode.prototype, "onaudioprocess", {
+        configurable: true,
+        get() { return handler.get.call(this); },
+        set(listener) {
+          handler.set.call(this, typeof listener !== "function" ? listener : event => {
+            listener(event);
+            probe.callbacks++;
+            if (this.context.currentTime > event.playbackTime) probe.lateCallbacks++;
+          });
+        },
+      });
+    }
     const createScriptProcessor = BaseAudioContext.prototype.createScriptProcessor;
     if (createScriptProcessor) {
       BaseAudioContext.prototype.createScriptProcessor = function (...args) {
@@ -165,9 +202,12 @@ try {
         return start.call(this, when, ...rest);
       };
     }
-  }, noWorklet);
+  }, { hide: noWorklet, busy: busyMilliseconds, period: busyPeriod, stallAt, stall: stallMilliseconds });
   const page = await context.newPage();
   page.on("pageerror", error => result.errors.push(error.message));
+  if (throttle > 1 && engineName === "chromium") {
+    await (await context.newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate: throttle });
+  }
   await page.goto(origin);
   // The page's own PageAudio is the module this import returns. Wrapping its
   // window check records, for the first batches and every refusal, when the
@@ -181,12 +221,25 @@ try {
     const { FMHost } = await import("/fm-host.js");
     const post = FMHost.prototype.post;
     FMHost.prototype.post = function (command) {
+      if (!audioProbe.hostModes.includes(this.mode)) audioProbe.hostModes.push(this.mode);
+      // A timed command for a time the synthesizer has already rendered takes
+      // effect late: its note starts that far into it. On the page's thread
+      // that is the end of the last buffer; a worklet renders at the clock.
+      if (["on", "off", "cut", "bend", "depth"].includes(command?.op) && Number.isFinite(command.at) && this.mode !== "pending") {
+        audioProbe.timedCommands++;
+        const late = (this.synth ? this.synth.time : this.context.currentTime) - command.at;
+        if (late > 1e-6) {
+          audioProbe.renderLate++;
+          audioProbe.renderLateMaximum = Math.max(audioProbe.renderLateMaximum, late);
+        }
+      }
       if (command?.op === "define") audioProbe.fmVoices++;
       if (command?.op === "on") {
         audioProbe.fmNotes++;
         if (command.slot) audioProbe.fmOwnVoiceNotes++;
         if (command.at > 0) {
           const lead = command.at - this.context.currentTime;
+          if (audioProbe.noteLeads.length < 20000) audioProbe.noteLeads.push([performance.now(), lead]);
           if (lead < -0.005) audioProbe.fmLateNotes++;
           audioProbe.fmMinimumLead = audioProbe.fmMinimumLead === null ? lead : Math.min(audioProbe.fmMinimumLead, lead);
           audioProbe.fmMaximumLead = audioProbe.fmMaximumLead === null ? lead : Math.max(audioProbe.fmMaximumLead, lead);
@@ -264,6 +317,13 @@ try {
     fmOwnVoiceNotes: audioProbe.fmOwnVoiceNotes,
     waves: audioProbe.waves,
     waveVelocities: audioProbe.waveVelocities,
+    hostModes: audioProbe.hostModes,
+    timedCommands: audioProbe.timedCommands,
+    renderLate: audioProbe.renderLate,
+    renderLateMaximum: audioProbe.renderLateMaximum,
+    callbacks: audioProbe.callbacks,
+    lateCallbacks: audioProbe.lateCallbacks,
+    noteLeads: audioProbe.noteLeads,
     fmVoices: audioProbe.fmVoices,
     fmLateNotes: audioProbe.fmLateNotes,
     fmMinimumLead: audioProbe.fmMinimumLead,
@@ -278,7 +338,21 @@ try {
     clippedReads: audioProbe.clippedReads,
     timing: audioProbe.timingLines.map(line => JSON.parse(line)),
   }));
-  result.observed = { ...observed, timing: undefined, batches: undefined, timingReports: observed.timing.length };
+  result.observed = { ...observed, timing: undefined, batches: undefined, noteLeads: undefined, timingReports: observed.timing.length };
+  result.noteLeads = observed.noteLeads;
+  if (stallMilliseconds > 0) {
+    // How far ahead notes were placed before the stall, in the ten seconds
+    // after it, and from twelve seconds after it to the end.
+    const median = list => list.length ? [...list].sort((a, b) => a - b)[list.length >> 1] : NaN;
+    const span = (from, to) => observed.noteLeads.filter(([at]) => at >= from && at < to).map(([, lead]) => lead);
+    const [before, after, later] = [span(0, stallAt), span(stallAt, stallAt + 10000), span(stallAt + 12000, Infinity)];
+    console.log(`${engineName}: note lead before the stall ${median(before).toFixed(3)} s (${before.length}), ` +
+      `in the 10 s after ${median(after).toFixed(3)} s (${after.length}), from 12 s after ${median(later).toFixed(3)} s (${later.length})`);
+    // How the lead came back: its median in each second from the stall on.
+    const seconds = [];
+    for (let from = stallAt; from < stallAt + 12000; from += 1000) seconds.push(median(span(from, from + 1000)));
+    console.log(`${engineName}: note lead in each second from the stall ${seconds.map(lead => Number.isNaN(lead) ? "-" : lead.toFixed(3)).join(" ")}`);
+  }
   result.reports = observed.timing;
   result.batches = observed.batches;
 
@@ -297,6 +371,10 @@ try {
     assert.deepEqual(observed.processors.map(args => args[2]), [32], JSON.stringify(observed.processors));
     assert.ok(observed.peak > 0, "the page's ScriptProcessor rendered nothing");
     check("without a worklet the FM synthesizer renders in a ScriptProcessor");
+    // Reported, not asserted: how often the speaker got a buffer late, and
+    // how many commands came after the synthesizer had rendered their time.
+    console.log(`${engineName}: ${observed.lateCallbacks} of ${observed.callbacks} ScriptProcessor buffers handed over late; ` +
+      `${observed.renderLate} of ${observed.timedCommands} timed commands after the render frontier (at most ${(observed.renderLateMaximum * 1000).toFixed(1)} ms)`);
   } else {
     assert.ok(observed.modules.some(module => module.loaded && /fm-synth\.js$/.test(module.url)), JSON.stringify(observed.modules));
     check("the FM synthesizer runs in an AudioWorklet");
@@ -319,10 +397,10 @@ try {
   // Fold every report into totals. A report covers the batches since the one
   // before it, so the sum is the whole run.
   const totals = { batches: 0, admitted: 0, reanchored: 0, refused: { late: 0, future: 0, range: 0 }, events: 0, not_late: 0,
-    late_le_5ms: 0, late_le_20ms: 0, late_le_100ms: 0, late_gt_100ms: 0, max_event_late_ms: 0 };
+    late_le_5ms: 0, late_le_20ms: 0, late_le_100ms: 0, late_gt_100ms: 0, max_event_late_ms: 0, anchor_earlier_ms: 0, anchor_later_ms: 0 };
   for (const report of observed.timing) {
     for (const group of [report.anchored, report.continuing]) {
-      for (const key of ["batches", "admitted", "reanchored", "events", "not_late", "late_le_5ms", "late_le_20ms", "late_le_100ms", "late_gt_100ms"]) {
+      for (const key of ["batches", "admitted", "reanchored", "events", "not_late", "late_le_5ms", "late_le_20ms", "late_le_100ms", "late_gt_100ms", "anchor_earlier_ms", "anchor_later_ms"]) {
         totals[key] += group[key] ?? 0;
       }
       for (const reason of ["late", "future", "range"]) totals.refused[reason] += group.refused[reason];
@@ -333,7 +411,7 @@ try {
   assert.ok(observed.timing.length > 0, "the debug page reported no playout timing");
   assert.ok(totals.admitted > 0 && totals.events > 0, JSON.stringify(totals));
   check(`debug timing: ${totals.admitted}/${totals.batches} batches admitted, ${totals.reanchored} re-anchored, ` +
-    `${totals.events} events, ${totals.late_gt_100ms} over 100 ms late, recovery requests ${observed.sent.audioResume ?? 0}`);
+    `${totals.events} events, ${totals.late_gt_100ms} over 100 ms late, anchor moved ${totals.anchor_earlier_ms.toFixed(1)} ms earlier and ${totals.anchor_later_ms.toFixed(1)} ms later, recovery requests ${observed.sent.audioResume ?? 0}`);
 
   assert.deepEqual(observed.errors, []);
   assert.deepEqual(result.errors, []);

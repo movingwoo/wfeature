@@ -9,7 +9,7 @@ const clock = at => ({ kind: "clock", at });
 const control = at => ({ kind: "controlChange", sound: 7, channel: 0, control: 7, value: 80, at });
 const empty = () => ({ batches: 0, admitted: 0, reanchored: 0, refused: { late: 0, future: 0, range: 0 }, clock_only_batches: 0, events: 0,
   not_late: 0, late_le_5ms: 0, late_le_20ms: 0, late_le_100ms: 0, late_gt_100ms: 0,
-  invalid_events: 0, max_event_late_ms: 0, max_frontier_late_ms: 0 });
+  invalid_events: 0, max_event_late_ms: 0, max_frontier_late_ms: 0, anchor_earlier_ms: 0, anchor_later_ms: 0 });
 const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-8, `${actual} != ${expected}`);
 const group = (actual, expected) => {
   const { max_event_late_ms, max_frontier_late_ms, ...counts } = actual;

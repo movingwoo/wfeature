@@ -38,6 +38,24 @@ const CONTROL_RAMP = 0.005;
 // the anchor rather than by rebuilding the whole output. A slow page delivers
 // batches 15–100 ms late; a rebuild cuts every sounding voice to replay it.
 const MAX_REANCHOR_LATE = 0.2;
+// The anchor is set by one batch, and a late batch moves it later together
+// with every sound after it. Between those moves it is steered so that the
+// typical batch of the last ANCHOR_WINDOW seconds lands within ANCHOR_SLACK of
+// the page's own lead: later at once when batches land closer than that,
+// earlier once no batch has been late for the hold, and never so far that the
+// most delayed batch of the last ANCHOR_MEMORY seconds would land closer than
+// ANCHOR_SLACK. A move is at most ANCHOR_RATE of the render time since the
+// batch before, except in silence, where nothing is heard hurrying or waiting.
+// The hold is ANCHOR_HOLD seconds and doubles, up to ANCHOR_HOLD_LIMIT, each
+// time a batch is late again within ANCHOR_RELAPSE seconds of the one before,
+// so a page whose batches keep arriving late keeps the lead that absorbs them.
+const ANCHOR_WINDOW = 2;
+const ANCHOR_SLACK = 0.02;
+const ANCHOR_RATE = 0.1;
+const ANCHOR_MEMORY = 10;
+const ANCHOR_HOLD = 2;
+const ANCHOR_HOLD_LIMIT = 16;
+const ANCHOR_RELAPSE = 30;
 const voiceKey = (sound, channel, note) => sound ? `${sound}:${channel}:${note}` : `${channel}:${note}`;
 // A stolen or retriggered note fades this fast rather than clicking; a
 // released one follows its own envelope.
@@ -110,7 +128,7 @@ const timingCounts = () => ({
   batches: 0, clock_only_batches: 0, admitted: 0, reanchored: 0, refused: { late: 0, future: 0, range: 0 },
   events: 0, not_late: 0, late_le_5ms: 0, late_le_20ms: 0,
   late_le_100ms: 0, late_gt_100ms: 0, invalid_events: 0,
-  max_event_late_ms: 0, max_frontier_late_ms: 0,
+  max_event_late_ms: 0, max_frontier_late_ms: 0, anchor_earlier_ms: 0, anchor_later_ms: 0,
 });
 
 export class PageAudio {
@@ -132,6 +150,14 @@ export class PageAudio {
     this.presentationAnchor = null;
     this.presentationFrontier = null;
     this.presentationLastTime = null;
+    this.presentationLastAudio = null;
+    this.anchoredAt = null;
+    this.steeredAt = null;
+    this.leadHistory = [];
+    // Late batches describe the connection, not one timeline: a rebuild
+    // keeps them.
+    this.anchorHold = ANCHOR_HOLD;
+    this.lateAt = null;
     this.presentationInterrupted = false;
     this.scheduledTime = null;
     this.master = null;
@@ -637,6 +663,7 @@ export class PageAudio {
     const current = context.currentTime;
     const latency = Number.isFinite(context.baseLatency) ? context.baseLatency : 0;
     const lead = Math.min(0.25, Math.max(0.1, latency));
+    const horizon = current + 0.35;
     let anchor = (!reset && this.presentationAnchor) || { audio: current + lead, presentation: clock.at };
     let refused = null;
     let lateBy = 0;
@@ -646,7 +673,7 @@ export class PageAudio {
       else if (at < current - 0.005) {
         refused = "late";
         lateBy = current - at;
-      } else if (at > current + 0.35) refused = "future";
+      } else if (at > horizon) refused = "future";
       if (refused) break;
     }
     // A late batch means the server or this page fell behind the render
@@ -665,13 +692,17 @@ export class PageAudio {
         moved = { audio: current + lead, presentation: clock.at };
       } else if (lateBy <= MAX_REANCHOR_LATE) {
         const candidate = { audio: current + lead, presentation: events[0].at };
-        if (events.every(event => candidate.audio + (event.at - candidate.presentation) <= current + 0.35)) moved = candidate;
+        if (events.every(event => candidate.audio + (event.at - candidate.presentation) <= horizon)) moved = candidate;
       }
     }
-    this.recordTiming(events, anchor, current, reset || !this.presentationAnchor, refused, moved !== null);
+    const fresh = reset || !this.presentationAnchor;
+    this.recordTiming(events, anchor, current, fresh, refused, moved !== null);
+    if (refused === "late") this.noteLate(current);
     if (moved && events.length === 1) {
       this.presentationAnchor = moved;
       this.presentationFrontier = clock.at;
+      this.anchoredAt = current;
+      this.leadHistory = [];
       return true;
     }
     if (moved) {
@@ -682,11 +713,68 @@ export class PageAudio {
     // Validate a reset before cancelling the old timeline, then install its
     // new anchor after stopAll has cleared the previous presentation state.
     if (reset) this.stopAll();
+    if (fresh || moved) {
+      this.anchoredAt = current;
+      this.leadHistory = [];
+    } else {
+      anchor = this.steerAnchor(anchor, events, current, lead);
+    }
     this.presentationAnchor = anchor;
     this.presentationFrontier = clock.at;
     this.presentationLastTime = last;
+    if (events.length > 1) this.presentationLastAudio = anchor.audio + (events.at(-2).at - anchor.presentation);
     this.presentationInterrupted = false;
     return true;
+  }
+
+  // noteLate records a batch that arrived late, moved or refused: the hold
+  // before the anchor comes back doubles when it happens again soon.
+  noteLate(current) {
+    const again = this.lateAt !== null && current - this.lateAt < ANCHOR_RELAPSE;
+    this.anchorHold = again ? Math.min(ANCHOR_HOLD_LIMIT, this.anchorHold * 2) : ANCHOR_HOLD;
+    this.lateAt = current;
+  }
+
+  // steerAnchor answers the anchor a continuing batch is placed with: moved
+  // so that a typical batch lands one lead ahead again. It never places this
+  // batch's first event before the last one already scheduled or before the
+  // render clock, so nothing is reordered; while anything sounds, a run of
+  // notes plays at most ANCHOR_RATE quicker or slower as the anchor moves.
+  steerAnchor(anchor, events, current, lead) {
+    const elapsed = Math.max(0, current - (this.steeredAt ?? current));
+    this.steeredAt = current;
+    const frontier = anchor.audio + (events.at(-1).at - anchor.presentation);
+    const history = this.leadHistory ??= [];
+    history.push({ at: current, lead: frontier - current });
+    while (history.length && history[0].at < current - ANCHOR_MEMORY) history.shift();
+    if (current - (this.anchoredAt ?? current) < ANCHOR_WINDOW) return anchor;
+    // The page's lead is where a typical batch lands, as the batch that set
+    // the anchor did; the most delayed one shows how much of the lead recent
+    // delays needed.
+    const recent = [];
+    let worst = Infinity;
+    for (const entry of history) {
+      if (entry.at >= current - ANCHOR_WINDOW) recent.push(entry.lead);
+      worst = Math.min(worst, entry.lead);
+    }
+    recent.sort((a, b) => a - b);
+    const off = recent[recent.length >> 1] - lead;
+    const limit = this.sources.size === 0 ? Infinity : ANCHOR_RATE * elapsed;
+    let step = 0;
+    if (off < -ANCHOR_SLACK) {
+      step = -Math.min(-off, limit);
+    } else if (off > ANCHOR_SLACK && current - (this.lateAt ?? -Infinity) >= this.anchorHold) {
+      const first = anchor.audio + (events[0].at - anchor.presentation);
+      const room = Math.min(first - current, first - (this.presentationLastAudio ?? -Infinity));
+      step = Math.max(0, Math.min(off, worst - ANCHOR_SLACK, limit, room));
+    }
+    if (!step) return anchor;
+    for (const entry of history) entry.lead -= step;
+    if (this.timing) {
+      if (step > 0) this.timing.continuing.anchor_earlier_ms += step * 1000;
+      else this.timing.continuing.anchor_later_ms -= step * 1000;
+    }
+    return { ...anchor, audio: anchor.audio - step };
   }
 
   // Scope one presentation timestamp across every source and controller call
@@ -1171,6 +1259,10 @@ export class PageAudio {
     this.presentationAnchor = null;
     this.presentationFrontier = null;
     this.presentationLastTime = null;
+    this.presentationLastAudio = null;
+    this.anchoredAt = null;
+    this.steeredAt = null;
+    this.leadHistory = [];
     this.presentationInterrupted = false;
     this.scheduledTime = null;
     this.voices.clear();
