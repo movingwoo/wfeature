@@ -76,6 +76,21 @@ export const createSafeStorage = open => {
         return false;
       }
     },
+    // keys lists every key held: the browser's, and those only this page kept
+    // because the browser refused the write.
+    keys: () => {
+      const names = new Set(shadow.keys());
+      try {
+        const store = backing();
+        for (let index = 0; index < (store?.length ?? 0); index++) {
+          const name = store.key(index);
+          if (name !== null) names.add(name);
+        }
+      } catch {
+        // A store that cannot be listed has nothing this page can name.
+      }
+      return [...names];
+    },
     // available reports whether anything written here survives the page. The
     // page uses it to say so rather than to decide whether to run.
     available: () => {

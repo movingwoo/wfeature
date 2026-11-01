@@ -114,7 +114,10 @@ const color = expected => page.waitForFunction(rgb => {
 const fire = async () => { await page.locator('[data-key="5"]').first().tap(); };
 const storage = () => page.evaluate(() => Object.fromEntries(Object.entries(localStorage).filter(([key]) => /keypad|keyBindings|frameScale/.test(key))));
 const download = async name => {
-  const pending = page.waitForEvent("download"); await page.locator("#save-export").click();
+  // The baseline shell has the save buttons on the picker; this one folds them under 백업.
+  const pending = page.waitForEvent("download"); const backup = page.locator("#backup");
+  if (await backup.count() && !(await backup.evaluate(fold => fold.open))) await page.locator("#backup-open").click();
+  await page.locator("#save-export").click();
   const file = join(output, name); await (await pending).saveAs(file); await dismissStatus(); return file;
 };
 const updateWorker = async () => {

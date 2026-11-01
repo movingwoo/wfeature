@@ -153,6 +153,29 @@ with a warning in the log while plain HTTP goes on. An address given to
 `-https` is required instead. The startup log names both URLs:
 `url=http://[::]:11541 https=https://[::]:11641`.
 
+### Moving the page's settings
+
+The page keeps its settings in the browser, and a browser keeps them apart
+per address: the same phone at `http://…:11541` and `https://…:11641`, or at
+two names of one machine, has two sets. **백업**, the divider under the game
+picker's add and delete buttons, opens the saves of the chosen game and these
+settings below it; its settings
+**내보내기** and **가져오기** carry them as one JSON file
+(`wfeature-settings-<date>.json`, `format: "wfeature-settings"`, `version: 1`):
+the keypad's type and arrangement, the keyboard's and the game controller's
+keys, the two volumes, the picture filter, the screen and speed of each game,
+vibration and fullscreen (`web/settings-file.js` lists the keys). The token that
+takes a parked game back, the last game picked, whether a keyboard or a
+controller has been used here and the copy of a damaged keypad record stay in
+the browser that has them.
+
+An import asks first, writes the file's settings over this browser's, leaves
+those the file does not hold, and opens the page again, which is when every
+setting is read. It reads only setting keys with string values of bounded size
+from a file of at most 1 MiB, refuses a newer version, and refuses a `.wfs`
+save backup with the place that takes one. A game's saves are not settings:
+they are on the server and travel from the game picker, one game at a time.
+
 ### Adding a game from the page, and taking it back off
 
 `POST /api/games?name=<file name>` writes one archive into the added root, and

@@ -311,6 +311,86 @@ body {
   font-size: 0.9em;
 }
 
+/* 백업 is a divider with its name near the left end, as wide as the picker,
+   and what it folds opens under it: a rule rather than a button, because it is
+   the way to four rare buttons and not a fifth thing to do. It sits closer to
+   the row above than the column's gap, being the end of the same list. */
+.backup {
+  width: min(100%, 300px);
+  margin-top: -12px;
+}
+
+.backup-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  color: #aaa;
+  font-size: 0.9em;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.backup-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.backup-toggle::before,
+.backup-toggle::after {
+  content: "";
+  border-top: 1px solid #4a4f54;
+}
+
+.backup-toggle::before {
+  width: 16px;
+}
+
+.backup-toggle::after {
+  flex: 1;
+}
+
+.backup-toggle:hover {
+  color: #e8e6e3;
+}
+
+/* The arrow points down while closed, at where the buttons will appear, and up
+   while open. */
+.backup-arrow {
+  width: 6px;
+  height: 6px;
+  margin: -3px 2px 0;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+}
+
+.backup[open] .backup-arrow {
+  margin-top: 3px;
+  transform: rotate(-135deg);
+}
+
+.backup-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.backup-label {
+  font-size: 0.85em;
+  color: #aaa;
+  text-align: center;
+  word-break: keep-all;
+}
+
+.backup .save-backup {
+  white-space: nowrap;
+}
+
 .game-select {
   width: min(100%, 300px);
   padding: 13px 12px;

@@ -17,6 +17,7 @@ import { initCheckpoints, isCheckpointKey } from "./checkpoint.js";
 import { createTextInputDialog } from "./text-input.js";
 import { askToConfirm } from "./confirm.js";
 import { initSaveBackup } from "./save-backup.js";
+import { initSettingsFile } from "./settings-file.js";
 import { reach } from "./reach.js";
 import { createVibration, initVibrationSetting } from "./vibrate.js";
 import { FULLSCREEN, createFullscreen } from "./fullscreen.js";
@@ -988,7 +989,7 @@ const initGameSelect = async () => {
       onRemoved: () => initGameSelect(),
     });
     select.addEventListener("change", () => syncRemoveButton(document));
-    // The picker is what says which game the two save buttons act on, so
+    // The picker is what says which game the save buttons of 백업 act on, so
     // chosenGame is handed over rather than read once: a player changes the
     // selection between pressing them.
     initSaveBackup({
@@ -996,6 +997,8 @@ const initGameSelect = async () => {
       chosenGame,
       onStatus: setStatus,
     });
+    initSettingsFile({ document, onStatus: setStatus });
+    initBackupFold();
   }
 
   await listGames(select, startButton, restarting);
@@ -1163,6 +1166,16 @@ const initLogView = debugBuild => {
   document.getElementById("log-clear")?.addEventListener("click", () => {
     pageAudio?.clearTiming();
     clearLog();
+  });
+};
+
+// 백업 is the last thing on the first screen and opens downwards, so on a
+// short screen what it opened can be under the edge; the screen scrolls just
+// far enough to show it.
+const initBackupFold = () => {
+  const fold = document.getElementById("backup");
+  fold?.addEventListener("toggle", () => {
+    if (fold.open) fold.scrollIntoView({ block: "nearest", behavior: "smooth" });
   });
 };
 

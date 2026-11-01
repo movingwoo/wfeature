@@ -45,14 +45,19 @@ picker.
   the wrong folder still runs. Below the list, **＋ 게임 추가** uploads one or more
   `.zip`/`.jar` files (each reported separately) and **게임 삭제**, enabled only
   for page-added games, removes one after a confirmation (`add-game.js`; the
-  route is in [Server](#server)). **세이브 내보내기** downloads the selected game's
-  saves as `<game>.wfs`, or hands them to the phone app's own save picker, and
-  **세이브 가져오기** restores a `.wfs` over them after a confirmation
-  (`save-backup.js`). The server's refusals are shown as it words them; a
+  route is in [Server](#server)). Under them a divider, **▾ 백업**, opens two
+  groups below it. Under
+  `게임 세이브 데이터 (.wfs)`, **내보내기** downloads the selected game's saves as
+  `<game>.wfs`, or hands them to the phone app's own save picker, and
+  **가져오기** restores a `.wfs` over them after a confirmation
+  (`save-backup.js`). Under `에뮬레이터 설정 (.json)`, the same two buttons
+  write this browser's settings to one `.json` and read them back, then open
+  the page again (`settings-file.js`). The server's refusals are shown as it words them; a
   request that never reaches the server says `서버에 연결하지 못했습니다.`
   rather than the browser's own English error (`reach.js`, also used by the
   game list and the upload and delete buttons). The buttons sit on the picker
-  because an import replaces a save and the game is not running there.
+  because an import replaces a save or reopens the page, and the game is not
+  running there.
 - **Screen** — the game's own screen size, chosen per game under `📱 화면`:
   `자동` (the default), 128×160, 176×220, 240×320, 240×400 or 320×480.
   `자동` sends no size and the server asks the archive: a KTF descriptor's

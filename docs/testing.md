@@ -2929,6 +2929,25 @@ archive whose channel 9 waves now play (30 in 20 seconds, all with their
 velocity) fails the harness's silent-mix check on both builds: its mix reads
 zero with or without the change.
 
+### Settings file
+
+`web/settings-file.test.mjs` checks which keys an export holds and which it
+leaves, that an import writes over this browser's settings and keeps the rest,
+that only setting keys with bounded string values are read from a file of the
+right kind and version, that the buttons ask before an import and open the page
+again after it, that a `.wfs` is sent to the save import, and that a browser
+that cannot store the settings is told so without a reload. On 2026-11-01
+Chromium and WebKit exported on `http://127.0.0.1` and imported on
+`http://localhost`, two origins of one server: after the reload the keypad type
+and the music volume showed in the panel, and the browser's own resume token was
+unchanged. The Android picker change was compiled against the SDK, not run.
+The same day the four buttons folded under the 백업 divider: in Chromium and
+WebKit at 390×844, 240×320 and 1280×860 it opened below itself and closed
+again, a short screen scrolled to what it opened, and its settings export still
+downloaded; `keypad-grid.mjs` scrolls the short screen to the divider instead
+of the save import, and `pwa.mjs` opens the fold only on a shell that has it and
+only when it is closed, since its first export runs on the baseline.
+
 ### HTTPS from the network
 
 `cmd/server/certificate_test.go` checks where `auto` puts the HTTPS listener
