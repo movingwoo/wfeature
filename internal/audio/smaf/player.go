@@ -1,8 +1,8 @@
 package smaf
 
 import (
+	"cmp"
 	"slices"
-	"sort"
 )
 
 // Translating SMAF into MIDI is not a relabelling. SMAF addresses up to four
@@ -144,11 +144,11 @@ func playWithBudget(data []byte, budget *decodeBudget) []Event {
 		}
 	}
 
-	sort.SliceStable(events, func(left, right int) bool {
-		if events[left].Time != events[right].Time {
-			return events[left].Time < events[right].Time
+	slices.SortStableFunc(events, func(left, right Event) int {
+		if left.Time != right.Time {
+			return cmp.Compare(left.Time, right.Time)
 		}
-		return eventOrder(events[left]) < eventOrder(events[right])
+		return cmp.Compare(eventOrder(left), eventOrder(right))
 	})
 	return events
 }
@@ -260,7 +260,7 @@ func sequenceEvents(
 				if !budget.pcm(len(wave.Data), expansion) {
 					return nil, channelOffset
 				}
-				samples, playable := decodeStreamWave(wave)
+				samples, playable := budget.expand(wave, decodeStreamWave)
 				if !playable {
 					continue
 				}
@@ -503,13 +503,16 @@ func pcmTrackEvents(track *PCMAudioTrack, base uint16, budget *decodeBudget) []E
 			if !budget.pcm(len(wave), 4) {
 				return nil
 			}
+			samples, _ := budget.expand(WaveData{Channels: Mono, Format: YamahaADPCM, BaseBit: Bit4, Data: wave}, func(wave WaveData) ([]int16, bool) {
+				return DecodeADPCM(wave.Data), true
+			})
 			events = budget.emit(events, Event{
 				Time:         now,
 				Type:         EventWave,
 				PCMChannel:   base + uint16(event.Channel),
 				WaveChannels: waveChannelCount(track.Channels),
 				SamplingRate: track.SamplingFreq,
-				Wave:         DecodeADPCM(wave),
+				Wave:         samples,
 			})
 		}
 	}
@@ -711,6 +714,41 @@ func decodeStreamWave(wave WaveData) ([]int16, bool) {
 		return samples, true
 	}
 	return nil, false
+}
+
+// waveSource names one encoded wave in the file being decoded: its bytes, by
+// where they sit, and how they are read.
+type waveSource struct {
+	data    *byte
+	length  int
+	format  StreamWaveFormat
+	baseBit BaseBit
+}
+
+type decodedWave struct {
+	samples  []int16
+	playable bool
+}
+
+// expand answers what a wave decodes to, decoding each wave once per Decode.
+// A score strikes the same wave again and again, a drum wave on every beat;
+// every strike's event holds the same samples, which nothing downstream
+// writes to. Each strike is still
+// charged to the PCM budget on its own.
+func (b *decodeBudget) expand(wave WaveData, decode func(WaveData) ([]int16, bool)) ([]int16, bool) {
+	if len(wave.Data) == 0 {
+		return decode(wave)
+	}
+	key := waveSource{data: &wave.Data[0], length: len(wave.Data), format: wave.Format, baseBit: wave.BaseBit}
+	if known, ok := b.samples[key]; ok {
+		return known.samples, known.playable
+	}
+	samples, playable := decode(wave)
+	if b.samples == nil {
+		b.samples = make(map[waveSource]decodedWave)
+	}
+	b.samples[key] = decodedWave{samples: samples, playable: playable}
+	return samples, playable
 }
 
 // streamWaveExpansion is the number of decoded bytes per encoded byte. Zero
