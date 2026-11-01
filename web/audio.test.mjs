@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PageAudio } from "./audio.js";
+import { fakeFM } from "./audio-test-fm.mjs";
 
 const setup = (t, state = "running") => {
   const timers = [];
@@ -117,55 +118,49 @@ test("a rejected recovery is reported and a later gesture can retry", async t =>
 });
 
 test("an older percussion source ending preserves its retriggered voice", () => {
-  const audio = new PageAudio();
-  const sources = [];
+  const { fm, createFM } = fakeFM();
+  const audio = new PageAudio({ createFM });
   const parameter = () => ({ value: 0, setValueAtTime() {}, exponentialRampToValueAtTime() {} });
   audio.context = {
     currentTime: 0,
     state: "running",
     createGain: () => ({ gain: parameter(), connect() {} }),
-    createBufferSource() {
-      const source = { connect() {}, start() {}, stop() {} };
-      sources.push(source);
-      return source;
-    },
-    createBiquadFilter: () => ({ frequency: parameter(), connect() {} }),
   };
-  audio._noise = {};
   audio.midiGain = {};
   audio.noteOn(9, 29, 100);
   audio.context.currentTime = 0.046;
   audio.noteOn(9, 29, 110);
   audio.noteOn(9, 70, 100);
+  const [first, second, third] = fm.notes().map(note => note.id);
+  assert.equal(fm.notes()[0].drumKey, 29, "percussion plays the drum key's stand-in");
+  assert.deepEqual(fm.of(first).map(command => command.op), ["cut"], "a retrigger fades the older hit");
   const replacement = audio.voices.get("9:29");
-  sources[0].onended();
+  fm.end(first);
   assert.equal(audio.voices.get("9:29"), replacement);
   assert.equal(audio.voices.size, 2);
-  sources[1].onended();
+  fm.end(second);
   assert.equal(audio.voices.has("9:29"), false);
   assert.equal(audio.voices.size, 1);
-  sources[2].onended();
+  fm.end(third);
   assert.equal(audio.voices.size, 0);
 });
 
 test("timeline reset stops PCM, percussion and released notes and resets channel state", () => {
-  const audio = new PageAudio();
+  const { fm, createFM } = fakeFM();
+  const audio = new PageAudio({ createFM });
   const sources = [];
   const parameter = () => ({ value: 0, setValueAtTime() {}, exponentialRampToValueAtTime() {}, cancelScheduledValues() {} });
   const createSource = () => {
-    const source = { stops: [], frequency: parameter(), connect() {}, disconnect() { this.disconnected = true; }, start() {}, stop(at) { this.stops.push(at); } };
+    const source = { stops: [], connect() {}, disconnect() { this.disconnected = true; }, start() {}, stop(at) { this.stops.push(at); } };
     sources.push(source);
     return source;
   };
   audio.context = {
     currentTime: 0, state: "running",
-    createGain: () => ({ gain: parameter(), connect() {} }),
+    createGain: () => ({ gain: parameter(), connect() {}, disconnect() {} }),
     createBufferSource: createSource,
-    createOscillator: createSource,
-    createBiquadFilter: () => ({ frequency: parameter(), connect() {} }),
     createBuffer: (channels, frames) => ({ numberOfChannels: channels, getChannelData: () => new Float32Array(frames) }),
   };
-  audio._noise = {};
   audio.midiGain = { gain: parameter() };
   audio.waveGain = { gain: parameter() };
   audio.setMIDIVolume(0.3);
@@ -178,16 +173,19 @@ test("timeline reset stops PCM, percussion and released notes and resets channel
   audio.playWave(1, 8000, new Float32Array(800));
   assert.equal(audio.sources.size, 3);
   assert.equal(audio.voices.size, 1, "the melodic release tail is already outside the voice map");
+  assert.equal(fm.notes()[0].program, 30, "the stand-in voice follows the channel's program");
   audio.stopAll();
   assert.equal(audio.sources.size, 0);
   assert.equal(audio.voices.size, 0);
+  assert.ok(fm.commands.some(command => command.op === "reset"), "the synthesizer drops every voice at once");
+  assert.equal(fm.lanes.filter(Boolean).length, 0, "every lane is returned");
   for (const source of sources) {
     assert.equal(source.stops.at(-1), undefined, "the old source must stop immediately");
     assert.equal(source.disconnected, true);
     source.onended();
   }
   assert.deepEqual(audio.channels[0], { program: 0, volume: 100, expression: 127, pan: 64, bend: 8192,
-    sustain: 0, bendRange: 2, bendRangeCents: 0, rpnMSB: 127, rpnLSB: 127,
+    sustain: 0, modulation: 0, bendRange: 2, bendRangeCents: 0, rpnMSB: 127, rpnLSB: 127,
     nrpnMSB: 127, nrpnLSB: 127, parameterKind: null });
   assert.equal(audio.midiVolume, 0.3, "the person's output volume survives timeline replacement");
   audio.stopAll();

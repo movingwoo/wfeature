@@ -27,6 +27,15 @@ type toneMap struct {
 	atmosphere    [maxSMAFChannels]bool
 	atmosLayers   [maxSMAFChannels][2]atmosphereLayer
 	atmosLayerSet [maxSMAFChannels][2]bool
+
+	// The file's own voices, and each channel's selection as the file wrote
+	// it: the handset bank byte keeps its drum bit and the program is not
+	// replaced by a General MIDI stand-in, because a defined voice is keyed
+	// by exactly those bytes.
+	voices     *voiceTable
+	rawBank    [maxSMAFChannels]uint8
+	rawBankLSB [maxSMAFChannels]uint8
+	rawProgram [maxSMAFChannels]uint8
 }
 
 // atmosphereLayer is one of the two supporting voices laid under Yamaha's MA
@@ -68,6 +77,7 @@ func (tones *toneMap) reset() {
 		tones.realMapSet[index] = false
 		tones.atmosphere[index] = false
 		tones.atmosLayerSet[index] = [2]bool{}
+		tones.rawBank[index], tones.rawBankLSB[index], tones.rawProgram[index] = 0, 0, 0
 	}
 	tones.reserved = [16]bool{}
 }
@@ -101,6 +111,7 @@ func (tones *toneMap) initTrack(formatType FormatType, statuses []ChannelStatus,
 			tones.forcedRhythm[channel] = false
 			tones.atmosphere[channel] = false
 			tones.atmosLayerSet[channel] = [2]bool{}
+			tones.rawBank[channel], tones.rawBankLSB[channel], tones.rawProgram[channel] = 0, 0, 0
 		}
 		return
 	}
@@ -220,8 +231,10 @@ func (tones *toneMap) updateControl(channel, control, value uint8) {
 	switch control {
 	case 0:
 		tones.bankMSB[index] = value & 0x7f
+		tones.rawBank[index] = value & 0x7f
 	case 32:
 		tones.bankLSB[index] = value & 0x7f
+		tones.rawBankLSB[index] = value & 0x7f
 	case 7:
 		tones.volumes[index] = min(value, 0x7f)
 	case 121:
@@ -239,6 +252,7 @@ func (tones *toneMap) updateBankSelect(channel, value uint8) {
 		tones.forcedRhythm[index] = true
 	}
 	tones.bankMSB[index] = value & 0x7f
+	tones.rawBank[index] = value
 }
 
 // setProgram records a program change and answers the MIDI channel and program
@@ -246,6 +260,7 @@ func (tones *toneMap) updateBankSelect(channel, value uint8) {
 // it is stored rather than sent.
 func (tones *toneMap) setProgram(channel, program uint8) (uint8, uint8) {
 	index := tones.pseudoChannel(channel)
+	tones.rawProgram[index] = min(program, 0x7f)
 	if tones.formatType == HandyPhoneStandard && tones.channelKinds[index] == toneRhythm {
 		tones.programs[index] = min(program, 0x7f)
 		return midiDrumChannel, 0
@@ -260,6 +275,49 @@ func (tones *toneMap) setProgram(channel, program uint8) (uint8, uint8) {
 	}
 	tones.programs[index] = mapped
 	return tones.realChannel(index), mapped
+}
+
+// voiceFor answers the slot of the file's own voice a note on this channel
+// plays, and the pitch it sounds; slot zero means the file defines none. A
+// handset voice is keyed by bank byte and program. A mobile drum kit may
+// define a voice per key, which wins over one for the whole kit. The pitch is
+// the note the score wrote, in MIDI numbering: a handset rhythm note sounds
+// its drum voice there, not at the drum key a General MIDI kit would play.
+func (tones *toneMap) voiceFor(channel uint8, note int16, time uint32) (uint8, uint8) {
+	if tones.voices == nil {
+		return 0, 0
+	}
+	index := tones.pseudoChannel(channel)
+	if tones.formatType == HandyPhoneStandard {
+		key := voiceKey{handset: true, bankMSB: tones.rawBank[index], program: tones.rawProgram[index]}
+		if slot := tones.voices.lookup(key, time); slot != 0 {
+			return slot, clampNote(note + 36)
+		}
+		return 0, 0
+	}
+	key := voiceKey{bankMSB: tones.rawBank[index], bankLSB: tones.rawBankLSB[index], program: tones.rawProgram[index]}
+	if tones.isRhythm(index) {
+		drum := key
+		drum.drumNote = clampNote(note)
+		if slot := tones.voices.lookup(drum, time); slot != 0 {
+			return slot, clampNote(note)
+		}
+	}
+	if slot := tones.voices.lookup(key, time); slot != 0 {
+		return slot, clampNote(note)
+	}
+	return 0, 0
+}
+
+// definesVoice reports whether the file defines a voice for the channel's
+// current melodic selection.
+func (tones *toneMap) definesVoice(channel uint8, time uint32) bool {
+	if tones.voices == nil || tones.formatType == HandyPhoneStandard {
+		return false
+	}
+	index := tones.pseudoChannel(channel)
+	key := voiceKey{bankMSB: tones.rawBank[index], bankLSB: tones.rawBankLSB[index], program: tones.rawProgram[index]}
+	return tones.voices.lookup(key, time) != 0
 }
 
 // mapProgram substitutes General MIDI voices for the Yamaha MA voices that

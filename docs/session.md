@@ -13,7 +13,7 @@ routes (`/api/saves`, `/api/savepack`, `/api/games`, `/api/status`,
 
 The page opens a WebSocket at `/api/session`. Text messages carry JSON commands
 and results in both directions. The query string negotiates everything else; the
-current page asks for `protocol=2&sound=resume&timing=1&pcm=1&phase=1`, and adds
+current page asks for `protocol=2&sound=resume&timing=1&pcm=1&phase=1&voice=1`, and adds
 `pictures=webp` when its browser decodes lossless WebP:
 
 | Query | Effect | Requires |
@@ -25,6 +25,7 @@ current page asks for `protocol=2&sound=resume&timing=1&pcm=1&phase=1`, and adds
 | `timing=1` | Presentation timestamps and a clock frontier. | `sound=resume` |
 | `pcm=1` | Independent PCM channels. | `sound=owned` or `sound=resume` |
 | `phase=1` | Fractional PCM resume positions. | `sound=owned` or `sound=resume` |
+| `voice=1` | The FM voices a score defines for itself, and the notes that play them. | `protocol=2` and `sound=owned` or `sound=resume` |
 
 An unknown value is answered with the older behavior rather than refused, so
 older pages remain compatible, and the current page also reads protocol 1 from
@@ -236,7 +237,7 @@ Loaded notes resume with their original programs, current channel controllers
 and saved envelope ages on capable pages. Pitch sensitivity and RPN/NRPN
 selection are restored before notes; pedal-held released keys receive note-off
 immediately after resuming under sustain. PCM tails resume with their remaining
-samples. Paused clips stay silent until explicitly resumed. Oscillator phase,
+samples. Paused clips stay silent until explicitly resumed. Operator phase,
 release tails, physical output latency and short controller smoothing
 transitions are not serialized, so this is not sample-exact audio continuity.
 Runtime state compatibility requires the same archive and a compatible
@@ -378,6 +379,9 @@ operation byte and its operands, with multibyte fields big-endian.
 | `0x14` | play PCM wave | 32-bit id, channels, 32-bit rate, 16-bit PCM group |
 | `0x15` | PCM control | 16-bit PCM group, control, value |
 | `0x16` | resume wave | 32-bit id, channels, 32-bit rate, 16-bit PCM group, 32-bit frame phase |
+| `0x17` | voice | slot (1–255), 32-bit id of the voice's encoding |
+| `0x18` | voice note on | channel, note, velocity, voice slot, pitch |
+| `0x19` | resume voice note | channel, note, velocity, 32-bit age in milliseconds, voice slot, pitch |
 
 A sampled sound or SysEx message travels once as a definition under an id and is
 named afterwards; ids are never reused. The definitions a page holds are bounded
@@ -420,6 +424,16 @@ phase before batch dispatch and starts the buffer at `phase/(1e9*rate)` seconds
 without changing its presentation timestamp. Old pages receive the same
 whole-frame suffix without phase metadata, old servers ignore the query, and a
 reconnect adopts the new page's capability.
+
+`voice=1`, binary only, carries the [FM voices](audio.md#the-files-own-voices)
+a score defines for itself. `0x17` names a slot of the selected sound and the
+id of a definition holding `smaf.Voice.Encode` bytes, so a voice repeated across
+sounds or loops travels once. `0x18` and `0x19` are `0x01` and `0x0a` with the
+voice slot and the pitch it sounds; a note whose file defines no voice keeps the
+ordinary operations. The page refuses slot zero and a pitch above 127, and
+skips a voice whose definition it does not hold. A page that did not ask
+receives the same notes as ordinary operations and no voices, an older server
+ignores the query, and a reconnect adopts the new page's capability.
 
 `timing=1`, negotiated with `sound=resume`, preserves presentation seconds
 without breaking older servers. JSON adds an optional `at` (zero is meaningful)

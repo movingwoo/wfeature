@@ -44,9 +44,10 @@ type AudioSoundState struct {
 type AudioNoteState struct{ Channel, Note uint8 }
 
 const (
-	// Version 9 preserves PCM subframe position through tail trimming. Versions
-	// 6 through 8 remain readable at their saved whole-frame positions.
-	audioStateVersion    = 9
+	// Version 10 records the FM voice each sounding note plays. Version 9
+	// preserves PCM subframe position through tail trimming. Versions 6
+	// through 9 remain readable; their notes resume on the Host's instrument.
+	audioStateVersion    = 10
 	maxAudioStateEntries = 1 << 20
 	maxAudioStateBytes   = 128 << 20
 )
@@ -231,6 +232,18 @@ func NewAudioFromStateWithClock(saved AudioState, sink AudioSink, now func() tim
 			current.activeNotes = append(current.activeNotes, activeNote{channel: note.Channel, note: note.Note})
 		}
 		audio.sounds[record.Handle] = current
+		// The definitions are past events of the restored score. Every one is
+		// in its own slot, so defining later ones early changes no note.
+		if current.playing {
+			for _, event := range current.events {
+				if event.Type == smaf.EventVoice {
+					if audio.sink.voices[current.handle] == nil {
+						audio.sink.voices[current.handle] = make(map[uint8][]byte)
+					}
+					audio.sink.voices[current.handle][event.Program] = event.SysEx
+				}
+			}
+		}
 	}
 	return audio, nil
 }

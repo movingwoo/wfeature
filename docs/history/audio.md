@@ -884,3 +884,75 @@ Each cell is one run, and runs of one build differ by about a tenth on the
 browser figures. The KTF title's one re-anchor is a batch with one event that
 arrived 14 ms late; the page moved the anchor and played it that much later,
 as it does for any batch up to 200 ms late.
+
+## FM voices
+
+<a id="fm-voices-2026-11-01"></a>
+
+On 2026-11-01 the page's MIDI half moved from one oscillator per note to an FM
+synthesizer that plays the voices scores define for themselves. The question
+came from listening, not from a defect: the oscillators chose a waveform by
+program family, while the music was written for FM chips.
+
+What the files carry. The 2026-10-09 corpus records already showed that every
+note-bearing sound but thirteen has a setup chunk (KTF 2,623 of 2,632, LGT 1,490
+of 1,494, SKT 775 of 775). Reading those messages on one handset title gave
+`43 03` definitions keyed by exactly the bank and program its tracks select,
+drum voices included; one mobile title gave `43 79 06 7F 01` definitions. With
+the decoder in place, a 2026-11-01 pass over the local archives (unique sounds;
+KTF 7,300, LGT 3,140) found:
+
+| | KTF | LGT |
+| --- | ---: | ---: |
+| Note-ons | 1,104,616 | 596,940 |
+| Playing the file's own voice | 945,046 (85.6%) | 458,770 (76.9%) |
+| Drum note-ons / with a file voice | 271,408 / 156,873 | 143,969 / 34,554 |
+| Voice definitions | 16,552 | 5,666 |
+| Four-operator definitions | 3,832 | 3,822 |
+| Operators naming a wave past 7 | 4,188 | 3,888 |
+
+The SKT archives' sounds sit where this pass did not look and are not counted.
+Message prefixes seen in setup chunks besides the two voice forms: the bulk
+wave blocks `43 79 06|07 7F 03` (KTF 457, LGT 511), the device commands
+`7F 07`, `7F 7F` and `7F 00 value`, and a handful of `43 05` messages, none
+read.
+
+Decisions. The voices are read by the Go decoder, bounded, and travel as a
+canonical encoding; the page does not interpret Yamaha bytes. A note names its
+voice through the note-on's unused program and value fields rather than new
+event fields, so event lists keep their checkpoint shape; only a sounding
+note's voice is new (audio state version 10). Definitions are re-sent before
+any reconstructed note, rebuilt from a restored score's events. The synthesizer
+runs in an AudioWorklet where the page is a secure context and in a
+ScriptProcessor where it is not, so a plain-HTTP page on the network hears the
+same voices rather than the old oscillators. The modulation and feedback scales
+follow the FM family's convention; whether the MA chips match it is not known,
+and nothing was compared with a handset. The first listening check is the
+user's.
+
+Validation on 2026-11-01: the Go decoder, backend and web host tests, the
+existing web audio suite moved to the synthesizer's commands, new synthesizer
+and host tests, `go vet`, and the full Go suite in both profiles with the race
+detector over the audio, backend, web host and session packages. Every unique
+local SMAF sound (10,827) is admitted or refused exactly as before: the same
+twenty empty sounds are refused. Five hundred ticks of each of 428 KTF and LGT
+archives end on the same screen digest and exit state with and without the
+change (424 compared; four start in neither). A quick save written by the
+previous build loads in this one on all three platforms, and this build's own
+quick saves round-trip. The live session passes in Chromium and WebKit, and in
+Chromium with the worklet hidden ([live audio](../testing.md#live-audio-session-acceptance)).
+
+What could be checked without a handset is whether the voices sound the notes
+the scores ask for. Twelve handset songs and sixteen mobile songs were rendered
+offline through the synthesizer, one lane per channel, and the chroma of the
+85 ms after each note-on that plays a file's own voice was compared with the
+note's pitch class, allowing for each carrier's multiple. Where a fundamental
+is at least 400 Hz, so that the analysis separates semitones, the strongest
+pitch class is the note's in 88.5% of 549 handset notes, and every other one is
+its third harmonic; in the mobile songs, whose channels often play chords, the
+note is among the three strongest classes in 95.2% of 3,814 notes and one
+semitone off in 0.7%. No note window was silent. Below 400 Hz the analysis
+cannot resolve a semitone, and the apparent one-semitone misses there vanish
+above it. Whether the timbres sound like a handset is the remaining question,
+and only listening answers it; renders of four songs are under
+`build/fm-listen/`.

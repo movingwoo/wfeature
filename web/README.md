@@ -280,9 +280,11 @@ picker.
   class and the write watch is not offered. Whether a session has a panel is the
   session's answer rather than the platform's, and the page removes the toggle
   where the answer is no.
-- **Sound** — the engine's MIDI and PCM events are synthesised in the page from
-  oscillators rather than a soundfont; the head of `audio.js` says why. The page
-  negotiates `sound=resume&timing=1&pcm=1&phase=1`: MIDI channels and PCM belong
+- **Sound** — the engine's MIDI and PCM events are synthesised in the page by an
+  FM synthesizer (`fm-synth.js`, hosted by `fm-host.js`) rather than a
+  soundfont; the head of `audio.js` says why. It plays the voices a score
+  defines for itself and stand-ins for the rest. The page negotiates
+  `sound=resume&timing=1&pcm=1&phase=1&voice=1`: MIDI channels and PCM belong
   to individual clips, and stopping one cancels its voices and tails
   independently. Queue recovery, reconnect and quick load reconstruct current
   output and held-note envelope ages and fractional PCM positions within the
@@ -345,8 +347,10 @@ picture is drawn on the next animation frame, magnified here with hqx at the
 scale the server names (`magnify.js`, `hqx.js`, and `hqx-patterns.js`, which is
 generated from the Go tables). Keys go up as JSON; sound arrives as compact
 binary MIDI and PCM events, each sample carried once (`audio-stream.js`), and
-is played by the synthesiser here; the cheat panel's operations are a request
-and an answer.
+is played here: samples as Web Audio buffers, notes by the FM synthesizer
+(`fm-synth.js`), which runs in an AudioWorklet or, on a plain-HTTP page, a
+ScriptProcessor (`fm-host.js`); the cheat panel's operations are a request and
+an answer.
 
 ## Grid keypad
 
@@ -571,7 +575,7 @@ offline, where it comes up and then fails on an import. `service-worker.test.mjs
 therefore compares the list against what `index.html` names and what the module
 graph from `app.js` reaches; two modules had already drifted out of it. A
 change to the list wants the cache name bumped with it. The shell cache is
-`wfeature-pwa-v63` (the constant in `service-worker.js`). The `wfeature-pwa-`
+`wfeature-pwa-v64` (the constant in `service-worker.js`). The `wfeature-pwa-`
 prefix, introduced in version 35, keeps already-installed workers from deleting
 it through their broad `wfeature-shell-*` cleanup. Activation removes legacy
 shell caches and strictly older `wfeature-pwa-vN` versions, preserving future

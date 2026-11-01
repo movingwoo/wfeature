@@ -140,10 +140,12 @@ natural-end state and deferred notifications follow the
 interrupts a blocking play or loop with `UserStopException`; resume is
 nonblocking and creates no replacement wait.
 
-The optional `AudioResumeSink` callback carries note age. The page reconstructs
-only the remaining attack/decay ramps, or begins at sustain. Percussion uses its
-saved noise offset and remaining tail. Melodic oscillator phase and release
-tails are not kept. Legacy sinks and pages receive a fresh note-on and cannot
+The optional `AudioResumeSink` callback carries note age, and
+`AudioVoiceResumeSink` adds the voice slot and pitch of a note that plays its
+sound's own voice. The page's synthesizer advances the note's envelopes by that
+age before rendering, so a held note continues rather than replaying its
+attack; percussion keeps its remaining place in the voice budget. Operator
+phase and release tails are not kept. Legacy sinks and pages receive a fresh note-on and cannot
 provide the full continuation contract; sinks without ownership cannot cancel
 PCM individually.
 
@@ -271,7 +273,8 @@ RMS 0.0924937, and percussion resumes at 91 ms with RMS 0.000726991 and no
 extended tail after channel gain was separated from the velocity envelope. The
 independent references use a fresh melodic oscillator phase, so these
 measurements establish envelope and sample-position behavior, not phase
-continuity. Gain, ownership and twelve-note coarse-clock render checks also
+continuity. They were taken with the oscillator synthesizer the FM synthesizer
+replaced on 2026-11-01 and have not been repeated since. Gain, ownership and twelve-note coarse-clock render checks also
 pass in both engines: eight browser runs in total.
 
 The repair slices recorded passing `make test`, `make test-debug`,

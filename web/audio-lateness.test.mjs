@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PageAudio } from "./audio.js";
+import { fakeFM } from "./audio-test-fm.mjs";
 import { GameSession, playAudioEvents } from "./session.js";
 
 const prefix = "audio playout timing: ";
@@ -20,8 +21,9 @@ const group = (actual, expected) => {
 
 function setup(t, { enabled = true, defaultDisabled = false } = {}) {
   t.mock.method(performance, "now", () => 0);
-  const reports = [], sources = [], state = { enabled };
-  const options = { report: message => reports.push(message) };
+  const reports = [], state = { enabled };
+  const { fm, createFM } = fakeFM();
+  const options = { report: message => reports.push(message), createFM };
   if (!defaultDisabled) options.diagnostics = () => state.enabled;
   const audio = new PageAudio(options);
   const node = () => ({ connect() {}, disconnect() {} });
@@ -31,17 +33,14 @@ function setup(t, { enabled = true, defaultDisabled = false } = {}) {
     state: "running", currentTime: 1, baseLatency: .1,
     createGain: () => ({ ...node(), gain: parameter() }),
     createStereoPanner: () => ({ ...node(), pan: parameter() }),
-    createOscillator() {
-      const source = { ...node(), frequency: parameter(), starts: [], stops: [],
-        start(...args) { this.starts.push(args); }, stop(...args) { this.stops.push(args); } };
-      sources.push(source);
-      return source;
-    },
   };
   audio.midiGain = node();
   audio.waveGain = node();
   t.after(() => audio.stopAll());
-  return { audio, reports, sources, state };
+  // Each note the synthesizer was asked for, with when it starts and when it
+  // was told to stop or release.
+  const notes = () => fm.notes().map(note => ({ starts: [[note.at]], stops: fm.of(note.id).map(command => [command.at]) }));
+  return { audio, reports, notes, state };
 }
 
 function flush(audio, reports) {
@@ -117,7 +116,7 @@ test("first window failure determines the reason while invalid and future events
 // slow page delivers batches 15-100 ms late and a rebuild for each one cut
 // every voice several times a second; a batch much later still asks.
 test("a late frontier without events moves the anchor and keeps playing", t => {
-  const { audio, reports, sources } = setup(t);
+  const { audio, reports, notes } = setup(t);
   assert.equal(audio.prepareBatch([clock(0)]), true);
   audio.context.currentTime = 1.3;
   assert.equal(playAudioEvents(audio, [clock(.1)]), true);
@@ -130,7 +129,7 @@ test("a late frontier without events moves the anchor and keeps playing", t => {
 
   // Later events are placed from the moved anchor, a lead ahead of the clock.
   assert.equal(playAudioEvents(audio, [{ kind: "noteOn", sound: 7, channel: 0, note: 60, velocity: 90, at: .12 }, clock(.12)]), true);
-  close(sources.at(-1).starts[0][0], 1.42);
+  close(notes().at(-1).starts[0][0], 1.42);
   snapshot = flush(audio, reports);
   group(snapshot.continuing, { ...empty(), batches: 1, admitted: 1, events: 1, not_late: 1 });
 
@@ -231,16 +230,16 @@ test("legacy, malformed, backward, resource and unavailable-context refusals do 
 });
 
 test("clearTiming discards the log aggregate while preserving existing sources and their anchor", t => {
-  const { audio, reports, sources } = setup(t);
+  const { audio, reports, notes } = setup(t);
   const note = at => ({ kind: "noteOn", note: 60 + Math.round(at * 100), velocity: 100, at });
   assert.equal(playAudioEvents(audio, [note(0), clock(0)]), true);
   audio.clearTiming();
   audio.reportTiming();
   assert.deepEqual(reports, []);
   assert.equal(playAudioEvents(audio, [note(.01), clock(.01)]), true);
-  assert.equal(sources.length, 2);
-  assert.deepEqual(sources[0].stops, []);
-  close(sources[1].starts[0][0] - sources[0].starts[0][0], .01);
+  assert.equal(notes().length, 2);
+  assert.deepEqual(notes()[0].stops, []);
+  close(notes()[1].starts[0][0] - notes()[0].starts[0][0], .01);
   const snapshot = flush(audio, reports);
   group(snapshot.anchored, empty());
   group(snapshot.continuing, { ...empty(), batches: 1, admitted: 1, events: 1, not_late: 1 });
@@ -291,26 +290,26 @@ async function openSession(t, audio) {
 
 for (const format of ["JSON", "WFA2"]) {
   test(`${format} late reception records one refusal through recovery and suppresses stale batches`, async t => {
-    const { audio, reports, sources } = setup(t);
+    const { audio, reports, notes } = setup(t);
     const { socket, session } = await openSession(t, audio);
     const send = events => socket.deliver(format === "WFA2" ? wire(events) : { kind: "audio", epoch: 7, audio: events });
     const note = at => ({ kind: "noteOn", sound: 7, channel: 0, note: 60, velocity: 100, at });
     send([note(0), clock(0)]);
-    assert.equal(sources.length, 1);
+    assert.equal(notes().length, 1);
     audio.context.currentTime = 1.5;
     const late = [note(.01), control(.02), clock(.02)];
     send(late);
     assert.deepEqual(socket.sent, [{ kind: "audioResume", epoch: 7 }]);
-    assert.equal(sources.length, 1, "rejected history must not start a partial source");
-    assert.equal(sources[0].stops.length, 1, "recovery must cancel old output");
+    assert.equal(notes().length, 1, "rejected history must not start a partial source");
+    assert.equal(notes()[0].stops.length, 1, "recovery must cancel old output");
     send(late);
     send(late);
     assert.equal(socket.sent.length, 1);
-    assert.equal(sources.length, 1);
+    assert.equal(notes().length, 1);
     send([{ kind: "allOff" }, note(.02), clock(.02)]);
     assert.equal(session.audioResetPending, false);
-    assert.equal(sources.length, 2);
-    close(sources[1].starts[0][0], 1.6);
+    assert.equal(notes().length, 2);
+    close(notes()[1].starts[0][0], 1.6);
     const snapshot = flush(audio, reports);
     group(snapshot.anchored, { ...empty(), batches: 2, admitted: 2, events: 2, not_late: 2 });
     group(snapshot.continuing, { ...empty(), batches: 1, refused: { late: 1, future: 0, range: 0 },
@@ -320,7 +319,7 @@ for (const format of ["JSON", "WFA2"]) {
 
 for (const format of ["JSON", "WFA2"]) {
   test(`${format} a batch a little late plays a lead ahead without asking for the current output`, async t => {
-    const { audio, reports, sources } = setup(t);
+    const { audio, reports, notes } = setup(t);
     const { socket } = await openSession(t, audio);
     const send = events => socket.deliver(format === "WFA2" ? wire(events) : { kind: "audio", epoch: 7, audio: events });
     const note = (at, pitch = 60) => ({ kind: "noteOn", sound: 7, channel: 0, note: pitch, velocity: 100, at });
@@ -328,10 +327,10 @@ for (const format of ["JSON", "WFA2"]) {
     audio.context.currentTime = 1.15;
     send([note(.01, 62), note(.03, 64), clock(.03)]);
     assert.deepEqual(socket.sent, [], "a little lateness must not cut every voice to rebuild them");
-    assert.equal(sources.length, 3);
-    assert.deepEqual(sources[0].stops, [], "the voice already sounding keeps sounding");
-    close(sources[1].starts[0][0], 1.25);
-    close(sources[2].starts[0][0], 1.27);
+    assert.equal(notes().length, 3);
+    assert.deepEqual(notes()[0].stops, [], "the voice already sounding keeps sounding");
+    close(notes()[1].starts[0][0], 1.25);
+    close(notes()[2].starts[0][0], 1.27);
     const snapshot = flush(audio, reports);
     group(snapshot.continuing, { ...empty(), batches: 1, reanchored: 1, events: 2, late_le_100ms: 1, late_le_20ms: 1,
       max_event_late_ms: 40, max_frontier_late_ms: 20 });

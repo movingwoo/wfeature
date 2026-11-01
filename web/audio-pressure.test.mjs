@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PageAudio } from "./audio.js";
+import { fakeFM } from "./audio-test-fm.mjs";
 import { AudioStream } from "./audio-stream.js";
 import { playAudioEvents } from "./session.js";
 
@@ -13,7 +14,8 @@ const timed = (events, at) => [...events.map(event => ({ ...event, at })), { kin
 
 function setup(t) {
   t.mock.method(performance, "now", () => 0);
-  const audio = new PageAudio(), sources = [], buffers = [];
+  const { fm, createFM } = fakeFM();
+  const audio = new PageAudio({ createFM }), sources = [], buffers = [];
   const parameter = () => ({ value: 1, events: [],
     setValueAtTime(value, at) { this.events.push([value, at]); },
     linearRampToValueAtTime(value, at) { this.events.push([value, at]); },
@@ -44,11 +46,14 @@ function setup(t) {
   audio.waveGain = node();
   audio.midiGain = node();
   const send = events => assert.equal(playAudioEvents(audio, events), true);
-  return { audio, sources, buffers, send };
+  // Native sources and synthesizer notes together are what the page created.
+  const created = () => sources.length + fm.notes().length;
+  const noteCommands = () => fm.notes().map(note => fm.of(note.id).length);
+  return { audio, fm, sources, buffers, send, created, noteCommands };
 }
 
 test("512 sources fit and a 513th binary wave refuses its entire batch before changing MIDI", t => {
-  const { audio, sources, buffers, send } = setup(t);
+  const { audio, buffers, send, created } = setup(t);
   const word = value => [value >>> 24, value >>> 16 & 255, value >>> 8 & 255, value & 255];
   const stream = new AudioStream();
   const packet = (...ops) => Uint8Array.from([0x57, 0x46, 0x41, 0x32, ...ops.flat()]).buffer;
@@ -56,13 +61,13 @@ test("512 sources fit and a 513th binary wave refuses its entire batch before ch
   const events = stream.decode(packet([0x10, ...word(1), ...word(8), 0, 32, 0, 224, 0, 64, 0, 192], ...repeated(511, play)));
   send([note(), ...events]);
   assert.equal(audio.sources.size, SOURCE_LIMIT);
-  assert.equal(sources.length, SOURCE_LIMIT);
+  assert.equal(created(), SOURCE_LIMIT);
   assert.equal(buffers.length, 1);
   const output = audio.channelOutputs.get(7)[0].gain.gain;
   assert.equal(playAudioEvents(audio, [volume, ...stream.decode(packet(play))]), false);
   assert.equal(audio.channelsFor(7)[0].volume, 100);
   assert.deepEqual(output.events, []);
-  assert.equal(sources.length, SOURCE_LIMIT);
+  assert.equal(created(), SOURCE_LIMIT);
   assert.equal(buffers.length, 1);
 });
 
@@ -72,15 +77,15 @@ for (const [name, expectedKeys, events] of [
   ["percussion tails", 24, () => Array.from({ length: 512 }, (_, index) => note({ channel: 9, note: index % 128 }))],
 ]) {
   test(`${name} consume the source budget independently of the key map`, t => {
-    const { audio, sources, send } = setup(t);
+    const { audio, fm, send, noteCommands } = setup(t);
     send(timed(events(), 0));
     assert.equal(audio.voices.size, expectedKeys);
     assert.equal(audio.sources.size, SOURCE_LIMIT);
-    const before = sources.map(source => source.stops.length);
+    const before = noteCommands();
     assert.equal(playAudioEvents(audio, timed([volume, note()], .001)), false);
     assert.equal(audio.channelsFor(7)[0].volume, 100);
-    assert.equal(sources.length, SOURCE_LIMIT);
-    assert.deepEqual(sources.map(source => source.stops.length), before);
+    assert.equal(fm.notes().length, SOURCE_LIMIT);
+    assert.deepEqual(noteCommands(), before);
   });
 }
 
@@ -131,7 +136,7 @@ for (const [budget, count, frames] of [["source", SOURCE_LIMIT, 4], ["byte", 128
 }
 
 test("malformed explicit owners refuse the whole batch before controls, stops or allocations", t => {
-  const { audio, sources, buffers, send } = setup(t);
+  const { audio, sources, buffers, send, created } = setup(t);
   const event = wave();
   send([note(), event, { ...event, sound: 0 }, { ...event, sound: 0xffffffff }]);
   const count = sources.length, bufferCount = buffers.length, output = audio.channelOutputs.get(7)[0].gain.gain;
@@ -146,7 +151,7 @@ test("malformed explicit owners refuse the whole batch before controls, stops or
     }
   }
   assert.equal(playAudioEvents(audio, [{ kind: "allOff" }, { ...event, sound: null }]), false);
-  assert.equal(audio.sources.size, count);
+  assert.equal(audio.sources.size, created(), "the refused reset keeps every sample and note");
   assert.ok(sources.every(source => source.stops.length === 0 && source.disconnects === 0));
 });
 
@@ -172,7 +177,7 @@ test("zero-velocity notes and expired drum reconstruction allocate nothing at th
 });
 
 test("an oversized all-off reconstruction is atomic and a full 280-source replay fits", t => {
-  const { audio, sources, buffers, send } = setup(t);
+  const { audio, fm, sources, buffers, send } = setup(t);
   const event = wave();
   send(timed([note(), ...repeated(511, event)], 0));
   const anchor = audio.presentationAnchor;
@@ -180,6 +185,7 @@ test("an oversized all-off reconstruction is atomic and a full 280-source replay
   assert.equal(audio.presentationAnchor, anchor);
   assert.equal(audio.sources.size, SOURCE_LIMIT);
   assert.ok(sources.every(source => source.stops.length === 0 && source.disconnects === 0));
+  assert.deepEqual(fm.of(fm.notes()[0].id), []);
   assert.equal(buffers.length, 1);
   const old = [...sources];
   send([{ kind: "allOff" }, ...Array.from({ length: 24 }, (_, index) => ({ ...note({ note: index + 60 }), kind: "noteResume", age: 50 })),
@@ -187,7 +193,9 @@ test("an oversized all-off reconstruction is atomic and a full 280-source replay
   assert.equal(audio.sources.size, 280);
   assert.equal(audio.voices.size, 24);
   assert.ok(old.every(source => source.disconnects === 1));
+  assert.deepEqual(fm.of(fm.notes()[0].id).map(command => command.op), ["cut"]);
   old[0].onended();
+  fm.end(fm.notes()[0].id);
   assert.equal(audio.sources.size, 280);
 });
 
@@ -230,23 +238,23 @@ test("the exact float-byte boundary reaches allocation and larger declared input
 });
 
 test("direct wave and note entry points guard capacity before allocating or stealing a voice", t => {
-  const { audio, sources, buffers, send } = setup(t);
+  const { audio, fm, buffers, send, created } = setup(t);
   send([note(), ...repeated(511, wave())]);
-  const held = sources[0];
+  const held = fm.notes()[0].id;
   audio.playWave(1, 8000, Float32Array.of(.75), 8);
   audio.noteOn(0, 60, 100, 7);
   audio.noteResume(0, 62, 100, 40, 8);
-  assert.equal(sources.length, SOURCE_LIMIT);
+  assert.equal(created(), SOURCE_LIMIT);
   assert.equal(buffers.length, 1);
-  assert.deepEqual(held.stops, []);
-  assert.equal(audio.voices.get("7:0:60").source, held);
-  held.onended();
+  assert.deepEqual(fm.of(held), []);
+  assert.equal(audio.voices.get("7:0:60").fm, held);
+  fm.end(held);
   audio.noteOn(0, 62, 100, 8);
   assert.equal(audio.sources.size, SOURCE_LIMIT);
-  assert.equal(sources.length, SOURCE_LIMIT + 1);
+  assert.equal(created(), SOURCE_LIMIT + 1);
 });
 
-for (const kind of ["buffer", "oscillator"]) {
+for (const kind of ["buffer"]) {
   test(`failed ${kind} creation does not spend a source or PCM byte reservation`, t => {
     const { audio, sources, send } = setup(t);
     const event = wave(new Float32Array(kind === "buffer" ? (1 << 20) / 4 : 4));
@@ -265,6 +273,20 @@ for (const kind of ["buffer", "oscillator"]) {
   });
 }
 
+test("a note without a synthesizer lane spends no source", t => {
+  const { audio, fm, send } = setup(t);
+  send(repeated(511, wave()));
+  const lane = fm.lane;
+  fm.lane = () => null;
+  audio.noteOn(0, 60, 100, 7);
+  assert.equal(audio.sources.size, 511);
+  assert.equal(audio.voices.size, 0);
+  assert.equal(fm.notes().length, 0);
+  fm.lane = lane;
+  audio.noteOn(0, 61, 100, 8);
+  assert.equal(audio.sources.size, SOURCE_LIMIT);
+});
+
 test("canonical base64 padding admits an exact byte-budget fit", t => {
   for (const occupied of [0, 8]) {
     const { audio, sources, send } = setup(t);
@@ -281,22 +303,22 @@ test("canonical base64 padding admits an exact byte-budget fit", t => {
 });
 
 test("a 280-source reconstruction fits both replay maxima and retired waves keep their byte charges", t => {
-  const { audio, sources, buffers, send } = setup(t);
+  const { audio, fm, sources, buffers, send } = setup(t);
   const event = wave(new Float32Array((512 << 10) / 4));
   const notes = Array.from({ length: 24 }, (_, index) => ({ ...note({ note: index + 60 }), kind: "noteResume", age: 50 }));
   send(timed([...notes, ...repeated(256, event)], 0));
   assert.equal(audio.sources.size, 280);
   assert.equal(buffers.length, 1);
-  assert.equal(sources[24].buffer, sources.at(-1).buffer);
+  assert.equal(sources[0].buffer, sources.at(-1).buffer);
   const extraFrame = wave(Float32Array.of(.5));
   assert.equal(playAudioEvents(audio, timed([volume, extraFrame], .005)), false);
   assert.equal(audio.channelsFor(7)[0].volume, 100);
   send(timed([{ kind: "stopSound", sound: 7 }], .010));
   assert.equal(playAudioEvents(audio, timed([extraFrame], .020)), false, "retiring a wave does not reclaim its samples");
   audio.context.currentTime = 1.111;
-  sources[0].onended();
+  fm.end(fm.notes()[0].id);
   assert.equal(playAudioEvents(audio, timed([extraFrame], .020)), false, "a MIDI end releases no PCM bytes");
-  sources[24].onended();
+  sources[0].onended();
   send(timed([event], .020));
   assert.equal(audio.sources.size, 279);
   assert.equal(buffers.length, 1);
@@ -315,7 +337,7 @@ test("a 280-source reconstruction fits both replay maxima and retired waves keep
   assert.equal(json.sources.length, 0);
 });
 
-for (const kind of ["buffer", "oscillator"]) {
+for (const kind of ["buffer"]) {
   test(`failed ${kind} start releases registered nodes and restores capacity`, t => {
     const { audio, sources, send } = setup(t);
     const event = wave();

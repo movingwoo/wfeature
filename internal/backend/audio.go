@@ -12,8 +12,8 @@ import (
 // AudioSink is what a Host has to provide to make sound audible. It is split
 // into PCM and MIDI because SMAF is: a file's percussion and melody are note
 // events for a synthesiser, while its sampled sounds are waveforms to mix, and
-// no Host renders both the same way. The browser uses its oscillator
-// synthesizer and Web Audio; the CLI records instead of playing. A Host that
+// no Host renders both the same way. The browser uses its FM synthesizer and
+// Web Audio; the CLI records instead of playing. A Host that
 // implements OwnedAudioSink additionally receives independent clip identities.
 //
 // Audio serializes sink calls under its mutex. Calls also occur during Play,
@@ -22,6 +22,10 @@ import (
 // of the call; a sink that queues them for later use must copy them.
 type AudioSink interface {
 	PlayWave(channels uint8, samplingRate uint32, samples []int16)
+	// MIDINoteOn plays a note on the Host's own instrument for its program.
+	// A Host that synthesizes a sound's own FM voices receives them through
+	// OwnedAudioSink: smaf.EventVoice definitions, and note-on events whose
+	// Program and Value name a defined slot and its pitch.
 	MIDINoteOn(channel, note, velocity uint8)
 	MIDINoteOff(channel, note, velocity uint8)
 	MIDIProgramChange(channel, program uint8)
@@ -351,8 +355,10 @@ func (audio *Audio) emit(current *sound, event smaf.Event) {
 		audio.sink.playWave(event)
 	case smaf.EventPCMControl:
 		audio.sink.PCMControl(event.PCMChannel, event.Control, event.Value)
+	case smaf.EventVoice:
+		audio.sink.defineVoice(event.Program, event.SysEx)
 	case smaf.EventNoteOn:
-		audio.sink.MIDINoteOn(event.Channel, event.Note, event.Velocity)
+		audio.sink.noteOn(event.Channel, event.Note, event.Velocity, event.Program, event.Value)
 		if event.Velocity == 0 {
 			current.releaseNote(event.Channel, event.Note)
 		} else if note := (activeNote{event.Channel, event.Note}); !slices.Contains(current.activeNotes, note) {

@@ -708,19 +708,21 @@ samples, current per-clip channels and independent guest gain. Audio component
 version 9 records paused cursors, frozen output, note envelope ages, finite
 remaining passes, completion counts, media position, pitch sensitivity, RPN and
 NRPN selectors, released keys held by sustain, independent PCM group controls,
-original wave byte charges and fractional sample-frame positions. Genuine
-version 6, 7 and 8 records remain readable at their saved whole frames; versions
+original wave byte charges and fractional sample-frame positions; version 10
+adds the FM voice each sounding note plays. Genuine version 6, 7, 8 and 9
+records remain readable, versions 6–8 at their saved whole frames; versions
 6 and 7 derive charges from the available tails, and version 6 invents no PCM
 routing. Earlier versions and mixed shapes are refused. New captures write
-version 9 in both profiles; rollback needs a pre-upgrade checkpoint or normal
+version 10 in both profiles; rollback needs a pre-upgrade checkpoint or normal
 startup. See [PCM state compatibility](audio.md#live-pcm-track-controls). SKT
 Java checkpoints also keep the bounded Player registry and queued listener events
 as heap roots, without callback closures. The
 [ownership repair](audio-ownership.md) also reconstructs output after a reconnect
 and after dropped audio batches. PCM position uses an unscaled Host clock that
 excludes detached staging time. Paused clips freeze their output clock, and
-capable pages reconstruct notes at their elapsed envelope age. Oscillator phase,
-release tails and network or device latency are not saved. A Host reset stops
+capable pages reconstruct notes at their elapsed envelope age, playing the
+voice each note had. Operator phase, release tails and network or device
+latency are not saved. A Host reset stops
 all old sources before replay and clears audio definitions and frame decoder
 state.
 

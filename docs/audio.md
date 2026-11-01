@@ -178,9 +178,9 @@ operation sizes.
 
 Audio checkpoints save raw routed waves and sorted, independent PCM states,
 including unset volume; reconstruction sends current controls before trimmed
-sample tails. The current audio state version is 9
+sample tails. The current audio state version is 10
 (`audioStateVersion` in `internal/backend/audio_state.go`). Strict readers
-accept four shapes:
+accept five shapes:
 
 | Version | Shape |
 | --- | --- |
@@ -188,13 +188,16 @@ accept four shapes:
 | 7 | Adds the PCM control and routing fields, required |
 | 8 | Adds each wave's original admission charge |
 | 9 | Adds each wave's phase within its first remaining sample frame |
+| 10 | Adds each sounding note's voice slot and pitch |
 
 Mixed shapes, unrelated missing fields, duplicates, unknown fields and
 unreserved groups are refused before adoption. Reading v6 does not invent
 routing. Versions 6 and 7 derive an initial charge from their saved sample
 tails, because the original pre-trim size cannot be recovered; versions 6–8
-adopt phase zero for the same reason. The next capture writes v9. Versions
-below 6 are refused. Older binaries refuse v9, so rollback requires a
+adopt phase zero for the same reason. Versions 6–9 resume their sounding
+notes on the page's stand-in voices; those notes are short-lived, and the score
+names its voices again for every later note. The next capture writes v10.
+Versions below 6 are refused. Older binaries refuse v10, so rollback requires a
 pre-upgrade checkpoint or a normal start; checkpoint files and ordinary saves
 are left in place. Debug and release use the same format.
 
@@ -294,6 +297,62 @@ so the validation itself is bounded. It neither advances live playback nor
 emits or copies output payloads. The event and retention bounds still apply to
 the entire saved score, and the checkpoint format is unchanged. See the
 [checkpoint verification](testing.md#checkpoint-display-and-audio-catch-up).
+
+## The file's own voices
+
+The MA chips are FM synthesizers, and a score that wants instruments of its own
+rather than the chip's built-in bank defines them as Yamaha exclusive messages,
+in a score track's setup chunk or inline in its sequence. Almost every score
+does. Over the local corpus on 2026-11-01, 85.6% of 1,104,616 KTF note-ons and
+76.9% of 596,940 LGT note-ons play a voice their own file defines; the rest
+select the chip's bank, and most of those are drum-kit hits. The files define
+16,552 and 5,666 voices; 23% and 67% of them use four operators.
+`voice.go` reads two layouts:
+
+| Message | Form | Key |
+|---|---|---|
+| `43 03 index bank program global 01` + 2 × 5 bytes | handset, two operators | the bank byte (top bit = drum bank) and program |
+| `43 79 06 7F 01 msb lsb program key type` + body | mobile, two or four operators, body in Yamaha seven-bit packing | both bank bytes, program and drum key |
+| `43 79 07 7F 01 …` | the same body stored directly | the same |
+
+The handset global byte holds LFO rate, the first operator's feedback and the
+algorithm; each operator byte group holds multiple, vibrato, envelope type and
+key-scale rate; release and decay; attack and sustain level; total level and
+key-scale level; vibrato depth, tremolo depth, tremolo and wave. A percussive
+handset envelope (envelope type clear) keeps falling at its release rate after
+reaching the sustain level, which is how it is stored. The mobile body is three
+global bytes (pan, basic octave; LFO, pan enable, algorithm) and seven per
+operator (sustain rate, ignore-key-off, key-scale rate; release and decay;
+attack and sustain level; total level and key-scale level; tremolo and vibrato
+depth and enable; multiple and detune; wave and feedback). In the `06` form
+every eighth byte carries the top bits of the seven after it. Feedback is kept
+only on the operators an algorithm feeds back into: the first, and the third in
+algorithms 2 and 5. Each byte layout was checked against real handset and
+mobile titles: every handset definition in one KTF title names exactly the
+bank and program its tracks select, and its drum voices are the drum keys its
+rhythm channels play.
+
+A voice is a chip's, not a track's. A voice one track sets up is played by
+another track's channels, so `collectVoices` reads every definition before any
+track plays. Setup voices are in force from the start, an inline one from its
+own time, and a later definition of the same key takes a new slot from then on,
+so notes before it keep the old voice. A note on a mobile drum kit takes the
+voice defined for its key before one defined for the whole kit. A file may
+define at most 255 voices; later definitions are ignored.
+
+Each definition becomes an `EventVoice` carrying its slot and `Voice.Encode`
+bytes, ordered before anything else at its instant. A note-on that plays one
+carries the slot in `Program` and the pitch it sounds in `Value`. The pitch is
+not always the note: a handset rhythm note's MIDI note is its drum key, which
+a General MIDI kit needs, while the chip sounds the drum voice at the pitch
+the score wrote — the two KTF drum tracks checked play kicks around D#2 and
+hi-hats around D4. The ambience voice's two stand-in layers are not added when
+the file defines that voice itself.
+
+Not read: sampled voices (voice type other than FM), the bulk wave blocks
+(`43 79 06|07 7F 03`), the short `43 05` form and the device commands
+(`7F 7F`, `7F 07`, `7F 00 value`, which looks like a master volume). Notes
+that select them play the page's stand-in for their program or drum key.
 
 ## Why translating to MIDI is not a relabelling
 
@@ -629,23 +688,67 @@ that contract, the negotiated protocol and the queue/reconnect repair.
 
 ## The two Hosts
 
-**Browser** (`web/audio.js`) synthesizes the MIDI itself from oscillators. The
-alternative, an audio worklet plus a sound bank of about ten megabytes fetched
-at page load, costs every phone that download and the memory, and an iOS tab
-that heavy can be pushed past its memory ceiling and lose sound entirely. The
-trade is deliberate: a soundfont piano sounds like a piano and an oscillator
-does not, but this music was written for an FM chip with a handful of
-operators, so an envelope over a waveform picked by program family lands closer
-to the original than it would for most music, costs nothing to ship, and works
-everywhere. Drums are a short filtered noise burst. Sampled sounds go straight
-into an `AudioBuffer`. MIDI and PCM feed separate gain nodes so the page's
-🎵 music and 🔊 effects sliders can trade against each other.
+**Browser** (`web/audio.js`) synthesizes the MIDI itself with an FM
+synthesizer (`web/fm-synth.js`). The music was written for FM chips and almost
+every score carries [its own voices](#the-files-own-voices), so the page plays
+those; a note whose file defines no voice plays one of the synthesizer's
+stand-ins, one per General MIDI family and one per drum group (kick, snare,
+hats, toms, cymbals, clap, metal, wood), built from the same operators plus a
+noise wave. A sound bank of about ten megabytes was the other answer, and it
+costs every phone that download and memory; an iOS tab that heavy can lose
+sound entirely. Sampled sounds go straight into an `AudioBuffer`. MIDI and PCM
+feed separate gain nodes so the page's 🎵 music and 🔊 effects sliders can
+trade against each other.
+
+The synthesizer renders every note into one of 32 mono lanes, one per sound
+channel the page has open, and each lane runs through that channel's volume,
+pan and sound gain as the old per-note oscillators did. In a secure context it
+runs in an AudioWorklet on the audio thread. A page opened by the machine's
+address over plain HTTP has no AudioWorklet, so there the same class renders in
+a ScriptProcessor with 2048-frame buffers on the page's thread: the sound is
+the same, and only a page busy for longer than a buffer can drop out. Commands
+carry the presentation time the rest of the page schedules with and take effect
+at their sample; a late command starts its note that far into its envelope.
+`fm-host.js` picks the host, `?voice=1` asks the server for the voices, and
+`0x17`–`0x19` carry them ([session protocol](session.md#sound)).
+
+The operator model is the FM family's: phase modulation, envelopes linear in
+decibels with rates that halve their time every four steps (a 96 dB decay takes
+78.56 s at effective rate 0 and 2.4 ms at 60), 0.75 dB per total-level step and
+3 dB per sustain-level step, feedback from the average of an operator's last
+two outputs with 4π for feedback 7, and a full-level modulator deviating its
+carrier by four cycles. The eight algorithms are the MA connections. These are
+the family's conventions, not measurements of an MA chip, and nothing has been
+compared with a handset by ear.
+
+Only phase and waveform run every sample. Envelopes, LFOs and pitch modulation
+move eight samples at a time with each operator's gain ramping linearly
+between, each operator renders those eight samples before the next operator
+does, and a voice ends once every carrier is 80 dB below full scale, envelope
+and total level together, rather than finishing its release tail to 96 dB. On
+the development machine, rendering 28 local songs costs on average 1.0% of one
+core for the handset songs and 2.5% for the mobile ones, whose channels hold
+about 21 voices at once; the heaviest song costs 7.5%, and 24 held voices, half
+of them four-operator, 3.7%. Before those three changes the same songs cost
+2.4%, 5.7% and 15.9%. With Chromium's CPU slowed down as a stand-in for a phone,
+the handset songs average 3.1% (4×) to 4.8% (6×) and the mobile songs 7.0% to
+10.7%; the heaviest song reaches 22.1% to 33.7%, which still leaves an
+AudioWorklet most of its 2.67 ms per 128-sample render quantum. No phone was
+measured.
+
+The synthesizer holds 64 voices: the page's 24 held notes and the release tails
+behind them. When the mobile songs fill it, the quietest released voice is
+taken, at a median of 43 dB below full scale (33 dB for the loudest tenth).
+A cap of 32 would save a fifth of the cost and take voices at a median of
+22 dB, loud enough to hear stop, so the cap stays at 64.
 The sliders are Host preferences, not guest volume: they default to 50, are
 remembered per browser under `wfeature:volume:midi` and `wfeature:volume:pcm`
 (`web/audio-settings.js`), and are applied when the first user gesture creates
 the audio graph.
 
-**CLI** (`backend.RecordingSink`) writes rather than plays. Playing would need a
+**CLI** (`backend.RecordingSink`) writes rather than plays. It is not an owned
+sink, so it hears every note as an ordinary note-on and records the General
+MIDI rendering, without the files' own voices. Playing would need a
 system MIDI port and an ALSA or CoreAudio backend, neither of which has a
 cgo-free Go equivalent, and whether the sound came out right is a question a
 recording answers better than a speaker. `runktf`, `runlgt` and `runskt` accept
@@ -953,12 +1056,12 @@ activation only update state. Stop and reset disconnect the affected channel
 graph.
 
 Reconnect, quick load and clip resume set current channel controls before
-reconstructing a note, keeping its original program and envelope age; the
-portable record holds both the original note metadata and the current channel
-state. Browser smoothing, oscillator phase, released tails and device latency
-are not saved. The normalized velocity envelope is independent of channel
-volume, including its small exponential-ramp floor; sustained levels keep the
-same volume/expression product.
+reconstructing a note, keeping its original program, its own voice and its
+envelope age; the portable record holds both the original note metadata and the
+current channel state, and the voices a restored sound defines are read again
+from its score before any note names one. Browser smoothing, operator phase,
+released tails and device latency are not saved. A note's velocity sets its
+synthesizer level independently of channel volume.
 
 `web/acceptance/audio-controls.mjs` compares seven authored scenarios with
 independent native Web Audio graphs in Chromium and WebKit. Held volume and
@@ -1232,6 +1335,14 @@ sequences. Null player inputs receive the specified `IllegalArgumentException`;
 empty media is refused rather than yielding an inert player.
 
 ## Deliberately incomplete
+
+- **MA-3 waves 8–31.** Mobile voices name 32 operator waves; the format
+  specification draws none of them and 4,188 KTF and 3,888 LGT operators use
+  one past 7. They play the shape of their low three bits.
+- **Voice pan, sustain bit and device commands.** The mobile voice's pan and
+  pan-enable bits, the handset operators' sustain bit, the MA-3 device commands
+  (including what looks like a master volume) and sampled voices are read past,
+  not applied.
 
 - **`Player.record`** answers false: no microphone can be offered.
 - **Clip helper hooks.** `Clip.playStart(boolean)` and `Clip.playUpdate(int,int)`

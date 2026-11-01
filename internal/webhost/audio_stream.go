@@ -30,6 +30,11 @@ import (
 //	0x14 play PCM wave   id, channels, sampling rate (32 bits), PCM channel (16 bits)
 //	0x15 PCM control     PCM channel (16 bits), control, value
 //	0x16 resume wave     id, channels, rate (32 bits), PCM channel (16 bits), frame phase (32 bits)
+//	0x17 voice           slot, id of the voice's encoding (smaf.Voice.Encode)
+//	0x18 voice note on   channel, note, velocity, voice slot, pitch
+//	0x19 resume voice    channel, note, velocity, age in milliseconds (32 bits), voice slot, pitch
+//
+// The last three reach only a page that asked for its sounds' own voices.
 //
 // A sampled sound or a SysEx message travels once as a definition and is named
 // by its id afterwards. A game plays the same few effects over and over, and
@@ -55,6 +60,9 @@ const (
 	audioOpPlayPCMWave   = 0x14
 	audioOpPCMControl    = 0x15
 	audioOpResumeWave    = 0x16
+	audioOpVoice         = 0x17
+	audioOpVoiceNoteOn   = 0x18
+	audioOpVoiceResume   = 0x19
 )
 
 var audioMagic = []byte("WFA2")
@@ -115,10 +123,25 @@ func (d *audioDefinitions) encode(events []audioEvent) []byte {
 		}
 		switch event.Kind {
 		case audioNoteOn:
-			out = append(out, audioOpNoteOn, event.Channel, event.Note, event.Velocity)
+			if event.Voice != 0 {
+				out = append(out, audioOpVoiceNoteOn, event.Channel, event.Note, event.Velocity, event.Voice, event.Pitch)
+			} else {
+				out = append(out, audioOpNoteOn, event.Channel, event.Note, event.Velocity)
+			}
 		case audioNoteResume:
-			out = append(out, audioOpNoteResume, event.Channel, event.Note, event.Velocity)
-			out = binary.BigEndian.AppendUint32(out, event.Age)
+			if event.Voice != 0 {
+				out = append(out, audioOpVoiceResume, event.Channel, event.Note, event.Velocity)
+				out = binary.BigEndian.AppendUint32(out, event.Age)
+				out = append(out, event.Voice, event.Pitch)
+			} else {
+				out = append(out, audioOpNoteResume, event.Channel, event.Note, event.Velocity)
+				out = binary.BigEndian.AppendUint32(out, event.Age)
+			}
+		case audioVoice:
+			var id uint32
+			out, id = d.reference(out, event.raw)
+			out = append(out, audioOpVoice, event.Voice)
+			out = binary.BigEndian.AppendUint32(out, id)
 		case audioNoteOff:
 			out = append(out, audioOpNoteOff, event.Channel, event.Note, event.Velocity)
 		case audioProgramChange:

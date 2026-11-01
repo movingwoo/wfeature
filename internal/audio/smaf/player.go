@@ -28,9 +28,20 @@ const (
 	EventEnd
 	// EventPCMControl changes one PCM track channel independently of MIDI.
 	EventPCMControl
+	// EventVoice defines one FM voice of the file's own: Program is its slot,
+	// one or more, and SysEx its Voice.Encode bytes. A note-on whose Program
+	// names the slot plays that voice at the pitch in its Value.
+	EventVoice
 )
 
 // Event is one thing to do at Time milliseconds after the start of playback.
+//
+// A note-on's Program and Value are its voice: the slot of an EventVoice the
+// same sound defined, and the pitch that voice sounds. Slot zero means the
+// file defines no voice for the note, and Value is then unused. The pitch can
+// differ from Note: a rhythm note's Note is the drum key a General MIDI
+// synthesizer plays, while the chip sounds the file's drum voice at the pitch
+// the score wrote.
 type Event struct {
 	Time uint32
 	Type EventType
@@ -93,9 +104,13 @@ func playWithBudget(data []byte, budget *decodeBudget) []Event {
 		return nil
 	}
 
-	var events []Event
+	voices, events := collectVoices(file, budget)
+	if budget.err != nil {
+		return nil
+	}
 	handyChannelOffset := uint8(0)
 	handyToneMap := newToneMap()
+	handyToneMap.voices = voices
 	pcmTracks := 0
 
 	for _, chunk := range file.Chunks {
@@ -114,8 +129,9 @@ func playWithBudget(data []byte, budget *decodeBudget) []Event {
 			events = append(events, pcmTrackEvents(chunk.PCMAudioTrack, base, budget)...)
 		case ChunkSoftbankSequence:
 			tones := newToneMap()
+			tones.voices = voices
 			tones.initTrack(HandyPhoneStandard, nil, handyChannelOffset)
-			trackEvents, nextOffset := sequenceEvents(chunk.SoftbankSequence, 20, 20, handyChannelOffset, true, nil, tones, budget)
+			trackEvents, nextOffset := sequenceEvents(chunk.SoftbankSequence, softbankTimebase, softbankTimebase, handyChannelOffset, true, nil, tones, budget)
 			events = append(events, trackEvents...)
 			handyChannelOffset = nextOffset
 		}
@@ -135,6 +151,8 @@ func playWithBudget(data []byte, budget *decodeBudget) []Event {
 
 func eventOrder(event Event) int {
 	switch event.Type {
+	case EventVoice:
+		return 3
 	case EventSysEx:
 		return 4
 	case EventControlChange, EventPitchBend, EventPCMControl:
@@ -158,7 +176,9 @@ func scoreTrackEvents(track *ScoreTrack, handyChannelOffset uint8, handyToneMap 
 	if isHandy {
 		tones.initTrack(track.FormatType, track.ChannelStatus, handyChannelOffset)
 	} else {
+		voices := tones.voices
 		tones = newToneMap()
+		tones.voices = voices
 		tones.initTrack(track.FormatType, track.ChannelStatus, 0)
 	}
 
@@ -271,8 +291,9 @@ func sequenceEvents(
 			if budget.err != nil {
 				return nil, channelOffset
 			}
-			events = budget.emit(events,
-				Event{Time: time, Type: EventNoteOn, Channel: midiChannel, Note: note, Velocity: velocity},
+			noteOn := Event{Time: time, Type: EventNoteOn, Channel: midiChannel, Note: note, Velocity: velocity}
+			noteOn.Program, noteOn.Value = tones.voiceFor(channel, int16(event.Note)+int16(octaveShift[index])*12, time)
+			events = budget.emit(events, noteOn,
 				Event{Time: time + uint32(duration), Type: EventNoteOff, Channel: midiChannel, Note: note})
 			events = budget.emit(events, tones.atmosphereNotes(time, uint32(duration), channel, note, velocity)...)
 
@@ -294,7 +315,11 @@ func sequenceEvents(
 			source := mapChannel(event.Channel)
 			channel, program := tones.setProgram(source, event.Program)
 			events = budget.emit(events, Event{Time: time, Type: EventProgramChange, Channel: channel, Program: program})
-			events = budget.emit(events, tones.atmosphereSetup(time, source, event.Program)...)
+			// The ambience layers stand in for a voice General MIDI lacks.
+			// A file that defines that voice itself needs no stand-in.
+			if !tones.definesVoice(source, time) {
+				events = budget.emit(events, tones.atmosphereSetup(time, source, event.Program)...)
+			}
 
 		case SeqExclusive:
 			events = budget.emit(events, Event{Time: time, Type: EventSysEx, SysEx: budget.sysEx(event.Exclusive)})
@@ -419,36 +444,108 @@ func waveChannelCount(channels Channels) uint8 {
 // Mobile uses F0 followed by a MIDI variable length quantity and its payload.
 func setupSysExEvents(data []byte, handy bool, budget *decodeBudget) []Event {
 	var events []Event
+	forEachSetupExclusive(data, handy, func(payload []byte) bool {
+		if budget.err != nil {
+			events = nil
+			return false
+		}
+		events = budget.emit(events, Event{Time: 0, Type: EventSysEx, SysEx: budget.sysEx(payload)})
+		return true
+	})
+	if budget.err != nil {
+		return nil
+	}
+	return events
+}
+
+// forEachSetupExclusive calls visit with each message's payload, from its
+// maker ID, until a message does not parse or visit answers false.
+func forEachSetupExclusive(data []byte, handy bool, visit func([]byte) bool) {
 	offset := 0
 	for offset < len(data) {
-		if budget.err != nil {
-			return nil
-		}
 		if handy {
 			if len(data)-offset < 2 || data[offset] != 0xff || data[offset+1] != 0xf0 {
-				break
+				return
 			}
 			r := reader{data: data, offset: offset + 2}
 			payload, ok := readHandyExclusive(&r, false)
-			if !ok {
-				break
+			if !ok || !visit(payload) {
+				return
 			}
-			events = budget.emit(events, Event{Time: 0, Type: EventSysEx, SysEx: budget.sysEx(payload)})
 			offset = r.offset
 			continue
 		}
 		if data[offset] != 0xf0 {
-			break
+			return
 		}
 		offset++
 		length, next, ok := readMIDIVariableLength(data, offset)
-		if !ok || length > len(data)-next {
-			break
+		if !ok || length > len(data)-next || !visit(data[next:next+length]) {
+			return
 		}
-		events = budget.emit(events, Event{Time: 0, Type: EventSysEx, SysEx: budget.sysEx(data[next : next+length])})
 		offset = next + length
 	}
-	return events
+}
+
+// softbankTimebase is the millisecond unit of a Softbank sequence's durations
+// and gates, which declare none of their own.
+const softbankTimebase = 20
+
+// collectVoices reads every FM voice the file defines before any track plays,
+// because a voice set up by one track is the chip's, not the track's: a later
+// track's channels select it too. Setup voices are in force from the start;
+// an inline one from its own time, which the same duration arithmetic as
+// sequenceEvents places. The answered events carry each definition.
+func collectVoices(file *File, budget *decodeBudget) (*voiceTable, []Event) {
+	table := &voiceTable{}
+	var events []Event
+	define := func(time uint32, message []byte) bool {
+		slot, encoded, ok := table.define(time, message)
+		if !ok {
+			return budget.err == nil
+		}
+		if !budget.voice(len(encoded)) {
+			return false
+		}
+		events = budget.emit(events, Event{Time: time, Type: EventVoice, Program: slot, SysEx: encoded})
+		return budget.err == nil
+	}
+	for _, chunk := range file.Chunks {
+		if chunk.Kind != ChunkScoreTrack {
+			continue
+		}
+		for _, setup := range chunk.ScoreTrack.SetupData {
+			forEachSetupExclusive(setup, chunk.ScoreTrack.FormatType == HandyPhoneStandard, func(payload []byte) bool {
+				return define(0, payload)
+			})
+		}
+	}
+	inline := func(sequence []SequenceEvent, timebase uint32) {
+		var now uint64
+		for _, event := range sequence {
+			now += uint64(event.Duration) * uint64(timebase)
+			if now > uint64(^uint32(0)) || budget.err != nil {
+				return
+			}
+			if event.Kind == SeqExclusive && !define(uint32(now), event.Exclusive) {
+				return
+			}
+		}
+	}
+	for _, chunk := range file.Chunks {
+		switch chunk.Kind {
+		case ChunkScoreTrack:
+			for _, sequence := range chunk.ScoreTrack.Sequences {
+				inline(sequence, chunk.ScoreTrack.TimebaseD)
+			}
+		case ChunkSoftbankSequence:
+			inline(chunk.SoftbankSequence, softbankTimebase)
+		}
+	}
+	if budget.err != nil {
+		return nil, nil
+	}
+	return table, events
 }
 
 func readMIDIVariableLength(data []byte, offset int) (value, next int, ok bool) {
