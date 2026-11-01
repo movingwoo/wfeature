@@ -16,6 +16,9 @@ const archive = process.env.WFEATURE_AUDIO_ARCHIVE;
 // title is held in play long enough to show its sustained sound load.
 const seconds = Number(process.env.WFEATURE_AUDIO_SECONDS || 12);
 const mash = process.env.WFEATURE_AUDIO_KEYS === "mash";
+// A page opened over plain HTTP on the network has no AudioWorklet; hiding it
+// here exercises the ScriptProcessor the page falls back to.
+const noWorklet = process.env.WFEATURE_AUDIO_NO_WORKLET === "1";
 if (!binary || !archive || !process.env.PLAYWRIGHT_MODULE) {
   throw new Error("Usage: WFEATURE_AUDIO_ARCHIVE=/path/to/archive PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node web/acceptance/audio-live.mjs DEBUG_SERVER [chromium|webkit]");
 }
@@ -52,10 +55,30 @@ try {
   browser = await engine.launch({ headless: true,
     args: engineName === "chromium" ? ["--autoplay-policy=no-user-gesture-required"] : [] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
-  await context.addInitScript(() => {
+  await context.addInitScript(hide => {
+    if (hide) {
+      Object.defineProperty(BaseAudioContext.prototype, "audioWorklet", { configurable: true, get: () => undefined });
+    }
     const probe = window.audioProbe = { sockets: [], sent: {}, soundPackets: 0, soundBytes: 0, errors: [],
       contexts: [], starts: 0, scheduledStarts: 0, lateStarts: 0, minimumLead: null, maximumLead: null,
-      live: 0, maximumLive: 0, peak: 0, clippedReads: 0, meters: [] };
+      live: 0, maximumLive: 0, peak: 0, clippedReads: 0, meters: [],
+      modules: [], processors: [], fmNotes: 0, fmOwnVoiceNotes: 0, fmVoices: 0, fmLateNotes: 0, fmMinimumLead: null, fmMaximumLead: null };
+    const createScriptProcessor = BaseAudioContext.prototype.createScriptProcessor;
+    if (createScriptProcessor) {
+      BaseAudioContext.prototype.createScriptProcessor = function (...args) {
+        probe.processors.push(args);
+        return createScriptProcessor.apply(this, args);
+      };
+    }
+    // The FM synthesizer runs in a worklet where it can: record the module.
+    if (window.AudioWorklet) {
+      const addModule = AudioWorklet.prototype.addModule;
+      AudioWorklet.prototype.addModule = function (url, ...rest) {
+        const entry = { url: String(url), loaded: false };
+        probe.modules.push(entry);
+        return addModule.call(this, url, ...rest).then(value => { entry.loaded = true; return value; });
+      };
+    }
     const NativeSocket = window.WebSocket;
     window.WebSocket = class extends NativeSocket {
       constructor(...args) {
@@ -141,7 +164,7 @@ try {
         return start.call(this, when, ...rest);
       };
     }
-  });
+  }, noWorklet);
   const page = await context.newPage();
   page.on("pageerror", error => result.errors.push(error.message));
   await page.goto(origin);
@@ -151,6 +174,25 @@ try {
   // own presentation times: a late page and a jumping server look different.
   await page.evaluate(async () => {
     const { PageAudio } = await import("/audio.js");
+    // Every command reaches the synthesizer through its host's post, in a
+    // worklet or a ScriptProcessor alike: count the notes and voices there,
+    // with each note's lead.
+    const { FMHost } = await import("/fm-host.js");
+    const post = FMHost.prototype.post;
+    FMHost.prototype.post = function (command) {
+      if (command?.op === "define") audioProbe.fmVoices++;
+      if (command?.op === "on") {
+        audioProbe.fmNotes++;
+        if (command.slot) audioProbe.fmOwnVoiceNotes++;
+        if (command.at > 0) {
+          const lead = command.at - this.context.currentTime;
+          if (lead < -0.005) audioProbe.fmLateNotes++;
+          audioProbe.fmMinimumLead = audioProbe.fmMinimumLead === null ? lead : Math.min(audioProbe.fmMinimumLead, lead);
+          audioProbe.fmMaximumLead = audioProbe.fmMaximumLead === null ? lead : Math.max(audioProbe.fmMaximumLead, lead);
+        }
+      }
+      return post.call(this, command);
+    };
     // The debug log view keeps only its last lines, and a long run pushes the
     // first timing reports out of it, so every report is copied as it lands.
     audioProbe.timingLines = [];
@@ -207,6 +249,14 @@ try {
     contexts: audioProbe.contexts.map(context => ({ state: context.state, time: context.currentTime,
       sampleRate: context.sampleRate, baseLatency: context.baseLatency ?? null })),
     starts: audioProbe.starts,
+    modules: audioProbe.modules,
+    processors: audioProbe.processors,
+    fmNotes: audioProbe.fmNotes,
+    fmOwnVoiceNotes: audioProbe.fmOwnVoiceNotes,
+    fmVoices: audioProbe.fmVoices,
+    fmLateNotes: audioProbe.fmLateNotes,
+    fmMinimumLead: audioProbe.fmMinimumLead,
+    fmMaximumLead: audioProbe.fmMaximumLead,
     scheduledStarts: audioProbe.scheduledStarts,
     lateStarts: audioProbe.lateStarts,
     minimumLead: audioProbe.minimumLead,
@@ -222,19 +272,34 @@ try {
   result.batches = observed.batches;
 
   const query = new URL(observed.url).searchParams;
-  for (const [key, value] of [["protocol", "2"], ["sound", "resume"], ["timing", "1"], ["pcm", "1"], ["phase", "1"]]) {
+  for (const [key, value] of [["protocol", "2"], ["sound", "resume"], ["timing", "1"], ["pcm", "1"], ["phase", "1"], ["voice", "1"]]) {
     assert.equal(query.get(key), value, `${key} in ${observed.url}`);
   }
-  check("the page negotiated protocol 2 with resumable, timed, routed and phased sound");
+  check("the page negotiated protocol 2 with resumable, timed, routed, phased and voiced sound");
 
   assert.ok(observed.soundPackets > 0, "no binary sound batch arrived");
   assert.equal(observed.contexts.length > 0 && observed.contexts.at(-1).state, "running", JSON.stringify(observed.contexts));
   assert.ok(observed.contexts.at(-1).time > 1, "the render clock did not advance");
   check(`${observed.soundPackets} sound batches reached a running AudioContext`);
 
-  assert.ok(observed.scheduledStarts > 0, `no source was scheduled (${observed.starts} immediate starts)`);
+  if (noWorklet) {
+    assert.deepEqual(observed.processors.map(args => args[2]), [32], JSON.stringify(observed.processors));
+    assert.ok(observed.peak > 0, "the page's ScriptProcessor rendered nothing");
+    check("without a worklet the FM synthesizer renders in a ScriptProcessor");
+  } else {
+    assert.ok(observed.modules.some(module => module.loaded && /fm-synth\.js$/.test(module.url)), JSON.stringify(observed.modules));
+    check("the FM synthesizer runs in an AudioWorklet");
+  }
+  assert.ok(observed.scheduledStarts + observed.fmNotes > 0, `no source or note was scheduled (${observed.starts} immediate starts)`);
   assert.equal(observed.lateStarts, 0, `late source starts, minimum lead ${observed.minimumLead}`);
-  check(`${observed.scheduledStarts} sources started ahead of the render clock (lead ${observed.minimumLead.toFixed(3)}–${observed.maximumLead.toFixed(3)} s)`);
+  assert.equal(observed.fmLateNotes, 0, `late synthesizer notes, minimum lead ${observed.fmMinimumLead}`);
+  if (observed.scheduledStarts) {
+    check(`${observed.scheduledStarts} sources started ahead of the render clock (lead ${observed.minimumLead.toFixed(3)}–${observed.maximumLead.toFixed(3)} s)`);
+  }
+  if (observed.fmNotes) {
+    check(`${observed.fmNotes} notes (${observed.fmOwnVoiceNotes} on ${observed.fmVoices} of the score's own voices) posted ahead of the render clock (lead ${observed.fmMinimumLead.toFixed(3)}–${observed.fmMaximumLead.toFixed(3)} s)`);
+    assert.ok(observed.peak > 0, "notes were posted but the mix stayed silent");
+  }
   // Reported, not asserted: how many sources were ever alive at once, and how
   // loud the mix got before the device, at the page's default sliders.
   console.log(`${engineName}: at most ${observed.maximumLive} sources alive at once; mix peak ${observed.peak.toFixed(3)}, ${observed.clippedReads} meter reads over full scale`);

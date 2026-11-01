@@ -30,7 +30,7 @@ const probingWebP = decodesLosslessWebP().then(decodes => { losslessWebP = decod
 export const sessionURL = () => {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
   const pictures = losslessWebP ? "&pictures=webp" : "";
-  return `${scheme}//${location.host}/api/session?protocol=2&sound=resume&timing=1&pcm=1&phase=1${pictures}`;
+  return `${scheme}//${location.host}/api/session?protocol=2&sound=resume&timing=1&pcm=1&phase=1&voice=1${pictures}`;
 };
 
 // available reports whether this browser can hold a session at all. Everything
@@ -396,11 +396,19 @@ export const playAudioEvents = (audio, events) => {
     const play = () => {
       const ownership = event.sound === undefined ? [] : [event.sound];
       switch (event.kind) {
+        // A note that plays its sound's own voice names the slot and pitch
+        // after its owner (and, for a note-on, a zero age).
         case "noteOn":
-          audio.noteOn(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0, ...ownership);
+          audio.noteOn(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0,
+            ...(event.voice ? [event.sound ?? 0, 0, event.voice, event.pitch ?? 0] : ownership));
           break;
         case "noteResume":
-          audio.noteResume(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0, event.age ?? 0, ...ownership);
+          audio.noteResume(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0, event.age ?? 0,
+            ...(event.voice ? [event.sound ?? 0, event.voice, event.pitch ?? 0] : ownership));
+          break;
+        // A sound's own FM voice, which its later notes name by slot.
+        case "voice":
+          if (event.data && audio.defineVoice) audio.defineVoice(event.voice ?? 0, event.data, event.sound ?? 0);
           break;
         case "noteOff":
           audio.noteOff(event.channel ?? 0, event.note ?? 0, event.velocity ?? 0, ...ownership);

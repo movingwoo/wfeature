@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PageAudio } from "./audio.js";
+import { fakeFM } from "./audio-test-fm.mjs";
 
 const setup = t => {
   let wall = 0, created = 0;
@@ -49,14 +50,17 @@ const setup = t => {
     if (previous) Object.defineProperty(globalThis, "AudioContext", previous);
     else delete globalThis.AudioContext;
   });
-  const audio = new PageAudio();
-  audio._noise = {};
-  return { audio, sources, created: () => created, advance: seconds => { wall += seconds; audio.context.currentTime += seconds; } };
+  const { fm, createFM } = fakeFM();
+  const audio = new PageAudio({ createFM });
+  return { audio, fm, sources, created: () => created, advance: seconds => { wall += seconds; audio.context.currentTime += seconds; } };
 };
 
 const sourceState = sources => sources.map(source => ({
   starts: structuredClone(source.starts), stops: structuredClone(source.stops), disconnects: source.disconnects,
 }));
+
+// laneOf answers the channel node a note's synthesizer lane feeds.
+const laneOf = (fm, note) => fm.lanes[note.lane].destination;
 
 const pathFrom = source => {
   const path = [];
@@ -82,7 +86,7 @@ test("a clock reset cannot let an older queued gain undo the latest mute", t => 
 });
 
 test("gain received before the first gesture applies when MIDI and PCM start", t => {
-  const { audio, sources, created } = setup(t);
+  const { audio, fm, sources, created } = setup(t);
   audio.setSoundGain(11, 5000);
   audio.setSoundGain(11, 2500);
   audio.setSoundGain(22, 0);
@@ -99,22 +103,23 @@ test("gain received before the first gesture applies when MIDI and PCM start", t
     assert.equal(gains.midi.gain.value, level);
     assert.equal(gains.wave.gain.value, level);
   }
-  assert.equal(sources.length, 4, "muted sources still advance for a future unmute");
+  assert.equal(sources.length, 2, "muted samples still advance for a future unmute");
+  assert.equal(fm.notes().length, 2, "muted notes still sound for a future unmute");
   assert.equal(audio.voices.size, 2);
   assert.ok(sources.every(source => source.starts.length === 1));
 });
 
 test("live gain changes hold MIDI and PCM positions and leave another clip untouched", t => {
-  const { audio, sources, advance } = setup(t);
+  const { audio, fm, sources, advance } = setup(t);
   for (const sound of [11, 22]) {
     audio.noteOn(0, 60, 100, sound);
     audio.playWave(1, 8000, new Float32Array([0.2, -0.2, 0.4, -0.4]), sound);
   }
   const current = sourceState(sources);
   const voices = [...audio.voices.values()];
-  const envelopes = voices.map(voice => structuredClone(voice.gain.gain.events));
+  const commands = structuredClone(fm.commands);
   const first = audio.soundGains.get(11), second = audio.soundGains.get(22);
-  const buffers = [sources[1].buffer, sources[3].buffer];
+  const buffers = [sources[0].buffer, sources[1].buffer];
   for (const value of [0, 2500, 10000]) {
     advance(0.125);
     audio.setSoundGain(11, value);
@@ -124,21 +129,22 @@ test("live gain changes hold MIDI and PCM positions and leave another clip untou
     assert.equal(second.wave.gain.value, 1);
     assert.deepEqual(second.midi.gain.events, []);
     assert.deepEqual(second.wave.gain.events, []);
-    assert.equal(sources.length, 4);
+    assert.equal(sources.length, 2);
     assert.deepEqual(sourceState(sources), current, "gain changes cannot restart or stop a source");
     assert.deepEqual([...audio.voices.values()], voices);
-    assert.deepEqual(voices.map(voice => voice.gain.gain.events), envelopes, "gain changes cannot rewrite the envelope");
-    assert.equal(sources[1].buffer, buffers[0]);
-    assert.equal(sources[3].buffer, buffers[1]);
+    assert.deepEqual(fm.commands, commands, "gain changes cannot restart, release or retune a note");
+    assert.equal(sources[0].buffer, buffers[0]);
+    assert.equal(sources[1].buffer, buffers[1]);
   }
-  assert.ok(pathFrom(sources[0]).includes(first.midi));
-  assert.ok(pathFrom(sources[1]).includes(first.wave));
-  assert.ok(pathFrom(sources[2]).includes(second.midi));
-  assert.ok(pathFrom(sources[3]).includes(second.wave));
+  const [note11, note22] = fm.notes();
+  assert.ok(pathFrom(laneOf(fm, note11)).includes(first.midi));
+  assert.ok(pathFrom(sources[0]).includes(first.wave));
+  assert.ok(pathFrom(laneOf(fm, note22)).includes(second.midi));
+  assert.ok(pathFrom(sources[1]).includes(second.wave));
 });
 
 test("released melodic tails and percussion share their clip's live gain", t => {
-  const { audio, sources, advance } = setup(t);
+  const { audio, fm, sources, advance } = setup(t);
   for (const sound of [11, 22]) {
     audio.noteOn(0, 60, 100, sound);
     advance(0.01);
@@ -149,34 +155,36 @@ test("released melodic tails and percussion share their clip's live gain", t => 
   assert.equal(audio.voices.size, 2, "released melodic tails are outside the note map");
   assert.equal(audio.sources.size, 6);
   const initial = sourceState(sources);
-  const release = structuredClone(sources[0].connections[0].gain.events);
+  const commands = structuredClone(fm.commands);
   const gains = audio.soundGains.get(11);
-  assert.ok(pathFrom(sources[0]).includes(gains.midi));
-  assert.ok(pathFrom(sources[1]).includes(gains.midi));
-  assert.ok(pathFrom(sources[2]).includes(gains.wave));
+  const [melody, drum] = fm.notes();
+  assert.deepEqual(fm.of(melody.id).map(command => command.op), ["off"], "the melody follows its own release");
+  assert.ok(pathFrom(laneOf(fm, melody)).includes(gains.midi));
+  assert.ok(pathFrom(laneOf(fm, drum)).includes(gains.midi));
+  assert.ok(pathFrom(sources[0]).includes(gains.wave));
   for (const value of [2500, 0, 10000]) {
     advance(0.005);
     audio.setSoundGain(11, value);
     assert.equal(gains.midi.gain.events.at(-1)[1], value / 10000);
     assert.equal(gains.wave.gain.events.at(-1)[1], value / 10000);
     assert.equal(audio.sources.size, 6);
-    assert.deepEqual(sourceState(sources), initial, "natural percussion and release stops stay in place");
-    assert.deepEqual(sources[0].connections[0].gain.events, release);
+    assert.deepEqual(sourceState(sources), initial, "sampled sound stays in place");
+    assert.deepEqual(fm.commands, commands, "natural percussion and releases stay in place");
     assert.deepEqual(audio.soundGains.get(22).midi.gain.events, []);
     assert.deepEqual(audio.soundGains.get(22).wave.gain.events, []);
   }
 });
 
 test("guest gain is applied before the user's unchanged mixer sliders", t => {
-  const { audio, sources } = setup(t);
+  const { audio, fm, sources } = setup(t);
   audio.setMasterVolume(0.7);
   audio.setMIDIVolume(0.3);
   audio.setWaveVolume(0.4);
   audio.noteOn(0, 60, 100, 11);
   audio.playWave(1, 8000, new Float32Array(8000), 11);
   const gains = audio.soundGains.get(11);
-  assert.deepEqual(pathFrom(sources[0]).slice(-4), [gains.midi, audio.midiGain, audio.master, audio.context.destination]);
-  assert.deepEqual(pathFrom(sources[1]).slice(-4), [gains.wave, audio.waveGain, audio.master, audio.context.destination]);
+  assert.deepEqual(pathFrom(laneOf(fm, fm.notes()[0])).slice(-4), [gains.midi, audio.midiGain, audio.master, audio.context.destination]);
+  assert.deepEqual(pathFrom(sources[0]).slice(-4), [gains.wave, audio.waveGain, audio.master, audio.context.destination]);
   for (const value of [0, 2500, 10000]) audio.setSoundGain(11, value);
   assert.deepEqual([audio.masterVolume, audio.midiVolume, audio.waveVolume], [0.7, 0.3, 0.4]);
   assert.deepEqual([audio.master.gain.value, audio.midiGain.gain.value, audio.waveGain.gain.value], [0.7, 0.3, 0.4]);

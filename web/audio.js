@@ -4,18 +4,22 @@
 // and sampled waveforms. Waveforms are easy — Web Audio plays a buffer. MIDI
 // is not, because MIDI is a score, and playing a score needs instruments.
 //
-// The obvious answer is a soundfont synthesiser, and the Rust build takes it:
-// a worklet plus a 10.5MB sound bank fetched at page load, which on iOS pushes
-// the tab past its memory ceiling and gets skipped entirely. This build takes
-// the other answer and synthesises the notes here, from oscillators, with no
-// download at all. That is a real trade — a soundfont piano sounds like a
-// piano and this does not — but these are 2000s handset games whose music was
-// written for an FM chip with a handful of operators, so an oscillator with an
-// envelope lands closer to the original than it would for most music, and it
-// costs nothing to ship and works on every device.
+// The music was written for Yamaha's MA chips, which are FM synthesizers, and
+// almost every score carries its own instruments as FM voices. The page plays
+// them with an FM synthesizer of its own (fm-synth.js), which also stands in
+// for what a file leaves to the chip's built-in bank. There is no sound bank
+// to download: a soundfont would be megabytes on every phone, and an iOS tab
+// that heavy can lose sound entirely. This file keeps the score's bookkeeping
+// — channels, voice budget, timing, ownership — and routes each channel's lane
+// of the synthesizer through its volume, pan and sound gain.
+
+import { FMHost } from "./fm-host.js";
 
 const MAX_VOICES = 24;
-const MAX_AUDIO_EVENTS = 65536;
+// A full reconstruction's worst case is about 134,000 events: every owner's
+// channel controls and FM voice definitions, its notes and samples. The
+// server's replay ceiling is the same (maxReplayAudio).
+const MAX_AUDIO_EVENTS = 1 << 18;
 const MAX_PCM_CHANNELS = 2048;
 // Retained native sources include scheduled starts and release/retired tails.
 // A full output reconstruction needs at most 256 PCM sources and 24 notes.
@@ -34,8 +38,16 @@ const CONTROL_RAMP = 0.005;
 // batches 15–100 ms late; a rebuild cuts every sounding voice to replay it.
 const MAX_REANCHOR_LATE = 0.2;
 const voiceKey = (sound, channel, note) => sound ? `${sound}:${channel}:${note}` : `${channel}:${note}`;
+// A stolen or retriggered note fades this fast rather than clicking; a
+// released one follows its own envelope.
+const RETRIGGER_FADE = 0.005;
+const STEAL_FADE = 0.01;
+const CUT_FADE = 0.005;
+// Percussion holds a place in the voice budget this long, as the server's
+// reconstruction assumes. Its sound rings on as long as its envelope does.
+const DRUM_SLOT = 0.2;
 const channelDefaults = () => ({
-  program: 0, volume: 100, expression: 127, pan: 64, bend: 8192, sustain: 0,
+  program: 0, volume: 100, expression: 127, pan: 64, bend: 8192, sustain: 0, modulation: 0,
   bendRange: 2, bendRangeCents: 0,
   rpnMSB: 127, rpnLSB: 127, nrpnMSB: 127, nrpnLSB: 127, parameterKind: null,
 });
@@ -86,12 +98,6 @@ const rampControl = (parameter, previous, level, at, current) => {
   parameter.linearRampToValueAtTime(level, at + CONTROL_RAMP);
   return { from, level, at, linear };
 };
-const melodyLevel = (peak, elapsed) => {
-  const sustain = Math.max(0.0001, peak * 0.7);
-  return elapsed < 0.01 ? 0.0001 * Math.pow(peak / 0.0001, elapsed / 0.01)
-    : elapsed < 0.12 ? peak * Math.pow(sustain / peak, (elapsed - 0.01) / 0.11) : sustain;
-};
-const drumLevel = (peak, elapsed) => elapsed < 0.18 ? peak * Math.pow(0.0001 / peak, elapsed / 0.18) : 0.0001;
 const timingCounts = () => ({
   batches: 0, clock_only_batches: 0, admitted: 0, reanchored: 0, refused: { late: 0, future: 0, range: 0 },
   events: 0, not_late: 0, late_le_5ms: 0, late_le_20ms: 0,
@@ -99,31 +105,17 @@ const timingCounts = () => ({
   max_event_late_ms: 0, max_frontier_late_ms: 0,
 });
 
-// General MIDI program families, reduced to the oscillator that carries each
-// one best. The program number's top three bits pick the family.
-const FAMILY_WAVES = [
-  "triangle", // 0-7   piano
-  "triangle", // 8-15  chromatic percussion
-  "sawtooth", // 16-23 organ
-  "triangle", // 24-31 guitar
-  "sine", //     32-39 bass
-  "sawtooth", // 40-47 strings
-  "sawtooth", // 48-55 ensemble
-  "square", //   56-63 brass
-  "square", //   64-71 reed
-  "sine", //     72-79 pipe
-  "sawtooth", // 80-87 synth lead
-  "triangle", // 88-95 synth pad
-  "sine", //     96-103 synth effects
-  "triangle", // 104-111 ethnic
-  "square", //  112-119 percussive
-  "sine", //    120-127 sound effects
-];
-
 export class PageAudio {
-  constructor({ report = () => {}, diagnostics = () => false } = {}) {
+  constructor({ report = () => {}, diagnostics = () => false, createFM = (context, options) => new FMHost(context, options) } = {}) {
     this.report = report;
     this.diagnostics = diagnostics;
+    this.createFM = createFM;
+    // The FM synthesizer, its voices by id, and the drum notes playing a
+    // file's own voice, which a note-off releases.
+    this.fm = null;
+    this.fmSources = new Map();
+    this.drumKeys = new Map();
+    this.nextVoiceId = 0;
     this.timing = null;
     this.activationCheck = null;
     this.recovering = false;
@@ -198,6 +190,7 @@ export class PageAudio {
         this.waveGain = this.context.createGain();
         this.waveGain.gain.value = this.waveVolume;
         this.waveGain.connect(this.master);
+        this.synthesizer();
       } catch (error) {
         console.warn("audio unavailable, the game will be silent:", error);
         this.failed = true;
@@ -208,6 +201,21 @@ export class PageAudio {
       this.context.resume().catch(error => this.report(`audio resume failed: ${error.message}`));
     }
     return this.context;
+  }
+
+  // synthesizer answers the FM synthesizer for the current context, creating
+  // it on first use. Without one, sampled sound still plays and the score is
+  // silent.
+  synthesizer() {
+    if (!this.fm && this.context && !this.fmFailed) {
+      try {
+        this.fm = this.createFM(this.context, { onEnded: ids => this.fmEnded(ids), report: this.report });
+      } catch (error) {
+        this.fmFailed = true;
+        this.report(`audio synthesizer unavailable: ${error.message}`);
+      }
+    }
+    return this.fm;
   }
 
   reportState(reason) {
@@ -341,16 +349,51 @@ export class PageAudio {
       } else {
         gain.connect(this.outputFor(sound, "midi"));
       }
-      outputs[channel] = { gain, panner, gainRamp: controlRamp(level), panRamp: controlRamp(pan) };
+      // The synthesizer lane is claimed by the first note and given back
+      // when another channel needs it and this one has nothing sounding.
+      outputs[channel] = { gain, panner, lane: null, voices: 0, lastUsed: 0,
+        gainRamp: controlRamp(level), panRamp: controlRamp(pan) };
     }
     return outputs[channel];
   }
 
-  disconnectChannelOutputs(sound) {
-    for (const output of this.channelOutputs.get(sound) || []) {
-      output?.gain.disconnect?.();
-      output?.panner?.disconnect?.();
+  // laneFor answers the synthesizer lane a channel's notes sound in. With
+  // every lane held, it takes back the one idle longest: a clip that finished
+  // on its own keeps its channels for its next play, not their lanes.
+  laneFor(output, channel, sound) {
+    if (output.lane !== null) return output.lane;
+    const fm = this.synthesizer();
+    if (!fm) return null;
+    const state = this.channelsFor(sound)[channel];
+    const claim = () => fm.lane(output.gain, channel === DRUM_CHANNEL ? 1 : this.bendRatio(state), state.modulation / 127);
+    let lane = claim();
+    if (lane === null) {
+      let idle = null;
+      for (const outputs of this.channelOutputs.values()) {
+        for (const other of outputs) {
+          if (other && other.lane !== null && other.voices === 0 && (!idle || other.lastUsed < idle.lastUsed)) idle = other;
+        }
+      }
+      if (idle) {
+        fm.release(idle.lane);
+        idle.lane = null;
+        lane = claim();
+      }
     }
+    output.lane = lane;
+    return lane;
+  }
+
+  releaseChannelOutput(output) {
+    if (!output) return;
+    if (output.lane !== null && output.lane !== undefined) this.fm?.release(output.lane);
+    output.lane = null;
+    output.gain.disconnect?.();
+    output.panner?.disconnect?.();
+  }
+
+  disconnectChannelOutputs(sound) {
+    for (const output of this.channelOutputs.get(sound) || []) this.releaseChannelOutput(output);
     this.channelOutputs.delete(sound);
   }
 
@@ -547,10 +590,9 @@ export class PageAudio {
     return state[kind];
   }
 
-  noteFrequency(channel, note, sound = 0) {
-    const state = this.channelsFor(sound)[channel & 15];
+  bendRatio(state) {
     const bendSemitones = ((state.bend - 8192) / 8192) * (state.bendRange + state.bendRangeCents / 100);
-    return 440 * Math.pow(2, (note + bendSemitones - 69) / 12);
+    return Math.pow(2, bendSemitones / 12);
   }
 
   // A timed batch ends with the server's current presentation clock. Check
@@ -676,12 +718,22 @@ export class PageAudio {
   }
 
   // Restored voices continue their envelope instead of replaying its attack.
-  noteResume(channel, note, velocity, ageMilliseconds, sound = 0) {
+  noteResume(channel, note, velocity, ageMilliseconds, sound = 0, voice = 0, pitch = 0) {
     if (!Number.isFinite(ageMilliseconds) || ageMilliseconds < 0) return;
-    this.noteOn(channel, note, velocity, sound, ageMilliseconds / 1000);
+    this.noteOn(channel, note, velocity, sound, ageMilliseconds / 1000, voice, pitch);
   }
 
-  noteOn(channel, note, velocity, sound = 0, age = 0) {
+  // defineVoice holds one of a sound's own FM voices until the sound stops.
+  defineVoice(slot, data, sound = 0) {
+    if (!Number.isInteger(slot) || slot < 1 || slot > 255 || !data) return;
+    if (!this.ensure()) return;
+    this.synthesizer()?.post({ op: "define", sound, slot, data });
+  }
+
+  // noteOn sounds a note. voice names a slot the sound defined, and pitch the
+  // note that voice sounds; without one the synthesizer's stand-in for the
+  // channel's program, or for the drum key, plays the note itself.
+  noteOn(channel, note, velocity, sound = 0, age = 0, voice = 0, pitch = 0) {
     if (!Number.isFinite(age) || age < 0) return;
     channel &= 15;
     if (velocity === 0) {
@@ -689,93 +741,83 @@ export class PageAudio {
       return;
     }
     const drum = (channel & 15) === DRUM_CHANNEL;
-    if (drum && age >= 0.2) return;
+    if (drum && age >= DRUM_SLOT) return;
     if (this.sources.size >= MAX_AUDIO_SOURCES) return false;
     const context = this.ensure();
     if (!context) return;
+    // A note with nowhere to sound must not cut another one on its way out.
+    const output = this.channelOutputFor(channel, sound);
+    if (this.laneFor(output, channel, sound) === null) return;
     const now = this.eventTime();
-    // onended follows the render clock. A coarse batch may already have
-    // passed a percussion voice's end on the score clock before that callback.
-    for (const [key, voice] of this.voices) {
-      if ((voice.end ?? Infinity) <= now) this.voices.delete(key);
+    // A percussion note gives its place in the budget back on the score
+    // clock, whatever the synthesizer is still rendering.
+    for (const [key, held] of this.voices) {
+      if ((held.slotEnd ?? held.end ?? Infinity) <= now) this.voices.delete(key);
     }
     if (this.voices.size >= MAX_VOICES) {
       // Steal the oldest voice rather than refusing the note: a dropped note
       // is more noticeable than a shortened one.
       const oldest = this.voices.keys().next().value;
-      this.stopVoice(oldest, 0.01, now);
+      this.stopVoice(oldest, STEAL_FADE, now);
     }
 
     const key = voiceKey(sound, channel, note);
-    this.stopVoice(key, 0.005, now);
-
-    let source, gain, filter, voice;
-    try {
-      gain = context.createGain();
-      const peak = Math.max(0.0001, (velocity / 127) * 0.25);
-      gain.connect(this.channelOutputFor(channel, sound).gain);
-      if (drum) {
-        // Percussion is a short filtered noise burst.
-        source = context.createBufferSource();
-        source.buffer = this.noiseBuffer(context);
-        filter = context.createBiquadFilter();
-        filter.type = "bandpass";
-        // Higher drum keys are the smaller pieces, so they ring higher.
-        filter.frequency.value = 200 + (note % 24) * 180;
-        source.connect(filter);
-        filter.connect(gain);
-        gain.gain.setValueAtTime(drumLevel(peak, age), now);
-        if (age < 0.18) gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18 - age);
-      } else {
-        source = context.createOscillator();
-        source.type = FAMILY_WAVES[(this.channelsFor(sound)[channel & 15].program >> 3) & 15];
-        source.frequency.value = this.noteFrequency(channel, note, sound);
-        source.connect(gain);
-        // A short attack and decay keep notes distinct without clicking.
-        gain.gain.setValueAtTime(melodyLevel(peak, age), now);
-        if (age < 0.01) gain.gain.exponentialRampToValueAtTime(peak, now + 0.01 - age);
-        if (age < 0.12) gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak * 0.7), now + 0.12 - age);
-      }
-      // A resumed envelope predates its source. Keep both times so a clock
-      // correction cannot release it before its first rendered sample.
-      voice = { source, gain, filter, kind: "midi", drum, started: now - age, sourceStart: now, peak, sound, channel, note };
-      if (drum) voice.end = now + 0.2 - age;
-      this.voices.set(key, voice);
-      this.sources.set(source, voice);
-      source.onended = () => this.finishSource(source, voice);
-      if (drum && age > 0) source.start(now, age);
-      else source.start(now);
-      if (drum) source.stop(voice.end);
-    } catch (error) {
-      try { source?.stop(); } catch { /* The source may not have started. */ }
-      if (voice) this.finishSource(source, voice);
-      else {
-        source?.disconnect?.();
-        gain?.disconnect?.();
-        filter?.disconnect?.();
-      }
-      throw error;
+    this.stopVoice(key, RETRIGGER_FADE, now);
+    const id = ++this.nextVoiceId;
+    const source = {
+      id,
+      stop: at => this.fm?.post({ op: "cut", id, at: at ?? this.context.currentTime, fade: CUT_FADE }),
+    };
+    const own = Number.isInteger(voice) && voice > 0 && voice < 256;
+    // A resumed envelope predates its source. Keep both times so a clock
+    // correction cannot release it before its first rendered sample.
+    const held = { source, kind: "midi", drum, fm: id, output, started: now - age, sourceStart: now, sound, channel, note, end: Infinity };
+    output.voices++;
+    output.lastUsed = now;
+    if (drum) held.slotEnd = now + DRUM_SLOT - age;
+    this.voices.set(key, held);
+    this.sources.set(source, held);
+    this.fmSources.set(id, source);
+    if (drum && own) {
+      // A drum key struck again before its last note's note-off releases that
+      // note, as a channel's new key-on would.
+      const previous = this.drumKeys.get(key);
+      if (previous) this.fm.post({ op: "off", id: previous.id, at: now });
+      this.drumKeys.set(key, source);
     }
+    this.fm.post({
+      op: "on", id, at: now, age, lane: output.lane, sound, slot: own ? voice : 0,
+      pitch: own && Number.isInteger(pitch) && pitch >= 0 && pitch < 128 ? pitch : note,
+      velocity, program: this.channelsFor(sound)[channel].program, drumKey: drum ? note : undefined,
+    });
   }
 
   noteOff(channel, note, velocity = 0, sound = 0, at) {
     channel &= 15;
-    // Rhythm notes are one-shots; ordinary note-off must not remove them
-    // from the shared voice budget before their natural end.
-    if (channel === DRUM_CHANNEL) return;
     const key = voiceKey(sound, channel, note);
+    if (channel === DRUM_CHANNEL) {
+      // A stand-in drum is a one-shot. A file's own drum voice is keyed off
+      // like any FM voice, without giving up its place in the budget early.
+      const source = this.drumKeys.get(key);
+      if (source) {
+        this.drumKeys.delete(key);
+        const held = this.sources.get(source);
+        this.fm?.post({ op: "off", id: source.id, at: Math.max(held?.sourceStart ?? 0, at ?? this.eventTime()) });
+      }
+      return;
+    }
     const voice = this.voices.get(key);
     if (!voice) return;
     if (this.channelsFor(sound)[channel].sustain >= 64) {
       voice.deferred = true;
       return;
     }
-    this.stopVoice(key, 0.06, at);
+    this.stopVoice(key, 0, at, true);
   }
 
   releaseDeferred(channel, sound, at) {
     for (const [key, voice] of this.voices) {
-      if (voice.sound === sound && voice.channel === channel && voice.deferred) this.stopVoice(key, 0.06, at);
+      if (voice.sound === sound && voice.channel === channel && voice.deferred) this.stopVoice(key, 0, at, true);
     }
   }
 
@@ -786,45 +828,35 @@ export class PageAudio {
     for (const [source, voice] of this.sources) {
       if (voice.retired || voice.kind !== "midi" || voice.sound !== sound || voice.channel !== channel) continue;
       voice.end = Math.min(at, voice.end ?? Infinity);
-      // Stopping the source preserves the envelope before the cut. Removing
-      // a future ramp endpoint or disconnecting now would change that audio.
       try { source.stop(voice.end); } catch { /* Already ended. */ }
     }
   }
 
-  // stopVoice releases a note over a short ramp. Cutting the gain outright
-  // would click.
-  stopVoice(key, release, at) {
+  // stopVoice ends a note: keyed off, it follows its own release; otherwise
+  // it fades over release seconds, because cutting a voice outright would
+  // click.
+  stopVoice(key, release, at, keyOff = false) {
     const voice = this.voices.get(key);
     if (!voice) return;
     this.voices.delete(key);
     const now = Math.max(voice.sourceStart, at ?? this.eventTime());
     if (now >= (voice.end ?? Infinity)) return;
-    try {
-      // AudioParam.value describes the render clock, which may not have
-      // reached this note yet. Recreate the envelope's value at the scheduled
-      // release, retaining a partial attack/decay ramp before that boundary.
-      const elapsed = now - voice.started;
-      const level = voice.drum ? drumLevel(voice.peak, elapsed) : melodyLevel(voice.peak, elapsed);
-      voice.gain.gain.cancelScheduledValues(now);
-      if (elapsed > 0) voice.gain.gain.exponentialRampToValueAtTime(level, now);
-      else voice.gain.gain.setValueAtTime(level, now);
-      voice.gain.gain.exponentialRampToValueAtTime(0.0001, Math.min(now + release, voice.end ?? Infinity));
-      voice.end = Math.min(now + release + 0.01, voice.end ?? Infinity);
-      voice.source.stop(voice.end);
-    } catch {
-      // A voice already stopped throws; nothing to do about it.
+    if (keyOff) {
+      this.fm?.post({ op: "off", id: voice.fm, at: now });
+      return;
     }
+    voice.end = now + release + 0.01;
+    this.fm?.post({ op: "cut", id: voice.fm, at: now, fade: release });
   }
 
-  noiseBuffer(context) {
-    if (!this._noise) {
-      const length = Math.floor(context.sampleRate * 0.25);
-      this._noise = context.createBuffer(1, length, context.sampleRate);
-      const samples = this._noise.getChannelData(0);
-      for (let index = 0; index < length; index += 1) samples[index] = Math.random() * 2 - 1;
+  // fmEnded learns which voices the synthesizer has finished rendering.
+  fmEnded(ids) {
+    for (const id of ids) {
+      const source = this.fmSources.get(id);
+      const voice = source && this.sources.get(source);
+      if (voice) this.finishSource(source, voice);
+      else this.fmSources.delete(id);
     }
-    return this._noise;
   }
 
   programChange(channel, program, sound = 0) {
@@ -837,6 +869,9 @@ export class PageAudio {
     const now = this.context ? this.eventTime() : 0;
     let retune = false;
     switch (control) {
+      case 1:
+        state.modulation = value;
+        break;
       case 7:
         state.volume = value;
         break;
@@ -891,6 +926,7 @@ export class PageAudio {
       case 121:
         state.expression = 127;
         state.sustain = 0;
+        state.modulation = 0;
         state.bend = 8192;
         state.rpnMSB = state.rpnLSB = state.nrpnMSB = state.nrpnLSB = 127;
         state.parameterKind = null;
@@ -902,7 +938,7 @@ export class PageAudio {
           if (voice.sound !== sound || voice.channel !== channel) continue;
           // All Notes Off releases rhythm tails too, independently of the
           // damper pedal; melodic notes follow the ordinary note-off path.
-          if (voice.drum) this.stopVoice(key, 0.06, now);
+          if (voice.drum) this.stopVoice(key, 0, now, true);
           else this.noteOff(channel, voice.note, 0, sound, now);
         }
         break;
@@ -912,6 +948,9 @@ export class PageAudio {
     if (retune) this.retuneChannel(channel, sound, now);
     const output = this.channelOutputs.get(sound)?.[channel & 15];
     if (!output) return;
+    if ((control === 1 || control === 121) && output.lane !== null && output.lane !== undefined) {
+      this.fm?.post({ op: "depth", lane: output.lane, at: now, depth: state.modulation / 127 });
+    }
     if (control === 7 || control === 11 || control === 121) {
       output.gainRamp = rampControl(output.gain.gain, output.gainRamp, this.channelGain(channel, sound), now, this.context.currentTime);
     } else if (control === 10 && output.panner) {
@@ -927,16 +966,13 @@ export class PageAudio {
     this.retuneChannel(channel, sound, now);
   }
 
+  // retuneChannel bends every note of a channel at once: the channel's lane
+  // carries one pitch ratio. Percussion is not bent.
   retuneChannel(channel, sound, at) {
-    for (const [source, voice] of this.sources) {
-      if (voice.retired || voice.kind !== "midi" || voice.sound !== sound || voice.channel !== channel || voice.drum || at >= (voice.end ?? Infinity)) continue;
-      try {
-        source.frequency.cancelScheduledValues?.(at);
-        source.frequency.setValueAtTime(this.noteFrequency(channel, voice.note, sound), at);
-      } catch {
-        // Ignore a voice that ended between the lookup and the write.
-      }
-    }
+    if (channel === DRUM_CHANNEL) return;
+    const output = this.channelOutputs.get(sound)?.[channel];
+    if (!output || output.lane === null || output.lane === undefined) return;
+    this.fm?.post({ op: "bend", lane: output.lane, at, ratio: this.bendRatio(this.channelsFor(sound)[channel]) });
   }
 
   sysex() {
@@ -1044,10 +1080,15 @@ export class PageAudio {
   finishSource(source, voice) {
     if (this.sources.get(source) !== voice) return;
     this.sources.delete(source);
+    if (voice.fm) {
+      this.fmSources.delete(voice.fm);
+      if (voice.output) voice.output.voices--;
+      const key = voiceKey(voice.sound, voice.channel, voice.note);
+      if (this.drumKeys.get(key) === source) this.drumKeys.delete(key);
+    }
     this.liveWaveBytes -= voice.waveBytes || 0;
     source.disconnect?.();
     voice.gain?.disconnect?.();
-    voice.filter?.disconnect?.();
     if (voice.kind === "midi") {
       const key = voiceKey(voice.sound, voice.channel, voice.note);
       // A retrigger can replace the key before the old source ends.
@@ -1059,10 +1100,7 @@ export class PageAudio {
 
   disconnectRetiredOutput(output) {
     if (!this.retiredOutputs.delete(output)) return;
-    for (const channel of output.channels || []) {
-      channel?.gain.disconnect?.();
-      channel?.panner?.disconnect?.();
-    }
+    for (const channel of output.channels || []) this.releaseChannelOutput(channel);
     for (const pcm of output.pcm?.values() || []) this.disconnectPCMOutput(pcm);
     output.gains?.midi?.disconnect?.();
     output.gains?.wave?.disconnect?.();
@@ -1072,6 +1110,12 @@ export class PageAudio {
   stopSound(sound = 0) {
     for (const [key, voice] of this.voices) {
       if (voice.sound === sound) this.voices.delete(key);
+    }
+    // Notes already scheduled keep the voices they resolved; later notes of
+    // this owner name voices it defines again.
+    this.fm?.post({ op: "forget", sound });
+    for (const [key, source] of this.drumKeys) {
+      if (this.sources.get(source)?.sound === sound) this.drumKeys.delete(key);
     }
     if (this.scheduledTime !== null) {
       const retiring = [...this.sources].filter(([, voice]) => voice.sound === sound && !voice.retired);
@@ -1119,10 +1163,13 @@ export class PageAudio {
     this.presentationInterrupted = false;
     this.scheduledTime = null;
     this.voices.clear();
+    this.drumKeys.clear();
+    this.fm?.post({ op: "reset" });
     for (const [source, voice] of this.sources) {
       try { source.stop(); } catch { /* The source may already have ended. */ }
       this.finishSource(source, voice);
     }
+    this.fmSources.clear();
     this.sources.clear();
     this.liveWaveBytes = 0;
     for (const output of this.retiredOutputs) this.disconnectRetiredOutput(output);

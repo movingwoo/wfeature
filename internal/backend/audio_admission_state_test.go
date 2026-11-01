@@ -41,8 +41,7 @@ func TestAudioPCMAdmissionStateRejectsInvalidChargesBeforeOutput(t *testing.T) {
 
 func TestAudioPCMAdmissionLegacyChargesUpgradeWithoutChangingCaller(t *testing.T) {
 	for _, version := range []uint32{6, 7} {
-		state := checkpointAudioFixture()
-		state.Version = version
+		state := checkpointAudioVersionFixture(version)
 		state.Output.Waves[0].BudgetBytes = 0
 		before := slices.Clone(state.Output.Waves)
 		now := time.Unix(1000, 0)

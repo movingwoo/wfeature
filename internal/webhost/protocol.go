@@ -352,6 +352,10 @@ type audioEvent struct {
 	Control    uint8    `json:"control,omitempty"`
 	Value      uint16   `json:"value,omitempty"`
 	Age        uint32   `json:"age,omitempty"` // Elapsed note envelope time in milliseconds.
+	// Voice is the slot of one of the sound's own FM voices: the one a
+	// voice event defines, or the one a note plays at Pitch.
+	Voice uint8 `json:"voice,omitempty"`
+	Pitch uint8 `json:"pitch,omitempty"`
 
 	// Channels, Rate and Samples describe a sampled sound. Samples are
 	// base64-encoded signed 16-bit little-endian frames rather than a JSON
@@ -386,6 +390,7 @@ const (
 	audioPlayWave      = "playWave"
 	audioStopSound     = "stopSound"
 	audioSoundGain     = "soundGain"
+	audioVoice         = "voice"
 	// audioAllOff has no counterpart in the guest's sink: it is what the
 	// server says when a game ends, because a note that was sounding at that
 	// moment has no one left to release it.

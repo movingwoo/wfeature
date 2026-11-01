@@ -44,9 +44,11 @@ type AudioSoundState struct {
 type AudioNoteState struct{ Channel, Note uint8 }
 
 const (
-	// Version 9 preserves PCM subframe position through tail trimming. Versions
-	// 6 through 8 remain readable at their saved whole-frame positions.
-	audioStateVersion    = 9
+	// Version 10 records the FM voice each sounding note plays and each
+	// channel's modulation. Version 9
+	// preserves PCM subframe position through tail trimming. Versions 6
+	// through 9 remain readable; their notes resume on the Host's instrument.
+	audioStateVersion    = 10
 	maxAudioStateEntries = 1 << 20
 	maxAudioStateBytes   = 128 << 20
 )
@@ -57,6 +59,16 @@ func validateAudioState(saved AudioState) error {
 	}
 	if err := saved.Output.validate(saved.Version); err != nil {
 		return err
+	}
+	if saved.Version < 10 {
+		// No earlier writer decoded voices. A record that has them is a hybrid.
+		for _, current := range saved.Sounds {
+			for _, event := range current.Events {
+				if event.Type == smaf.EventVoice || event.Type == smaf.EventNoteOn && (event.Program != 0 || event.Value != 0) {
+					return fmt.Errorf("version %d audio state carries FM voices", saved.Version)
+				}
+			}
+		}
 	}
 	var used audioResourceUsage
 	reservedPCM := make(map[audioPCMKey]bool)
@@ -220,6 +232,10 @@ func NewAudioFromStateWithClock(saved AudioState, sink AudioSink, now func() tim
 	}
 	audio := &Audio{sink: newAudioOutput(sink, now), sounds: make(map[AudioHandle]*sound, len(saved.Sounds)), next: saved.Next, maxSounds: saved.MaxSounds, resourceLimits: defaultAudioResourceLimits(), volume: saved.Volume}
 	audio.sink.restore(saved.Output)
+	sounding := make(map[AudioHandle]bool)
+	for _, note := range saved.Output.Notes {
+		sounding[note.Sound] = true
+	}
 	for _, record := range saved.Sounds {
 		resources, err := soundResourceUsage(record.Events, record.ActiveNotes)
 		if err != nil {
@@ -231,6 +247,16 @@ func NewAudioFromStateWithClock(saved AudioState, sink AudioSink, now func() tim
 			current.activeNotes = append(current.activeNotes, activeNote{channel: note.Channel, note: note.Note})
 		}
 		audio.sounds[record.Handle] = current
+		// The definitions are past events of the restored score. Every one is
+		// in its own slot, so defining later ones early changes no note. A
+		// finished sound's percussion can still be sounding, and needs them too.
+		if current.playing || sounding[current.handle] {
+			for _, event := range current.events {
+				if event.Type == smaf.EventVoice {
+					audio.sink.rememberVoice(current.handle, event.Program, event.SysEx)
+				}
+			}
+		}
 	}
 	return audio, nil
 }

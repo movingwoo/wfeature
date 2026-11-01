@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PageAudio } from "./audio.js";
+import { fakeFM } from "./audio-test-fm.mjs";
 import { GameSession, playAudioEvents } from "./session.js";
 
 const pcm = Buffer.alloc(4000);
@@ -55,7 +56,7 @@ const setup = async t => {
     sources.push(result);
     return result;
   };
-  const audio = new PageAudio();
+  const audio = new PageAudio({ createFM: fakeFM().createFM });
   audio.context = {
     state: "running", currentTime: 1, baseLatency: .01, sampleRate: 48000,
     createGain: () => ({ ...node(), gain: parameter() }),

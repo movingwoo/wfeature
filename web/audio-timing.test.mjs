@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PageAudio } from "./audio.js";
+import { fakeFM } from "./audio-test-fm.mjs";
 import { playAudioEvents } from "./session.js";
 
 const setup = t => {
@@ -20,24 +21,45 @@ const setup = t => {
     disconnect() { this.disconnects++; },
   });
   const source = () => {
-    const current = { ...node(), frequency: parameter(), stops: [],
+    const current = { ...node(), stops: [],
       start(at) { this.started = at; }, stop(at) { this.stopped = at; this.stops.push(at); } };
     sources.push(current);
     return current;
   };
-  const audio = new PageAudio();
+  // Synthesizer notes join the same creation-ordered list as native sources,
+  // seen through their commands: when each starts, when it was cut or keyed
+  // off, its lane's bends, and whether the page still tracks it.
+  const { fm, createFM } = fakeFM();
+  const audio = new PageAudio({ createFM });
+  const post = fm.post.bind(fm);
+  fm.post = command => {
+    post(command);
+    if (command.op !== "on") return;
+    const ends = () => fm.of(command.id).filter(other => other.op === "cut" || other.op === "off");
+    sources.push({
+      fm: command.id, program: command.program, drumKey: command.drumKey, started: command.at,
+      get stops() { return ends().map(other => other.at); },
+      get stopped() { return ends().at(-1)?.at; },
+      get ops() { return fm.of(command.id).map(other => other.op); },
+      get frequency() {
+        return { events: fm.commands.filter(other => other.op === "bend" && other.lane === command.lane && other.at >= command.at)
+          .map(other => ["set", other.ratio, other.at]) };
+      },
+      get disconnects() { return [...audio.sources.values()].some(voice => voice.fm === command.id) ? 0 : 1; },
+      onended() { fm.end(command.id); },
+    });
+  };
   audio.context = {
     state: "running", currentTime: 1, baseLatency: 0.09, sampleRate: 48000,
     createGain: () => ({ ...node(), gain: parameter() }),
     createStereoPanner: () => ({ ...node(), pan: parameter() }),
-    createOscillator: source, createBufferSource: source,
+    createBufferSource: source,
     createBuffer: (channels, frames) => ({ numberOfChannels: channels, getChannelData: () => new Float32Array(frames) }),
     createBiquadFilter: () => ({ ...node(), frequency: parameter() }),
   };
   audio.midiGain = {};
   audio.waveGain = {};
-  audio._noise = {};
-  return { audio, sources, wall: value => { wall = value; } };
+  return { audio, fm, sources, wall: value => { wall = value; } };
 };
 
 const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} != ${expected}`);
@@ -50,16 +72,13 @@ test("an overdue post-restore gate recovers without replaying stale output", t =
     { kind: "clock", at: 0 },
   ]), true);
   const old = sources[0];
-  let stopped = false;
-  const stop = old.stop;
-  old.stop = function (at) { stopped = true; stop.call(this, at); };
   audio.context.currentTime += .01;
   assert.equal(playAudioEvents(audio, [
     { kind: "noteOff", sound: 1, note: 60, at: -.005839489 },
     { kind: "clock", at: .01 },
   ]), false);
   assert.equal(sources.length, 1, "rejected history must not create new sources");
-  assert.equal(stopped, false, "rejected history must not partially change output");
+  assert.deepEqual(old.stops, [], "rejected history must not partially change output");
   assert.equal(playAudioEvents(audio, [
     { kind: "allOff" },
     { kind: "noteResume", sound: 2, note: 64, velocity: 90, age: 110, at: .01 },
@@ -67,7 +86,7 @@ test("an overdue post-restore gate recovers without replaying stale output", t =
   ]), true);
   assert.equal(audio.voices.size, 1);
   assert.equal([...audio.voices.values()][0].sound, 2);
-  assert.equal(stopped, true, "global reset must cancel old sources immediately");
+  assert.deepEqual(old.ops, ["cut"], "global reset must cancel old sources immediately");
   close(sources[1].started, audio.context.currentTime + .1);
 });
 
@@ -79,7 +98,8 @@ test("separate arrivals retain their spacing within one large output buffer", t 
   wall(0.050);
   audio.noteOff(0, 60);
   close(sources[1].started - sources[0].started, 0.025);
-  close(sources[0].stopped - sources[0].started, 0.050 + 0.060 + 0.010);
+  close(sources[0].stopped - sources[0].started, 0.050);
+  assert.deepEqual(sources[0].ops, ["off"], "a released note follows its own release");
   assert.ok(sources[0].started > audio.context.currentTime);
   wall(0.090);
   audio.context.currentTime += 0.09;
@@ -102,32 +122,20 @@ test("MIDI, percussion, PCM and bends share the scheduling clock", t => {
   close(sources[2].started - start, 0.075);
 });
 
-test("a short note released before rendering retains its attack and decay", t => {
-  const { audio, sources, wall } = setup(t);
-  audio.noteOn(0, 60, 100);
-  const voice = audio.voices.get("0:60");
-  const start = sources[0].started;
-  const peak = 100 / 127 * 0.25;
-  wall(0.005);
-  audio.noteOff(0, 60);
-  const hold = voice.gain.gain.events.find(event => Math.abs(event[2] - (start + 0.005)) < 1e-9);
-  assert.equal(hold[0], "ramp", "retain the attack segment before the release");
-  close(hold[1], Math.sqrt(0.0001 * peak));
-  assert.ok(hold[1] > 0.0001 && hold[1] < 1, "use the envelope, not the initial AudioParam.value");
-});
-
-test("a release within decay holds the scheduled envelope level", t => {
-  const { audio, sources, wall } = setup(t);
-  audio.noteOn(0, 60, 100);
-  const voice = audio.voices.get("0:60");
-  const start = sources[0].started;
-  const peak = 100 / 127 * 0.25;
-  wall(0.065);
-  audio.noteOff(0, 60);
-  const hold = voice.gain.gain.events.find(event => Math.abs(event[2] - (start + 0.065)) < 1e-9);
-  close(hold[1], peak * Math.sqrt(0.7));
-  assert.equal(voice.gain.gain.events[1][1], peak, "retain the completed attack");
-});
+// A note released before it has rendered keeps its attack: the synthesizer
+// applies the key-off at its own sample, from whatever level the envelope has
+// reached by then, rather than the page cutting the note.
+for (const [name, gate] of [["a short note released before rendering", 0.005], ["a release within decay", 0.065]]) {
+  test(`${name} keeps its envelope up to the key-off`, t => {
+    const { audio, sources, wall } = setup(t);
+    audio.noteOn(0, 60, 100);
+    const start = sources[0].started;
+    wall(gate);
+    audio.noteOff(0, 60);
+    assert.deepEqual(sources[0].ops, ["off"]);
+    close(sources[0].stopped, start + gate);
+  });
+}
 
 test("an output stall and a reset cannot leave scheduling far ahead", t => {
   const { audio, sources, wall } = setup(t);
@@ -140,7 +148,7 @@ test("an output stall and a reset cannot leave scheduling far ahead", t => {
   wall(100);
   audio.noteOn(0, 67, 100);
   assert.ok(sources[2].started >= 20 && sources[2].started <= 20.2);
-  assert.equal(sources[0].stopped, undefined, "reset cancels even a source scheduled in the future");
+  assert.ok(sources[0].stopped <= sources[0].started, "reset cancels even a note scheduled in the future");
 });
 
 test("a clock that falls behind is reanchored and low latency stays bounded", t => {
@@ -161,7 +169,7 @@ test("trimming clock drift does not move a release back before its attack", t =>
   audio.noteOn(0, 64, 100);
   wall(0.105);
   audio.noteOff(0, 64);
-  assert.ok(sources[1].stopped - sources[1].started >= 0.089,
+  assert.ok(sources[1].stopped - sources[1].started >= 0.019,
     "a 5 ms clock correction must not erase the entire 25 ms note");
 });
 
@@ -202,8 +210,8 @@ test("coarse and fine packets schedule the same short gates, PCM and controller 
   const coarse = run(true), fine = run(false);
   const output = ({ audio, sources }) => ({
     sources: sources.map(source => ({
-      start: source.started, stops: source.stops, type: source.type,
-      frequency: source.frequency.events, envelope: source.connections[0].gain.events,
+      start: source.started, stops: source.stops, program: source.program,
+      frequency: source.frequency?.events, ops: source.ops,
     })),
     channelGain: audio.channelOutputs.get(7)[0].gain.gain.events,
     pan: audio.channelOutputs.get(7)[0].panner.pan.events,
@@ -213,13 +221,12 @@ test("coarse and fine packets schedule the same short gates, PCM and controller 
   assert.deepEqual(output(coarse), output(fine), "packet grouping and arrival spacing cannot change the authored timeline");
   const [short, longer, pcm, sustained] = coarse.sources;
   close(short.started, 1.1);
-  close(short.stopped - short.started, 0.005 + 0.060 + 0.010);
-  close(longer.stopped - longer.started, 0.035 + 0.060 + 0.010);
+  close(short.stopped - short.started, 0.005);
+  close(longer.stopped - longer.started, 0.035);
   close(pcm.started - short.started, 0.020);
-  close(sustained.stopped - sustained.started, 0.030 + 0.060 + 0.010);
-  const attackRelease = short.connections[0].gain.events.find(event => Math.abs(event[2] - 1.105) < 1e-9);
-  assert.equal(attackRelease[0], "ramp");
-  close(attackRelease[1], Math.sqrt(0.0001 * (100 / 127 * 0.25)));
+  close(sustained.stopped - sustained.started, 0.030);
+  assert.deepEqual(short.ops, ["off"], "a short gate keys off; it is not cut");
+  assert.equal(short.program, 72);
   const gain = coarse.audio.soundGains.get(7);
   assert.deepEqual(gain.midi.gain.events, gain.wave.gain.events);
   assert.deepEqual(gain.midi.gain.events.map(event => event[1]), [0.5, 0, 1]);
@@ -239,7 +246,6 @@ test("a timed stop preserves preceding envelopes and isolates the restarted owne
   const oldSources = [sources[0], sources[2], sources[3]];
   const oldGains = audio.soundGains.get(7);
   const oldChannels = audio.channelOutputs.get(7);
-  const envelope = structuredClone(sources[0].connections[0].gain.events);
   assert.equal(playAudioEvents(audio, [
     { kind: "stopSound", at: 0.040, sound: 7 },
     { kind: "programChange", at: 0.041, sound: 7, program: 72 },
@@ -252,13 +258,13 @@ test("a timed stop preserves preceding envelopes and isolates the restarted owne
     close(source.stopped, 1.14);
     assert.equal(source.disconnects, 0, "a future stop must leave earlier scheduled audio connected");
   }
-  assert.deepEqual(sources[0].connections[0].gain.events, envelope, "stop cannot erase earlier attack or release ramps");
+  assert.deepEqual(sources[0].ops, ["off", "cut"], "stop cannot erase the earlier release");
   assert.equal(oldGains.midi.disconnects, 0);
   assert.equal(oldGains.wave.disconnects, 0);
   assert.equal(oldChannels[0].gain.disconnects, 0);
   assert.notEqual(audio.soundGains.get(7), oldGains);
   assert.notEqual(audio.channelOutputs.get(7), oldChannels);
-  assert.equal(sources[4].type, "sine");
+  assert.equal(sources[4].program, 72);
   assert.equal(audio.soundGains.get(7).midi.gain.value, 0.5);
   const oldStops = oldSources.map(source => [...source.stops]);
   assert.equal(playAudioEvents(audio, [
@@ -310,8 +316,8 @@ test("expired percussion cannot steal a held melody while onended still awaits t
   assert.equal(sources.length, 25);
   assert.deepEqual(sources[0].stops, [], "expired drum slots must be removed before stealing the oldest live melody");
   assert.equal(audio.voices.size, 2);
-  assert.equal(audio.voices.get("8:0:69").source, sources[0]);
-  assert.equal(audio.voices.get("7:9:70").source, sources[24]);
+  assert.equal(audio.voices.get("8:0:69").fm, sources[0].fm);
+  assert.equal(audio.voices.get("7:9:70").fm, sources[24].fm);
   assert.equal(audio.sources.size, 25, "scheduled sources remain connected until their real end callbacks");
   for (const source of sources.slice(1, 24)) source.onended();
   assert.equal(audio.sources.size, 2);
@@ -321,9 +327,14 @@ test("a timed stop never postpones a source's earlier natural or released end", 
   const { audio, sources } = setup(t);
   assert.equal(playAudioEvents(audio, [clock(0)]), true);
   assert.equal(playAudioEvents(audio, [attack(0), release(0.005), attack(0.010, 40, 7, 9), clock(0.010)]), true);
-  const ends = sources.map(source => source.stopped);
+  const ends = sources.map(source => source.stops);
   assert.equal(playAudioEvents(audio, [{ kind: "stopSound", at: 0.220, sound: 7 }, clock(0.220)]), true);
-  assert.deepEqual(sources.map(source => source.stopped), ends);
+  // A later cut cannot move an earlier key-off or extend a note: the
+  // synthesizer ends each voice at whichever comes first.
+  sources.forEach((source, index) => {
+    assert.deepEqual(source.stops.slice(0, ends[index].length), ends[index]);
+    assert.ok(source.stops.slice(ends[index].length).every(at => at >= 1.32 - 1e-9));
+  });
   assert.ok(sources.every(source => source.disconnects === 0), "logical expiry cannot disconnect audio still ahead of the render clock");
   for (const source of sources) source.onended();
   assert.equal(audio.retiredOutputs.size, 0);
@@ -343,21 +354,21 @@ const invalidBatches = [
   ["nonfinite frontier", () => [attack(0.060, 62), clock(Infinity)]],
   ["nonfinite event", () => [attack(0.060, 62), attack(NaN, 64), clock(0.070)]],
   ["duplicate frontier", () => [attack(0.060, 62), clock(0.060), clock(0.070)]],
-  ["oversized", () => [attack(0.060, 62), ...Array(65536).fill(controller(0.060, 7, 0)), clock(0.060)]],
+  ["oversized", () => [attack(0.060, 62), ...Array(1 << 18).fill(controller(0.060, 7, 0)), clock(0.060)]],
 ];
 for (const [name, events, current] of invalidBatches) {
   test(`${name}: a timed batch is refused before any sound or controller is applied`, t => {
-    const { audio, sources } = setup(t);
+    const { audio, fm, sources } = setup(t);
     assert.equal(playAudioEvents(audio, [clock(0)]), true);
     assert.equal(playAudioEvents(audio, [attack(0.050), clock(0.050)]), true);
     const anchor = audio.presentationAnchor;
     const channel = audio.channelOutputs.get(7)[0];
-    const envelope = structuredClone(sources[0].connections[0].gain.events);
+    const commands = structuredClone(fm.commands);
     if (current !== undefined) audio.context.currentTime = current;
     assert.equal(playAudioEvents(audio, events()), false);
     assert.equal(sources.length, 1);
     assert.deepEqual(sources[0].stops, []);
-    assert.deepEqual(sources[0].connections[0].gain.events, envelope);
+    assert.deepEqual(fm.commands, commands);
     assert.deepEqual(channel.gain.gain.events, []);
     assert.equal(audio.presentationAnchor, anchor);
     assert.equal(audio.presentationFrontier, 0.050);
@@ -380,7 +391,7 @@ test("signed pending deadlines after a reset retain their original gate", t => {
   const { audio, sources } = setup(t);
   assert.equal(playAudioEvents(audio, [{ kind: "allOff" }, attack(-0.040), release(-0.005), clock(0)]), true);
   close(sources[0].started, 1.060);
-  close(sources[0].stopped - sources[0].started, 0.035 + 0.060 + 0.010);
+  close(sources[0].stopped - sources[0].started, 0.035);
 });
 
 for (const state of ["suspended", "interrupted"]) {
@@ -390,7 +401,7 @@ for (const state of ["suspended", "interrupted"]) {
     audio.context.state = state;
     assert.equal(playAudioEvents(audio, [attack(0.010, 62), clock(0.010)]), undefined);
     assert.equal(sources.length, 1);
-    assert.equal(sources[0].stopped, undefined);
+    assert.deepEqual(sources[0].ops, ["cut"]);
     assert.equal(sources[0].disconnects, 1);
     assert.equal(audio.sources.size, 0);
     assert.equal(audio.presentationAnchor, null);
@@ -418,13 +429,14 @@ test("all-off immediately cancels future and retired sources before replacing th
   assert.equal(playAudioEvents(audio, [attack(0.050, 62), { kind: "allOff" }, attack(0, 67), clock(0)]), true);
   assert.equal(sources.length, 3, "events preceding the last all-off belong to the obsolete timeline");
   for (const source of obsolete) {
-    assert.equal(source.stopped, undefined);
+    assert.equal(source.ops.at(-1), "cut");
+    assert.ok(source.stopped <= audio.context.currentTime, "cancelled at once, not at a future instant");
     assert.equal(source.disconnects, 1);
     source.onended();
     assert.equal(source.disconnects, 1);
   }
   assert.equal(audio.sources.size, 1);
-  assert.equal(audio.voices.get("7:0:67").source, sources[2]);
+  assert.equal(audio.voices.get("7:0:67").fm, sources[2].fm);
   assert.equal(audio.retiredOutputs.size, 0);
   close(sources[2].started, 1.1);
   assert.equal(playAudioEvents(audio, [{ kind: "allOff" }]), true);

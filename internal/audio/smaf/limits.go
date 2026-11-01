@@ -95,6 +95,12 @@ func (b *decodeBudget) sysEx(data []byte) []byte {
 	return sysExMessage(data)
 }
 
+// voice charges one encoded voice definition to the SysEx budget, since it is
+// read from the file's exclusive messages and travels the same way.
+func (b *decodeBudget) voice(size int) bool {
+	return b.charge(&b.used.sysExBytes, size, b.limits.sysExBytes, "SysEx bytes") == nil
+}
+
 func (b *decodeBudget) milliseconds(value uint64) uint32 {
 	if value > uint64(^uint32(0)) {
 		if b.err == nil {

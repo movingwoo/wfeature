@@ -174,3 +174,22 @@ test("truncated or invalid PCM operands reject every earlier event in the messag
   assert.deepEqual(stream.decode(message([0x15, 0, 1, 7, 127])), [{ kind: "pcmControl", pcmChannel: 1, control: 7, value: 127 }]);
   assert.deepEqual(stream.decode(message(operands[0])), [], "a missing definition cannot create a source");
 });
+
+test("voices, voiced notes and voiced resumes keep their sound, slot and pitch", () => {
+  const stream = new AudioStream();
+  const bytes = [1, 0, 2, 1, 9, 9];
+  assert.deepEqual(stream.decode(message(select(3), define(9, bytes), [0x17, 7, ...word(9)],
+    [0x18, 9, 36, 90, 7, 39], [0x19, 2, 64, 70, ...word(1500), 7, 52])), [
+    { kind: "voice", voice: 7, data: Uint8Array.from(bytes), sound: 3 },
+    { kind: "noteOn", channel: 9, note: 36, velocity: 90, voice: 7, pitch: 39, sound: 3 },
+    { kind: "noteResume", channel: 2, note: 64, velocity: 70, age: 1500, voice: 7, pitch: 52, sound: 3 },
+  ]);
+  assert.deepEqual(stream.decode(message([0x17, 1, ...word(77)])), [], "a voice whose bytes never arrived is skipped");
+  for (const bad of [
+    [0x17, 0, ...word(9)], [0x17, 1, 0, 0],
+    [0x18, 0, 60, 100, 0, 60], [0x18, 0, 60, 100, 1, 128], [0x18, 0, 60],
+    [0x19, 0, 60, 100, ...word(1), 0, 60], [0x19, 0, 60, 100, ...word(1), 1],
+  ]) {
+    assert.throws(() => stream.decode(message([1, 0, 60, 100], bad)), undefined, `accepted ${bad}`);
+  }
+});

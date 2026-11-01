@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PageAudio } from "./audio.js";
+import { fakeFM } from "./audio-test-fm.mjs";
 
 const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} != ${expected}`);
 
@@ -66,23 +67,25 @@ const setup = t => {
     if (previous) Object.defineProperty(globalThis, "AudioContext", previous);
     else delete globalThis.AudioContext;
   });
-  const audio = new PageAudio();
-  audio._noise = {};
-  return { audio, sources, nodes, created: () => created,
+  const { fm, createFM } = fakeFM();
+  const audio = new PageAudio({ createFM });
+  return { audio, fm, sources, nodes, created: () => created,
     wall: seconds => { wall = seconds; },
     advance: seconds => { wall += seconds; audio.context.currentTime += seconds; } };
 };
 
-const route = voice => {
-  const gain = voice.gain.connections[0], panner = gain.connections[0], owner = panner.connections[0];
-  assert.equal(gain.kind, "gain", "a channel gain follows the note envelope");
+// route follows a note's synthesizer lane to its channel's nodes.
+const route = (fm, voice) => {
+  const note = fm.notes().find(command => command.id === voice.fm);
+  const gain = fm.lanes[note.lane].destination, panner = gain.connections[0], owner = panner.connections[0];
+  assert.equal(gain.kind, "gain", "a channel gain receives the note's lane");
   assert.equal(panner.kind, "panner", "a shared panner follows the channel gain");
   return { gain, panner, owner };
 };
 const sourceState = sources => sources.map(source => ({ starts: structuredClone(source.starts), stops: structuredClone(source.stops) }));
 
 test("controllers before activation store state without creating audio nodes", t => {
-  const { audio, nodes, created } = setup(t);
+  const { audio, fm, nodes, created } = setup(t);
   audio.controlChange(2, 7, 32, 11);
   audio.controlChange(2, 11, 64, 11);
   audio.controlChange(2, 10, 0, 11);
@@ -91,26 +94,26 @@ test("controllers before activation store state without creating audio nodes", t
   assert.equal(nodes.length, 0);
 
   audio.noteOn(2, 60, 100, 11);
-  const voice = audio.voices.get("11:2:60"), output = route(voice);
+  const voice = audio.voices.get("11:2:60"), output = route(fm, voice);
   close(output.gain.gain.value, 32 / 127 * 64 / 127);
   close(output.panner.pan.value, -1);
-  close(voice.peak, 100 / 127 * 0.25);
+  assert.equal(fm.notes()[0].velocity, 100, "velocity reaches the synthesizer unscaled by the channel");
   assert.equal(output.owner, audio.soundGains.get(11).midi);
   assert.deepEqual(output.gain.gain.events, []);
   assert.deepEqual(output.panner.pan.events, []);
 });
 
 test("held and overlapping notes share live volume, expression and pan without changing envelopes", t => {
-  const { audio, sources, advance } = setup(t);
+  const { audio, fm, sources, advance } = setup(t);
   for (const [sound, channel, note] of [[11, 2, 60], [11, 2, 64], [11, 3, 60], [22, 2, 60]]) {
     audio.noteOn(channel, note, 100, sound);
   }
-  const voices = [...audio.voices.values()], outputs = voices.map(route);
+  const voices = [...audio.voices.values()], outputs = voices.map(voice => route(fm, voice));
   assert.equal(outputs[0].gain, outputs[1].gain);
   assert.equal(outputs[0].panner, outputs[1].panner);
   assert.notEqual(outputs[0].gain, outputs[2].gain);
   assert.notEqual(outputs[0].gain, outputs[3].gain);
-  const envelopes = voices.map(voice => structuredClone(voice.gain.gain.events));
+  const commands = structuredClone(fm.commands);
   const initial = sourceState(sources), gain = outputs[0].gain.gain, pan = outputs[0].panner.pan;
   advance(0.2);
   const at = audio.eventTime();
@@ -131,18 +134,18 @@ test("held and overlapping notes share live volume, expression and pan without c
     assert.deepEqual(output.gain.gain.events, []);
     assert.deepEqual(output.panner.pan.events, []);
   }
-  assert.deepEqual(voices.map(voice => voice.gain.gain.events), envelopes);
+  assert.deepEqual(fm.commands, commands, "channel controls cannot restart or release a note");
   assert.deepEqual(sourceState(sources), initial);
-  assert.equal(sources.length, 4);
+  assert.equal(fm.notes().length, 4);
 });
 
 test("same-time controls retain the unfinished fade and zero recovers without another attack", t => {
-  const { audio, sources, advance } = setup(t);
+  const { audio, fm, sources, advance } = setup(t);
   audio.controlChange(0, 7, 0, 11);
   audio.noteOn(0, 60, 100, 11);
-  const voice = audio.voices.get("11:0:60"), gain = route(voice).gain.gain;
-  const envelope = structuredClone(voice.gain.gain.events), initial = sourceState(sources);
-  close(voice.peak, 100 / 127 * 0.25);
+  const voice = audio.voices.get("11:0:60"), gain = route(fm, voice).gain.gain;
+  const commands = structuredClone(fm.commands), initial = sourceState(sources);
+  assert.equal(fm.notes()[0].velocity, 100);
   advance(0.2);
   const at = audio.eventTime();
   audio.controlChange(0, 7, 127, 11);
@@ -158,13 +161,13 @@ test("same-time controls retain the unfinished fade and zero recovers without an
   advance(0.02);
   audio.controlChange(0, 11, 127, 11);
   close(gain.at(audio.eventTime() + 0.005), 64 / 127);
-  assert.deepEqual(voice.gain.gain.events, envelope);
+  assert.deepEqual(fm.commands, commands, "a silenced channel's note keeps sounding for its recovery");
   assert.deepEqual(sourceState(sources), initial);
   assert.equal(audio.voices.get("11:0:60"), voice);
 });
 
 test("release tails and percussion after note-off remain on live channel controls", t => {
-  const { audio, sources, advance } = setup(t);
+  const { audio, fm, sources, advance } = setup(t);
   audio.noteOn(0, 60, 100, 11);
   audio.noteOn(9, 40, 100, 11);
   const melody = audio.voices.get("11:0:60"), drum = audio.voices.get("11:9:40");
@@ -174,16 +177,18 @@ test("release tails and percussion after note-off remain on live channel control
   assert.equal(audio.voices.size, 1);
   assert.equal(audio.voices.get("11:9:40"), drum);
   assert.equal(audio.sources.size, 2);
-  const envelopes = [melody, drum].map(voice => structuredClone(voice.gain.gain.events));
+  assert.deepEqual(fm.of(melody.fm).map(command => command.op), ["off"], "the melody follows its own release");
+  assert.deepEqual(fm.of(drum.fm), [], "a stand-in drum is a one-shot");
+  const commands = structuredClone(fm.commands);
   const initial = sourceState(sources);
   for (const [channel, voice] of [[0, melody], [9, drum]]) {
     audio.controlChange(channel, 7, 0, 11);
     audio.controlChange(channel, 10, 127, 11);
-    const output = route(voice), end = audio.eventTime() + 0.005;
+    const output = route(fm, voice), end = audio.eventTime() + 0.005;
     close(output.gain.gain.at(end), 0);
     close(output.panner.pan.at(end), 63 / 64);
   }
-  assert.deepEqual([melody, drum].map(voice => voice.gain.gain.events), envelopes);
+  assert.deepEqual(fm.commands, commands);
   assert.deepEqual(sourceState(sources), initial, "percussion keeps its natural end and melody its release end");
 });
 
@@ -192,7 +197,7 @@ test("channel controls leave PCM, owner gains and user sliders unchanged", t => 
   audio.setSoundGain(11, 2500);
   audio.noteOn(0, 60, 100, 11);
   audio.playWave(1, 8000, new Float32Array([0.25, -0.25]), 11);
-  const wave = sources[1], envelope = wave.connections[0], gains = audio.soundGains.get(11);
+  const wave = sources[0], envelope = wave.connections[0], gains = audio.soundGains.get(11);
   assert.equal(envelope.connections[0], gains.wave);
   const initial = sourceState(sources), buffer = wave.buffer;
   for (const [control, value] of [[7, 0], [11, 32], [10, 127]]) audio.controlChange(0, control, value, 11);
@@ -207,26 +212,28 @@ test("channel controls leave PCM, owner gains and user sliders unchanged", t => 
 });
 
 test("a resumed envelope keeps its age while current channel controls change", t => {
-  const { audio, advance } = setup(t);
+  const { audio, fm, advance } = setup(t);
   audio.controlChange(0, 7, 32, 11);
   audio.controlChange(0, 11, 64, 11);
   audio.noteResume(0, 60, 100, 65, 11);
-  const voice = audio.voices.get("11:0:60"), output = route(voice);
-  close(voice.gain.gain.events[0][1], 100 / 127 * 0.25 * Math.sqrt(0.7));
+  const voice = audio.voices.get("11:0:60"), output = route(fm, voice);
+  close(fm.notes()[0].age, 0.065);
   close(voice.sourceStart - voice.started, 0.065);
   close(output.gain.gain.value, 32 / 127 * 64 / 127);
-  const envelope = structuredClone(voice.gain.gain.events);
+  const commands = structuredClone(fm.commands);
   advance(0.02);
   audio.controlChange(0, 7, 127, 11);
-  assert.deepEqual(voice.gain.gain.events, envelope);
+  assert.deepEqual(fm.commands, commands);
   audio.noteOff(0, 60, 0, 11);
-  close(voice.gain.gain.events.at(-2)[1], 100 / 127 * 0.25 * 0.7 ** (0.075 / 0.11));
+  const [release] = fm.of(voice.fm);
+  assert.equal(release.op, "off");
+  close(release.at, audio.eventTime());
 });
 
 test("a clock reset cancels older pending controls before applying the latest ramp", t => {
-  const { audio, wall } = setup(t);
+  const { audio, fm, wall } = setup(t);
   audio.noteOn(0, 60, 100, 11);
-  const output = route(audio.voices.get("11:0:60"));
+  const output = route(fm, audio.voices.get("11:0:60"));
   audio.context.baseLatency = 0.09;
   audio.scheduleAnchor = { audio: 1.17, wall: 0 };
   audio.controlChange(0, 7, 32, 11);
@@ -251,13 +258,13 @@ test("a clock reset cancels older pending controls before applying the latest ra
 });
 
 test("stopping owners including zero disconnects cached channel nodes exactly once", t => {
-  const { audio } = setup(t);
+  const { audio, fm } = setup(t);
   const outputs = new Map();
   for (const sound of [0, 11, 22]) {
     audio.controlChange(0, 7, 32, sound);
     audio.noteOn(0, 60, 100, sound);
     audio.noteOn(1, 64, 100, sound);
-    outputs.set(sound, [...audio.voices.values()].filter(voice => voice.sound === sound).map(route));
+    outputs.set(sound, [...audio.voices.values()].filter(voice => voice.sound === sound).map(voice => route(fm, voice)));
   }
   audio.stopSound();
   audio.stopSound();
@@ -269,8 +276,9 @@ test("stopping owners including zero disconnects cached channel nodes exactly on
     assert.equal(output.gain.disconnects, 0);
     assert.equal(output.panner.disconnects, 0);
   }
+  assert.equal(fm.released.length, 2, "the stopped owner's lanes are returned");
   audio.noteOn(0, 60, 100);
-  const replacement = route(audio.voices.get("0:60"));
+  const replacement = route(fm, audio.voices.get("0:60"));
   assert.notEqual(replacement.gain, outputs.get(0)[0].gain);
   close(replacement.gain.gain.value, 100 / 127);
   audio.stopSound(11);

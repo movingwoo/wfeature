@@ -7,6 +7,8 @@ import "slices"
 // let subsequent Data Entry overwrite the previously selected sensitivity.
 func (state *AudioChannelState) controlChange(control, value uint8) {
 	switch control {
+	case 1:
+		state.Modulation = value
 	case 7:
 		state.Volume = value
 	case 10:
@@ -26,7 +28,7 @@ func (state *AudioChannelState) controlChange(control, value uint8) {
 	case 121:
 		// Reset controller positions, not instrument/mix configuration or
 		// registered parameter values (including pitch sensitivity).
-		state.Expression, state.Sustain, state.Bend = 127, 0, 8192
+		state.Expression, state.Sustain, state.Bend, state.Modulation = 127, 0, 8192, 0
 		state.RPNMSB, state.RPNLSB, state.NRPNMSB, state.NRPNLSB = 127, 127, 127, 127
 		state.NRPN = false
 	case 6, 38, 96, 97:

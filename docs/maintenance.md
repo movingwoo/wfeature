@@ -113,14 +113,15 @@ and in rendered Chromium/WebKit output. The remainder cannot be settled there:
   evidence, not a guessed mapping
   ([sounds without audible events](history/audio.md#sounds-without-audible-events)).
 
-Measured-work candidates for timbre, none started: the page maps 128 programs
-onto 16 oscillator families and plays drums as a short filtered-noise burst, so
-distinct attack/decay/sustain/release shapes per family and a small procedural
-drum model could separate instruments without importing a sample bank. Measure
-clipping of the actual mixed MIDI/PCM output at the supported slider settings
-before adding headroom or a limiter, and measure native CPU and memory of the
-retained sources before tuning the source budgets. No vendor sound bank is
-guessed from SysEx, and the synthesis engine is not to be replaced wholesale.
+Timbre: since 2026-11-01 the page plays the FM voices scores define for
+themselves, and its own FM stand-ins for the programs and drum keys they leave
+to the chip's bank ([the file's own voices](audio.md#the-files-own-voices)).
+Open: a listening comparison with a handset, the MA-3 waves 8–31, which play an
+approximation, and the stand-in voices, which are reasonable FM patches rather
+than the chip's built-in ones. No vendor sound bank is guessed or bundled.
+Measure clipping of the actual mixed MIDI/PCM output at the supported slider
+settings before adding headroom or a limiter, and the synthesizer's CPU on a
+phone before raising the voice budget.
 
 ## Performance and optional features
 

@@ -137,6 +137,7 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 	runner.soundTiming = request.URL.Query().Get("timing") == "1" && runner.soundResume
 	runner.soundPCM = negotiatedPCM(request.URL.Query().Get("pcm"), runner.soundOwnership)
 	runner.soundWavePhase = negotiatedWavePhase(request.URL.Query().Get("phase"), runner.soundOwnership)
+	runner.soundVoice = negotiatedVoice(request.URL.Query().Get("voice"), runner.soundOwnership, runner.protocol)
 	runner.run(request.Context())
 }
 
@@ -182,6 +183,7 @@ type sessionRunner struct {
 	soundTiming     bool // Presentation timestamps are negotiated independently.
 	soundPCM        bool // PCM channel controls require an explicitly capable page.
 	soundWavePhase  bool // Fractional PCM offsets require an explicitly capable page.
+	soundVoice      bool // A sound's own FM voices require an explicitly capable page.
 	legacyAudio     legacyAudioState
 	audioNeedsReset bool
 	// audioSentAt is when the last sound message was queued. A batch that
@@ -1798,6 +1800,9 @@ func (r *sessionRunner) sendAudio(events []audioEvent, droppable bool) bool {
 			events[i].FramePhase = 0
 		}
 	}
+	if !r.soundVoice {
+		events = withoutVoices(events)
+	}
 	if !r.soundPCM {
 		compatible := events[:0]
 		for _, event := range events {
@@ -1989,6 +1994,12 @@ func (a *audioCollector) queueAudioEvent(sound backend.AudioHandle, event smaf.E
 		}
 	case smaf.EventNoteOn:
 		queued.Kind, queued.Note, queued.Velocity = audioNoteOn, event.Note, event.Velocity
+		queued.Voice, queued.Pitch = event.Program, event.Value
+	case smaf.EventVoice:
+		if len(event.SysEx) == 0 || event.Program == 0 {
+			return
+		}
+		queued.Kind, queued.Voice, queued.raw = audioVoice, event.Program, bytes.Clone(event.SysEx)
 	case smaf.EventNoteOff:
 		queued.Kind, queued.Note, queued.Velocity = audioNoteOff, event.Note, event.Velocity
 	case smaf.EventProgramChange:
@@ -2019,8 +2030,12 @@ func (a *audioCollector) SoundGain(sound backend.AudioHandle, gain uint16) {
 }
 
 func (a *audioCollector) ResumeNote(sound backend.AudioHandle, channel, note, velocity uint8, age time.Duration) {
-	milliseconds := uint32(min(max(age.Milliseconds(), 0), int64(1<<32-1)))
-	a.append(audioEvent{Kind: audioNoteResume, Sound: uint32(sound), Channel: channel, Note: note, Velocity: velocity, Age: milliseconds})
+	a.append(audioEvent{Kind: audioNoteResume, Sound: uint32(sound), Channel: channel, Note: note, Velocity: velocity, Age: audioAgeMilliseconds(age)})
+}
+
+// audioAgeMilliseconds is a note's envelope age as the wire carries it.
+func audioAgeMilliseconds(age time.Duration) uint32 {
+	return uint32(min(max(age.Milliseconds(), 0), int64(1<<32-1)))
 }
 
 // Handoffs run between guest calls, never concurrently with a tick or input.

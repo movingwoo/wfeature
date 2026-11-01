@@ -14,7 +14,7 @@ import (
 
 func checkpointAudioFixture() AudioState {
 	return AudioState{
-		Version: 9, Next: 1, MaxSounds: defaultMaxSounds, Volume: 100,
+		Version: 10, Next: 1, MaxSounds: defaultMaxSounds, Volume: 100,
 		Sounds: []AudioSoundState{{Handle: 1, Volume: 100, Length: time.Second, Events: []smaf.Event{
 			{Type: smaf.EventWave, WaveChannels: 1, SamplingRate: 4, Wave: []int16{11, 22, 33, 44}},
 			{Time: 1000, Type: smaf.EventEnd},
@@ -23,13 +23,14 @@ func checkpointAudioFixture() AudioState {
 			Channels: defaultAudioChannels(),
 			Sounds:   []AudioSoundOutputState{{Sound: 1, Gain: AudioGainUnity, Channels: defaultAudioChannels()}},
 			Waves:    []AudioWaveState{{Sound: 1, Channels: 1, Rate: 4, Samples: []int16{11, 22, 33, 44}, BudgetBytes: 8, FramePhase: 0}},
+			Notes:    []AudioVoiceState{{Sound: 1, Channel: 0, Note: 60, Velocity: 100, StartedWith: defaultAudioChannels()[0], Voice: 1, Pitch: 48}},
 		},
 	}
 }
 
 func checkpointAudioDocument(t *testing.T, legacy bool) map[string]any {
 	t.Helper()
-	version := uint32(9)
+	version := uint32(10)
 	if legacy {
 		version = 6
 	}
@@ -44,6 +45,11 @@ func checkpointAudioVersionFixture(version uint32) AudioState {
 	}
 	if version == 6 || version == 7 || version == 8 {
 		state.Output.Waves[0].FramePhase = 0
+	}
+	if version <= 9 {
+		for index := range state.Output.Notes {
+			state.Output.Notes[index].Voice, state.Output.Notes[index].Pitch = 0, 0
+		}
 	}
 	return state
 }
@@ -87,7 +93,36 @@ func checkpointAudioVersionDocument(t *testing.T, version uint32) map[string]any
 			remove(wave.(map[string]any), "FramePhase")
 		}
 	}
+	if version <= 9 {
+		for _, note := range output["Notes"].([]any) {
+			remove(note.(map[string]any), "Voice")
+			remove(note.(map[string]any), "Pitch")
+			remove(note.(map[string]any)["StartedWith"].(map[string]any), "Modulation")
+		}
+		for _, channel := range checkpointAudioChannels(output) {
+			remove(channel, "Modulation")
+		}
+	}
 	return record
+}
+
+// checkpointAudioChannels answers every channel state of an output record
+// except the ones notes started with.
+func checkpointAudioChannels(output map[string]any) []map[string]any {
+	var channels []map[string]any
+	for _, channel := range output["Channels"].([]any) {
+		channels = append(channels, channel.(map[string]any))
+	}
+	for _, sound := range output["Sounds"].([]any) {
+		for _, channel := range sound.(map[string]any)["Channels"].([]any) {
+			channels = append(channels, channel.(map[string]any))
+		}
+	}
+	return channels
+}
+
+func checkpointAudioNote(record map[string]any) map[string]any {
+	return record["Output"].(map[string]any)["Notes"].([]any)[0].(map[string]any)
 }
 
 func checkpointAudioJSON(t *testing.T, value any) []byte {
@@ -108,7 +143,7 @@ func checkpointAudioWave(record map[string]any) map[string]any {
 }
 
 func TestCheckpointAudioLegacyShapeAndFieldOrder(t *testing.T) {
-	for _, shapeVersion := range []uint32{6, 7, 8, 9} {
+	for _, shapeVersion := range []uint32{6, 7, 8, 9, 10} {
 		record := checkpointAudioVersionDocument(t, shapeVersion)
 		version := checkpointAudioJSON(t, record["Version"])
 		delete(record, "Version")
@@ -134,7 +169,7 @@ func TestCheckpointAudioLegacyShapeAndFieldOrder(t *testing.T) {
 }
 
 func TestCheckpointAudioCurrentPCMDataPreserved(t *testing.T) {
-	for _, version := range []uint32{7, 8, 9} {
+	for _, version := range []uint32{7, 8, 9, 10} {
 		want := checkpointAudioVersionFixture(version)
 		want.Sounds[0].Events[0].PCMChannel = 35
 		want.Output.Waves[0].PCMChannel = 35
@@ -143,7 +178,7 @@ func TestCheckpointAudioCurrentPCMDataPreserved(t *testing.T) {
 		checkpointAudioEvent(record, 0)["PCMChannel"] = 35
 		checkpointAudioWave(record)["PCMChannel"] = 35
 		record["Output"].(map[string]any)["PCMChannels"] = want.Output.PCMChannels
-		if version == 9 {
+		if version >= 9 {
 			want.Output.Waves[0].FramePhase = 1
 			checkpointAudioWave(record)["FramePhase"] = 1
 		}
@@ -155,7 +190,7 @@ func TestCheckpointAudioCurrentPCMDataPreserved(t *testing.T) {
 }
 
 func TestCheckpointAudioLegacyEmptyListsAndPreflightLimits(t *testing.T) {
-	for _, version := range []uint32{6, 7, 8, 9} {
+	for _, version := range []uint32{6, 7, 8, 9, 10} {
 		record := checkpointAudioVersionDocument(t, version)
 		record["Sounds"] = nil
 		record["Output"].(map[string]any)["Waves"] = nil
@@ -196,9 +231,9 @@ func TestCheckpointAudioRejectsHybridOrMissingFieldsAtomically(t *testing.T) {
 		{"v6 full v7 shape", 7, func(r map[string]any) { r["Version"] = 6 }},
 		{"v6 full v8 shape", 8, func(r map[string]any) { r["Version"] = 6 }},
 		{"v7 full v8 shape", 8, func(r map[string]any) { r["Version"] = 7 }},
-		{"v6 full current shape", 9, func(r map[string]any) { r["Version"] = 6 }},
-		{"v7 full current shape", 9, func(r map[string]any) { r["Version"] = 7 }},
-		{"v8 full current shape", 9, func(r map[string]any) { r["Version"] = 8 }},
+		{"v6 full current shape", 10, func(r map[string]any) { r["Version"] = 6 }},
+		{"v7 full current shape", 10, func(r map[string]any) { r["Version"] = 7 }},
+		{"v8 full current shape", 10, func(r map[string]any) { r["Version"] = 8 }},
 		{"v7 event omission", 7, func(r map[string]any) { delete(checkpointAudioEvent(r, 0), "PCMChannel") }},
 		{"v7 second event omission", 7, func(r map[string]any) { delete(checkpointAudioEvent(r, 1), "PCMChannel") }},
 		{"v7 wave omission", 7, func(r map[string]any) { delete(checkpointAudioWave(r), "PCMChannel") }},
@@ -216,19 +251,31 @@ func TestCheckpointAudioRejectsHybridOrMissingFieldsAtomically(t *testing.T) {
 		{"v7 entire v6 shape", 6, func(r map[string]any) { r["Version"] = 7 }},
 		{"v8 entire v6 shape", 6, func(r map[string]any) { r["Version"] = 8 }},
 		{"v8 entire v7 shape", 7, func(r map[string]any) { r["Version"] = 8 }},
-		{"current entire v6 shape", 6, func(r map[string]any) { r["Version"] = 9 }},
-		{"current entire v7 shape", 7, func(r map[string]any) { r["Version"] = 9 }},
-		{"current entire v8 shape", 8, func(r map[string]any) { r["Version"] = 9 }},
-		{"current event omission", 9, func(r map[string]any) { delete(checkpointAudioEvent(r, 0), "PCMChannel") }},
-		{"current second event omission", 9, func(r map[string]any) { delete(checkpointAudioEvent(r, 1), "PCMChannel") }},
-		{"current wave omission", 9, func(r map[string]any) { delete(checkpointAudioWave(r), "PCMChannel") }},
-		{"current output omission", 9, func(r map[string]any) { delete(r["Output"].(map[string]any), "PCMChannels") }},
-		{"current budget omission", 9, func(r map[string]any) { delete(checkpointAudioWave(r), "BudgetBytes") }},
-		{"current phase omission", 9, func(r map[string]any) { delete(checkpointAudioWave(r), "FramePhase") }},
-		{"current second wave phase omission", 9, func(r map[string]any) {
+		{"current entire v6 shape", 6, func(r map[string]any) { r["Version"] = 10 }},
+		{"current entire v7 shape", 7, func(r map[string]any) { r["Version"] = 10 }},
+		{"current entire v8 shape", 8, func(r map[string]any) { r["Version"] = 10 }},
+		{"current event omission", 10, func(r map[string]any) { delete(checkpointAudioEvent(r, 0), "PCMChannel") }},
+		{"current second event omission", 10, func(r map[string]any) { delete(checkpointAudioEvent(r, 1), "PCMChannel") }},
+		{"current wave omission", 10, func(r map[string]any) { delete(checkpointAudioWave(r), "PCMChannel") }},
+		{"current output omission", 10, func(r map[string]any) { delete(r["Output"].(map[string]any), "PCMChannels") }},
+		{"current budget omission", 10, func(r map[string]any) { delete(checkpointAudioWave(r), "BudgetBytes") }},
+		{"current phase omission", 10, func(r map[string]any) { delete(checkpointAudioWave(r), "FramePhase") }},
+		{"current second wave phase omission", 10, func(r map[string]any) {
 			wave := checkpointAudioWave(checkpointAudioVersionDocument(t, 8))
 			r["Output"].(map[string]any)["Waves"] = []any{checkpointAudioWave(r), wave}
 		}},
+		{"v6 voice addition", 6, func(r map[string]any) { checkpointAudioNote(r)["Voice"] = 0 }},
+		{"v9 voice addition", 9, func(r map[string]any) { checkpointAudioNote(r)["Voice"] = 0 }},
+		{"v9 pitch addition", 9, func(r map[string]any) { checkpointAudioNote(r)["Pitch"] = 0 }},
+		{"v9 full current shape", 10, func(r map[string]any) { r["Version"] = 9 }},
+		{"current entire v9 shape", 9, func(r map[string]any) { r["Version"] = 10 }},
+		{"current voice omission", 10, func(r map[string]any) { delete(checkpointAudioNote(r), "Voice") }},
+		{"current pitch omission", 10, func(r map[string]any) { delete(checkpointAudioNote(r), "Pitch") }},
+		{"current voice overflow", 10, func(r map[string]any) { checkpointAudioNote(r)["Voice"] = 256 }},
+		{"v9 modulation addition", 9, func(r map[string]any) { checkpointAudioChannels(r["Output"].(map[string]any))[0]["Modulation"] = 0 }},
+		{"v9 started-with modulation addition", 9, func(r map[string]any) { checkpointAudioNote(r)["StartedWith"].(map[string]any)["Modulation"] = 0 }},
+		{"current modulation omission", 10, func(r map[string]any) { delete(checkpointAudioChannels(r["Output"].(map[string]any))[3], "Modulation") }},
+		{"current modulation overflow", 10, func(r map[string]any) { checkpointAudioChannels(r["Output"].(map[string]any))[0]["Modulation"] = 256 }},
 		{"legacy unknown field", 6, func(r map[string]any) { checkpointAudioEvent(r, 0)["Future"] = 0 }},
 		{"legacy wrong version case", 6, func(r map[string]any) { delete(r, "Version"); r["version"] = 6 }},
 		{"legacy null version", 6, func(r map[string]any) { r["Version"] = nil }},
@@ -238,10 +285,10 @@ func TestCheckpointAudioRejectsHybridOrMissingFieldsAtomically(t *testing.T) {
 		{"v8 wrong group shape", 8, func(r map[string]any) { r["Output"].(map[string]any)["PCMChannels"] = map[string]any{} }},
 		{"v8 null budget", 8, func(r map[string]any) { checkpointAudioWave(r)["BudgetBytes"] = nil }},
 		{"v8 budget overflow", 8, func(r map[string]any) { checkpointAudioWave(r)["BudgetBytes"] = uint64(1) << 32 }},
-		{"current null phase", 9, func(r map[string]any) { checkpointAudioWave(r)["FramePhase"] = nil }},
-		{"current negative phase", 9, func(r map[string]any) { checkpointAudioWave(r)["FramePhase"] = -1 }},
-		{"current phase overflow", 9, func(r map[string]any) { checkpointAudioWave(r)["FramePhase"] = uint64(1) << 32 }},
-		{"current unknown wave field", 9, func(r map[string]any) { checkpointAudioWave(r)["FuturePhase"] = 0 }},
+		{"current null phase", 10, func(r map[string]any) { checkpointAudioWave(r)["FramePhase"] = nil }},
+		{"current negative phase", 10, func(r map[string]any) { checkpointAudioWave(r)["FramePhase"] = -1 }},
+		{"current phase overflow", 10, func(r map[string]any) { checkpointAudioWave(r)["FramePhase"] = uint64(1) << 32 }},
+		{"current unknown wave field", 10, func(r map[string]any) { checkpointAudioWave(r)["FuturePhase"] = 0 }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			record := checkpointAudioVersionDocument(t, test.version)
@@ -256,7 +303,7 @@ func TestCheckpointAudioRejectsHybridOrMissingFieldsAtomically(t *testing.T) {
 			}
 		})
 	}
-	for _, version := range []uint32{6, 7, 8, 9} {
+	for _, version := range []uint32{6, 7, 8, 9, 10} {
 		for _, test := range []struct {
 			name   string
 			change func(map[string]any)
@@ -285,6 +332,9 @@ func TestCheckpointAudioRejectsHybridOrMissingFieldsAtomically(t *testing.T) {
 		}
 		if version >= 9 {
 			duplicates = append(duplicates, bytes.Replace(data, []byte(`"FramePhase":`), []byte(`"FramePhase":0,"FramePhase":`), 1))
+		}
+		if version >= 10 {
+			duplicates = append(duplicates, bytes.Replace(data, []byte(`"Voice":`), []byte(`"Voice":0,"Voice":`), 1))
 		}
 		for _, bad := range duplicates {
 			target, want := checkpointAudioFixture(), checkpointAudioFixture()
@@ -315,8 +365,8 @@ func TestCheckpointAudioVersionContextIsLocal(t *testing.T) {
 		Rows: []AudioState{current, legacy6, legacy7, legacy8, current}, Event: current.Sounds[0].Events[0], Wave: current.Output.Waves[0]}
 	record := map[string]any{
 		"Version": 6, "Legacy6": checkpointAudioVersionDocument(t, 6), "Legacy7": checkpointAudioVersionDocument(t, 7), "Legacy8": checkpointAudioVersionDocument(t, 8), "Missing": nil,
-		"Current": checkpointAudioVersionDocument(t, 9),
-		"Rows":    []any{checkpointAudioVersionDocument(t, 9), checkpointAudioVersionDocument(t, 6), checkpointAudioVersionDocument(t, 7), checkpointAudioVersionDocument(t, 8), checkpointAudioVersionDocument(t, 9)},
+		"Current": checkpointAudioVersionDocument(t, 10),
+		"Rows":    []any{checkpointAudioVersionDocument(t, 10), checkpointAudioVersionDocument(t, 6), checkpointAudioVersionDocument(t, 7), checkpointAudioVersionDocument(t, 8), checkpointAudioVersionDocument(t, 10)},
 		"Event":   current.Sounds[0].Events[0], "Wave": current.Output.Waves[0],
 	}
 	var got wrapper
@@ -327,17 +377,17 @@ func TestCheckpointAudioVersionContextIsLocal(t *testing.T) {
 	if err := DecodeCheckpointRecord(checkpointAudioJSON(t, record), &got); !errors.Is(err, ErrCheckpointDamaged) || !reflect.DeepEqual(got, want) {
 		t.Fatalf("legacy sibling relaxed current audio or changed destination: %v", err)
 	}
-	record["Current"] = checkpointAudioVersionDocument(t, 9)
+	record["Current"] = checkpointAudioVersionDocument(t, 10)
 	delete(checkpointAudioWave(record["Current"].(map[string]any)), "BudgetBytes")
 	if err := DecodeCheckpointRecord(checkpointAudioJSON(t, record), &got); !errors.Is(err, ErrCheckpointDamaged) || !reflect.DeepEqual(got, want) {
 		t.Fatalf("legacy sibling relaxed current wave charge or changed destination: %v", err)
 	}
-	record["Current"] = checkpointAudioVersionDocument(t, 9)
+	record["Current"] = checkpointAudioVersionDocument(t, 10)
 	delete(checkpointAudioWave(record["Current"].(map[string]any)), "FramePhase")
 	if err := DecodeCheckpointRecord(checkpointAudioJSON(t, record), &got); !errors.Is(err, ErrCheckpointDamaged) || !reflect.DeepEqual(got, want) {
 		t.Fatalf("legacy sibling relaxed current wave phase or changed destination: %v", err)
 	}
-	record["Current"] = checkpointAudioVersionDocument(t, 9)
+	record["Current"] = checkpointAudioVersionDocument(t, 10)
 	checkpointAudioWave(record["Legacy7"].(map[string]any))["BudgetBytes"] = 0
 	if err := DecodeCheckpointRecord(checkpointAudioJSON(t, record), &got); !errors.Is(err, ErrCheckpointDamaged) || !reflect.DeepEqual(got, want) {
 		t.Fatalf("current sibling relaxed legacy wave charge or changed destination: %v", err)
@@ -366,13 +416,13 @@ func TestCheckpointAudioVersionContextIsLocal(t *testing.T) {
 }
 
 func TestCheckpointAudioUnknownVersionsKeepStrictShape(t *testing.T) {
-	for _, version := range []uint32{0, 5, 10, 1<<32 - 1} {
-		for _, shapeVersion := range []uint32{6, 7, 8, 9} {
+	for _, version := range []uint32{0, 5, 11, 1<<32 - 1} {
+		for _, shapeVersion := range []uint32{6, 7, 8, 9, 10} {
 			record := checkpointAudioVersionDocument(t, shapeVersion)
 			record["Version"] = version
 			var got AudioState
 			err := DecodeCheckpointRecord(checkpointAudioJSON(t, record), &got)
-			if shapeVersion != 9 {
+			if shapeVersion != 10 {
 				if !errors.Is(err, ErrCheckpointDamaged) {
 					t.Fatalf("version %d accepted version %d shape with missing current fields: %v", version, shapeVersion, err)
 				}

@@ -69,8 +69,13 @@ func soundResourceUsage(events []smaf.Event, active []AudioNoteState) (audioReso
 	}
 	groups := make(map[uint16]bool)
 	for index, event := range events {
-		if event.Type > smaf.EventPCMControl || index > 0 && events[index-1].Time > event.Time {
+		if event.Type > smaf.EventVoice || index > 0 && events[index-1].Time > event.Time {
 			return audioResourceUsage{}, fmt.Errorf("audio events have an unsupported type or order")
+		}
+		if event.Type == smaf.EventVoice {
+			if _, ok := smaf.DecodeVoice(event.SysEx); !ok || event.Program == 0 {
+				return audioResourceUsage{}, fmt.Errorf("audio voice definition is invalid")
+			}
 		}
 		if event.PCMChannel != 0 && event.Type != smaf.EventWave && event.Type != smaf.EventPCMControl {
 			return audioResourceUsage{}, fmt.Errorf("audio event has an unrelated PCM channel")
@@ -93,6 +98,11 @@ func soundResourceUsage(events []smaf.Event, active []AudioNoteState) (audioReso
 			}
 			if event.Type == smaf.EventNoteOn && event.Velocity != 0 {
 				mark(event.Channel, event.Note)
+			}
+			// A note-on's voice is a slot and the pitch it sounds; without a
+			// slot there is no pitch to carry.
+			if event.Type == smaf.EventNoteOn && (event.Value >= 128 || event.Program == 0 && event.Value != 0) {
+				return audioResourceUsage{}, fmt.Errorf("audio note has an invalid voice")
 			}
 		}
 		if event.Type == smaf.EventWave && len(event.Wave) != 0 && (event.WaveChannels == 0 || event.SamplingRate == 0) {

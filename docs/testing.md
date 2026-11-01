@@ -2795,7 +2795,17 @@ an origin, here a loopback static server for `web/`. All sixteen runs passed:
 
 The fractional restored PCM scenario, the one the
 [fractional reconstruction](#fractional-pcm-reconstruction) section left
-pending, matches its independent native graph exactly in both engines. These
+pending, matches its independent native graph exactly in both engines.
+
+Six of these harnesses — `audio-controls.mjs`, `audio-midi-state.mjs`,
+`audio-resume.mjs`, `audio-gain.mjs`, `audio-ownership.mjs` and
+`audio-timing.mjs` — build their reference graphs from the per-note oscillator
+envelopes the page used until 2026-11-01. The page now synthesizes notes with
+its FM synthesizer, so those references no longer describe it and the six are
+not expected to pass until they are rebuilt on the synthesizer's own offline
+render. The node tests cover the same contracts against the synthesizer's
+commands, and [the live session](#live-audio-session-acceptance) runs the
+synthesizer in both engines. The PCM and presentation harnesses are unaffected. These
 are offline renders of authored events: they settle native graph behavior, not
 a live game session, device latency or listening. `build/sound-browser-acceptance/`
 holds `run.sh` and the sixteen logs.
@@ -2808,9 +2818,14 @@ sound unless a test calls it, so the harness takes a local archive through
 `WFEATURE_AUDIO_ARCHIVE`, copies it into a scratch library, presses OK three
 times like the real-scene probe, and removes the copy and its save tree
 afterwards. It checks that the socket negotiates
-`protocol=2&sound=resume&timing=1&pcm=1&phase=1`, that binary sound batches
-reach a running context and that every source the page schedules starts ahead
-of the render clock, and it folds the debug page's `audio playout timing`
+`protocol=2&sound=resume&timing=1&pcm=1&phase=1&voice=1`, that binary sound
+batches reach a running context, that the FM synthesizer's worklet module
+loads, and that every source and every synthesizer note the page schedules
+starts ahead of the render clock; notes are counted from the commands posted to
+the worklet, with how many play the score's own voices. With
+`WFEATURE_AUDIO_NO_WORKLET=1` it hides the AudioWorklet as a plain-HTTP page
+on the network has none, and checks instead that the page's ScriptProcessor
+renders. It folds the debug page's `audio playout timing`
 reports into totals. A wrapper around the page's own window check records the
 first batches and every refusal with page time, render time and the batch's
 presentation times. It also reports the most sources alive at once and the
@@ -2833,6 +2848,19 @@ twelve seconds:
 | SKT `14a62a8521a0d434` | 689–690 | 172–176 | 0.044–0.109 | WebKit: one late |
 | KTF `aa3fcba4598b` | 666–678 | 113–116 | 0.078–0.116 | none |
 | LGT `87b04639cdfef6cc` | 329 | 10 | 0.030–0.092 | one future, one late |
+
+On 2026-11-01, after the FM synthesizer replaced the oscillators, a handset
+KTF archive (`8ac1d682de08`) and a mobile-format LGT archive (`af7d82e5e239`)
+pass for 16–20 seconds:
+
+| Archive prefix | Engine | Sound batches | Notes (own voices / definitions) | Note lead (s) | Mix peak |
+| --- | --- | ---: | --- | --- | ---: |
+| KTF `8ac1d682de08` | Chromium, worklet | 187 | 94 (94 / 23) | 0.053–0.105 | 0.075 |
+| KTF `8ac1d682de08` | WebKit, worklet | 183 | 94 (94 / 23) | 0.083–0.107 | 0.067 |
+| KTF `8ac1d682de08` | Chromium, ScriptProcessor | 185 | — | — | 0.069 |
+| LGT `af7d82e5e239` | Chromium, worklet | 167 | 10 (10 / 3) | 0.081–0.112 | 0.062 |
+
+No batch was refused late in any run and no meter read exceeded full scale.
 
 No source started late and no event was more than 100 ms late. The LGT
 archive's first ticks take about 300 ms: the batch sent before the first stall

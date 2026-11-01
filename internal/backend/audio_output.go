@@ -11,7 +11,7 @@ import (
 )
 
 // AudioOutputState is the portable output represented by the page's MIDI
-// synthesizer and PCM player. Oscillator phase, release tails and network/device
+// synthesizer and PCM player. Operator phase, release tails and network/device
 // latency are not execution state. Notes retain their envelope age and PCM
 // resumes at a whole sample frame on the presentation clock. Unscaled Host
 // time continues aging output between service boundaries and supplies a
@@ -37,6 +37,9 @@ type AudioChannelState struct {
 	BendSemitones, BendCents                  uint8
 	RPNMSB, RPNLSB, NRPNMSB, NRPNLSB          uint8
 	NRPN                                      bool
+	// Modulation is the channel's controller 1, the vibrato depth the page's
+	// synthesizer adds to every note on the channel.
+	Modulation uint8
 }
 
 type AudioVoiceState struct {
@@ -50,6 +53,9 @@ type AudioVoiceState struct {
 	Age         time.Duration
 	// Released notes still sound because the owner's sustain pedal is down.
 	Released bool
+	// Voice is the slot of the owner's own FM voice the note plays, and Pitch
+	// the note it sounds; zero plays the Host's instrument for the program.
+	Voice, Pitch uint8
 }
 
 type AudioWaveState struct {
@@ -121,13 +127,17 @@ type audioOutput struct {
 	pcmRefusals   uint64
 	restoredAt    time.Time
 	detached      bool
+	// voices holds each owner's FM voice definitions, borrowed from its
+	// immutable events, so a reconstruction can define them again before
+	// the notes that play them.
+	voices map[AudioHandle]map[uint8][]byte
 }
 
 func newAudioOutput(sink AudioSink, now func() time.Time) *audioOutput {
 	if now == nil {
 		now = time.Now
 	}
-	output := &audioOutput{sink: sink, now: now, soundChannels: make(map[AudioHandle]*[16]AudioChannelState), gains: make(map[AudioHandle]uint16), paused: make(map[AudioHandle]time.Time)}
+	output := &audioOutput{sink: sink, now: now, soundChannels: make(map[AudioHandle]*[16]AudioChannelState), gains: make(map[AudioHandle]uint16), paused: make(map[AudioHandle]time.Time), voices: make(map[AudioHandle]map[uint8][]byte)}
 	output.pcmChannels = make(map[audioPCMKey]*AudioPCMChannelState)
 	output.channels = defaultAudioChannels()
 	return output
@@ -167,14 +177,19 @@ func (output *audioOutput) pruneNotes(now time.Time) {
 }
 
 func (output *audioOutput) MIDINoteOn(channel, note, velocity uint8) {
+	output.noteOn(channel, note, velocity, 0, 0)
+}
+
+// noteOn is MIDINoteOn for a note that may play its owner's own voice.
+func (output *audioOutput) noteOn(channel, note, velocity, voice, pitch uint8) {
 	now := output.eventTime()
 	output.pruneNotes(now)
-	if channel >= 16 || note >= 128 || velocity >= 128 {
+	if channel >= 16 || note >= 128 || velocity >= 128 || pitch >= 128 || voice == 0 && pitch != 0 {
 		output.invalid = true
 	} else if velocity == 0 {
 		output.releaseNote(channel, note)
 	} else {
-		current := audioOutputNote{AudioVoiceState: AudioVoiceState{Channel: channel, Note: note, Velocity: velocity, Sound: output.sound, StartedWith: output.currentChannels()[channel]}}
+		current := audioOutputNote{AudioVoiceState: AudioVoiceState{Channel: channel, Note: note, Velocity: velocity, Sound: output.sound, StartedWith: output.currentChannels()[channel], Voice: voice, Pitch: pitch}}
 		current.started = now
 		if channel == 9 {
 			current.ends = current.started.Add(drumDuration)
@@ -182,7 +197,32 @@ func (output *audioOutput) MIDINoteOn(channel, note, velocity uint8) {
 		output.appendNote(current)
 	}
 	if output.sink != nil {
-		output.destination(output.sound).MIDINoteOn(channel, note, velocity)
+		output.destination(output.sound).voiceNoteOn(channel, note, velocity, voice, pitch)
+	}
+}
+
+// rememberVoice keeps an owner's voice for reconstruction. The bytes are
+// borrowed from the owner's immutable events.
+func (output *audioOutput) rememberVoice(owner AudioHandle, slot uint8, data []byte) {
+	voices := output.voices[owner]
+	if voices == nil {
+		voices = make(map[uint8][]byte)
+		output.voices[owner] = voices
+	}
+	voices[slot] = data
+}
+
+// defineVoice records one of the current owner's FM voices and forwards it.
+// A Play restarts its owner with stopSound, which forgets the definitions;
+// the score defines them again from its first instant.
+func (output *audioOutput) defineVoice(slot uint8, data []byte) {
+	if slot == 0 {
+		output.invalid = true
+		return
+	}
+	output.rememberVoice(output.sound, slot, data)
+	if output.sink != nil {
+		output.destination(output.sound).defineVoice(slot, data)
 	}
 }
 
@@ -357,7 +397,8 @@ func (output *audioOutput) capture(now time.Time) (AudioOutputState, error) {
 
 func (state AudioChannelState) valid() bool {
 	return state.Program < 128 && state.Volume < 128 && state.Expression < 128 && state.Pan < 128 && state.Sustain < 128 && state.Bend < 16384 &&
-		state.BendSemitones < 128 && state.BendCents < 100 && state.RPNMSB < 128 && state.RPNLSB < 128 && state.NRPNMSB < 128 && state.NRPNLSB < 128
+		state.BendSemitones < 128 && state.BendCents < 100 && state.RPNMSB < 128 && state.RPNLSB < 128 && state.NRPNMSB < 128 && state.NRPNLSB < 128 &&
+		state.Modulation < 128
 }
 
 func (saved AudioOutputState) validate(version uint32) error {
@@ -403,6 +444,9 @@ func (saved AudioOutputState) validate(version uint32) error {
 			return invalid()
 		}
 		if note.Released && (note.Channel == 9 || channels[note.Sound][note.Channel].Sustain < 64) {
+			return invalid()
+		}
+		if note.Pitch >= 128 || note.Voice == 0 && note.Pitch != 0 || version < 10 && note.Voice != 0 {
 			return invalid()
 		}
 		owner := note.Sound
@@ -511,6 +555,7 @@ func replayAudioChannel(sink AudioSink, channel uint8, state AudioChannelState) 
 	sink.MIDIControlChange(channel, 10, state.Pan)
 	sink.MIDIControlChange(channel, 11, state.Expression)
 	sink.MIDIControlChange(channel, 64, state.Sustain)
+	sink.MIDIControlChange(channel, 1, state.Modulation)
 	replayAudioParameters(sink, channel, state)
 	sink.MIDIPitchBend(channel, state.Bend)
 }
@@ -568,6 +613,17 @@ func (output *audioOutput) replay(now time.Time, sound AudioHandle, only bool) {
 			}
 		}
 	}
+	// A page that lost its output lost the voices too; define them again
+	// before any note that names one.
+	for _, owner := range slices.Sorted(maps.Keys(output.voices)) {
+		if !selected(owner) {
+			continue
+		}
+		voices := output.voices[owner]
+		for _, slot := range slices.Sorted(maps.Keys(voices)) {
+			output.destination(owner).defineVoice(slot, voices[slot])
+		}
+	}
 	// Restore independent channels once before sounding any note. Reapplying
 	// RPN 0 between voices would briefly reset fine sensitivity when CC6 arrives.
 	if independent {
@@ -596,9 +652,14 @@ func (output *audioOutput) replay(now time.Time, sound AudioHandle, only bool) {
 			if _, raw := output.sink.(AudioGainSink); !raw {
 				velocity = uint8(int(velocity) * int(output.gain(note.Sound)) / int(AudioGainUnity))
 			}
-			sink.ResumeNote(note.Sound, note.Channel, note.Note, velocity, max(0, now.Sub(note.started)))
+			age := max(0, now.Sub(note.started))
+			if voiced, ok := sink.(AudioVoiceResumeSink); ok && note.Voice != 0 {
+				voiced.ResumeVoiceNote(note.Sound, note.Channel, note.Note, velocity, note.Voice, note.Pitch, age)
+			} else {
+				sink.ResumeNote(note.Sound, note.Channel, note.Note, velocity, age)
+			}
 		} else {
-			output.destination(note.Sound).MIDINoteOn(note.Channel, note.Note, note.Velocity)
+			output.destination(note.Sound).voiceNoteOn(note.Channel, note.Note, note.Velocity, note.Voice, note.Pitch)
 		}
 		if note.Released {
 			output.destination(note.Sound).MIDINoteOff(note.Channel, note.Note, 0)
@@ -669,6 +730,7 @@ func (output *audioOutput) stopSound(sound AudioHandle) {
 		return true
 	})
 	delete(output.soundChannels, sound)
+	delete(output.voices, sound)
 	for key := range output.pcmChannels {
 		if key.sound == sound {
 			delete(output.pcmChannels, key)

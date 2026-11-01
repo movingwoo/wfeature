@@ -163,6 +163,28 @@ export class AudioStream {
           emit({ kind: "pcmControl", pcmChannel, control, value });
           break;
         }
+        // A sound's own FM voice, defined once by id like a sample.
+        case 0x17: {
+          need(5);
+          const voice = bytes[at];
+          const definition = this.definitions.get(view.getUint32(at + 1));
+          at += 5;
+          if (voice === 0) throw new Error("sound message defines voice slot zero");
+          if (definition) emit({ kind: "voice", voice, data: definition.bytes });
+          break;
+        }
+        case 0x18:
+          need(5);
+          if (bytes[at + 3] === 0 || bytes[at + 4] > 127) throw new Error("sound message has an invalid voice note");
+          emit({ kind: "noteOn", channel: bytes[at], note: bytes[at + 1], velocity: bytes[at + 2], voice: bytes[at + 3], pitch: bytes[at + 4] });
+          at += 5;
+          break;
+        case 0x19:
+          need(9);
+          if (bytes[at + 7] === 0 || bytes[at + 8] > 127) throw new Error("sound message has an invalid voice note");
+          emit({ kind: "noteResume", channel: bytes[at], note: bytes[at + 1], velocity: bytes[at + 2], age: view.getUint32(at + 3), voice: bytes[at + 7], pitch: bytes[at + 8] });
+          at += 9;
+          break;
         default:
           throw new Error(`unknown sound operation ${operation}`);
       }

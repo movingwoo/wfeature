@@ -34,8 +34,9 @@ type checkpointRecordWalk struct {
 	audio  *checkpointAudioShape
 }
 
-// Versions 7, 8 and 9 added PCM controls, retained wave admission charges and
-// frame phases. Track each addition until the enclosing AudioState ends, since
+// Versions 7, 8, 9 and 10 added PCM controls, retained wave admission charges,
+// frame phases, and the FM voice of each sounding note with each channel's
+// modulation. Track each addition until the enclosing AudioState ends, since
 // Version can follow its children. Unknown versions require the complete current
 // shape; their semantic version checks remain the audio component's responsibility.
 type checkpointAudioShape struct {
@@ -47,6 +48,7 @@ const (
 	checkpointAudioPCMFields uint8 = 1 << iota
 	checkpointAudioWaveBudgetField
 	checkpointAudioWavePhaseField
+	checkpointAudioVoiceFields
 )
 
 func checkpointAudioAddedField(t reflect.Type, name string) uint8 {
@@ -67,6 +69,14 @@ func checkpointAudioAddedField(t reflect.Type, name string) uint8 {
 	case reflect.TypeFor[AudioOutputState]():
 		if name == "PCMChannels" {
 			return checkpointAudioPCMFields
+		}
+	case reflect.TypeFor[AudioVoiceState]():
+		if name == "Voice" || name == "Pitch" {
+			return checkpointAudioVoiceFields
+		}
+	case reflect.TypeFor[AudioChannelState]():
+		if name == "Modulation" {
+			return checkpointAudioVoiceFields
 		}
 	}
 	return 0
@@ -312,7 +322,7 @@ func (walk *checkpointRecordWalk) inspect(decoder *json.Decoder, token json.Toke
 			return invalid()
 		}
 		if audio != nil {
-			required := checkpointAudioPCMFields | checkpointAudioWaveBudgetField | checkpointAudioWavePhaseField
+			required := checkpointAudioPCMFields | checkpointAudioWaveBudgetField | checkpointAudioWavePhaseField | checkpointAudioVoiceFields
 			switch audio.version {
 			case 6:
 				required = 0
@@ -320,6 +330,8 @@ func (walk *checkpointRecordWalk) inspect(decoder *json.Decoder, token json.Toke
 				required = checkpointAudioPCMFields
 			case 8:
 				required = checkpointAudioPCMFields | checkpointAudioWaveBudgetField
+			case 9:
+				required = checkpointAudioPCMFields | checkpointAudioWaveBudgetField | checkpointAudioWavePhaseField
 			}
 			if audio.present&^required != 0 {
 				return fmt.Errorf("version %d audio checkpoint contains newer fields", audio.version)

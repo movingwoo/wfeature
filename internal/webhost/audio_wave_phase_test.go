@@ -212,7 +212,7 @@ func TestAudioWavePhaseBackendReplayAndCheckpoint(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						if saved.Version != 9 || len(saved.Output.Waves) != 1 || saved.Output.Waves[0].FramePhase != 500000000 || saved.Output.Waves[0].BudgetBytes != 8 || !slices.Equal(saved.Output.Waves[0].Samples, []int16{-200, 300, -400}) {
+						if saved.Version != 10 || len(saved.Output.Waves) != 1 || saved.Output.Waves[0].FramePhase != 500000000 || saved.Output.Waves[0].BudgetBytes != 8 || !slices.Equal(saved.Output.Waves[0].Samples, []int16{-200, 300, -400}) {
 							t.Fatalf("capture lost fractional frame or raw suffix: %+v", saved.Output.Waves)
 						}
 						at := 0.375

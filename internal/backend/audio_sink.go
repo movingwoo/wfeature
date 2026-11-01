@@ -1,6 +1,10 @@
 package backend
 
-import "github.com/movingwoo/wfeature/internal/audio/smaf"
+import (
+	"time"
+
+	"github.com/movingwoo/wfeature/internal/audio/smaf"
+)
 
 // OwnedAudioSink receives independent playback streams. Sound handles scope
 // every MIDI channel and sampled source; stopping one stream must also cancel
@@ -35,6 +39,13 @@ type AudioPCMSink interface {
 type AudioWaveResumeSink interface {
 	OwnedAudioSink
 	ResumeWave(sound AudioHandle, event smaf.Event, framePhase uint32)
+}
+
+// AudioVoiceResumeSink restores a held note that plays a sound's own voice.
+// Hosts without it resume the note on their ordinary instrument.
+type AudioVoiceResumeSink interface {
+	AudioResumeSink
+	ResumeVoiceNote(sound AudioHandle, channel, note, velocity, voice, pitch uint8, age time.Duration)
 }
 
 func emitAudioEvent(sink AudioSink, sound AudioHandle, event smaf.Event) {
@@ -89,10 +100,22 @@ func (s audioSoundSink) resumeWave(event smaf.Event, framePhase uint32) {
 	emitAudioEvent(s.sink, s.sound, event)
 }
 func (s audioSoundSink) MIDINoteOn(channel, note, velocity uint8) {
+	s.voiceNoteOn(channel, note, velocity, 0, 0)
+}
+
+// voiceNoteOn reaches a legacy sink as an ordinary note-on; only an owned
+// sink can tell whose voice slot the note names.
+func (s audioSoundSink) voiceNoteOn(channel, note, velocity, voice, pitch uint8) {
 	if _, live := s.sink.(AudioGainSink); !live {
 		velocity = uint8(int(velocity) * int(s.gain) / int(AudioGainUnity))
 	}
-	emitAudioEvent(s.sink, s.sound, smaf.Event{Type: smaf.EventNoteOn, Channel: channel, Note: note, Velocity: velocity})
+	emitAudioEvent(s.sink, s.sound, smaf.Event{Type: smaf.EventNoteOn, Channel: channel, Note: note, Velocity: velocity, Program: voice, Value: pitch})
+}
+
+func (s audioSoundSink) defineVoice(slot uint8, data []byte) {
+	if _, owned := s.sink.(OwnedAudioSink); owned {
+		emitAudioEvent(s.sink, s.sound, smaf.Event{Type: smaf.EventVoice, Program: slot, SysEx: data})
+	}
 }
 func (s audioSoundSink) MIDINoteOff(channel, note, velocity uint8) {
 	emitAudioEvent(s.sink, s.sound, smaf.Event{Type: smaf.EventNoteOff, Channel: channel, Note: note, Velocity: velocity})
