@@ -54,6 +54,9 @@ type Event struct {
 	Value    uint8
 	Bend     uint16
 
+	// A wave's Velocity is that of the stream note that triggered it, 1 to
+	// 127. Zero means the wave has none and plays at its full level: a PCM
+	// audio track's waves, and events made before waves carried one.
 	SamplingRate uint32
 	WaveChannels uint8
 	// PCMChannel scopes ATR controls within a sound. Zero retains the
@@ -214,6 +217,7 @@ func sequenceEvents(
 	var events []Event
 	var now uint32
 	var octaveShift [maxSMAFChannels]int8
+	var sounding [maxSMAFChannels]handsetNote
 
 	mapChannel := func(channel uint8) uint8 {
 		if useChannelOffset {
@@ -240,11 +244,12 @@ func sequenceEvents(
 			// Explicit velocity updates channel memory even when the stream
 			// wave is absent or unsupported and this note produces no output.
 			velocity := tones.noteVelocity(channel, event.Velocity, event.HasVelocity)
-			if event.Note == 0 {
-				// Note zero plays the score track's attached wave rather than
-				// a pitch. The wave numbering is one-based against channels.
-				wave, ok := waves[channel+1]
-				if !ok {
+			// Note zero is a stream note even when the wave it names is
+			// missing; it then plays nothing rather than a pitch.
+			if wave, ok := streamWave(waves, channel, event.Note, tones.formatType); ok || event.Note == 0 {
+				// A stream note's level follows its velocity, and at zero
+				// it is silent, like a pitched note-on of zero.
+				if !ok || velocity == 0 {
 					continue
 				}
 				expansion := streamWaveExpansion(wave)
@@ -261,6 +266,7 @@ func sequenceEvents(
 				events = budget.emit(events, Event{
 					Time:         time,
 					Type:         EventWave,
+					Velocity:     velocity,
 					WaveChannels: waveChannelCount(wave.Channels),
 					SamplingRate: uint32(wave.SamplingFreq),
 					Wave:         samples,
@@ -293,8 +299,16 @@ func sequenceEvents(
 			}
 			noteOn := Event{Time: time, Type: EventNoteOn, Channel: midiChannel, Note: note, Velocity: velocity}
 			noteOn.Program, noteOn.Value = tones.voiceFor(channel, int16(event.Note)+int16(octaveShift[index])*12, time)
+			handset := tones.formatType == HandyPhoneStandard
+			if handset {
+				releaseHandsetNote(events, &sounding[pseudo], time)
+			}
+			emitted := len(events)
 			events = budget.emit(events, noteOn,
 				Event{Time: time + uint32(duration), Type: EventNoteOff, Channel: midiChannel, Note: note})
+			if handset && len(events) == emitted+2 {
+				sounding[pseudo] = handsetNote{off: emitted + 1, start: time, set: true}
+			}
 			events = budget.emit(events, tones.atmosphereNotes(time, uint32(duration), channel, note, velocity)...)
 
 		case SeqControlChange:
@@ -382,6 +396,56 @@ func sequenceEvents(
 		nextOffset = saturatingAdd(channelOffset, 4)
 	}
 	return events, nextOffset
+}
+
+// streamWave answers the attached wave a mobile score note triggers. Note zero
+// plays the wave numbered one past its channel. Channel 9 also numbers waves
+// by note: its note n plays wave n+1 whenever the track carries that wave, and
+// is a rhythm note otherwise. That is how the 21 local files whose only stream
+// notes are on channel 9 sound at all (docs/audio.md, "Stream notes on channel
+// 9"). Handset tracks attach no waves.
+func streamWave(waves map[uint8]WaveData, channel, note uint8, format FormatType) (WaveData, bool) {
+	if format != HandyPhoneStandard && channel == waveNoteChannel && note < 0xff {
+		if wave, ok := waves[note+1]; ok {
+			return wave, true
+		}
+	}
+	if note != 0 {
+		return WaveData{}, false
+	}
+	wave, ok := waves[channel+1]
+	return wave, ok
+}
+
+// waveNoteChannel is the mobile score channel whose notes name waves.
+const waveNoteChannel = 9
+
+// handsetNote is the last note a handset channel started: where its note-off
+// sits in the events being built, and when it began.
+type handsetNote struct {
+	off   int
+	start uint32
+	set   bool
+}
+
+// releaseHandsetNote ends a handset channel's previous note when the next one
+// starts. A handset channel sounds one note at a time, rhythm channels too: a
+// new note-on keys off the note still sounding there, whatever its key. The
+// note-off moves forward rather than a second one being added, so the old one
+// cannot cut a later note of the same key. A note replaced at its own start
+// never sounds and is dropped with its note-off: at one instant every note-off
+// sorts before every note-on, which would leave it held.
+func releaseHandsetNote(events []Event, previous *handsetNote, time uint32) {
+	if !previous.set || previous.off >= len(events) || events[previous.off].Time <= time {
+		return
+	}
+	if previous.start == time {
+		events[previous.off-1].Channel = noMIDIChannel
+		events[previous.off].Channel = noMIDIChannel
+	} else {
+		events[previous.off].Time = time
+	}
+	previous.set = false
 }
 
 func pcmTrackEvents(track *PCMAudioTrack, base uint16, budget *decodeBudget) []Event {

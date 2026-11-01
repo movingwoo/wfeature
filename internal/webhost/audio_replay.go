@@ -29,7 +29,7 @@ func (a *audioCollector) withClock(events []audioEvent) []audioEvent {
 
 // A full reconstruction can contain 256 sound owners plus the legacy owner,
 // each with 16 channels of 15 channel operations and up to 255 FM voice
-// definitions, plus 24 notes and 256 sampled sources. Another 2,048 PCM groups
+// definitions, plus 32 notes and 256 sampled sources. Another 2,048 PCM groups
 // require at most three control operations each: about 134,000 in all. The
 // page accepts a batch this size. Ordinary guest batches keep the smaller
 // limit. This ceiling also bounds an interrupted replay.

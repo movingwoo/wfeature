@@ -89,7 +89,7 @@ func (s audioSoundSink) playWave(event smaf.Event) {
 	s.resumeWave(event, 0)
 }
 func (s audioSoundSink) resumeWave(event smaf.Event, framePhase uint32) {
-	event = smaf.Event{Type: smaf.EventWave, PCMChannel: event.PCMChannel, WaveChannels: event.WaveChannels, SamplingRate: event.SamplingRate, Wave: event.Wave}
+	event = smaf.Event{Type: smaf.EventWave, Velocity: event.Velocity, PCMChannel: event.PCMChannel, WaveChannels: event.WaveChannels, SamplingRate: event.SamplingRate, Wave: event.Wave}
 	if _, live := s.sink.(AudioGainSink); !live {
 		event.Wave = scaleAudioSamples(event.Wave, s.gain)
 	}

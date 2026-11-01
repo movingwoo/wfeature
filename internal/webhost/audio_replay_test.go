@@ -251,7 +251,7 @@ func TestAudioReplayFitsEveryLoadedSoundAndReturnsToOrdinaryBound(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(want.Output.Sounds) != 256 || len(want.Output.Notes) != 24 || len(want.Output.Waves) != 256 {
+	if len(want.Output.Sounds) != 256 || len(want.Output.Notes) != 32 || len(want.Output.Waves) != 256 {
 		t.Fatal("fixture did not reach the supported sound, voice and PCM limits")
 	}
 	collector := &audioCollector{pcmChannels: true}
@@ -336,7 +336,7 @@ func TestAudioReplayFitsEveryLoadedSoundAndReturnsToOrdinaryBound(t *testing.T) 
 			t.Fatalf("replay lost sounding owner %d", note.Sound)
 		}
 	}
-	if len(waves) != 256 || len(notes) != 24 {
+	if len(waves) != 256 || len(notes) != 32 {
 		t.Fatalf("replayed waves=%d, notes=%d", len(waves), len(notes))
 	}
 	if len(pcmControls) != 2048*3 {

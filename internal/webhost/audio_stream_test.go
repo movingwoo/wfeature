@@ -62,6 +62,14 @@ func readAudio(t *testing.T, message []byte) []audioOperation {
 			operation.operands = take(5)
 		case audioOpVoiceResume:
 			operation.operands = take(9)
+		case audioOpWaveVelocity:
+			operation.operands = take(1)
+		case audioOpPlayPCMWave:
+			operation.id = binary.BigEndian.Uint32(take(4))
+			operation.operands = take(7)
+		case audioOpResumeWave:
+			operation.id = binary.BigEndian.Uint32(take(4))
+			operation.operands = take(11)
 		default:
 			t.Fatalf("unknown operation %#x", operation.op)
 		}

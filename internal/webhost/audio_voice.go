@@ -14,6 +14,13 @@ func negotiatedVoice(value string, ownership bool, protocol int) bool {
 	return value == "1" && ownership && protocol == protocolStream
 }
 
+// negotiatedWaveVelocity reports whether the page sets a stream wave's level
+// from its note's velocity. Only the binary stream carries it; any other page
+// plays every wave at full level, as before waves had a velocity.
+func negotiatedWaveVelocity(value string, ownership bool, protocol int) bool {
+	return value == "1" && ownership && protocol == protocolStream
+}
+
 // ResumeVoiceNote is ResumeNote for a held note that plays its sound's own
 // voice. sendAudio removes the voice for pages that did not request it.
 func (a *audioCollector) ResumeVoiceNote(sound backend.AudioHandle, channel, note, velocity, voice, pitch uint8, age time.Duration) {

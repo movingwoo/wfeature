@@ -173,7 +173,7 @@ func TestAudioResourcesReserveEveryPossibleActiveKeyBeforePlayback(t *testing.T)
 	}
 	audio.Advance(0)
 	saved := captureOwnedAudio(t, audio)
-	if len(saved.Sounds[0].ActiveNotes) != 2048 || len(saved.Output.Notes) != 24 {
+	if len(saved.Sounds[0].ActiveNotes) != 2048 || len(saved.Output.Notes) != maxOutputNotes {
 		t.Fatalf("active-key reservations and output voices diverged: keys=%d, voices=%d", len(saved.Sounds[0].ActiveNotes), len(saved.Output.Notes))
 	}
 }

@@ -16,7 +16,7 @@ score's last event. Applying SMAF wave gates is separate open work
 `backend.OwnedAudioSink` to receive `AudioEvent(handle, event)` and
 `StopSound(handle)`, under the same serialization and borrowed-buffer contract
 as `AudioSink`. The web Host implements both interfaces. Each owner has sixteen
-independent MIDI channel states. The audible 24-voice budget is global; paused
+independent MIDI channel states. The audible 32-voice budget is global; paused
 owners keep bounded, inaudible voice records separately, as described below.
 
 The CLI receives the flattened MIDI/PCM diagnostic stream, whose recording
@@ -30,7 +30,7 @@ output separately from device and clip gain, plus paused cursors, note envelope
 ages, finite remaining passes, completion counts, media position, pitch
 sensitivity and RPN/NRPN selectors. Pedal-held notes keep their released-key
 flag independently of sounding notes whose keys are still down. The accepted
-audio state versions (6 through the current 9) and their compatibility rules
+audio state versions (6 through the current 11) and their compatibility rules
 are in [audio checkpoint versions](audio.md#audio-checkpoint-versions);
 incompatible checkpoints are refused and left on disk, and ordinary saves and
 the shared debug/release data formats are unchanged.
@@ -149,7 +149,7 @@ phase and release tails are not kept. Legacy sinks and pages receive a fresh not
 provide the full continuation contract; sinks without ownership cannot cancel
 PCM individually.
 
-Only 24 notes sound together. Each paused owner can keep at most 24 additional
+Only 32 notes sound together. Each paused owner can keep at most 32 additional
 notes within the 256-loaded-sound limit; paused records do not take audible
 slots. Resuming appends voices in the same order as the page and applies the
 audible limit again. PCM shares the 256-wave/32 MiB admission budget across

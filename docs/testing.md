@@ -2818,11 +2818,12 @@ sound unless a test calls it, so the harness takes a local archive through
 `WFEATURE_AUDIO_ARCHIVE`, copies it into a scratch library, presses OK three
 times like the real-scene probe, and removes the copy and its save tree
 afterwards. It checks that the socket negotiates
-`protocol=2&sound=resume&timing=1&pcm=1&phase=1&voice=1`, that binary sound
+`protocol=2&sound=resume&timing=1&pcm=1&phase=1&voice=1&wavevelocity=1`, that binary sound
 batches reach a running context, that the FM synthesizer's worklet module
 loads, and that every source and every synthesizer note the page schedules
 starts ahead of the render clock; notes are counted from the commands posted to
-the worklet, with how many play the score's own voices. With
+the worklet, with how many play the score's own voices, and waves are counted
+with how many carry their stream note's velocity. With
 `WFEATURE_AUDIO_NO_WORKLET=1` it hides the AudioWorklet as a plain-HTTP page
 on the network has none, and checks instead that the page's ScriptProcessor
 renders. It folds the debug page's `audio playout timing`
@@ -2875,6 +2876,50 @@ server, not lost timestamps. Whether an event a few milliseconds late should
 play at once instead of reconstructing is a tuning question for device
 lateness data. Per-run results without archive names are in
 `build/sound-live-audio/`.
+
+### Sound fidelity rules of 2026-11-01
+
+Seven rules changed together: channel 9 stream notes name wave n+1, ADPCM
+rounds each bit of its difference, handset channels sound one note at a time
+(the decoder, `internal/audio/smaf`); velocity follows a square root, the
+attack rises in a straight line, 32 notes sound at once (the page, with the
+server's output budget); and stream waves keep their velocity (decoder, audio
+state version 11, `wavevelocity=1`). The rules and their corpus counts are in
+[sound](audio.md#stream-notes-on-channel-9).
+
+Each rule has a unit test written to fail on the previous code, and did:
+`TestChannelNineNoteNPlaysWaveNPlusOne`, `TestADPCMDifferenceSumsEachBitsTruncatedShare`,
+`TestHandsetChannelSoundsOneNoteAtATime`, the velocity and attack tests in
+`web/fm-synth.test.mjs`, and `web/audio-wave-velocity.test.mjs`. The opt-in
+`TestADPCMMatchesAnExternalVectorPair` (`WFEATURE_ADPCM_VECTOR`) passed against
+a published MA ADPCM pair kept outside the repository. Checkpoint tests cover
+v11 and every older shape, and `TestAudioWaveVelocitySurvivesCaptureAndReconstruction`
+a sounding wave's velocity through capture, the record codec and replay.
+
+Every SMAF file in the local library (11,175 carrier-local sounds) was decoded
+by the previous and the new decoder and the outputs compared by hash. Note
+events changed in exactly the 166 handset sounds with overlapping notes and
+the 89 with channel 9 notes 1 to 6 on waves; samples changed in every sound
+with a wave; the wave count changed in exactly the 255 sounds with channel 9
+stream notes; no sound's length changed and no other file moved. Silent sounds
+went from 36 to 15. The tools and outputs are in the ignored
+`build/sound-quality/` (`_soundscan`, `_adpcmstat` and `_smafdump` under
+`build/`).
+
+Quick saves taken by the previous build and loaded by the new one restore and
+save again on two archives per platform, chosen for channel 9 waves or
+overlapping handset notes. The 500-tick final-frame digests of 428 KTF and LGT
+archives are identical between the builds (424 equal, four start in neither).
+Offline renders of four songs through the page's synthesizer, before and
+after, are the listening material; handset listening is outstanding.
+
+The live harness passed on a mobile-format LGT archive (`87b04639cdfe`) in Chromium
+and WebKit worklets and in Chromium's ScriptProcessor, and on a second LGT
+archive in Chromium; 15 of the first archive's 16 waves in 20 seconds arrived
+with their velocity (the other is a PCM track's), at a mix peak of 0.199. A KTF
+archive whose channel 9 waves now play (30 in 20 seconds, all with their
+velocity) fails the harness's silent-mix check on both builds: its mix reads
+zero with or without the change.
 
 ### Native cost of the largest sound loads
 

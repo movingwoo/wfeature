@@ -74,6 +74,9 @@ const ATTACK = 1, DECAY = 2, SUSTAIN = 3, RELEASE = 4, OFF = 0;
 const effectiveRate = (rate, keyScale, keyCode) => rate === 0 ? 0 : Math.min(63, rate * 4 + (keyScale ? keyCode : keyCode >> 2));
 const decaySeconds = rate => 78.56 / 2 ** (rate / 4); // 96 dB
 const attackSeconds = rate => 5.652 / 2 ** (rate / 4);
+// The attack raises an operator's amplitude in a straight line from silence
+// to full over its rate's time; attackDb is that amplitude as attenuation.
+const attackDb = level => level > 0 ? Math.min(SILENT_DB, -20 * Math.log10(level)) : SILENT_DB;
 const keyCodeOf = pitch => Math.max(0, Math.min(15, Math.floor((pitch - 12) / 6)));
 
 // waveAt answers one operator waveform at a phase in cycles, which may be
@@ -353,7 +356,9 @@ export class FMSynth {
     voice.patch = patch;
     voice.drum = command.drumKey !== undefined;
     voice.keyOn = true;
-    voice.level = OUTPUT_LEVEL * Math.max(0, Math.min(1, (command.velocity ?? 100) / 127));
+    // The chip's velocity curve is the square root of the velocity's
+    // fraction: half velocity is about -3 dB, not -6 dB.
+    voice.level = OUTPUT_LEVEL * Math.sqrt(Math.max(0, Math.min(1, (command.velocity ?? 100) / 127)));
     voice.frequency = 440 * 2 ** ((pitch - 69) / 12);
     voice.fade = 1;
     voice.fadeStep = 0;
@@ -375,8 +380,9 @@ export class FMSynth {
       operator.vibratoCents = source.vibrato ? VIBRATO_CENTS[source.vibratoDepth] : 0;
       operator.tremoloDb = source.tremolo ? TREMOLO_DB[source.tremoloDepth] : 0;
       const attackRate = effectiveRate(source.attack, source.keyScaleRate, keyCode);
-      operator.attackFactor = attackRate >= 60 ? 0 : attackRate === 0 ? 1 : Math.exp(Math.log(0.1 / SILENT_DB) / (attackSeconds(attackRate) * rate));
-      operator.attackControl = operator.attackFactor ** CONTROL_SAMPLES;
+      // Amplitude per sample; rate 0 never rises and 60 or more starts full.
+      operator.attackStep = attackRate >= 60 ? Infinity : attackRate === 0 ? 0 : 1 / (attackSeconds(attackRate) * rate);
+      operator.attackLevel = 0;
       const step = value => {
         const effective = effectiveRate(value, source.keyScaleRate, keyCode);
         return effective === 0 ? 0 : SILENT_DB / (decaySeconds(effective) * rate);
@@ -393,7 +399,7 @@ export class FMSynth {
       operator.step = 0;
       operator.attenuation = SILENT_DB;
       operator.stage = ATTACK;
-      if (operator.attackFactor === 0) {
+      if (operator.attackStep === Infinity) {
         operator.attenuation = 0;
         operator.stage = DECAY;
       }
@@ -418,10 +424,11 @@ export class FMSynth {
     let left = samples;
     while (left > 0 && operator.stage !== OFF) {
       if (operator.stage === ATTACK) {
-        if (operator.attackFactor === 1) return;
-        const needed = Math.log(0.1 / Math.max(0.1, operator.attenuation)) / Math.log(operator.attackFactor);
+        if (operator.attackStep === 0) return;
+        const needed = (1 - operator.attackLevel) / operator.attackStep;
         if (needed > left) {
-          operator.attenuation *= operator.attackFactor ** left;
+          operator.attackLevel += operator.attackStep * left;
+          operator.attenuation = attackDb(operator.attackLevel);
           return;
         }
         left -= needed;
@@ -515,10 +522,12 @@ export class FMSynth {
       const operator = voice.operators[index];
       switch (operator.stage) {
         case ATTACK:
-          operator.attenuation *= operator.attackControl;
-          if (operator.attenuation < 0.1) {
+          operator.attackLevel += operator.attackStep * CONTROL_SAMPLES;
+          if (operator.attackLevel >= 1) {
             operator.attenuation = 0;
             operator.stage = DECAY;
+          } else {
+            operator.attenuation = attackDb(operator.attackLevel);
           }
           break;
         case DECAY:

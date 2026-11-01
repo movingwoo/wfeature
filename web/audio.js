@@ -15,14 +15,15 @@
 
 import { FMHost } from "./fm-host.js";
 
-const MAX_VOICES = 24;
+// Held notes that sound together; the server's output budget matches it.
+export const MAX_VOICES = 32;
 // A full reconstruction's worst case is about 134,000 events: every owner's
 // channel controls and FM voice definitions, its notes and samples. The
 // server's replay ceiling is the same (maxReplayAudio).
 const MAX_AUDIO_EVENTS = 1 << 18;
 const MAX_PCM_CHANNELS = 2048;
 // Retained native sources include scheduled starts and release/retired tails.
-// A full output reconstruction needs at most 256 PCM sources and 24 notes.
+// A full output reconstruction needs at most 256 PCM sources and 32 notes.
 const MAX_AUDIO_SOURCES = 512;
 // Charge float payload per live wave reference, even when its buffer is shared.
 // This covers the backend's 32 MiB PCM replay with mono-to-stereo fallback.
@@ -62,6 +63,13 @@ const wavePayloadBytes = (channels, length) => {
 };
 const validWaveRate = rate => Number.isInteger(rate) && rate > 0 && rate <= 0xffffffff;
 const validFramePhase = phase => Number.isInteger(phase) && phase >= 0 && phase < 1_000_000_000;
+const validWaveVelocity = velocity => Number.isInteger(velocity) && velocity >= 0 && velocity <= 127;
+// Every sampled source plays through this gain before the effect slider.
+const WAVE_GAIN = 0.8;
+// A stream wave's level follows its note's velocity on the chip's square-root
+// curve, 6 dB above a note at the default channel volume of 100, and never
+// past full: every velocity from 52 up plays at full level.
+const waveLevel = velocity => velocity === 0 ? 1 : Math.min(1, Math.sqrt(velocity / 127) * (100 / 127) * 2);
 const waveSampleLength = samples => {
   if (typeof samples !== "string") return samples?.length ?? 0;
   // The JSON wire carries base64 int16 samples. Account without decoding or
@@ -1030,8 +1038,10 @@ export class PageAudio {
 
   // Only definition-backed, immutable samples opt into buffer reuse. Mutable
   // callers still get a fresh snapshot. Every play has its own source and gain.
-  playWave(channels, samplingRate, samples, sound = 0, cacheable = false, pcmChannel = 0, framePhase = 0) {
-    if (!validFramePhase(framePhase)) return false;
+  // velocity is the stream note's that triggered the wave; zero, a PCM
+  // track's or an older server's, plays it at full level.
+  playWave(channels, samplingRate, samples, sound = 0, cacheable = false, pcmChannel = 0, framePhase = 0, velocity = 0) {
+    if (!validFramePhase(framePhase) || !validWaveVelocity(velocity)) return false;
     if (pcmChannel !== 0 && (!validPCMChannel(pcmChannel) || !validPCMOwner(sound) || channels !== 1)) return;
     if (!samples || samples.length === 0) return;
     const bytes = wavePayloadBytes(channels, samples.length);
@@ -1049,7 +1059,7 @@ export class PageAudio {
       source = context.createBufferSource();
       source.buffer = buffer;
       gain = context.createGain();
-      gain.gain.value = 0.8;
+      gain.gain.value = WAVE_GAIN * waveLevel(velocity);
       source.connect(gain);
       if (pcm) {
         gain.connect(pcm.left);
