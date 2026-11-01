@@ -34,6 +34,9 @@ type decodeBudget struct {
 	limits decodeLimits
 	used   decodeLimits
 	err    error
+	// samples is what each wave of this decode expanded to; it lives here
+	// because the budget is the one value every track's decoding shares.
+	samples map[waveSource]decodedWave
 }
 
 func newDecodeBudget() *decodeBudget { return &decodeBudget{limits: defaultDecodeLimits()} }

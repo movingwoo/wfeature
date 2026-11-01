@@ -326,6 +326,15 @@ Replacing a sequence or wave chunk does not refund parsing work. Standalone
 `DecodeADPCM` also refuses an output above the PCM byte limit. Each new decode
 starts with its own budget; the input remains unchanged.
 
+The charge is per trigger, but the work is not: a decode expands each wave
+once, and every trigger's event shares those samples, which nothing downstream
+writes to. Channel 9's stream notes strike their drum waves on every beat.
+Together with a typed stable sort in place of the reflection-based one, this
+took decoding all 10,765 local unique sounds on the development machine from
+993 ms to 726 ms on 2026-11-01, and the slowest single sound from 8.7 ms to
+1.4 ms, with every event and payload identical. The decode runs once per
+`Load`, inside the guest's call.
+
 A hard limit rejects the whole file, even when earlier tracks were valid.
 `Parse` and `Decode` return an error wrapping `ErrResourceLimit`; `Play` keeps
 its compatibility behavior of returning no events on failure. `backend.Audio.Load`
