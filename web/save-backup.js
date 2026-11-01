@@ -121,6 +121,19 @@ const nativeSaver = win => {
   return null;
 };
 
+// deliverFile hands a file to the person: to the app's own save picker on a
+// phone, and as a download elsewhere. It answers which, because only the
+// download is known to have happened.
+export const deliverFile = async (blob, name, doc, win = globalThis) => {
+  const native = nativeSaver(win);
+  if (native) {
+    native(name, await toBase64(blob));
+    return "picker";
+  }
+  saveAs(blob, name, doc);
+  return "download";
+};
+
 // base64 of a blob, in chunks: spreading a whole array into fromCharCode
 // overflows the argument stack at a size a save can reach.
 const toBase64 = async blob => {
@@ -184,18 +197,11 @@ export const initSaveBackup = ({
     }
     busy(exportButton, phrase("savepack.exporting"), async () => {
       const blob = await exportSave(game, fetcher);
-      const name = backupFileName(game);
-      const native = nativeSaver(win);
-      if (native) {
-        native(name, await toBase64(blob));
-        // The picker is the app's now, and what happens at it — a place
-        // chosen, or a cancel — is not something the page hears about. So it
-        // says what it did rather than claiming the file was written.
-        onStatus?.(phrase("savepack.choose-place"));
-        return;
-      }
-      saveAs(blob, name, doc);
-      onStatus?.(phrase("savepack.downloaded"));
+      // The picker is the app's, and what happens at it — a place chosen, or
+      // a cancel — is not something the page hears about. So it says what it
+      // did rather than claiming the file was written.
+      const way = await deliverFile(blob, backupFileName(game), doc, win);
+      onStatus?.(phrase(way === "picker" ? "savepack.choose-place" : "savepack.downloaded"));
     });
   });
 

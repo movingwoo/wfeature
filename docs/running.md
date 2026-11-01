@@ -78,9 +78,10 @@ router's name for the machine, a proxy's — so there is none; keep the server
 off networks and browsers you do not trust, or bind it to loopback.
 
 A page opened by the machine's address over plain
-HTTP is not a secure context, so the browser gives it no game controller and
-registers no service worker; `127.0.0.1`, the phone apps and an HTTPS proxy are
-secure contexts.
+HTTP is not a secure context, so the browser gives it no game controller,
+registers no service worker, and plays the music without an AudioWorklet;
+`127.0.0.1`, the phone apps, the server's own [HTTPS port](#from-a-phone-over-https)
+and an HTTPS proxy are secure contexts.
 
 The game runs **on the server**, and the page draws the frames it sends; see
 [`session.md`](session.md). There is nothing to build for the browser.
@@ -95,6 +96,8 @@ The game runs **on the server**, and the page draws the frames it sends; see
 | `-logs` | `<data>/logs` | where debug reports are written |
 | `-number` | `01000000000` | the handset's subscriber number: 1 to 11 digits |
 | `-open` | off | open the page in a browser once the server answers on its port |
+| `-https` | `auto` | the HTTPS listener: a port (on `-addr`'s host), `host:port`, or `off`; `auto` opens one 100 ports above `-addr` (`:11641`) when that address is reachable from the network, and none for a loopback address or a socket |
+| `-tls` | `<data>/tls` | where the HTTPS listener keeps its self-signed certificate |
 | `-version` | — | print `wfeature-server <version> (<profile>)` to stdout, then exit |
 
 `<data>` is `var` when the working directory has a `var/` directory, otherwise
@@ -106,9 +109,11 @@ client source (`client=web` or `client=embedded`) and each root.
 Each flag reads an environment variable when it is not given — `WFEATURE_ADDR`,
 `WFEATURE_WEB_ROOT`, `WFEATURE_GAME_ROOT`, `WFEATURE_ADDED_ROOT`,
 `WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`, `WFEATURE_PHONE_NUMBER`,
-`WFEATURE_OPEN` (any non-empty value) — and `WFEATURE_HOST` with
+`WFEATURE_OPEN` (any non-empty value), `WFEATURE_HTTPS_ADDR`,
+`WFEATURE_TLS_ROOT` — and `WFEATURE_HOST` with
 `WFEATURE_PORT` compose the default address. `WFEATURE_PORT` is also the
-default port of `status` and `stop`.
+default port of `status` and `stop`. `WFEATURE_HTTPS_PORT` names the HTTPS port
+when `WFEATURE_HTTPS_ADDR` does not.
 
 `-number` is the only setting that changes what a game sees rather than where
 it lives. One title treats any number of five digits or more as a subscriber it
@@ -123,6 +128,73 @@ server built with `-tags debug` collects the full diagnostics and writes to the
 debug save tree. One process cannot serve the other profile, which keeps a
 debug session from moving a release session's progress. Every HTTP route the
 server answers is listed in [`web/README.md`](../web/README.md#server).
+
+### From a phone over HTTPS
+
+A phone or another computer on the same network can open
+`https://<the machine's address>:11641` as well as the plain address. The
+server presents a certificate it made itself, so the browser warns once — in
+Chrome and Edge "Advanced", then the link marked unsafe; in Firefox "Advanced",
+then "Accept the Risk and Continue"; in Safari "Show Details", then "visit this
+website", which on a Mac can go on to a confirmation and the account password —
+and after that the page is a secure context: the music plays in an
+AudioWorklet, as on the machine itself and in the phone apps, and a game
+controller works. The machine itself needs none of this: a browser treats
+`http://127.0.0.1:11541` as secure already.
+Chrome still registers no service worker for a page whose certificate it was
+told to accept, so the page cannot be installed or opened offline there.
+
+The certificate is made at the first start, kept in `<data>/tls` (`-tls`) and
+served again, because each new one is a new warning on every phone. It names
+`localhost`, the machine's host name and every address of its interfaces,
+lasts 800 days (Apple's platforms refuse longer) and is made again a month
+before it ends, or when the machine has an address it does not name; the new
+one keeps the old addresses, so a machine that moves between two networks
+settles on one. Its key is the file `key.pem`, readable by its owner only.
+Deleting the folder makes a new certificate at the next start, and every
+browser that accepted the old one warns again.
+
+`auto` gives no HTTPS listener to `-addr 127.0.0.1:…` or a socket, which are
+the machine itself or a proxy's to secure, and one it cannot open is left out
+with a warning in the log while plain HTTP goes on. Moving the plain port with
+`-addr :11542` moves the automatic HTTPS one to `:11642`. `-https 11700` puts it
+on that port, `-https 192.168.0.5:11700` on that address, `-https off` turns it
+off; a port or address given is required, and a server that cannot open it
+does not start. The startup log names where both listen
+(`url=http://[::]:11541 https=https://[::]:11641`) and, on the next line, the
+addresses another device on the same network opens
+(`open from another device on the same network`); `status` names the HTTPS one
+too:
+
+```text
+wfeature server is running.
+  address    http://127.0.0.1:11541
+  other host http://192.168.0.60:11541
+  https      https://192.168.0.60:11641
+```
+
+### Moving the page's settings
+
+The page keeps its settings in the browser, and a browser keeps them apart
+per address: the same phone at `http://…:11541` and `https://…:11641`, or at
+two names of one machine, has two sets. **백업**, the divider under the game
+picker's add and delete buttons, opens the saves of the chosen game and these
+settings below it; its settings
+**내보내기** and **가져오기** carry them as one JSON file
+(`wfeature-settings.json`, `format: "wfeature-settings"`, `version: 1`):
+the keypad's type and arrangement, the keyboard's and the game controller's
+keys, the two volumes, the picture filter, the screen and speed of each game,
+vibration and fullscreen (`web/settings-file.js` lists the keys). The token that
+takes a parked game back, the last game picked, whether a keyboard or a
+controller has been used here and the copy of a damaged keypad record stay in
+the browser that has them.
+
+An import asks first, writes the file's settings over this browser's, leaves
+those the file does not hold, and opens the page again, which is when every
+setting is read. It reads only setting keys with string values of bounded size
+from a file of at most 1 MiB, refuses a newer version, and refuses a `.wfs`
+save backup with the place that takes one. A game's saves are not settings:
+they are on the server and travel from the game picker, one game at a time.
 
 ### Adding a game from the page, and taking it back off
 

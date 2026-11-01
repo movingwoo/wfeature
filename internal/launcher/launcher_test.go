@@ -54,7 +54,7 @@ func TestQueryRecognisesThisServer(t *testing.T) {
 			http.NotFound(writer, request)
 			return
 		}
-		fmt.Fprint(writer, `{"server":"wfeature","profile":"release","version":"9.9.9","pid":4242}`)
+		fmt.Fprint(writer, `{"server":"wfeature","profile":"release","version":"9.9.9","pid":4242,"https_port":11641}`)
 	})}
 	go func() { _ = server.Serve(listener) }()
 	defer server.Close()
@@ -63,8 +63,14 @@ func TestQueryRecognisesThisServer(t *testing.T) {
 	if report.State != Ours {
 		t.Fatalf("Query() = %v, want Ours", report.State)
 	}
-	if report.PID != 4242 || report.Profile != "release" || report.Version != "9.9.9" {
+	if report.PID != 4242 || report.Profile != "release" || report.Version != "9.9.9" || report.SecurePort != 11641 {
 		t.Fatalf("report = %+v", report)
+	}
+	if report.SecureURL() != "https://127.0.0.1:11641" {
+		t.Errorf("SecureURL() = %q", report.SecureURL())
+	}
+	if (Report{Port: port}).SecureURL() != "" || (Report{Port: port}).SecureLANURL() != "" {
+		t.Error("a server without HTTPS has an HTTPS address")
 	}
 	if report.URL() != fmt.Sprintf("http://127.0.0.1:%d", port) {
 		t.Errorf("URL() = %q", report.URL())

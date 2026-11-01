@@ -676,6 +676,23 @@ func TestStatusNamesTheServerItsProfileAndVersion(t *testing.T) {
 	}
 }
 
+// The status says where the server also answers HTTPS, so `status` can name
+// the address a phone opens; a server without one says nothing about it.
+func TestStatusNamesTheHTTPSPort(t *testing.T) {
+	var status struct {
+		HTTPS *int `json:"https_port"`
+	}
+	recorder := get(t, newTestServer(t, Options{SecurePort: 11641}), "/api/status")
+	if err := json.Unmarshal(recorder.Body.Bytes(), &status); err != nil || status.HTTPS == nil || *status.HTTPS != 11641 {
+		t.Fatalf("status %s, %v", recorder.Body.String(), err)
+	}
+	status.HTTPS = nil
+	recorder = get(t, newTestServer(t, Options{}), "/api/status")
+	if err := json.Unmarshal(recorder.Body.Bytes(), &status); err != nil || status.HTTPS != nil {
+		t.Fatalf("status %s, %v", recorder.Body.String(), err)
+	}
+}
+
 // An unstamped build is every build that is not a release, so the field says
 // what the CLI's -version says rather than nothing at all.
 func TestStatusCallsAnUnstampedBuildDev(t *testing.T) {

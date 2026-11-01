@@ -13,6 +13,30 @@ import { FMSynth, FM_LANES } from "./fm-synth.js";
 // speaker in the ScriptProcessor fallback: about 43 ms each at 48 kHz.
 const SCRIPT_BUFFER_FRAMES = 2048;
 
+// bufferClock answers, for each callback of one ScriptProcessor, the context
+// time at which the buffer it fills starts to play. Chromium and WebKit report
+// playbackTime as the render clock when they posted the callback plus one
+// buffer, so the report runs late by however long the posting waited for the
+// render thread, and skips ahead past a buffer the engine silenced without a
+// callback because the page's thread was still busy with the one before. The
+// buffers themselves follow each other exactly: this counts them, moves to an
+// earlier report when one comes, as a smaller wait shows, and steps over the
+// silenced ones. Rendering at the report placed a buffer's notes early by its
+// wait.
+export const bufferClock = context => {
+  let start = null;
+  return event => {
+    const span = event.outputBuffer.length / context.sampleRate;
+    const reported = Number.isFinite(event.playbackTime) ? event.playbackTime : context.currentTime + span;
+    if (start === null) return start = reported;
+    start += span;
+    const ahead = reported - start;
+    if (ahead < 0) start = reported;
+    else if (ahead >= span) start += Math.floor(ahead / span) * span;
+    return start;
+  };
+};
+
 export class FMHost {
   constructor(context, { onEnded = () => {}, report = () => {} } = {}) {
     this.context = context;
@@ -90,11 +114,12 @@ export class FMHost {
     const ended = [];
     synth.onEnded = id => ended.push(id);
     const lanes = [];
+    const clock = bufferClock(this.context);
     node.onaudioprocess = event => {
       const buffer = event.outputBuffer;
       lanes.length = buffer.numberOfChannels;
       for (let index = 0; index < buffer.numberOfChannels; index++) lanes[index] = buffer.getChannelData(index);
-      const start = Number.isFinite(event.playbackTime) ? event.playbackTime : this.context.currentTime;
+      const start = clock(event);
       try {
         synth.render(lanes, buffer.length, start);
       } catch (error) {

@@ -275,6 +275,10 @@ change was checked by building for the simulator and the device.
 can arrive either from the page's own ＋ 게임 추가 button or by being dropped
 into the folder. Android has no equivalent — see below.
 
+On Android every file input opens the system picker with one list of types:
+zip, jar and `application/octet-stream` for a game and a save backup, and JSON
+and plain text for the settings file, which providers type either way.
+
 **The save backup is a declared type.** `UTExportedTypeDeclarations` names
 `com.movingwoo.wfeature.save-backup`, extension `wfs`, conforming to
 `public.data`, so a backup the page exported is a type of its own rather than

@@ -447,13 +447,17 @@ public class MainActivity extends Activity {
                 // A game is a zip or a jar, and phones disagree about which
                 // type they call those — some report a zip as
                 // application/octet-stream — so the type is left open and the
-                // list below is what the picker highlights.
+                // list below is what the picker highlights. A save backup is
+                // octet-stream; a settings file is JSON, which some providers
+                // call plain text.
                 intent.setType("*/*");
                 intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
                         "application/zip",
                         "application/java-archive",
                         "application/x-zip-compressed",
                         "application/octet-stream",
+                        "application/json",
+                        "text/plain",
                 });
                 intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
                 try {

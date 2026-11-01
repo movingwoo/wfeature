@@ -73,11 +73,13 @@ const (
 
 // Report is one port's answer.
 type Report struct {
-	Port    int
-	State   State
-	PID     int
-	Profile string
-	Version string
+	Port int
+	// SecurePort is where the server also answers HTTPS; zero for none.
+	SecurePort int
+	State      State
+	PID        int
+	Profile    string
+	Version    string
 	// Reason explains a Foreign result.
 	Reason Reason
 	// Detail is the technical half of Reason — an HTTP status, a transport
@@ -98,6 +100,24 @@ func (r Report) LANURL() string {
 		return ""
 	}
 	return fmt.Sprintf("http://%s", net.JoinHostPort(address, strconv.Itoa(r.Port)))
+}
+
+// SecureURL is the HTTPS address on this machine, or "" when there is none.
+func (r Report) SecureURL() string {
+	if r.SecurePort == 0 {
+		return ""
+	}
+	return fmt.Sprintf("https://127.0.0.1:%d", r.SecurePort)
+}
+
+// SecureLANURL is the HTTPS address for another machine on the local network,
+// the one a phone opens for the secure page, or "" when there is none.
+func (r Report) SecureLANURL() string {
+	address := lanAddress()
+	if r.SecurePort == 0 || address == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://%s", net.JoinHostPort(address, strconv.Itoa(r.SecurePort)))
 }
 
 // lanAddress picks this machine's address on the local network: the first
@@ -138,6 +158,7 @@ type statusPayload struct {
 	Profile string `json:"profile"`
 	Version string `json:"version"`
 	PID     int    `json:"pid"`
+	HTTPS   int    `json:"https_port"`
 }
 
 // Query asks one port what is behind it.
@@ -199,6 +220,9 @@ func Query(ctx context.Context, port int) Report {
 	report.PID = payload.PID
 	report.Profile = payload.Profile
 	report.Version = payload.Version
+	if payload.HTTPS > 0 && payload.HTTPS <= 65535 {
+		report.SecurePort = payload.HTTPS
+	}
 	return report
 }
 

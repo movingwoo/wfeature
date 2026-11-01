@@ -52,7 +52,7 @@ func TestStoppingTheServerEndsAnAttachedSession(t *testing.T) {
 	}
 	requested := make(chan struct{})
 	served := make(chan error, 1)
-	go func() { served <- serve(listener, handler, logger, requested) }()
+	go func() { served <- serve(listener, nil, handler, logger, requested) }()
 
 	connection, _, err := wsproto.Dial("ws://"+listener.Addr().String()+"/api/session", nil)
 	if err != nil {

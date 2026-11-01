@@ -461,7 +461,7 @@ try {
     await labelsFit();
     assert.equal(await record(), saved);
     if (width === 240) {
-      for (const id of ["game-select", "save-import"]) {
+      for (const id of ["game-select", "backup-open"]) {
         const control = page.locator(`#${id}`);
         await control.scrollIntoViewIfNeeded();
         const bounds = await control.boundingBox();
