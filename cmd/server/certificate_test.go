@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,11 +22,12 @@ import (
 	"github.com/movingwoo/wfeature/web"
 )
 
-// **HTTPS goes where a phone reaches the server.** The default address binds
-// every interface, so the HTTPS listener takes the port 100 above it; a
-// loopback address is a secure context already and a socket is a proxy's to
-// secure, so neither gets one unless it is asked for.
-func TestTheHTTPSListenerFollowsAnAddressAPhoneCanReach(t *testing.T) {
+// **HTTPS goes where a phone reaches the server, or where it is told.** The
+// default address binds every interface, so the HTTPS listener takes the port
+// 100 above it; a loopback address is a secure context already and a socket is
+// a proxy's to secure, so neither gets one unless it is asked for. A bare port
+// goes on -addr's host, as `stop 11542` takes one for the plain listener.
+func TestTheHTTPSListenerGoesWhereAPhoneReachesItOrWhereItIsTold(t *testing.T) {
 	for _, probe := range []struct{ value, address, want string }{
 		{"auto", ":11541", ":11641"},
 		{"auto", "0.0.0.0:11541", "0.0.0.0:11641"},
@@ -39,11 +41,64 @@ func TestTheHTTPSListenerFollowsAnAddressAPhoneCanReach(t *testing.T) {
 		{"auto", ":0", ""},
 		{"off", ":11541", ""},
 		{"", ":11541", ""},
+		{"11700", ":11541", ":11700"},
+		{"11700", "192.168.0.5:11541", "192.168.0.5:11700"},
+		{"11700", "127.0.0.1:11541", "127.0.0.1:11700"},
+		{"11700", "unix:/run/wfeature.sock", ":11700"},
 		{":9443", "127.0.0.1:11541", ":9443"},
+		{"192.168.0.5:9443", ":11541", "192.168.0.5:9443"},
 	} {
-		if got := httpsAddress(probe.value, probe.address); got != probe.want {
-			t.Errorf("httpsAddress(%q, %q) = %q, want %q", probe.value, probe.address, got, probe.want)
+		got, err := httpsAddress(probe.value, probe.address)
+		if err != nil || got != probe.want {
+			t.Errorf("httpsAddress(%q, %q) = %q, %v; want %q", probe.value, probe.address, got, err, probe.want)
 		}
+	}
+	for _, value := range []string{"0", "70000", "https", "192.168.0.5", "on"} {
+		if got, err := httpsAddress(value, ":11541"); err == nil {
+			t.Errorf("httpsAddress(%q) = %q, want an error", value, got)
+		}
+	}
+}
+
+func TestTheHTTPSListenerReadsItsAddressAndPortFromTheEnvironment(t *testing.T) {
+	t.Setenv("WFEATURE_HTTPS_ADDR", "")
+	t.Setenv("WFEATURE_HTTPS_PORT", "")
+	if got := defaultHTTPS(); got != "auto" {
+		t.Fatalf("defaultHTTPS() = %q, want auto", got)
+	}
+	t.Setenv("WFEATURE_HTTPS_PORT", "11700")
+	if got := defaultHTTPS(); got != "11700" {
+		t.Fatalf("defaultHTTPS() = %q, want the port", got)
+	}
+	t.Setenv("WFEATURE_HTTPS_ADDR", "off")
+	if got := defaultHTTPS(); got != "off" {
+		t.Fatalf("defaultHTTPS() = %q, want the address over the port", got)
+	}
+}
+
+// status names the HTTPS address a phone opens, beside the plain ones.
+func TestStatusNamesTheHTTPSAddress(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.WriteString(writer, `{"server":"wfeature","profile":"release","version":"9.9.9","pid":4242,"https_port":11641}`)
+	})}
+	go func() { _ = server.Serve(listener) }()
+	defer server.Close()
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := reportStatus([]string{"-port", strconv.Itoa(port)}, write, write); err != nil {
+		t.Fatal(err)
+	}
+	write.Close()
+	answer, _ := io.ReadAll(read)
+	if !strings.Contains(string(answer), "  https      https://") || !strings.Contains(string(answer), ":11641\n") {
+		t.Fatalf("status said:\n%s", answer)
 	}
 }
 

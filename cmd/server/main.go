@@ -125,8 +125,8 @@ func run(arguments []string, answer, output *os.File) error {
 		"the subscriber number this handset answers with; a shorter one opens a title that gates on billing")
 	openPage := flags.Bool("open", environmentOr("WFEATURE_OPEN", "") != "",
 		"open the page in a browser once the server is listening")
-	secureAddress := flags.String("https", environmentOr("WFEATURE_HTTPS_ADDR", "auto"),
-		`address of the HTTPS listener, "off" for none; "auto" is 100 ports above -addr when that is reachable from the network`)
+	secureAddress := flags.String("https", defaultHTTPS(),
+		`the HTTPS listener: a port, host:port, or "off"; "auto" is 100 ports above -addr when that is reachable from the network`)
 	certificateRoot := flags.String("tls", environmentOr("WFEATURE_TLS_ROOT", filepath.Join(root, "tls")),
 		"directory keeping the HTTPS listener's self-signed certificate")
 	showVersion := flags.Bool("version", false, "print the version and exit")
@@ -172,11 +172,6 @@ func run(arguments []string, answer, output *os.File) error {
 	options.RequestShutdown = func() { once.Do(func() { close(shutdownRequested) }) }
 	requestShutdown := shutdownRequested
 
-	server, err := webhost.New(options)
-	if err != nil {
-		return err
-	}
-
 	listener, err := listen(*address)
 	if err != nil {
 		return err
@@ -189,6 +184,15 @@ func run(arguments []string, answer, output *os.File) error {
 	secureURL := ""
 	if secure != nil {
 		secureURL = "https://" + secure.Addr().String()
+		options.SecurePort = secure.Addr().(*net.TCPAddr).Port
+	}
+	server, err := webhost.New(options)
+	if err != nil {
+		listener.Close()
+		if secure != nil {
+			secure.Close()
+		}
+		return err
 	}
 	// Which saves a session is playing should never be a guess, so the tree is
 	// named on startup: the profiles keep separate ones.
@@ -202,6 +206,14 @@ func run(arguments []string, answer, output *os.File) error {
 		"games", *gameRoot,
 		"added", *addedRoot,
 		"saves", *saveRoot)
+	// The addresses above say where the server listens; a phone or another
+	// computer needs the one it can reach it by.
+	if port, ok := listener.Addr().(*net.TCPAddr); ok && !port.IP.IsLoopback() {
+		report := launcher.Report{Port: port.Port, SecurePort: options.SecurePort}
+		if other := report.LANURL(); other != "" {
+			logger.Info("open from another device on the same network", "url", other, "https", report.SecureLANURL())
+		}
+	}
 
 	if *openPage {
 		openWhenServing(listener)
@@ -214,18 +226,41 @@ func run(arguments []string, answer, output *os.File) error {
 // alone.
 const secureOffset = 100
 
-// httpsAddress answers where the HTTPS listener goes: the address given,
-// nowhere for "off" or nothing, and for "auto" secureOffset ports above on the
-// same host when the server is reachable from the network. A loopback address
-// is a secure context already, and a socket is a proxy's to secure.
-func httpsAddress(value, address string) string {
+// defaultHTTPS is -https when the flag is not given: WFEATURE_HTTPS_ADDR, then
+// WFEATURE_HTTPS_PORT, as WFEATURE_ADDR and WFEATURE_PORT name the plain one.
+func defaultHTTPS() string {
+	return environmentOr("WFEATURE_HTTPS_ADDR", environmentOr("WFEATURE_HTTPS_PORT", "auto"))
+}
+
+// httpsAddress answers where the HTTPS listener goes: nowhere for "off" or
+// nothing; a bare port on -addr's host, or every interface when -addr names
+// none; a host:port as given; and for "auto" secureOffset ports above -addr
+// when that is reachable from the network. A loopback address is a secure
+// context already, and a socket is a proxy's to secure.
+func httpsAddress(value, address string) (string, error) {
 	switch value {
 	case "", "off":
-		return ""
+		return "", nil
 	case "auto":
-	default:
-		return value
+		return automaticHTTPSAddress(address), nil
 	}
+	if port, err := strconv.Atoi(value); err == nil {
+		if port <= 0 || port > 65535 {
+			return "", fmt.Errorf("-https: port %d is out of range", port)
+		}
+		host := ""
+		if !strings.HasPrefix(address, unixPrefix) {
+			host, _, _ = net.SplitHostPort(address)
+		}
+		return net.JoinHostPort(host, strconv.Itoa(port)), nil
+	}
+	if _, port, err := net.SplitHostPort(value); err != nil || port == "" {
+		return "", fmt.Errorf("-https: expected a port, host:port, auto or off, got %q", value)
+	}
+	return value, nil
+}
+
+func automaticHTTPSAddress(address string) string {
 	if strings.HasPrefix(address, unixPrefix) {
 		return ""
 	}
@@ -247,9 +282,9 @@ func httpsAddress(value, address string) string {
 // dir. One that "auto" chose and cannot open is left out with a warning; the
 // page still answers over plain HTTP. One given by address is required.
 func listenSecurely(value, address, dir string, logger *slog.Logger) (net.Listener, error) {
-	secureAddress := httpsAddress(value, address)
-	if secureAddress == "" {
-		return nil, nil
+	secureAddress, err := httpsAddress(value, address)
+	if err != nil || secureAddress == "" {
+		return nil, err
 	}
 	required := value != "auto"
 	fail := func(err error) (net.Listener, error) {
@@ -346,6 +381,11 @@ func reportStatus(arguments []string, answer, output *os.File) error {
 		fmt.Fprintf(answer, "  address    %s\n", report.URL())
 		if lan := report.LANURL(); lan != "" {
 			fmt.Fprintf(answer, "  other host %s\n", lan)
+		}
+		if secure := report.SecureLANURL(); secure != "" {
+			fmt.Fprintf(answer, "  https      %s\n", secure)
+		} else if secure := report.SecureURL(); secure != "" {
+			fmt.Fprintf(answer, "  https      %s\n", secure)
 		}
 		fmt.Fprintf(answer, "  version    %s (%s)\n", versionOrUnknown(report.Version), report.Profile)
 		fmt.Fprintf(answer, "  stop with  %s stop %d\n", launcherName(), port)

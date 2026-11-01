@@ -96,7 +96,7 @@ The game runs **on the server**, and the page draws the frames it sends; see
 | `-logs` | `<data>/logs` | where debug reports are written |
 | `-number` | `01000000000` | the handset's subscriber number: 1 to 11 digits |
 | `-open` | off | open the page in a browser once the server answers on its port |
-| `-https` | `auto` | the HTTPS listener's address, `off` for none; `auto` opens one 100 ports above `-addr` (`:11641`) when that address is reachable from the network, and none for a loopback address or a socket |
+| `-https` | `auto` | the HTTPS listener: a port (on `-addr`'s host), `host:port`, or `off`; `auto` opens one 100 ports above `-addr` (`:11641`) when that address is reachable from the network, and none for a loopback address or a socket |
 | `-tls` | `<data>/tls` | where the HTTPS listener keeps its self-signed certificate |
 | `-version` | — | print `wfeature-server <version> (<profile>)` to stdout, then exit |
 
@@ -112,7 +112,8 @@ Each flag reads an environment variable when it is not given — `WFEATURE_ADDR`
 `WFEATURE_OPEN` (any non-empty value), `WFEATURE_HTTPS_ADDR`,
 `WFEATURE_TLS_ROOT` — and `WFEATURE_HOST` with
 `WFEATURE_PORT` compose the default address. `WFEATURE_PORT` is also the
-default port of `status` and `stop`.
+default port of `status` and `stop`. `WFEATURE_HTTPS_PORT` names the HTTPS port
+when `WFEATURE_HTTPS_ADDR` does not.
 
 `-number` is the only setting that changes what a game sees rather than where
 it lives. One title treats any number of five digits or more as a subscriber it
@@ -130,12 +131,16 @@ server answers is listed in [`web/README.md`](../web/README.md#server).
 
 ### From a phone over HTTPS
 
-A phone on the same network can open `https://<the machine's address>:11641`
-as well as the plain address. The server presents a certificate it made
-itself, so the browser warns once — on Android Chrome "Advanced", then
-"Proceed"; on iPhone Safari "Show Details", then "visit this website" — and
-after that the page is a secure context: the music plays in an AudioWorklet, as
-on the machine itself and in the phone apps, and a game controller works.
+A phone or another computer on the same network can open
+`https://<the machine's address>:11641` as well as the plain address. The
+server presents a certificate it made itself, so the browser warns once — in
+Chrome and Edge "Advanced", then the link marked unsafe; in Firefox "Advanced",
+then "Accept the Risk and Continue"; in Safari "Show Details", then "visit this
+website", which on a Mac can go on to a confirmation and the account password —
+and after that the page is a secure context: the music plays in an
+AudioWorklet, as on the machine itself and in the phone apps, and a game
+controller works. The machine itself needs none of this: a browser treats
+`http://127.0.0.1:11541` as secure already.
 Chrome still registers no service worker for a page whose certificate it was
 told to accept, so the page cannot be installed or opened offline there.
 
@@ -146,12 +151,27 @@ lasts 800 days (Apple's platforms refuse longer) and is made again a month
 before it ends, or when the machine has an address it does not name; the new
 one keeps the old addresses, so a machine that moves between two networks
 settles on one. Its key is the file `key.pem`, readable by its owner only.
+Deleting the folder makes a new certificate at the next start, and every
+browser that accepted the old one warns again.
 
 `auto` gives no HTTPS listener to `-addr 127.0.0.1:…` or a socket, which are
 the machine itself or a proxy's to secure, and one it cannot open is left out
-with a warning in the log while plain HTTP goes on. An address given to
-`-https` is required instead. The startup log names both URLs:
-`url=http://[::]:11541 https=https://[::]:11641`.
+with a warning in the log while plain HTTP goes on. Moving the plain port with
+`-addr :11542` moves the automatic HTTPS one to `:11642`. `-https 11700` puts it
+on that port, `-https 192.168.0.5:11700` on that address, `-https off` turns it
+off; a port or address given is required, and a server that cannot open it
+does not start. The startup log names where both listen
+(`url=http://[::]:11541 https=https://[::]:11641`) and, on the next line, the
+addresses another device on the same network opens
+(`open from another device on the same network`); `status` names the HTTPS one
+too:
+
+```text
+wfeature server is running.
+  address    http://127.0.0.1:11541
+  other host http://192.168.0.60:11541
+  https      https://192.168.0.60:11641
+```
 
 ### Moving the page's settings
 

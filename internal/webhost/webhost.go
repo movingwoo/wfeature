@@ -88,6 +88,9 @@ type Options struct {
 	// Version names the release this binary came from, for /api/status. An
 	// unstamped build leaves it empty and the endpoint says so.
 	Version string
+	// SecurePort is the port the host also serves HTTPS on, for /api/status;
+	// zero when it serves none.
+	SecurePort int
 
 	// RequestShutdown asks the process to stop the way a signal does: drain,
 	// then exit. It is what POST /api/shutdown calls, and a host that does not
@@ -133,6 +136,7 @@ type Server struct {
 	debugLogMu    sync.Mutex
 	debugLogPosts []time.Time
 	version       string
+	securePort    int
 	// requestShutdown is Options.RequestShutdown; nil means the route is not
 	// served at all.
 	requestShutdown func()
@@ -176,6 +180,7 @@ func New(options Options) (*Server, error) {
 		traceLimit:      sessionTraceLimit(),
 		diagnostics:     backend.DebugBuild(),
 		version:         options.Version,
+		securePort:      options.SecurePort,
 		requestShutdown: options.RequestShutdown,
 	}
 	// The page is filled from the text file on every load, so a file that does
@@ -267,7 +272,8 @@ func (s *Server) serveStatus(writer http.ResponseWriter, request *http.Request) 
 		Profile string `json:"profile"`
 		Version string `json:"version"`
 		PID     int    `json:"pid"`
-	}{Server: "wfeature", Profile: s.profile, Version: version, PID: os.Getpid()})
+		HTTPS   int    `json:"https_port,omitempty"`
+	}{Server: "wfeature", Profile: s.profile, Version: version, PID: os.Getpid(), HTTPS: s.securePort})
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "Internal Server Error")
 		return

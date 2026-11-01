@@ -2951,7 +2951,9 @@ only when it is closed, since its first export runs on the baseline.
 ### HTTPS from the network
 
 `cmd/server/certificate_test.go` checks where `auto` puts the HTTPS listener
-and where it puts none, that the self-signed certificate is made once, served
+and where it puts none, where a bare port or a `host:port` puts it and which
+values are refused, `WFEATURE_HTTPS_ADDR` over `WFEATURE_HTTPS_PORT`, the
+`https` line of `status`, that the self-signed certificate is made once, served
 again, made again for a new address while keeping the old ones, renewed a month
 before its end and replaced when unreadable, with a lifetime under 825 days
 and its key readable by its owner only, and that the page and the session
