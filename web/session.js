@@ -30,7 +30,7 @@ const probingWebP = decodesLosslessWebP().then(decodes => { losslessWebP = decod
 export const sessionURL = () => {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
   const pictures = losslessWebP ? "&pictures=webp" : "";
-  return `${scheme}//${location.host}/api/session?protocol=2&sound=resume&timing=1&pcm=1&phase=1&voice=1${pictures}`;
+  return `${scheme}//${location.host}/api/session?protocol=2&sound=resume&timing=1&pcm=1&phase=1&voice=1&wavevelocity=1${pictures}`;
 };
 
 // available reports whether this browser can hold a session at all. Everything
@@ -434,7 +434,9 @@ export const playAudioEvents = (audio, events) => {
           if (event.samples) {
             const samples = typeof event.samples === "string" ? decodeSamples(event.samples) : event.samples;
             const cacheable = event.cacheable === true && samples === event.samples;
-            if (event.framePhase !== undefined) {
+            if (event.velocity !== undefined) {
+              audio.playWave(event.channels ?? 1, event.rate ?? 8000, samples, event.sound ?? 0, cacheable, event.pcmChannel ?? 0, event.framePhase ?? 0, event.velocity);
+            } else if (event.framePhase !== undefined) {
               audio.playWave(event.channels ?? 1, event.rate ?? 8000, samples, event.sound ?? 0, cacheable, event.pcmChannel ?? 0, event.framePhase);
             } else if (event.pcmChannel) {
               audio.playWave(event.channels ?? 1, event.rate ?? 8000, samples, event.sound ?? 0, cacheable, event.pcmChannel);

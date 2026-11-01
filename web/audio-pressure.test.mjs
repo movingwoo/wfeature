@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PageAudio } from "./audio.js";
+import { MAX_VOICES, PageAudio } from "./audio.js";
 import { fakeFM } from "./audio-test-fm.mjs";
 import { AudioStream } from "./audio-stream.js";
 import { playAudioEvents } from "./session.js";
@@ -74,7 +74,7 @@ test("512 sources fit and a 513th binary wave refuses its entire batch before ch
 for (const [name, expectedKeys, events] of [
   ["same-key melody retriggers", 1, () => repeated(512, note())],
   ["released melody tails", 0, () => repeated(512, [note(), { kind: "noteOff", channel: 0, note: 60, sound: 7 }]).flat()],
-  ["percussion tails", 24, () => Array.from({ length: 512 }, (_, index) => note({ channel: 9, note: index % 128 }))],
+  ["percussion tails", MAX_VOICES, () => Array.from({ length: 512 }, (_, index) => note({ channel: 9, note: index % 128 }))],
 ]) {
   test(`${name} consume the source budget independently of the key map`, t => {
     const { audio, fm, send, noteCommands } = setup(t);

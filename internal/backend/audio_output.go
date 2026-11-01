@@ -70,6 +70,8 @@ type AudioWaveState struct {
 	// FramePhase is the consumed fraction of the first remaining frame, in
 	// billionths of a frame. It survives trimming without nanosecond rounding.
 	FramePhase uint32
+	// Velocity is the wave event's: its stream note's, or zero for full level.
+	Velocity uint8
 }
 
 // AudioPCMChannelState retains the independent controls for one ATR channel.
@@ -96,7 +98,7 @@ type audioOutputWave struct {
 // PCM admission and retained output share the same bounds. Refuse a newest
 // wave that cannot be retained, so recovery cannot silently lose audible PCM.
 const (
-	maxOutputNotes = 24 // Matches the page synthesizer's voice budget.
+	maxOutputNotes = 32 // Matches the page synthesizer's voice budget.
 	// Each paused owner retains at most one active voice budget. Paused
 	// voices consume no page slots; resuming applies the active budget again.
 	maxRetainedOutputNotes = maxOutputNotes * (defaultMaxSounds + 1)
@@ -335,7 +337,7 @@ func (output *audioOutput) playWave(event smaf.Event) {
 	if len(samples) != 0 {
 		now := output.eventTime()
 		output.pruneWaves(now)
-		wave := AudioWaveState{Sound: output.sound, PCMChannel: event.PCMChannel, Channels: channels, Rate: rate, Samples: samples}
+		wave := AudioWaveState{Sound: output.sound, PCMChannel: event.PCMChannel, Channels: channels, Rate: rate, Samples: samples, Velocity: event.Velocity}
 		if channels == 0 || channels > 32 || rate == 0 || len(samples)%int(channels) != 0 {
 			output.invalid = true
 			return
@@ -387,7 +389,7 @@ func (output *audioOutput) capture(now time.Time) (AudioOutputState, error) {
 		if !alive {
 			continue
 		}
-		saved.Waves = append(saved.Waves, AudioWaveState{Sound: wave.Sound, PCMChannel: wave.PCMChannel, Channels: wave.Channels, Rate: wave.Rate, BudgetBytes: wave.BudgetBytes, FramePhase: phase, Samples: slices.Clone(wave.Samples[frames*int(wave.Channels):])})
+		saved.Waves = append(saved.Waves, AudioWaveState{Sound: wave.Sound, PCMChannel: wave.PCMChannel, Channels: wave.Channels, Rate: wave.Rate, BudgetBytes: wave.BudgetBytes, FramePhase: phase, Velocity: wave.Velocity, Samples: slices.Clone(wave.Samples[frames*int(wave.Channels):])})
 	}
 	if err := saved.validate(audioStateVersion); err != nil {
 		return AudioOutputState{}, err
@@ -467,7 +469,7 @@ func (saved AudioOutputState) validate(version uint32) error {
 		if !owners[wave.Sound] || wave.Channels == 0 || wave.Channels > 32 || wave.Rate == 0 || len(wave.Samples) == 0 || len(wave.Samples)%int(wave.Channels) != 0 {
 			return invalid()
 		}
-		if wave.FramePhase >= uint32(time.Second) || version < 9 && wave.FramePhase != 0 {
+		if wave.FramePhase >= uint32(time.Second) || version < 9 && wave.FramePhase != 0 || wave.Velocity >= 128 || version < 11 && wave.Velocity != 0 {
 			return invalid()
 		}
 		charge := wave.BudgetBytes
@@ -691,7 +693,7 @@ func (output *audioOutput) replay(now time.Time, sound AudioHandle, only bool) {
 		if !alive {
 			continue
 		}
-		output.emitWave(wave.Sound, smaf.Event{Type: smaf.EventWave, PCMChannel: wave.PCMChannel, WaveChannels: wave.Channels, SamplingRate: wave.Rate, Wave: wave.Samples[frames*int(wave.Channels):]}, phase)
+		output.emitWave(wave.Sound, smaf.Event{Type: smaf.EventWave, Velocity: wave.Velocity, PCMChannel: wave.PCMChannel, WaveChannels: wave.Channels, SamplingRate: wave.Rate, Wave: wave.Samples[frames*int(wave.Channels):]}, phase)
 	}
 }
 

@@ -119,13 +119,14 @@ func TestAudioOutputRestoresEmittedLevelsAndSamplePosition(t *testing.T) {
 func TestAudioOutputMatchesVoiceStealingAndExpiresPercussion(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	audio := NewAudioWithClock(nil, func() time.Time { return now })
-	for note := uint8(40); note < 64; note++ {
+	last := uint8(40 + maxOutputNotes - 1)
+	for note := uint8(40); note <= last; note++ {
 		audio.sink.MIDINoteOn(0, note, 90)
 	}
 	// Retrigger at capacity steals the oldest key before replacing its own.
-	audio.sink.MIDINoteOn(0, 63, 100)
+	audio.sink.MIDINoteOn(0, last, 100)
 	saved, err := audio.CaptureState()
-	if err != nil || len(saved.Output.Notes) != 23 || saved.Output.Notes[0].Note != 41 || saved.Output.Notes[22].Velocity != 100 {
+	if err != nil || len(saved.Output.Notes) != maxOutputNotes-1 || saved.Output.Notes[0].Note != 41 || saved.Output.Notes[maxOutputNotes-2].Velocity != 100 {
 		t.Fatalf("voice stealing changed: %+v, %v", saved.Output.Notes, err)
 	}
 	audio.sink.MIDIControlChange(0, 123, 0)

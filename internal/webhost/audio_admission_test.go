@@ -106,7 +106,7 @@ func captureAdmissionState(t *testing.T, audio *backend.Audio, owner backend.Aud
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Version != 10 || len(saved.Output.Waves) != 256 {
+	if saved.Version != 11 || len(saved.Output.Waves) != 256 {
 		t.Fatalf("admission capture: version=%d, waves=%d", saved.Version, len(saved.Output.Waves))
 	}
 	for index, wave := range saved.Output.Waves {

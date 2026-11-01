@@ -108,6 +108,9 @@ func soundResourceUsage(events []smaf.Event, active []AudioNoteState) (audioReso
 		if event.Type == smaf.EventWave && len(event.Wave) != 0 && (event.WaveChannels == 0 || event.SamplingRate == 0) {
 			return audioResourceUsage{}, fmt.Errorf("audio wave has no channel or sample rate")
 		}
+		if event.Type == smaf.EventWave && event.Velocity >= 128 {
+			return audioResourceUsage{}, fmt.Errorf("audio wave has an invalid velocity")
+		}
 		if err := used.payload(len(event.Wave), 2); err != nil {
 			return audioResourceUsage{}, err
 		}

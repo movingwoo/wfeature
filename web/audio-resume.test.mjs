@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PageAudio } from "./audio.js";
+import { MAX_VOICES, PageAudio } from "./audio.js";
 import { fakeFM } from "./audio-test-fm.mjs";
 
 const setup = t => {
@@ -108,18 +108,18 @@ for (const age of [90, 180, 199]) {
 
 test("invalid ages and expired percussion consume no voice or source", t => {
   const { audio, fm } = setup(t);
-  for (const note of Array.from({ length: 24 }, (_, i) => 40 + i)) audio.noteOn(0, note, 100, 11);
+  for (const note of Array.from({ length: MAX_VOICES }, (_, i) => 40 + i)) audio.noteOn(0, note, 100, 11);
   for (const age of [-1, NaN, Infinity, -Infinity, undefined, "65"]) {
     audio.noteResume(0, 70, 100, age, 22);
     audio.noteResume(9, 40, 100, age, 22);
   }
   for (const age of [200, 201, 1000]) audio.noteResume(9, 40, 100, age, 22);
-  assert.equal(fm.notes().length, 24);
-  assert.equal(audio.voices.size, 24);
+  assert.equal(fm.notes().length, MAX_VOICES);
+  assert.equal(audio.voices.size, MAX_VOICES);
   assert.ok(fm.notes().every(note => fm.of(note.id).length === 0));
   audio.noteResume(0, 70, 100, 1000, 22);
-  assert.equal(fm.notes().length, 25);
-  assert.equal(audio.voices.size, 24, "resumed notes share the ordinary voice limit");
+  assert.equal(fm.notes().length, MAX_VOICES + 1);
+  assert.equal(audio.voices.size, MAX_VOICES, "resumed notes share the ordinary voice limit");
   assert.deepEqual(ops(fm, fm.notes()[0].id), ["cut"]);
   assert.equal(audio.voices.has("11:0:40"), false);
   assert.equal(audio.voices.has("22:0:70"), true);

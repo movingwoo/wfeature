@@ -44,11 +44,13 @@ type AudioSoundState struct {
 type AudioNoteState struct{ Channel, Note uint8 }
 
 const (
-	// Version 10 records the FM voice each sounding note plays and each
-	// channel's modulation. Version 9
+	// Version 11 records the velocity of each sounding wave. Version 10
+	// records the FM voice each sounding note plays and each channel's
+	// modulation. Version 9
 	// preserves PCM subframe position through tail trimming. Versions 6
-	// through 9 remain readable; their notes resume on the Host's instrument.
-	audioStateVersion    = 10
+	// through 10 remain readable; their notes resume on the Host's instrument
+	// before version 10, and their waves at full level before version 11.
+	audioStateVersion    = 11
 	maxAudioStateEntries = 1 << 20
 	maxAudioStateBytes   = 128 << 20
 )
@@ -66,6 +68,16 @@ func validateAudioState(saved AudioState) error {
 			for _, event := range current.Events {
 				if event.Type == smaf.EventVoice || event.Type == smaf.EventNoteOn && (event.Program != 0 || event.Value != 0) {
 					return fmt.Errorf("version %d audio state carries FM voices", saved.Version)
+				}
+			}
+		}
+	}
+	if saved.Version < 11 {
+		// No earlier writer gave a wave a velocity; its waves play at full level.
+		for _, current := range saved.Sounds {
+			for _, event := range current.Events {
+				if event.Type == smaf.EventWave && event.Velocity != 0 {
+					return fmt.Errorf("version %d audio state carries wave velocities", saved.Version)
 				}
 			}
 		}

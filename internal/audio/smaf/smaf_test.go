@@ -8,9 +8,8 @@ import (
 )
 
 // These cover the parser's three sequence dialects and the tone map's
-// conversions, and are the reference implementation's own cases carried over:
-// a port that only proves "does not crash on real files" would not have caught
-// a dialect decoded plausibly but wrongly.
+// conversions: a check that only proves "does not crash on real files" would
+// not have caught a dialect decoded plausibly but wrongly.
 
 func TestHandyVariableNumber(t *testing.T) {
 	for _, testCase := range []struct {
@@ -283,7 +282,7 @@ func TestMobileStreamNotePreservesVelocityMemory(t *testing.T) {
 		wave      []byte
 		wantWaves int
 	}{
-		{"mapped", []byte{0x11, 0x1f, 0x40, 0, 128, 255}, 3},
+		{"mapped", []byte{0x11, 0x1f, 0x40, 0, 128, 255}, 2},
 		{"absent", nil, 0},
 		{"unsupported-width", []byte{0x13, 0x1f, 0x40, 0, 0, 0, 0}, 0},
 		{"unsupported-stereo", []byte{0x91, 0x1f, 0x40, 0, 128, 255, 128}, 0},
@@ -296,7 +295,7 @@ func TestMobileStreamNotePreservesVelocityMemory(t *testing.T) {
 				1, 0x90, 0, 96, 1, // A stream note still stores its explicit velocity.
 				1, 0x80, 63, 1,
 				1, 0x81, 64, 1, // Another channel keeps its own previous value.
-				1, 0x90, 0, 0, 1,
+				1, 0x90, 0, 0, 1, // A stream note of velocity zero is silent.
 				1, 0x80, 65, 1, // Explicit zero must remain zero when omitted.
 				1, 0x90, 66, 88, 1,
 				1, 0x80, 0, 1, // An omitted stream velocity preserves the stored value.
@@ -323,8 +322,10 @@ func TestMobileStreamNotePreservesVelocityMemory(t *testing.T) {
 			if len(waves) != probe.wantWaves {
 				t.Fatalf("stream notes emitted %d waves, want %d", len(waves), probe.wantWaves)
 			}
+			// Each wave carries the velocity its stream note played at.
 			for index, wave := range waves {
-				if wave.Time != []uint32{3, 6, 9}[index] || wave.WaveChannels != 1 || wave.SamplingRate != 8000 ||
+				if wave.Time != []uint32{3, 9}[index] || wave.Velocity != []uint8{96, 88}[index] ||
+					wave.WaveChannels != 1 || wave.SamplingRate != 8000 ||
 					!reflect.DeepEqual(wave.Wave, []int16{-32768, 0, 32512}) {
 					t.Fatalf("velocity memory changed stream mapping, timing or raw samples: %+v", wave)
 				}
@@ -590,6 +591,27 @@ func TestADPCMStepTableIsCarriedIn256ths(t *testing.T) {
 	state.step(7)
 	if state.stepSize != 304 {
 		t.Errorf("step size after one maximal delta = %d, want 304", state.stepSize)
+	}
+}
+
+// **Each magnitude bit adds its own rounded-down share of the step.** The
+// difference is step/8, plus step/4, step/2 and step for bits 0, 1 and 2, each
+// truncated before they are summed. Rounding the sum once instead,
+// ((1+2·delta)·step)>>3, is up to two counts larger per sample, and the excess
+// is kept: after twelve samples of this stream it is eleven counts. The
+// expected values were worked out by hand from that rule.
+func TestADPCMDifferenceSumsEachBitsTruncatedShare(t *testing.T) {
+	// From the floor step 127, delta 1 is 15 + 31 = 46 where the single
+	// rounding gives (3·127)>>3 = 47.
+	state := adpcmState{stepSize: 127}
+	if got := state.step(9); got != -46 {
+		t.Fatalf("first difference = %d, want -46", got)
+	}
+
+	want := []int16{-46, -155, -264, -342, -420, -466, -575, -811, -849, -1156, -1035, -633}
+	got := DecodeADPCM([]byte{0xb9, 0xab, 0x9a, 0xfb, 0xc8, 0x51})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DecodeADPCM = %v, want %v", got, want)
 	}
 }
 

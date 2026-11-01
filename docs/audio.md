@@ -66,6 +66,31 @@ a restored sound keeps its old list, only newly loaded sounds use this reading,
 and no checkpoint field changed. The corpus measurements and the silent files
 that led here are in the [audit](history/audio.md#sounds-without-audible-events).
 
+### A handset channel sounds one note at a time
+
+A handset (HPS) channel is one voice, its rhythm channels included: a note-on
+keys off the note still sounding on the same channel, whatever its key, and
+the ambience layers laid under it. The decoder moves those note-offs forward
+to the new note's start rather than adding second ones, so an earlier note-off
+cannot cut a later note of the same key. A note replaced at its own instant
+never sounds and is dropped with its note-off and its layers: at one instant
+every note-off is ordered before every note-on, so its note-on would otherwise
+be left held. Mobile channels stay polyphonic. The rule is in
+`releaseHandsetNote` (`internal/audio/smaf/player.go`).
+
+For the same ordering reason a note of zero gate, in any dialect, keys off one
+millisecond after its note-on rather than at it; until 2026-11-01 such a note
+stayed held until its key was played again or the sound ended. The library
+has 174 in five handset sounds and three in two mobile ones.
+
+In the local library on 2026-11-01, 166 of the 2,708 sounds with handset notes
+start a note while their channel's previous one still sounds by its gate:
+3,208 times, 863 of them at the same instant. Those 166 are the only sounds
+whose events changed, and no sound's length changed, because a moved note-off
+only moves to a later note's start. Restored checkpoints keep the events they
+were decoded with. Whether a handset retriggers the voice's envelope or glides
+into the new note is not modelled; the new note starts its own envelope.
+
 ### Mobile note velocity memory
 
 A mobile note without a velocity operand uses the channel's last explicit
@@ -75,11 +100,57 @@ including an absent or unsupported wave. CC121 resets that channel's memory to
 zero. This follows the note-message contract on page 43 of the
 [SMAF 3.05 specification](https://img.atwiki.jp/mmfuta/attach/19/78/SMAF3.05.pdf#page=43).
 
-The stream-wave mapping and its raw PCM gain are unchanged; stream velocity and
-gate behavior remain [contract work](history/audio.md#pcm-contract-evidence).
-Restored checkpoints keep their already decoded event lists and only newly
-loaded sounds use this rule. It adds no saved field; the PCM extension below
-versions its own state.
+Stream-wave gate behavior remains
+[contract work](history/audio.md#pcm-contract-evidence); the wave a stream
+note names and the level it plays at are below. Restored checkpoints keep
+their already decoded event lists and only newly loaded sounds use this rule.
+It adds no saved field; the PCM extension below versions its own state.
+
+### Stream notes on channel 9
+
+A mobile score note can trigger one of the waves its track attaches (`Mwa`
+chunks) instead of a pitch. Note zero plays the wave numbered one past its
+channel. Channel 9 also numbers waves by note: its note n plays wave n+1
+whenever the track carries that wave in a form the decoder plays, and is a
+rhythm note otherwise. Its note zero without such a wave 1 falls back to the
+wave one past the channel, wave 10, which no local file carries, and plays
+nothing without it, as before (`streamWave` in
+`internal/audio/smaf/player.go`).
+
+The library settles the numbering. Read as one past the channel, channel 9's
+note zero names wave 10, which none of the 11,175 local sounds carries; 249 of
+the 255 sounds with channel 9 stream notes carry wave 1, and their channel 9
+notes 1 to 6 land on the waves 2 to 7 they carry. On 2026-11-01 the rule
+changed those 255 sounds: 7,944 triggers now play their waves. 5,177 are
+channel 9 note zeros that played nothing; the other 2,767 were notes 1 to 6,
+which sounded as pitches below 10 Hz or as rhythm notes on drum keys 1 to 6. Among them are 21 of the 23 sounds that had no audible
+event at all, whose only triggers are channel 9 note zero; the other two
+trigger note zero on channel 15, whose wave 16 they do not carry, and stay
+silent ([the audit](history/audio.md#sounds-without-audible-events)).
+Restored checkpoints keep the events they were decoded with.
+
+### Stream wave levels
+
+A stream wave's event carries its note's velocity (`Event.Velocity`, 1 to 127),
+and the page plays it at `min(1, 2 · 100/127 · √(v/127))` of the source gain
+every sampled sound has: the chip's square-root velocity curve, 6 dB above a
+note at the default channel volume of 100 (`waveLevel` in `web/audio.js`).
+Every velocity from 52 up is full level, which is how every stream wave played
+before 2026-11-01; a stream note of velocity zero is silent and emits no wave.
+A PCM audio track's waves carry no velocity (zero) and play at full level. In
+the local library 1,290 stream wave triggers, with velocities 1 to 50, play
+quieter than before, in 5 KTF, 40 LGT and 1 SKT sounds; none has velocity zero.
+
+The CLI's recording, which is not an owned sink, receives waves without their
+velocity and records every one at full level.
+
+The velocity reaches the page as operation `0x1a` before its wave, and only a
+page that negotiates `wavevelocity=1` receives it
+([session protocol](session.md#protocol-2-sound)); any other page plays every wave at full
+level. Sounding waves keep their velocity from audio state
+[version 11](#audio-checkpoint-versions). A checkpoint from an earlier version
+holds waves without one, and they resume at full level, the level they had
+when it was written; such a checkpoint may not carry wave velocities at all.
 
 ### A predictor that walked away from the signal
 
@@ -110,6 +181,28 @@ The audible effect was a click at the start of every sound and a crackle
 through it, reported as "the sound pops"; a title whose effects are all sampled
 popped on every one. The fix keeps the same multiply, shifts by eight instead
 of six, and swaps the two nibbles (`internal/audio/smaf/adpcm.go`).
+
+### Rounding each bit of the difference
+
+The difference a nibble adds is a sum of the step size's shifts, one for each
+magnitude bit: an eighth always, then a quarter, a half and the whole step for
+bits 0, 1 and 2, each rounded down before they are added. Until 2026-11-01 the
+decoder rounded the sum once, `((1 + 2·delta)·step) >> 3`, which is up to two
+counts larger per sample, and like every ADPCM error the excess stays in every
+later sample. A published MA ADPCM test pair, an encoded stream and its 34,340
+decoded samples, decodes exactly under the per-bit sum and up to 76 counts off
+under the single rounding. The pair is not in this repository:
+`TestADPCMMatchesAnExternalVectorPair` checks it when `WFEATURE_ADPCM_VECTOR`
+names a directory holding `out.adpcm` and `out.pcm`, and
+`TestADPCMDifferenceSumsEachBitsTruncatedShare` locks a vector worked out by
+hand.
+
+Across the 6,755 distinct local ADPCM waves the mean DC offset falls (KTF 124
+to 118 counts, LGT 242 to 235, SKT 107 to 103) and 3,079 waves touch a rail
+instead of 3,087; the waves that end loud or off-centre are the same, apart
+from one more LGT wave ending above a tenth of full scale. Every sound with an
+ADPCM wave decodes to slightly different samples. Restored checkpoints keep
+the samples they were decoded with.
 
 ### The two wave forms that are not compressed at all
 
@@ -178,9 +271,9 @@ operation sizes.
 
 Audio checkpoints save raw routed waves and sorted, independent PCM states,
 including unset volume; reconstruction sends current controls before trimmed
-sample tails. The current audio state version is 10
+sample tails. The current audio state version is 11
 (`audioStateVersion` in `internal/backend/audio_state.go`). Strict readers
-accept five shapes:
+accept six shapes:
 
 | Version | Shape |
 | --- | --- |
@@ -189,6 +282,7 @@ accept five shapes:
 | 8 | Adds each wave's original admission charge |
 | 9 | Adds each wave's phase within its first remaining sample frame |
 | 10 | Adds each sounding note's voice slot and pitch, and each channel's modulation |
+| 11 | Adds each sounding wave's [velocity](#stream-wave-levels) |
 
 Mixed shapes, unrelated missing fields, duplicates, unknown fields and
 unreserved groups are refused before adoption. Reading v6 does not invent
@@ -199,14 +293,16 @@ the events it was decoded with, which name no voices: its notes, sounding and
 later, play the page's stand-ins until the game loads the sound again, and its
 next capture keeps those events. A checkpoint holds decoded events, not a
 sound's bytes, so the voices cannot be recovered for it; versions 6–9 may not
-carry voice events at all. The next capture writes v10.
-Versions below 6 are refused. Older binaries refuse v10, so rollback requires a
+carry voice events at all. In the same way a sound restored from versions 6–10
+plays its stream waves at full level, and those versions may not carry wave
+velocities. The next capture writes v11.
+Versions below 6 are refused. Older binaries refuse v11, so rollback requires a
 pre-upgrade checkpoint or a normal start; checkpoint files and ordinary saves
 are left in place. Debug and release use the same format.
 
 Native browser rendering of the PCM controls
 [passes](testing.md#native-audio-rendering-acceptance); device listening is
-outstanding. Bend, gate, looping, retrigger and stream-velocity rules are open
+outstanding. Bend, gate, looping and retrigger rules are open
 (see [Deliberately incomplete](#deliberately-incomplete)).
 
 ### Decoder resource limits
@@ -262,7 +358,7 @@ held keys retained in a restored record. A sound has at most 2,048 MIDI keys.
 Retriggering a key replaces its held-key entry, matching the output and page,
 and velocity-zero note-on releases it, so an unbalanced repeating authored
 stream cannot grow an unbounded list. Held-key bookkeeping is distinct from the
-24 audible voices and from keys released under sustain.
+32 audible voices and from keys released under sustain.
 
 `Audio.Load`, `LoadEvents` and `PlayTransient` reject excessive combined cost
 with `ErrAudioResourceLimit` before allocating a handle or changing output.
@@ -400,7 +496,7 @@ reading.
 ### Global score order
 
 `Audio.Advance` merges all active scores by absolute guest deadline before
-applying the shared 24-note output budget. Equal deadlines use ascending sound
+applying the shared 32-note output budget. Equal deadlines use ascending sound
 handle, then original event order within that score. Repeated passes rejoin
 that merge at their original boundaries; a coarse tick cannot drain one
 owner's whole backlog ahead of an earlier peer event. The pending heap holds
@@ -548,7 +644,7 @@ The page accepts at most 512 retained Web Audio sources (`MAX_AUDIO_SOURCES`)
 and 128 MiB of logical Float32 PCM payload across live wave references
 (`MAX_LIVE_WAVE_BYTES`). Scheduled starts, melodic release tails, percussion and
 retired clip generations all count until their sources end or are disconnected
-by an immediate stop or reset. The separate 24-note admission rule still selects
+by an immediate stop or reset. The separate 32-note admission rule still selects
 held MIDI keys. Every PCM reference is charged, including references sharing
 one cached buffer; these are conservative accounting limits, not measured
 native memory.
@@ -564,7 +660,7 @@ reuse that owner's capacity without freeing peers. Scheduled stops keep their
 charges because the sources can still be audible. Global reset checks its
 replacement output against empty budgets before clearing old output.
 
-The largest supported reconstruction fits: 256 retained PCM waves plus 24 MIDI
+The largest supported reconstruction fits: 256 retained PCM waves plus 32 MIDI
 notes, and 32 MiB of raw signed-16-bit PCM expanded to stereo for an older
 sender and converted to Float32 is at most 128 MiB. The source ceiling leaves
 room for transient tails. Backend [PCM admission](#pcm-admission-and-restoration)
@@ -719,14 +815,24 @@ the same, and only a page busy for longer than a buffer can drop out. Commands
 carry the presentation time the rest of the page schedules with and take effect
 at their sample; a late command starts its note that far into its envelope.
 `fm-host.js` picks the host, `?voice=1` asks the server for the voices, and
-`0x17`–`0x19` carry them ([session protocol](session.md#sound)).
+`0x17`–`0x19` carry them ([session protocol](session.md#protocol-2-sound)).
 
-The operator model is the FM family's: phase modulation, envelopes linear in
-decibels with rates that halve their time every four steps (a 96 dB decay takes
-78.56 s at effective rate 0 and 2.4 ms at 60), 0.75 dB per total-level step and
+The operator model is the FM family's: phase modulation, decay, sustain and
+release linear in decibels with rates that halve their time every four steps
+(a 96 dB decay takes 78.56 s at effective rate 0 and 2.4 ms at 60), an attack
+that raises the amplitude in a straight line from silence to full in its
+rate's time (5.652 s at effective rate 0, halving the same way; 60 and above
+start at full), 0.75 dB per total-level step and
 3 dB per sustain-level step, feedback from the average of an operator's last
 two outputs with 4π for feedback 7, and a full-level modulator deviating its
-carrier by four cycles. The eight algorithms are the MA connections. These are
+carrier by four cycles. The eight algorithms are the MA connections. A note's
+level follows the square root of its velocity's fraction, so half velocity is
+about −3 dB rather than −6 dB; this applies to every note the page plays,
+because every one comes from a SMAF score or, for MIDP `playTone`, from the
+same chip. A resumed note advances its envelopes in closed form along the same
+curves, so a reconnect continues an attack where it was. Until 2026-11-01 the
+attack fell in decibels on an exponential curve over the same time and
+velocity scaled the level linearly. These are
 the family's conventions, not measurements of an MA chip, and nothing has been
 compared with a handset by ear.
 
@@ -745,7 +851,14 @@ the handset songs average 3.1% (4×) to 4.8% (6×) and the mobile songs 7.0% to
 AudioWorklet most of its 2.67 ms per 128-sample render quantum. No phone was
 measured.
 
-The synthesizer holds 64 voices: the page's 24 held notes and the release tails
+The page holds 32 notes at once (`MAX_VOICES` in `web/audio.js`, matched by the
+server's `maxOutputNotes`), raised from 24 on 2026-11-01. The densest local
+mobile song holds up to 35; in its first minute 3 of its notes are stolen
+instead of 76, and offline it renders in about 2% more time. The page does not
+tell the server its budget: a tab still running a page cached from before the
+change keeps 24 until it reloads, so the server's record of held notes can
+then list notes that page has already taken back.
+The synthesizer holds 64 voices: the page's 32 held notes and the release tails
 behind them. When the mobile songs fill it, the quietest released voice is
 taken, at a median of 43 dB below full scale (33 dB for the loudest tenth).
 A cap of 32 would save a fifth of the cost and take voices at a median of
@@ -1369,11 +1482,12 @@ empty media is refused rather than yielding an inert player.
   The KTF Java `Volume` mute and default-volume extensions stay stubs: no local
   KTF image names any of the four. LGT's source volume is remembered; its one
   caller copies the same level to the device volume itself.
-- **Stream-wave assignment and HPS device commands.** 23 local files trigger
-  stream notes that the current channel-plus-one mapping turns into waves they
-  do not carry, and twelve HPS files hold only device commands. They stay
-  silent until original runtime evidence settles the assignment and the
-  commands. In 77 HPS setup chunks the first message's last declared byte is
+- **Stream-wave assignment and HPS device commands.** Two local files trigger
+  note zero on channel 15, which names a wave 16 they do not carry, one
+  triggers a stream note in a file with no wave, and twelve HPS files hold only
+  device commands. They stay silent until original runtime evidence settles
+  the assignment and the commands; channel 9's numbering is settled
+  ([stream notes on channel 9](#stream-notes-on-channel-9)). In 77 HPS setup chunks the first message's last declared byte is
   `7F` where `F7` belongs, so the chunk yields nothing; whether `7F` is a vendor
   terminator is unverified. See
   [sounds without audible events](history/audio.md#sounds-without-audible-events).
@@ -1393,8 +1507,9 @@ empty media is refused rather than yielding an inert player.
   sample out is the handset's choice, as are short-sample looping and
   same-channel retrigger. A hard cutoff would trim more than a tenth from 5,042
   of the 8,752 local wave triggers, so the natural tail stays until a handset is
-  heard. Stream and score-attached sample velocity/gain and profile-specific
-  mapping need profile evidence. See [PCM controls](#live-pcm-track-controls)
+  heard. Stream waves follow their note's velocity
+  ([stream wave levels](#stream-wave-levels)); PCM track waves have none, and
+  profile-specific mapping needs profile evidence. See [PCM controls](#live-pcm-track-controls)
   and [the census](history/audio.md#pcm-contract-evidence).
 - **The WAV is a concatenation, not a timeline.** Sampled sounds are appended
   at the first one's rate, because these games play one at a time; the file

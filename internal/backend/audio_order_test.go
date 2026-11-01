@@ -155,32 +155,31 @@ func TestAudioAdvanceVoiceBudgetMatchesChronologicalAdmission(t *testing.T) {
 		sound         AudioHandle
 		channel, note uint8
 	}
+	// Two owners interleave eight voices more than the budget holds.
+	const perOwner = maxOutputNotes/2 + 4
 	results := make(map[string][]voiceKey)
 	for _, mode := range []string{"coarse", "deadlines"} {
 		t.Run(mode, func(t *testing.T) {
 			audio := NewAudioWithClock(nil, func() time.Time { return time.Unix(1000, 0) })
 			var firstEvents, secondEvents []smaf.Event
-			for i := uint32(0); i < 16; i++ {
+			for i := uint32(0); i < perOwner; i++ {
 				firstEvents = append(firstEvents, smaf.Event{Time: 20 + 40*i, Type: smaf.EventNoteOn, Note: 40 + uint8(i), Velocity: 100})
 				secondEvents = append(secondEvents, smaf.Event{Time: 40 * i, Type: smaf.EventNoteOn, Note: 64 + uint8(i), Velocity: 100})
 			}
 			first := loadOwnedAudio(t, audio, append(firstEvents, smaf.Event{Time: 2000, Type: smaf.EventEnd}))
 			second := loadOwnedAudio(t, audio, append(secondEvents, smaf.Event{Time: 2000, Type: smaf.EventEnd}))
 			if mode == "deadlines" {
-				for at := time.Duration(0); at <= 620*time.Millisecond; at += 20 * time.Millisecond {
+				for at := time.Duration(0); at <= 40*perOwner*time.Millisecond; at += 20 * time.Millisecond {
 					audio.Advance(at)
 				}
 			}
-			audio.Advance(950 * time.Millisecond)
-			// The first eight of 32 interleaved voices have been stolen. A
-			// per-owner drain incorrectly retains 16 keys from its last owner.
-			want := []voiceKey{
-				{second, 0, 68}, {first, 0, 44}, {second, 0, 69}, {first, 0, 45},
-				{second, 0, 70}, {first, 0, 46}, {second, 0, 71}, {first, 0, 47},
-				{second, 0, 72}, {first, 0, 48}, {second, 0, 73}, {first, 0, 49},
-				{second, 0, 74}, {first, 0, 50}, {second, 0, 75}, {first, 0, 51},
-				{second, 0, 76}, {first, 0, 52}, {second, 0, 77}, {first, 0, 53},
-				{second, 0, 78}, {first, 0, 54}, {second, 0, 79}, {first, 0, 55},
+			audio.Advance(40*perOwner*time.Millisecond + 150*time.Millisecond)
+			// The first eight interleaved voices have been stolen. A
+			// per-owner drain incorrectly retains a full budget of keys
+			// from its last owner.
+			var want []voiceKey
+			for i := uint8(4); i < perOwner; i++ {
+				want = append(want, voiceKey{second, 0, 64 + i}, voiceKey{first, 0, 40 + i})
 			}
 			var got []voiceKey
 			for _, voice := range captureOwnedAudio(t, audio).Output.Notes {
@@ -193,7 +192,7 @@ func TestAudioAdvanceVoiceBudgetMatchesChronologicalAdmission(t *testing.T) {
 		})
 	}
 	if !reflect.DeepEqual(results["coarse"], results["deadlines"]) {
-		t.Error("batch size changed which 24 voices survived")
+		t.Error("batch size changed which voices survived")
 	}
 }
 
@@ -246,7 +245,7 @@ func TestAudioResumeAdmitsRetainedVoiceAfterDuePeerNotes(t *testing.T) {
 		t.Fatal(err)
 	}
 	var notes []smaf.Event
-	for i := uint32(0); i < 24; i++ {
+	for i := uint32(0); i < maxOutputNotes; i++ {
 		notes = append(notes, smaf.Event{Time: i + 1, Type: smaf.EventNoteOn, Note: uint8(64 + i), Velocity: 100})
 	}
 	peer := loadOwnedAudio(t, audio, append(notes, smaf.Event{Time: 1000, Type: smaf.EventEnd}))
@@ -257,10 +256,10 @@ func TestAudioResumeAdmitsRetainedVoiceAfterDuePeerNotes(t *testing.T) {
 	// the retained note must remain newest even without an intervening tick.
 	audio.Advance(100 * time.Millisecond)
 	voices := captureOwnedAudio(t, audio).Output.Notes
-	if len(voices) != 24 || voices[23].Sound != owner || voices[23].Note != 60 {
+	if len(voices) != maxOutputNotes || voices[maxOutputNotes-1].Sound != owner || voices[maxOutputNotes-1].Note != 60 {
 		t.Fatalf("resume was admitted before older due peer notes: %+v", voices)
 	}
-	for i, voice := range voices[:23] {
+	for i, voice := range voices[:maxOutputNotes-1] {
 		if voice.Sound != peer || voice.Note != uint8(65+i) {
 			t.Fatalf("voice %d = %+v; want retained peer note %d", i, voice, 65+i)
 		}

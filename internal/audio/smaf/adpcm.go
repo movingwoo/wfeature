@@ -1,8 +1,7 @@
 package smaf
 
 // Yamaha ADPCM-B decoding, the only wave encoding SMAF files in the wild
-// actually use. Adapted from superctr's ymb_codec.c (Unlicense), the same
-// source the reference implementation used.
+// actually use.
 
 // adpcmStepTable scales the step size by how large the last delta was: small
 // deltas shrink the step, large ones grow it, which is what lets four bits
@@ -26,10 +25,25 @@ type adpcmState struct {
 	stepSize uint32
 }
 
+// The difference is a sum of the step size's shifts, one per magnitude bit,
+// each rounded down on its own: an eighth always, then a quarter, a half and
+// the whole step for bits 0, 1 and 2. Rounding the sum once instead,
+// ((1+2·delta)·step)>>3, is up to two counts larger per sample, and the error
+// is kept for the rest of the sound like any other (docs/audio.md, "Rounding
+// each bit of the difference").
 func (state *adpcmState) step(nibble uint8) int16 {
 	sign := nibble & 8
 	delta := uint32(nibble & 7)
-	difference := ((1 + delta<<1) * state.stepSize) >> 3
+	difference := state.stepSize >> 3
+	if delta&1 != 0 {
+		difference += state.stepSize >> 2
+	}
+	if delta&2 != 0 {
+		difference += state.stepSize >> 1
+	}
+	if delta&4 != 0 {
+		difference += state.stepSize
+	}
 
 	value := state.history
 	if sign != 0 {

@@ -630,6 +630,11 @@ fall back to. The twelve HPS files hold device commands (`43 03 90 Bn`/`Cn`
 headers) whose meaning is not inferred from their bytes. The original runtime
 or SDK is the evidence still needed for all three groups.
 
+On 2026-11-01 channel 9's stream notes took the note-plus-one numbering
+([stream notes on channel 9](../audio.md#stream-notes-on-channel-9)), and the
+21 files whose triggers sit on channel 9 play their wave 1. The two on channel
+15, the LGT record without a wave and the twelve HPS files remain silent.
+
 Classifying them exposed the [HPS exclusive framing](../audio.md#hps-exclusive-messages)
 defect. Across 2,721 HPS files with 7,763 sequences, an independent cursor
 found 27,639 sized sequence messages, 82 of them with an `F7` inside the device

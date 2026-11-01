@@ -62,7 +62,8 @@ try {
     const probe = window.audioProbe = { sockets: [], sent: {}, soundPackets: 0, soundBytes: 0, errors: [],
       contexts: [], starts: 0, scheduledStarts: 0, lateStarts: 0, minimumLead: null, maximumLead: null,
       live: 0, maximumLive: 0, peak: 0, clippedReads: 0, meters: [],
-      modules: [], processors: [], fmNotes: 0, fmOwnVoiceNotes: 0, fmVoices: 0, fmLateNotes: 0, fmMinimumLead: null, fmMaximumLead: null };
+      modules: [], processors: [], fmNotes: 0, fmOwnVoiceNotes: 0, fmVoices: 0, fmLateNotes: 0, fmMinimumLead: null, fmMaximumLead: null,
+      waves: 0, waveVelocities: 0 };
     const createScriptProcessor = BaseAudioContext.prototype.createScriptProcessor;
     if (createScriptProcessor) {
       BaseAudioContext.prototype.createScriptProcessor = function (...args) {
@@ -193,6 +194,14 @@ try {
       }
       return post.call(this, command);
     };
+    // Waves, and how many arrived with their stream note's velocity; every
+    // argument is passed on.
+    const playWave = PageAudio.prototype.playWave;
+    PageAudio.prototype.playWave = function (...args) {
+      audioProbe.waves++;
+      if (args[7] > 0) audioProbe.waveVelocities++;
+      return playWave.apply(this, args);
+    };
     // The debug log view keeps only its last lines, and a long run pushes the
     // first timing reports out of it, so every report is copied as it lands.
     audioProbe.timingLines = [];
@@ -253,6 +262,8 @@ try {
     processors: audioProbe.processors,
     fmNotes: audioProbe.fmNotes,
     fmOwnVoiceNotes: audioProbe.fmOwnVoiceNotes,
+    waves: audioProbe.waves,
+    waveVelocities: audioProbe.waveVelocities,
     fmVoices: audioProbe.fmVoices,
     fmLateNotes: audioProbe.fmLateNotes,
     fmMinimumLead: audioProbe.fmMinimumLead,
@@ -272,10 +283,10 @@ try {
   result.batches = observed.batches;
 
   const query = new URL(observed.url).searchParams;
-  for (const [key, value] of [["protocol", "2"], ["sound", "resume"], ["timing", "1"], ["pcm", "1"], ["phase", "1"], ["voice", "1"]]) {
+  for (const [key, value] of [["protocol", "2"], ["sound", "resume"], ["timing", "1"], ["pcm", "1"], ["phase", "1"], ["voice", "1"], ["wavevelocity", "1"]]) {
     assert.equal(query.get(key), value, `${key} in ${observed.url}`);
   }
-  check("the page negotiated protocol 2 with resumable, timed, routed, phased and voiced sound");
+  check("the page negotiated protocol 2 with resumable, timed, routed, phased, voiced and wave-velocity sound");
 
   assert.ok(observed.soundPackets > 0, "no binary sound batch arrived");
   assert.equal(observed.contexts.length > 0 && observed.contexts.at(-1).state, "running", JSON.stringify(observed.contexts));
@@ -300,6 +311,7 @@ try {
     check(`${observed.fmNotes} notes (${observed.fmOwnVoiceNotes} on ${observed.fmVoices} of the score's own voices) posted ahead of the render clock (lead ${observed.fmMinimumLead.toFixed(3)}–${observed.fmMaximumLead.toFixed(3)} s)`);
     assert.ok(observed.peak > 0, "notes were posted but the mix stayed silent");
   }
+  if (observed.waves) check(`${observed.waves} waves played, ${observed.waveVelocities} with their stream note's velocity`);
   // Reported, not asserted: how many sources were ever alive at once, and how
   // loud the mix got before the device, at the page's default sliders.
   console.log(`${engineName}: at most ${observed.maximumLive} sources alive at once; mix peak ${observed.peak.toFixed(3)}, ${observed.clippedReads} meter reads over full scale`);

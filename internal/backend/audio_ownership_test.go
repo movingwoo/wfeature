@@ -343,14 +343,14 @@ func TestOwnedAudioCancellationAndRestartIsolatePCM(t *testing.T) {
 func TestOwnedAudioVoiceBudgetIsSharedAcrossOwners(t *testing.T) {
 	audio := NewAudio(nil)
 	var handles []AudioHandle
-	for i := 0; i < 25; i++ {
+	for i := 0; i < maxOutputNotes+1; i++ {
 		handles = append(handles, loadOwnedAudio(t, audio, []smaf.Event{
 			{Type: smaf.EventNoteOn, Note: 60, Velocity: 100}, {Time: 1000, Type: smaf.EventEnd},
 		}))
 		audio.Advance(0)
 	}
 	saved := captureOwnedAudio(t, audio)
-	if len(saved.Output.Notes) != 24 {
+	if len(saved.Output.Notes) != maxOutputNotes {
 		t.Fatalf("voice budget grew per owner: %d voices", len(saved.Output.Notes))
 	}
 	for i, note := range saved.Output.Notes {
@@ -362,7 +362,7 @@ func TestOwnedAudioVoiceBudgetIsSharedAcrossOwners(t *testing.T) {
 	audio.SetSink(sink)
 	audio.ResumeOutput()
 	notes := sink.ofType(smaf.EventNoteOn)
-	if len(notes) != 24 {
+	if len(notes) != maxOutputNotes {
 		t.Fatalf("reconstruction exceeded the shared budget: %d", len(notes))
 	}
 	for _, note := range notes {

@@ -253,3 +253,53 @@ test("an operator stepping more than a cycle a sample keeps its phase within one
   assert.ok(operator0.step > 1, `step ${operator0.step}`);
   assert.ok(operator0.phase >= 0 && operator0.phase < 1, `phase ${operator0.phase}`);
 });
+
+test("velocity scales a voice by the square root of its fraction", () => {
+  for (const velocity of [127, 64, 16]) {
+    const target = synth();
+    define(target, sine());
+    on(target, { velocity });
+    const level = peak(render(target, 0.2));
+    const want = 0.25 * Math.sqrt(velocity / 127);
+    assert.ok(Math.abs(level - want) < 0.005, `velocity ${velocity}: peak ${level}, want ${want}`);
+  }
+});
+
+// Attack 3 at this pitch is effective rate 14: half a second to full.
+const ATTACK_SECONDS = 5.652 / 2 ** (14 / 4);
+const amplitude = operator => 10 ** (-operator.attenuation / 20);
+
+test("an attack raises the amplitude in a straight line over its rate's time", () => {
+  const target = synth();
+  define(target, sine({ attack: 3 }));
+  on(target);
+  let elapsed = 0;
+  for (const fraction of [0.25, 0.5, 0.75]) {
+    const until = fraction * ATTACK_SECONDS;
+    render(target, until - elapsed, elapsed);
+    elapsed = Math.round(until * RATE / BLOCK) * BLOCK / RATE;
+    const [carrier] = target.voices.find(voice => voice.active).operators;
+    assert.equal(carrier.stage, 1, `attack still running at ${fraction}`);
+    const want = elapsed / ATTACK_SECONDS;
+    assert.ok(Math.abs(amplitude(carrier) - want) < 0.01, `at ${fraction}: amplitude ${amplitude(carrier)}, want ${want}`);
+  }
+  render(target, ATTACK_SECONDS, elapsed);
+  const [carrier] = target.voices.find(voice => voice.active).operators;
+  assert.equal(carrier.attenuation, 0, "the attack ends at full level");
+});
+
+test("a note resumed during its attack continues the same straight line", () => {
+  const rendered = synth(), aged = synth();
+  define(rendered, sine({ attack: 3 }));
+  define(aged, sine({ attack: 3 }));
+  on(rendered);
+  render(rendered, 0.2);
+  on(aged, { age: 0.2, at: 0.2 });
+  render(aged, BLOCK / RATE, 0.2);
+  render(rendered, BLOCK / RATE, 0.2);
+  const [left] = rendered.voices.find(voice => voice.active).operators;
+  const [right] = aged.voices.find(voice => voice.active).operators;
+  assert.equal(left.stage, 1);
+  assert.equal(right.stage, 1);
+  assert.ok(Math.abs(amplitude(left) - amplitude(right)) < 0.002, `${amplitude(left)} vs ${amplitude(right)}`);
+});

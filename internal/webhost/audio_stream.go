@@ -33,8 +33,11 @@ import (
 //	0x17 voice           slot, id of the voice's encoding (smaf.Voice.Encode)
 //	0x18 voice note on   channel, note, velocity, voice slot, pitch
 //	0x19 resume voice    channel, note, velocity, age in milliseconds (32 bits), voice slot, pitch
+//	0x1a wave velocity   velocity of the stream note behind the next operation, a 0x11, 0x14 or 0x16
 //
-// The last three reach only a page that asked for its sounds' own voices.
+// 0x17 to 0x19 reach only a page that asked for its sounds' own voices, and
+// 0x1a only one that asked for wave velocities; a wave without it plays at
+// full level.
 //
 // A sampled sound or a SysEx message travels once as a definition and is named
 // by its id afterwards. A game plays the same few effects over and over, and
@@ -63,6 +66,7 @@ const (
 	audioOpVoice         = 0x17
 	audioOpVoiceNoteOn   = 0x18
 	audioOpVoiceResume   = 0x19
+	audioOpWaveVelocity  = 0x1a
 )
 
 var audioMagic = []byte("WFA2")
@@ -172,6 +176,9 @@ func (d *audioDefinitions) encode(events []audioEvent) []byte {
 			}
 			if event.FramePhase != 0 {
 				operation = audioOpResumeWave
+			}
+			if event.Velocity != 0 {
+				out = append(out, audioOpWaveVelocity, event.Velocity)
 			}
 			out = append(out, operation)
 			out = binary.BigEndian.AppendUint32(out, id)

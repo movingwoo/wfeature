@@ -50,8 +50,13 @@ export class AudioStream {
       if (!Number.isFinite(seconds)) throw new Error("sound message has a nonfinite time");
       return seconds;
     };
+    // A wave velocity belongs to the wave operation right after it.
+    let waveVelocity = 0;
     while (at < bytes.length) {
       const operation = bytes[at++];
+      if (waveVelocity !== 0 && operation !== 0x11 && operation !== 0x14 && operation !== 0x16) {
+        throw new Error("sound message has a wave velocity without its wave");
+      }
       switch (operation) {
         case 0x01:
           need(3);
@@ -141,8 +146,10 @@ export class AudioStream {
             const event = { kind: "playWave", channels, rate, samples: definition.samples, cacheable: true };
             if (routed || pcmChannel !== 0) event.pcmChannel = pcmChannel;
             if (resumed) event.framePhase = framePhase;
+            if (waveVelocity !== 0) event.velocity = waveVelocity;
             emit(event);
           }
+          waveVelocity = 0;
           break;
         }
         case 0x12: {
@@ -185,10 +192,16 @@ export class AudioStream {
           emit({ kind: "noteResume", channel: bytes[at], note: bytes[at + 1], velocity: bytes[at + 2], age: view.getUint32(at + 3), voice: bytes[at + 7], pitch: bytes[at + 8] });
           at += 9;
           break;
+        case 0x1a:
+          need(1);
+          waveVelocity = bytes[at++];
+          if (waveVelocity === 0 || waveVelocity > 127) throw new Error("sound message has an invalid wave velocity");
+          break;
         default:
           throw new Error(`unknown sound operation ${operation}`);
       }
     }
+    if (waveVelocity !== 0) throw new Error("sound message has a wave velocity without its wave");
     return events;
   }
 }

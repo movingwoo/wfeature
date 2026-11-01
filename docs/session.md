@@ -13,7 +13,7 @@ routes (`/api/saves`, `/api/savepack`, `/api/games`, `/api/status`,
 
 The page opens a WebSocket at `/api/session`. Text messages carry JSON commands
 and results in both directions. The query string negotiates everything else; the
-current page asks for `protocol=2&sound=resume&timing=1&pcm=1&phase=1&voice=1`, and adds
+current page asks for `protocol=2&sound=resume&timing=1&pcm=1&phase=1&voice=1&wavevelocity=1`, and adds
 `pictures=webp` when its browser decodes lossless WebP:
 
 | Query | Effect | Requires |
@@ -26,6 +26,7 @@ current page asks for `protocol=2&sound=resume&timing=1&pcm=1&phase=1&voice=1`, 
 | `pcm=1` | Independent PCM channels. | `sound=owned` or `sound=resume` |
 | `phase=1` | Fractional PCM resume positions. | `sound=owned` or `sound=resume` |
 | `voice=1` | The FM voices a score defines for itself, and the notes that play them. | `protocol=2` and `sound=owned` or `sound=resume` |
+| `wavevelocity=1` | The velocity of the stream note behind each wave, which sets its level. | `protocol=2` and `sound=owned` or `sound=resume` |
 
 An unknown value is answered with the older behavior rather than refused, so
 older pages remain compatible, and the current page also reads protocol 1 from
@@ -382,6 +383,7 @@ operation byte and its operands, with multibyte fields big-endian.
 | `0x17` | voice | slot (1–255), 32-bit id of the voice's encoding |
 | `0x18` | voice note on | channel, note, velocity, voice slot, pitch |
 | `0x19` | resume voice note | channel, note, velocity, 32-bit age in milliseconds, voice slot, pitch |
+| `0x1a` | wave velocity | velocity (1–127) of the next operation, which is `0x11`, `0x14` or `0x16` |
 
 A sampled sound or SysEx message travels once as a definition under an id and is
 named afterwards; ids are never reused. The definitions a page holds are bounded
@@ -434,6 +436,17 @@ ordinary operations. The page refuses slot zero and a pitch above 127, and
 skips a voice whose definition it does not hold. A page that did not ask
 receives the same notes as ordinary operations and no voices, an older server
 ignores the query, and a reconnect adopts the new page's capability.
+
+`wavevelocity=1`, binary only, carries the velocity of the stream note that
+triggered a wave, from which the page sets its
+[level](audio.md#stream-wave-levels). `0x1a` precedes the wave operation it
+belongs to, after any definition that operation names; a wave without a
+velocity, such as a PCM track's, has no `0x1a` and plays at full level. The
+page refuses a message whose `0x1a` is zero, above 127, or not followed
+directly by a wave operation, and consumes the velocity with a wave whose
+definition it does not hold. A page that did not ask receives every wave
+without one, an older server ignores the query, and a reconnect adopts the new
+page's capability.
 
 `timing=1`, negotiated with `sound=resume`, preserves presentation seconds
 without breaking older servers. JSON adds an optional `at` (zero is meaningful)

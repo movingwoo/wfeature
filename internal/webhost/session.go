@@ -137,7 +137,8 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 	runner.soundTiming = request.URL.Query().Get("timing") == "1" && runner.soundResume
 	runner.soundPCM = negotiatedPCM(request.URL.Query().Get("pcm"), runner.soundOwnership)
 	runner.soundWavePhase = negotiatedWavePhase(request.URL.Query().Get("phase"), runner.soundOwnership)
-	runner.soundVoice = negotiatedVoice(request.URL.Query().Get("voice"), runner.soundOwnership, runner.protocol)
+	runner.soundVoice = negotiatedStreamFeature(request.URL.Query().Get("voice"), runner.soundOwnership, runner.protocol)
+	runner.soundWaveVelocity = negotiatedStreamFeature(request.URL.Query().Get("wavevelocity"), runner.soundOwnership, runner.protocol)
 	runner.run(request.Context())
 }
 
@@ -178,14 +179,16 @@ type sessionRunner struct {
 	// keeps receiving complete PNGs and JSON sound. See frame_patch.go.
 	protocol int
 	// soundOwnership enables independent clip events in either audio protocol.
-	soundOwnership  bool
-	soundResume     bool // Envelope ages require a newer page than ownership alone.
-	soundTiming     bool // Presentation timestamps are negotiated independently.
-	soundPCM        bool // PCM channel controls require an explicitly capable page.
-	soundWavePhase  bool // Fractional PCM offsets require an explicitly capable page.
-	soundVoice      bool // A sound's own FM voices require an explicitly capable page.
-	legacyAudio     legacyAudioState
-	audioNeedsReset bool
+	soundOwnership bool
+	soundResume    bool // Envelope ages require a newer page than ownership alone.
+	soundTiming    bool // Presentation timestamps are negotiated independently.
+	soundPCM       bool // PCM channel controls require an explicitly capable page.
+	soundWavePhase bool // Fractional PCM offsets require an explicitly capable page.
+	soundVoice     bool // A sound's own FM voices require an explicitly capable page.
+	// A stream wave's velocity sets its level only on a page that asked.
+	soundWaveVelocity bool
+	legacyAudio       legacyAudioState
+	audioNeedsReset   bool
 	// audioSentAt is when the last sound message was queued. A batch that
 	// holds only its frontier waits for clockOnlyInterval after it.
 	audioSentAt time.Time
@@ -1803,6 +1806,13 @@ func (r *sessionRunner) sendAudio(events []audioEvent, droppable bool) bool {
 	if !r.soundVoice {
 		events = withoutVoices(events)
 	}
+	if !r.soundWaveVelocity {
+		for i := range events {
+			if events[i].Kind == audioPlayWave {
+				events[i].Velocity = 0
+			}
+		}
+	}
 	if !r.soundPCM {
 		compatible := events[:0]
 		for _, event := range events {
@@ -1986,7 +1996,7 @@ func (a *audioCollector) queueAudioEvent(sound backend.AudioHandle, event smaf.E
 			return
 		}
 		queued.Kind, queued.Channels, queued.Rate = audioPlayWave, event.WaveChannels, event.SamplingRate
-		queued.PCMChannel = event.PCMChannel
+		queued.PCMChannel, queued.Velocity = event.PCMChannel, event.Velocity
 		queued.FramePhase = framePhase
 		queued.pcm = make([]byte, len(event.Wave)*2)
 		for index, sample := range event.Wave {

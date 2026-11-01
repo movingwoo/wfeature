@@ -108,10 +108,12 @@ and in rendered Chromium/WebKit output. The remainder cannot be settled there:
   distributions from devices.
   [The live sessions](testing.md#live-audio-session-acceptance) show the two
   cases seen so far.
-- **Silent files.** 23 files whose stream notes select waves they do not carry
-  and twelve HPS files that hold only device commands need original runtime
-  evidence, not a guessed mapping
-  ([sounds without audible events](history/audio.md#sounds-without-audible-events)).
+- **Silent files.** Two files whose channel 15 stream notes select a wave they
+  do not carry, one stream note in a file with no wave, and twelve HPS files
+  that hold only device commands need original runtime evidence, not a guessed
+  mapping ([sounds without audible events](history/audio.md#sounds-without-audible-events)).
+  The 21 whose only triggers were channel 9 note zero play since 2026-11-01
+  ([stream notes on channel 9](audio.md#stream-notes-on-channel-9)).
 
 Timbre: since 2026-11-01 the page plays the FM voices scores define for
 themselves, and its own FM stand-ins for the programs and drum keys they leave
@@ -121,7 +123,9 @@ approximation, and the stand-in voices, which are reasonable FM patches rather
 than the chip's built-in ones. No vendor sound bank is guessed or bundled.
 Measure clipping of the actual mixed MIDI/PCM output at the supported slider
 settings before adding headroom or a limiter, and the synthesizer's CPU on a
-phone before raising the voice budget.
+phone before raising the voice budget past its 32 held notes (raised from 24
+on 2026-11-01 without a phone measurement; the offline cost of the densest
+local song rose by about 2%).
 
 ## Performance and optional features
 

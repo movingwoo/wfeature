@@ -200,7 +200,7 @@ func TestAudioPauseSeparatesRetainedAndActiveVoiceBudgets(t *testing.T) {
 	sink := &resumeAudioProbe{}
 	audio := NewAudioWithClock(sink, func() time.Time { return now })
 	var events []smaf.Event
-	for note := uint8(40); note <= 64; note++ {
+	for note := uint8(40); note <= 40+maxOutputNotes; note++ {
 		events = append(events, smaf.Event{Type: smaf.EventNoteOn, Note: note, Velocity: 100})
 	}
 	events = append(events, smaf.Event{Time: 1000, Type: smaf.EventEnd})
@@ -214,7 +214,7 @@ func TestAudioPauseSeparatesRetainedAndActiveVoiceBudgets(t *testing.T) {
 	saved := captureOwnedAudio(t, audio)
 	for _, owner := range []AudioHandle{first, second} {
 		notes := pausedOutputNotes(saved, owner)
-		if len(notes) != 24 || notes[0].Note != 41 || notes[23].Note != 64 {
+		if len(notes) != maxOutputNotes || notes[0].Note != 41 || notes[maxOutputNotes-1].Note != 40+maxOutputNotes {
 			t.Fatalf("owner %d lost its independent voice budget: %+v", owner, notes)
 		}
 	}
@@ -224,14 +224,14 @@ func TestAudioPauseSeparatesRetainedAndActiveVoiceBudgets(t *testing.T) {
 			Sound: owner, Channel: 1, Note: 60, Velocity: 100, StartedWith: defaultAudioChannels()[1],
 		})
 		if _, err := NewAudioFromState(bad, nil); err == nil {
-			t.Fatalf("checkpoint accepted a twenty-fifth voice for owner %d", owner)
+			t.Fatalf("checkpoint accepted a voice past the budget for owner %d", owner)
 		}
 	}
 	if err := audio.Resume(first, 0); err != nil {
 		t.Fatal(err)
 	}
 	after := captureOwnedAudio(t, audio)
-	if len(after.Output.Notes) != 24 || len(pausedOutputNotes(after, first)) != 24 || len(sink.resumed) != 24 {
+	if len(after.Output.Notes) != maxOutputNotes || len(pausedOutputNotes(after, first)) != maxOutputNotes || len(sink.resumed) != maxOutputNotes {
 		t.Fatal("resumed notes did not take the active voice budget in delivery order")
 	}
 	for i, note := range sink.resumed {
@@ -256,7 +256,7 @@ func TestAudioResumeVoiceStealingFollowsDeliveryOrder(t *testing.T) {
 				t.Fatal(err)
 			}
 			var events []smaf.Event
-			for note := uint8(40); note <= 62; note++ {
+			for note := uint8(40); note <= 40+maxOutputNotes-2; note++ {
 				events = append(events, smaf.Event{Type: smaf.EventNoteOn, Note: note, Velocity: 100})
 			}
 			if expiredDrum {
@@ -270,7 +270,7 @@ func TestAudioResumeVoiceStealingFollowsDeliveryOrder(t *testing.T) {
 				t.Fatal(err)
 			}
 			saved := captureOwnedAudio(t, audio)
-			if len(saved.Output.Notes) != 24 || saved.Output.Notes[0].Sound != second || saved.Output.Notes[0].Note != 40 || saved.Output.Notes[23].Sound != first {
+			if len(saved.Output.Notes) != maxOutputNotes || saved.Output.Notes[0].Sound != second || saved.Output.Notes[0].Note != 40 || saved.Output.Notes[maxOutputNotes-1].Sound != first {
 				t.Fatalf("resume changed the audible voice order: %+v", saved.Output.Notes)
 			}
 			third := loadOwnedAudio(t, audio, []smaf.Event{
@@ -279,7 +279,7 @@ func TestAudioResumeVoiceStealingFollowsDeliveryOrder(t *testing.T) {
 			})
 			audio.Advance(300 * time.Millisecond)
 			saved = captureOwnedAudio(t, audio)
-			if len(saved.Output.Notes) != 24 || saved.Output.Notes[0].Sound != second || saved.Output.Notes[0].Note != 41 || saved.Output.Notes[22].Sound != first || saved.Output.Notes[23].Sound != third {
+			if len(saved.Output.Notes) != maxOutputNotes || saved.Output.Notes[0].Sound != second || saved.Output.Notes[0].Note != 41 || saved.Output.Notes[maxOutputNotes-2].Sound != first || saved.Output.Notes[maxOutputNotes-1].Sound != third {
 				t.Fatalf("the next note stole a different voice from the page: %+v", saved.Output.Notes)
 			}
 		})
