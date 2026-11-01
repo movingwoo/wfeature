@@ -2929,6 +2929,25 @@ archive whose channel 9 waves now play (30 in 20 seconds, all with their
 velocity) fails the harness's silent-mix check on both builds: its mix reads
 zero with or without the change.
 
+### HTTPS from the network
+
+`cmd/server/certificate_test.go` checks where `auto` puts the HTTPS listener
+and where it puts none, that the self-signed certificate is made once, served
+again, made again for a new address while keeping the old ones, renewed a month
+before its end and replaced when unreadable, with a lifetime under 825 days
+and its key readable by its owner only, and that the page and the session
+socket answer over TLS and stop with the server.
+
+On 2026-11-01 the debug server ran with its defaults on the development
+machine, and Chromium and WebKit opened a KTF archive by the machine's network
+address with certificate errors ignored, standing in for a person who accepted
+the warning. Over `https://…:<port + 100>` the page was a secure context, the
+synthesizer's AudioWorklet module loaded, the session socket was `wss:` and the
+sound batches arrived; over the plain port none of that, and the synthesizer ran
+in the ScriptProcessor. Chrome refused the service worker on the HTTPS page
+("An SSL certificate error occurred when fetching the script"). Accepting the
+warning by hand on a phone, Android Chrome and iPhone Safari, is not covered.
+
 ### ScriptProcessor buffer clock
 
 In both engines a ScriptProcessor callback's `playbackTime` is exactly one

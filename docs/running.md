@@ -78,9 +78,10 @@ router's name for the machine, a proxy's — so there is none; keep the server
 off networks and browsers you do not trust, or bind it to loopback.
 
 A page opened by the machine's address over plain
-HTTP is not a secure context, so the browser gives it no game controller and
-registers no service worker; `127.0.0.1`, the phone apps and an HTTPS proxy are
-secure contexts.
+HTTP is not a secure context, so the browser gives it no game controller,
+registers no service worker, and plays the music without an AudioWorklet;
+`127.0.0.1`, the phone apps, the server's own [HTTPS port](#from-a-phone-over-https)
+and an HTTPS proxy are secure contexts.
 
 The game runs **on the server**, and the page draws the frames it sends; see
 [`session.md`](session.md). There is nothing to build for the browser.
@@ -95,6 +96,8 @@ The game runs **on the server**, and the page draws the frames it sends; see
 | `-logs` | `<data>/logs` | where debug reports are written |
 | `-number` | `01000000000` | the handset's subscriber number: 1 to 11 digits |
 | `-open` | off | open the page in a browser once the server answers on its port |
+| `-https` | `auto` | the HTTPS listener's address, `off` for none; `auto` opens one 100 ports above `-addr` (`:11641`) when that address is reachable from the network, and none for a loopback address or a socket |
+| `-tls` | `<data>/tls` | where the HTTPS listener keeps its self-signed certificate |
 | `-version` | — | print `wfeature-server <version> (<profile>)` to stdout, then exit |
 
 `<data>` is `var` when the working directory has a `var/` directory, otherwise
@@ -106,7 +109,8 @@ client source (`client=web` or `client=embedded`) and each root.
 Each flag reads an environment variable when it is not given — `WFEATURE_ADDR`,
 `WFEATURE_WEB_ROOT`, `WFEATURE_GAME_ROOT`, `WFEATURE_ADDED_ROOT`,
 `WFEATURE_SAVE_ROOT`, `WFEATURE_LOG_ROOT`, `WFEATURE_PHONE_NUMBER`,
-`WFEATURE_OPEN` (any non-empty value) — and `WFEATURE_HOST` with
+`WFEATURE_OPEN` (any non-empty value), `WFEATURE_HTTPS_ADDR`,
+`WFEATURE_TLS_ROOT` — and `WFEATURE_HOST` with
 `WFEATURE_PORT` compose the default address. `WFEATURE_PORT` is also the
 default port of `status` and `stop`.
 
@@ -123,6 +127,31 @@ server built with `-tags debug` collects the full diagnostics and writes to the
 debug save tree. One process cannot serve the other profile, which keeps a
 debug session from moving a release session's progress. Every HTTP route the
 server answers is listed in [`web/README.md`](../web/README.md#server).
+
+### From a phone over HTTPS
+
+A phone on the same network can open `https://<the machine's address>:11641`
+as well as the plain address. The server presents a certificate it made
+itself, so the browser warns once — on Android Chrome "Advanced", then
+"Proceed"; on iPhone Safari "Show Details", then "visit this website" — and
+after that the page is a secure context: the music plays in an AudioWorklet, as
+on the machine itself and in the phone apps, and a game controller works.
+Chrome still registers no service worker for a page whose certificate it was
+told to accept, so the page cannot be installed or opened offline there.
+
+The certificate is made at the first start, kept in `<data>/tls` (`-tls`) and
+served again, because each new one is a new warning on every phone. It names
+`localhost`, the machine's host name and every address of its interfaces,
+lasts 800 days (Apple's platforms refuse longer) and is made again a month
+before it ends, or when the machine has an address it does not name; the new
+one keeps the old addresses, so a machine that moves between two networks
+settles on one. Its key is the file `key.pem`, readable by its owner only.
+
+`auto` gives no HTTPS listener to `-addr 127.0.0.1:…` or a socket, which are
+the machine itself or a proxy's to secure, and one it cannot open is left out
+with a warning in the log while plain HTTP goes on. An address given to
+`-https` is required instead. The startup log names both URLs:
+`url=http://[::]:11541 https=https://[::]:11641`.
 
 ### Adding a game from the page, and taking it back off
 

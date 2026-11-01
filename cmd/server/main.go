@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -124,6 +125,10 @@ func run(arguments []string, answer, output *os.File) error {
 		"the subscriber number this handset answers with; a shorter one opens a title that gates on billing")
 	openPage := flags.Bool("open", environmentOr("WFEATURE_OPEN", "") != "",
 		"open the page in a browser once the server is listening")
+	secureAddress := flags.String("https", environmentOr("WFEATURE_HTTPS_ADDR", "auto"),
+		`address of the HTTPS listener, "off" for none; "auto" is 100 ports above -addr when that is reachable from the network`)
+	certificateRoot := flags.String("tls", environmentOr("WFEATURE_TLS_ROOT", filepath.Join(root, "tls")),
+		"directory keeping the HTTPS listener's self-signed certificate")
 	showVersion := flags.Bool("version", false, "print the version and exit")
 	if err := flags.Parse(arguments); err != nil {
 		return err
@@ -176,10 +181,20 @@ func run(arguments []string, answer, output *os.File) error {
 	if err != nil {
 		return err
 	}
+	secure, err := listenSecurely(*secureAddress, *address, *certificateRoot, logger)
+	if err != nil {
+		listener.Close()
+		return err
+	}
+	secureURL := ""
+	if secure != nil {
+		secureURL = "https://" + secure.Addr().String()
+	}
 	// Which saves a session is playing should never be a guess, so the tree is
 	// named on startup: the profiles keep separate ones.
 	logger.Info("serving wfeature",
 		"url", serverURL(listener),
+		"https", secureURL,
 		"version", version,
 		"profile", server.Profile(),
 		"client", source,
@@ -191,7 +206,74 @@ func run(arguments []string, answer, output *os.File) error {
 	if *openPage {
 		openWhenServing(listener)
 	}
-	return serve(listener, server, logger, requestShutdown)
+	return serve(listener, secure, server, logger, requestShutdown)
+}
+
+// secureOffset is how far above the plain port "auto" puts the HTTPS one. The
+// next port up is where a second server is usually moved to, so it is left
+// alone.
+const secureOffset = 100
+
+// httpsAddress answers where the HTTPS listener goes: the address given,
+// nowhere for "off" or nothing, and for "auto" secureOffset ports above on the
+// same host when the server is reachable from the network. A loopback address
+// is a secure context already, and a socket is a proxy's to secure.
+func httpsAddress(value, address string) string {
+	switch value {
+	case "", "off":
+		return ""
+	case "auto":
+	default:
+		return value
+	}
+	if strings.HasPrefix(address, unixPrefix) {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "localhost" {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return ""
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil || number <= 0 || number+secureOffset > 65535 {
+		return ""
+	}
+	return net.JoinHostPort(host, strconv.Itoa(number+secureOffset))
+}
+
+// listenSecurely opens the HTTPS listener, presenting the certificate kept in
+// dir. One that "auto" chose and cannot open is left out with a warning; the
+// page still answers over plain HTTP. One given by address is required.
+func listenSecurely(value, address, dir string, logger *slog.Logger) (net.Listener, error) {
+	secureAddress := httpsAddress(value, address)
+	if secureAddress == "" {
+		return nil, nil
+	}
+	required := value != "auto"
+	fail := func(err error) (net.Listener, error) {
+		if required {
+			return nil, err
+		}
+		logger.Warn("serving without HTTPS", "error", err)
+		return nil, nil
+	}
+	certificate, created, err := secureCertificate(dir, reachableNames(), reachableAddresses(), time.Now())
+	if err != nil {
+		return fail(err)
+	}
+	if created {
+		logger.Info("made a self-signed certificate for HTTPS; a browser warns once before it is accepted",
+			"dir", dir, "names", certificate.Leaf.DNSNames, "addresses", certificate.Leaf.IPAddresses)
+	}
+	plain, err := listen(secureAddress)
+	if err != nil {
+		return fail(err)
+	}
+	// HTTP/1.1 only: the session is a WebSocket upgrade, which HTTP/2 here
+	// would not carry.
+	return tls.NewListener(plain, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}), nil
 }
 
 // openWhenServing shows the page once the port answers. A launcher used to
@@ -434,7 +516,7 @@ func serverURL(listener net.Listener) string {
 	return "http://" + listener.Addr().String()
 }
 
-func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger, requested <-chan struct{}) error {
+func serve(listener, secure net.Listener, handler *webhost.Server, logger *slog.Logger, requested <-chan struct{}) error {
 	httpServer := &http.Server{
 		Handler: handler,
 		// A game archive is tens of megabytes over a home network, so the
@@ -456,6 +538,16 @@ func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger, 
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       10 * time.Minute,
 		WriteTimeout:      10 * time.Minute,
+	}
+	servers := []*http.Server{httpServer}
+	listeners := []net.Listener{listener}
+	if secure != nil {
+		// The HTTPS listener serves the same handler under the same bounds.
+		secureServer := &http.Server{Handler: handler, ReadHeaderTimeout: httpServer.ReadHeaderTimeout,
+			ReadTimeout: httpServer.ReadTimeout, WriteTimeout: httpServer.WriteTimeout,
+			ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelDebug)}
+		servers = append(servers, secureServer)
+		listeners = append(listeners, secure)
 	}
 
 	// Ctrl-C during a save write should still finish the write, so the server
@@ -489,21 +581,27 @@ func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger, 
 	// the drain goes on.
 	signal.Ignore(syscall.SIGPIPE)
 
-	failed := make(chan error, 1)
-	go func() { failed <- httpServer.Serve(listener) }()
+	failed := make(chan error, len(servers))
+	for index, server := range servers {
+		go func() { failed <- server.Serve(listeners[index]) }()
+	}
 
 	select {
 	case err := <-failed:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
+		// One listener failing ends the server; the other stops with it.
+		for _, server := range servers {
+			server.Close()
+		}
 		return err
 	case <-requested:
 		logger.Info("shutting down")
-		return drain(httpServer, handler, logger)
+		return drain(servers, handler, logger)
 	case <-signalled.Done():
 		logger.Info("shutting down")
-		return drain(httpServer, handler, logger)
+		return drain(servers, handler, logger)
 	}
 }
 
@@ -511,7 +609,7 @@ func serve(listener net.Listener, handler *webhost.Server, logger *slog.Logger, 
 // stop safe during a save write. Every way of asking ends here: the signals a
 // window's Ctrl-C, a terminate and a closed window send, and the local request
 // POST /api/shutdown makes.
-func drain(httpServer *http.Server, handler *webhost.Server, logger *slog.Logger) error {
+func drain(servers []*http.Server, handler *webhost.Server, logger *slog.Logger) error {
 	shutdown, cancel := context.WithTimeout(context.Background(), webhost.StopDeadline)
 	defer cancel()
 	// Shutdown neither closes nor waits for a hijacked connection, and a
@@ -529,9 +627,15 @@ func drain(httpServer *http.Server, handler *webhost.Server, logger *slog.Logger
 		defer close(games)
 		handler.CloseSessions(shutdown)
 	}()
-	if err := httpServer.Shutdown(shutdown); err != nil {
-		logger.Error("shutdown was not clean", "error", err)
+	var stopped sync.WaitGroup
+	for _, server := range servers {
+		stopped.Go(func() {
+			if err := server.Shutdown(shutdown); err != nil {
+				logger.Error("shutdown was not clean", "error", err)
+			}
+		})
 	}
+	stopped.Wait()
 	<-games
 	return nil
 }

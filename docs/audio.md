@@ -842,7 +842,9 @@ reconstruction restores it. In a secure context it
 runs in an AudioWorklet on the audio thread. A page opened by the machine's
 address over plain HTTP has no AudioWorklet, so there the same class renders in
 a ScriptProcessor with 2048-frame buffers on the page's thread: the sound is
-the same, and only a page busy for longer than a buffer can drop out. Each
+the same, and only a page busy for longer than a buffer can drop out. The
+server's own [HTTPS port](running.md#from-a-phone-over-https) is a secure
+context once its warning is accepted, and gives such a page the worklet. Each
 buffer renders for when it plays, counted rather than read (`bufferClock` in
 `fm-host.js`): Chromium and WebKit report a callback's `playbackTime` as the
 render clock when they posted the callback plus one buffer, late by however
