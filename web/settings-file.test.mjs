@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  SETTINGS_FILE_NAME,
   SETTINGS_FORMAT,
   applySettings,
   exportSettings,
   initSettingsFile,
   isSetting,
   readSettings,
-  settingsFileName,
 } from "./settings-file.js";
 import { createSafeStorage } from "./storage.js";
 import "./text-fixture.mjs";
@@ -63,8 +63,8 @@ test("an export holds every setting and nothing that is not one", () => {
   for (const [key] of NOT_SETTINGS) assert.equal(isSetting(key), false, key);
 });
 
-test("the export is named for the day it was made", () => {
-  assert.equal(settingsFileName(new Date(2026, 10, 1)), "wfeature-settings-2026-11-01.json");
+test("the export has one name whatever the day", () => {
+  assert.equal(SETTINGS_FILE_NAME, "wfeature-settings.json");
 });
 
 // **Another browser gets the same settings back.** A setting the file does not
@@ -138,7 +138,7 @@ test("the buttons export, and import after asking, then open the page again", as
   });
 
   await page.fire("settings-export", "click");
-  assert.equal(page.created.at(-1).download, "wfeature-settings-2026-11-01.json");
+  assert.equal(page.created.at(-1).download, "wfeature-settings.json");
   assert.equal(page.created.at(-1).clicked, 1);
   assert.equal(statuses.at(-1), phrase("settingsfile.downloaded"));
 

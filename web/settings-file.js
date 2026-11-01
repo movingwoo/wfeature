@@ -59,12 +59,10 @@ export const isSetting = key =>
   typeof key === "string" && key.length <= MAX_KEY &&
   (SETTING_KEYS.has(key) || SETTING_PREFIXES.some(prefix => key.length > prefix.length && key.startsWith(prefix)));
 
-// settingsFileName is what the export is called: the day it was made, so two
-// exports side by side say which is newer.
-export const settingsFileName = (now = new Date()) => {
-  const day = [now.getFullYear(), now.getMonth() + 1, now.getDate()].map(part => String(part).padStart(2, "0")).join("-");
-  return `wfeature-settings-${day}.json`;
-};
+// SETTINGS_FILE_NAME is what the export is called: one short name, with the
+// prefix saying whose settings they are in a downloads folder that has other
+// programs' settings.json. When it was made is inside the file (`exported`).
+export const SETTINGS_FILE_NAME = "wfeature-settings.json";
 
 // exportSettings answers the file's text and how many settings it holds.
 export const exportSettings = (storage = local, now = new Date()) => {
@@ -133,7 +131,7 @@ export const initSettingsFile = ({
     try {
       const { text } = exportSettings(storage, now());
       const blob = new Blob([text], { type: "application/json" });
-      const way = await deliverFile(blob, settingsFileName(now()), doc, win);
+      const way = await deliverFile(blob, SETTINGS_FILE_NAME, doc, win);
       onStatus?.(phrase(way === "picker" ? "settingsfile.choose-place" : "settingsfile.downloaded"));
     } catch (error) {
       onStatus?.(error.message);

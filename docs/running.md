@@ -181,7 +181,7 @@ two names of one machine, has two sets. **백업**, the divider under the game
 picker's add and delete buttons, opens the saves of the chosen game and these
 settings below it; its settings
 **내보내기** and **가져오기** carry them as one JSON file
-(`wfeature-settings-<date>.json`, `format: "wfeature-settings"`, `version: 1`):
+(`wfeature-settings.json`, `format: "wfeature-settings"`, `version: 1`):
 the keypad's type and arrangement, the keyboard's and the game controller's
 keys, the two volumes, the picture filter, the screen and speed of each game,
 vibration and fullscreen (`web/settings-file.js` lists the keys). The token that
