@@ -2,14 +2,11 @@ package lgt
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"os"
 	"strings"
 	"testing"
 
-	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
@@ -221,36 +218,5 @@ func TestCertificateMessageSocketDeferredDeliveryAndClose(t *testing.T) {
 	notificationService(t, c)
 	if v, _ := c.readWord(output + 8); v != 0 {
 		t.Fatal("closed socket callback fired")
-	}
-}
-
-func TestLocalCertificateMessageSelection(t *testing.T) {
-	path := os.Getenv("WFEATURE_LGT_CERTIFICATE_MESSAGE_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_LGT_CERTIFICATE_MESSAGE_ARCHIVE")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original := bytes.Clone(data)
-	for _, disabled := range []bool{false, true} {
-		s, err := StartSession(context.Background(), data, SessionOptions{DisableAuthentication: disabled, SaveRoot: t.TempDir(), Width: 240, Height: 320})
-		if err != nil {
-			t.Fatal(err)
-		}
-		status := backend.AuthenticationLGTCertificateMessage
-		if disabled {
-			status = backend.AuthenticationOff
-		}
-		if s.Authentication() != status || (s.client.notificationNetwork == nil) != disabled {
-			t.Fatal("incorrect session selection")
-		}
-		if err := s.Close(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !bytes.Equal(data, original) {
-		t.Fatal("original archive changed")
 	}
 }

@@ -1,6 +1,7 @@
 package jvm
 
 import (
+	"strings"
 	"testing"
 
 	"golang.org/x/text/encoding/korean"
@@ -128,5 +129,90 @@ func TestStringConstructorsAgreeOnTheCharsetsTheyAccept(t *testing.T) {
 		t.Error("new String(byte[], \"Shift_JIS\") was accepted")
 	} else if !vm.IsGuestException(err, IOExceptionClass) {
 		t.Errorf("new String(byte[], \"Shift_JIS\") = %v, want an IOException", err)
+	}
+}
+
+// One class is one Class object, whichever way it was reached: getClass,
+// a class literal, or Class.forName. A key class whose equals compares classes
+// is otherwise never equal to anything.
+func TestClassObjectsAreCanonical(t *testing.T) {
+	vm := New(libraryContractsSource(), Options{})
+	for _, method := range []string{"classIdentity", "equalByClass"} {
+		result, err := vm.InvokeStatic("LibraryContracts", method, "()Z")
+		if err != nil {
+			t.Fatalf("%s() error = %v", method, err)
+		}
+		if got, _ := result.Int32(); got != 1 {
+			t.Fatalf("%s() = %d, want true", method, got)
+		}
+	}
+}
+
+// A buffer length past what any array may hold is refused before anything is
+// allocated for it.
+func TestStringBufferSetLengthIsBounded(t *testing.T) {
+	small := New(nil, Options{MaxArrayLength: 1024})
+	buffer, err := small.NewObject(StringBufferClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := small.InvokeVirtual(buffer, "setLength", "(I)V", IntValue(4096)); err == nil {
+		t.Fatal("setLength past MaxArrayLength was accepted")
+	}
+	if _, err := small.InvokeVirtual(buffer, "setLength", "(I)V", IntValue(1024)); err != nil {
+		t.Fatalf("setLength at MaxArrayLength error = %v", err)
+	}
+
+	vm := New(libraryContractsSource(), Options{})
+	_, err = vm.InvokeStatic("LibraryContracts", "setHugeLength", "()I")
+	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("setLength(Integer.MAX_VALUE) error = %v, want the array limit", err)
+	}
+}
+
+// A null where a String method wants a String is a NullPointerException the
+// title can catch, and equalsIgnoreCase(null) is simply false.
+func TestNullStringArgumentsRaiseNullPointerException(t *testing.T) {
+	vm := New(libraryContractsSource(), Options{})
+	if got := contractInt(t, vm, "nullArguments"); got != 127 {
+		t.Fatalf("nullArguments() = %#b, want %#b", got, 127)
+	}
+}
+
+// A StringBuffer shared between two threads is read and written under its own
+// lock by every method. Run with -race: the read side used to skip the lock.
+func TestStringBufferReadsTakeTheBufferLock(t *testing.T) {
+	vm := New(libraryContractsSource(), Options{})
+	defer vm.Close()
+	if got := contractInt(t, vm, "sharedBuffer"); got != 2000 {
+		t.Fatalf("sharedBuffer() = %d, want 2000", got)
+	}
+}
+
+// The parses refuse what CLDC's refuse: a leading plus sign and surrounding
+// spaces are not digits.
+func TestNumberParsesAreStrict(t *testing.T) {
+	vm := New(libraryContractsSource(), Options{})
+	if got := contractInt(t, vm, "parseStrictly"); got != 63 {
+		t.Fatalf("parseStrictly() = %#b, want %#b", got, 63)
+	}
+	for _, text := range []string{"+5", " 5", "5 "} {
+		_, err := vm.InvokeStatic(IntegerClass, "parseInt", "(Ljava/lang/String;I)I", ReferenceValue(vm.NewString(text)), IntValue(10))
+		if !vm.IsGuestException(err, "java/lang/NumberFormatException") {
+			t.Errorf("Integer.parseInt(%q, 10) error = %v, want NumberFormatException", text, err)
+		}
+		_, err = vm.InvokeStatic(LongClass, "parseLong", "(Ljava/lang/String;I)J", ReferenceValue(vm.NewString(text)), IntValue(16))
+		if !vm.IsGuestException(err, "java/lang/NumberFormatException") {
+			t.Errorf("Long.parseLong(%q, 16) error = %v, want NumberFormatException", text, err)
+		}
+	}
+}
+
+// A StringBuffer that reuses its storage still reads zeros where setLength
+// lengthened it.
+func TestStringBufferSetLengthZeroesReusedStorage(t *testing.T) {
+	vm := New(heapBudgetSource(), Options{})
+	if got := heapBudgetString(t, vm, "refill"); got != "axy\x00\x00" {
+		t.Fatalf("refill() = %q, want %q", got, "axy\x00\x00")
 	}
 }

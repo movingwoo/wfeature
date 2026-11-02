@@ -11,6 +11,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
 
 func TestRuntimeControlContinuesClockCallbacksInputAndUnloadedClip(t *testing.T) {
@@ -24,18 +25,18 @@ func TestRuntimeControlContinuesClockCallbacksInputAndUnloadedClip(t *testing.T)
 		code.literal(2, probe)
 		code.emit(0xe5820000, 0xe5821004, 0xe12fff1e)
 	})
-	netCall(t, runtime, wipicrt.WIPICNetConnect, callback, 0x1234)
+	wipicrttest.NetCall(t, runtime.Runtime, wipicrt.WIPICNetConnect, callback, 0x1234)
 	card := &jvm.Object{ClassName: jvm.ObjectClass}
 	runtime.cInputCardOwner = card
 	runtime.CInput = wipicrt.CInputState{Owner: wipicrt.CInputOwner{Address: probe}, Active: true, Mode: 3, Revision: 17, Calls: 12, Activations: 3, DiscardCarrier: true, ClearPending: true}
 	runtime.CInput.Pending = []byte{0xb0, 0xa1}
 	runtime.RepaintPending, runtime.GuestFlushedOwnFrame, runtime.guestHasPainted = true, true, true
 	runtime.roundsSinceGuestPaint, runtime.GuestEventLoop = 3, true
-	clip := mediaCall(t, runtime, wipicrt.WIPICMediaClipCreate, 0, 0, 0)
-	runtime.WIPICClips[clip].State.Data = oneNoteSMAF()
-	mediaCall(t, runtime, wipicrt.WIPICMediaSetMuteState, 3, 1)
-	mediaCall(t, runtime, wipicrt.WIPICMediaSetMuteState, 0, 0)
-	mediaCall(t, runtime, wipicrt.WIPICMediaClipSetVolume, clip, 45)
+	clip := wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaClipCreate, 0, 0, 0)
+	runtime.WIPICClips[clip].State.Data = wipicrttest.OneNoteSMAF()
+	wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaSetMuteState, 3, 1)
+	wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaSetMuteState, 0, 0)
+	wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaClipSetVolume, clip, 45)
 	clock.Advance(123456789 * time.Nanosecond)
 	heap, err := runtime.captureHeapState(nil)
 	if err != nil {
@@ -87,10 +88,10 @@ func TestRuntimeControlContinuesClockCallbacksInputAndUnloadedClip(t *testing.T)
 	if !fresh.RepaintPending || !fresh.GuestFlushedOwnFrame || !fresh.guestHasPainted || fresh.roundsSinceGuestPaint != 3 || !fresh.GuestEventLoop {
 		t.Fatal("guest painting or event ownership differs")
 	}
-	if mediaCall(t, fresh, wipicrt.WIPICMediaGetMuteState, 3) != 1 || mediaCall(t, fresh, wipicrt.WIPICMediaGetMuteState, 0) != 0 || len(fresh.WIPICMutedSources) != 1 {
+	if wipicrttest.MediaCall(t, fresh.Runtime, wipicrt.WIPICMediaGetMuteState, 3) != 1 || wipicrttest.MediaCall(t, fresh.Runtime, wipicrt.WIPICMediaGetMuteState, 0) != 0 || len(fresh.WIPICMutedSources) != 1 {
 		t.Fatalf("restored C media mute state = %v, want source 3 alone", fresh.WIPICMutedSources)
 	}
-	if level := mediaCall(t, fresh, wipicrt.WIPICMediaClipGetVolume, clip); level != 45 {
+	if level := wipicrttest.MediaCall(t, fresh.Runtime, wipicrt.WIPICMediaClipGetVolume, clip); level != 45 {
 		t.Fatalf("restored C clip volume = %d, want 45", level)
 	}
 	buffer, err := fresh.Allocate(4)
@@ -123,16 +124,16 @@ func TestRuntimeControlContinuesClockCallbacksInputAndUnloadedClip(t *testing.T)
 	if len(runtime.PendingNetCallbacks) != 1 || !runtime.CInput.Owner.Current(runtime.Runtime) || !bytes.Equal(fresh.WIPICClips[clip].State.Data, runtime.WIPICClips[clip].State.Data) {
 		t.Fatal("restored control changed its source or clip data")
 	}
-	sink := &countingSink{}
+	sink := &wipicrttest.CountingSink{}
 	fixture.client.Audio = backend.NewAudio(sink)
-	if got := mediaCall(t, fresh, wipicrt.WIPICMediaPlay, clip, 0); got != 0 {
+	if got := wipicrttest.MediaCall(t, fresh.Runtime, wipicrt.WIPICMediaPlay, clip, 0); got != 0 {
 		t.Fatalf("restored unloaded clip play = %#x", got)
 	}
 	fixture.client.Audio.Advance(fresh.GuestElapsed() + time.Second)
-	if sink.noteOns != 1 {
-		t.Fatalf("restored clip emitted %d notes", sink.noteOns)
+	if sink.NoteOns != 1 {
+		t.Fatalf("restored clip emitted %d notes", sink.NoteOns)
 	}
-	mediaCall(t, fresh, wipicrt.WIPICMediaClipFree, clip)
+	wipicrttest.MediaCall(t, fresh.Runtime, wipicrt.WIPICMediaClipFree, clip)
 	if len(fresh.WIPICClips) != 0 || len(fresh.WIPICClipOrder) != 0 || runtime.WIPICClips[clip] == nil {
 		t.Fatal("restored clip deletion changed source ownership")
 	}

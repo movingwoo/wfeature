@@ -2,7 +2,6 @@ package lgt
 
 import (
 	"bytes"
-	"os"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -65,62 +64,4 @@ func TestFramebufferOriginCorrectionRejectsUnexpectedCode(t *testing.T) {
 	if err := correctFramebufferOrigin(memory); err == nil {
 		t.Fatal("unexpected initialization accepted")
 	}
-}
-
-// WFEATURE_LGT_ORIGIN_ARCHIVE names an ignored local archive. Verify matching
-// through the real loader, without starting gameplay or touching saved data.
-func TestLocalFramebufferOriginArchive(t *testing.T) {
-	path := os.Getenv("WFEATURE_LGT_ORIGIN_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_LGT_ORIGIN_ARCHIVE")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	archive, err := Open(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original := bytes.Clone(archive.Module)
-	if !hasFramebufferOriginCorrection(original) {
-		t.Fatal("original module did not select correction")
-	}
-	check := func(want byte) {
-		t.Helper()
-		client, err := Load(archive, Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var instruction [2]byte
-		if err := client.core.Memory().Read(framebufferOriginAddress+4, instruction[:]); err != nil {
-			t.Fatal(err)
-		}
-		if instruction != [2]byte{want, 0x33} {
-			t.Fatalf("loaded origin instruction = %x, want %02x33", instruction, want)
-		}
-	}
-	check(0)
-	if !bytes.Equal(original, archive.Module) {
-		t.Fatal("loader changed original module")
-	}
-	archive.Descriptor.AID = "other"
-	archive.Descriptor.PID = "other"
-	archive.Resources["unrelated"] = []byte("other")
-	check(0)
-	// Even a change outside loadable code must reject this exact-module fix.
-	archive.Module = bytes.Clone(original)
-	archive.Module[15] ^= 1 // ELF identification padding, ignored by the loader.
-	if hasFramebufferOriginCorrection(archive.Module) {
-		t.Fatal("module with changed padding selected correction")
-	}
-	check(24)
-	// One changed instruction is a different revision, even with identical
-	// descriptor and resources. It must retain its own initialization.
-	archive.Module = bytes.Clone(original)
-	archive.Module[0x1dfc4] = 25
-	if hasFramebufferOriginCorrection(archive.Module) {
-		t.Fatal("changed module selected correction")
-	}
-	check(25)
 }

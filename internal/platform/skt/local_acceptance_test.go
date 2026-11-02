@@ -10,6 +10,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
+	"github.com/movingwoo/wfeature/internal/testlocal"
 )
 
 // localAcceptanceTicks is far enough for a title to get past a vendor logo and
@@ -28,9 +29,7 @@ const localAcceptanceTicks = 300
 //
 //	WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchivesBootAndPaint -v ./internal/platform/skt
 func TestLocalSKTArchivesBootAndPaint(t *testing.T) {
-	if os.Getenv("WFEATURE_SKT_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_SKT_ACCEPTANCE=1 to run ignored local SKT archives")
-	}
+	testlocal.Enabled(t, "WFEATURE_SKT_ACCEPTANCE", "run ignored local SKT archives")
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate SKT acceptance test source")
@@ -115,9 +114,7 @@ func TestLocalSKTArchivesBootAndPaint(t *testing.T) {
 //
 //	WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchiveSoundsDecode -v ./internal/platform/skt
 func TestLocalSKTArchiveSoundsDecode(t *testing.T) {
-	if os.Getenv("WFEATURE_SKT_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_SKT_ACCEPTANCE=1 to read ignored local SKT archives")
-	}
+	testlocal.Enabled(t, "WFEATURE_SKT_ACCEPTANCE", "read ignored local SKT archives")
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate SKT acceptance test source")

@@ -216,3 +216,49 @@ func TestCallCheckpointRefusesInvalidRecordBeforeEntering(t *testing.T) {
 		t.Fatal("accepted a pending service without its continuation")
 	}
 }
+
+// A call restored at a limit stop carries the same overrun the live run would
+// have carried past the grant.
+func TestACallResumedAtALimitCarriesItsOverrun(t *testing.T) {
+	const budget = 20
+	core := NewCore(CoreOptions{MaxSteps: budget})
+	loadARM(t, core.Memory(), 0x1000,
+		0xe2800001, // loop: add r0, r0, #1
+		0xeafffffd, // b loop
+	)
+	parent := NewThread(NewContext())
+	var at uint64
+	finished := errors.New("first renewal")
+	parent.SetLimitHook(func(context.Context) error {
+		at = core.Steps()
+		return finished
+	})
+	saved := NewContext()
+	if err := saved.SetPC(0x1000); err != nil {
+		t.Fatal(err)
+	}
+	saved.Registers[RegisterSP] = 0x3000
+	frame := CallFrame{
+		Version: callFrameVersion, Context: saved, EntryStack: 0x3000, End: 0x2000,
+		Budget: budget, Steps: budget + 5, Window: budget + 5, Stop: CallStoppedAtLimit,
+	}
+	if _, err := core.ResumeCall(context.Background(), parent, frame, nil, nil); !errors.Is(err, finished) {
+		t.Fatalf("ResumeCall() error = %v, want the hook's own stop", err)
+	}
+	if at != budget-5 {
+		t.Fatalf("the restored call reached its next renewal after %d steps, want %d", at, budget-5)
+	}
+}
+
+// A limit stop's carried overrun comes from one quantum, whose step count the
+// engine reports in 32 bits. A record claiming more is not one this core wrote,
+// and restoring it would call the hook for every window it claims.
+func TestACallFrameClaimingAnImpossibleOverrunIsRefused(t *testing.T) {
+	frame := CallFrame{
+		Version: callFrameVersion, Context: NewContext(), End: 0x2000,
+		Budget: 20, Steps: 1 << 40, Window: 1 << 40, Stop: CallStoppedAtLimit,
+	}
+	if err := frame.Validate(); err == nil {
+		t.Fatal("a limit stop with an overrun no quantum can produce was accepted")
+	}
+}

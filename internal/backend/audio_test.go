@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -32,21 +33,9 @@ func (sink *recordingSink) MIDISysEx(data []byte) { sink.record("sysex", len(dat
 func (sink *recordingSink) record(name string, values ...int) {
 	entry := name
 	for _, value := range values {
-		entry += " " + itoa(value)
+		entry += " " + strconv.Itoa(value)
 	}
 	sink.calls = append(sink.calls, entry)
-}
-
-func itoa(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	digits := ""
-	for value > 0 {
-		digits = string(rune('0'+value%10)) + digits
-		value /= 10
-	}
-	return digits
 }
 
 func (sink *recordingSink) count(prefix string) int {

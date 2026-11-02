@@ -10,9 +10,10 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/session"
+	"github.com/movingwoo/wfeature/internal/testlocal"
 )
 
-// TestSessionCostProbe runs a real archive the way a page's session does — the
+// TestLocalSessionCostProbe runs a real archive the way a page's session does — the
 // shared session, then the picture encoder for every new frame and the sound
 // encoding for every batch — and reports what that cost the host. The
 // platform probes stop at the session, so a profile of them never sees the
@@ -25,11 +26,8 @@ import (
 // WFEATURE_LOAD_TICKS sets the length. WFEATURE_PERF_KEYS=mash presses a fixed
 // cycle of keys, one every 24 ticks, so a title that waits on its menus gets
 // past them and into the work a player sees.
-func TestSessionCostProbe(t *testing.T) {
-	path := os.Getenv("WFEATURE_PERF_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_PERF_ARCHIVE to a local game archive")
-	}
+func TestLocalSessionCostProbe(t *testing.T) {
+	path := testlocal.Value(t, "WFEATURE_PERF_ARCHIVE", "a local game archive")
 	ticks := 3000
 	if value := os.Getenv("WFEATURE_LOAD_TICKS"); value != "" {
 		parsed, err := strconv.Atoi(value)

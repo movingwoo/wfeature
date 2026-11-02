@@ -2,8 +2,15 @@ package ktf
 
 import (
 	"encoding/binary"
+	"image"
 	"image/color"
+	"math"
+	"math/rand"
+	"slices"
 	"testing"
+	"time"
+
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
 
 // newLaterNativePlatform is a platform running a module of the later
@@ -214,5 +221,87 @@ func TestNativeDIBRefusesAHeaderItCannotDraw(t *testing.T) {
 		if _, ok := platform.dibAt(block); ok {
 			t.Errorf("a header with %s reads as an IDIB", change.name)
 		}
+	}
+}
+
+// referenceNativeDraw is the native blit as it ran before its loops started at
+// the first row and column that can land.
+func referenceNativeDraw(frame *image.RGBA, source *nativeImage, blit NativeBlit) {
+	bounds := source.frame.Bounds()
+	rows := min(blit.Height, min(bounds.Max.Y-blit.SourceY, frame.Bounds().Max.Y-blit.Y))
+	columns := min(blit.Width, min(bounds.Max.X-blit.SourceX, frame.Bounds().Max.X-blit.X))
+	for row := 0; row < rows; row++ {
+		sourceY, targetY := blit.SourceY+row, blit.Y+row
+		if sourceY < bounds.Min.Y || targetY < 0 {
+			continue
+		}
+		for column := 0; column < columns; column++ {
+			sourceX, targetX := blit.SourceX+column, blit.X+column
+			if sourceX < bounds.Min.X || targetX < 0 {
+				continue
+			}
+			pixel := source.frame.RGBAAt(sourceX, sourceY)
+			if pixel == nativeTransparent {
+				continue
+			}
+			frame.SetRGBA(targetX, targetY, pixel)
+		}
+	}
+}
+
+func randomNativeFrame(random *rand.Rand, bounds image.Rectangle) *image.RGBA {
+	frame := image.NewRGBA(bounds)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			pixel := color.RGBA{R: uint8(random.Intn(256)), G: uint8(random.Intn(256)), B: uint8(random.Intn(256)), A: 0xff}
+			if random.Intn(4) == 0 {
+				pixel = nativeTransparent
+			}
+			frame.SetRGBA(x, y, pixel)
+		}
+	}
+	return frame
+}
+
+func TestNativeBlitKeepsOrdinaryPixels(t *testing.T) {
+	random := rand.New(rand.NewSource(7))
+	for trial := 0; trial < 3000; trial++ {
+		sourceBounds := image.Rect(0, 0, 16, 12)
+		if trial%2 == 0 {
+			sourceBounds = image.Rect(2, 3, 18, 15)
+		}
+		source := &nativeImage{frame: randomNativeFrame(random, sourceBounds)}
+		start := randomNativeFrame(random, image.Rect(0, 0, 30, 20))
+		platform := &NativePlatform{screen: &nativeScreen{frame: image.NewRGBA(start.Rect)}}
+		copy(platform.screen.frame.Pix, start.Pix)
+		blit := NativeBlit{
+			X: random.Intn(60) - 25, Y: random.Intn(40) - 15,
+			Width: random.Intn(50) - 5, Height: random.Intn(40) - 5,
+			SourceX: random.Intn(40) - 15, SourceY: random.Intn(30) - 10,
+		}
+		platform.drawImage(source, blit)
+		referenceNativeDraw(start, source, blit)
+		if !slices.Equal(platform.screen.frame.Pix, start.Pix) {
+			t.Fatalf("native blit %+v drew different pixels", blit)
+		}
+	}
+}
+
+// A blit whose target and source positions are both far negative was bounded
+// by nothing but its own width, and skipped the off-screen part one turn at a
+// time.
+func TestNativeBlitFarNegativePositionsFinish(t *testing.T) {
+	random := rand.New(rand.NewSource(8))
+	source := &nativeImage{frame: randomNativeFrame(random, image.Rect(0, 0, 16, 16))}
+	platform := &NativePlatform{screen: &nativeScreen{frame: image.NewRGBA(image.Rect(0, 0, 40, 30))}}
+	for _, blit := range []NativeBlit{
+		{X: math.MinInt32, SourceX: math.MinInt32, Width: math.MaxInt32, Height: 50},
+		{Y: math.MinInt32, SourceY: math.MinInt32, Width: 50, Height: math.MaxInt32},
+		{X: -math.MaxInt32, Y: -math.MaxInt32, SourceX: -math.MaxInt32, SourceY: -math.MaxInt32, Width: math.MaxInt32, Height: math.MaxInt32},
+	} {
+		wipicrttest.FinishesWithin(t, 5*time.Second, func() error {
+			platform.drawImage(source, blit)
+			return nil
+		})
 	}
 }

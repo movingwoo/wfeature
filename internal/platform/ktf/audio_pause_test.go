@@ -9,10 +9,11 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
 
 type audioPauseProbe struct {
-	countingSink
+	wipicrttest.CountingSink
 	events []struct {
 		sound backend.AudioHandle
 		event smaf.Event
@@ -73,7 +74,7 @@ func newJavaAudioPauseClip(t *testing.T, client *Client, runtime *initialization
 	}
 	vm := client.JVM()
 	if _, err := vm.InvokeVirtual(clip, "<init>", "(Ljava/lang/String;[B)V",
-		jvm.ReferenceValue(vm.NewString("audio/mmf")), jvm.ReferenceValue(newByteArray(t, client, oneNoteSMAF()))); err != nil {
+		jvm.ReferenceValue(vm.NewString("audio/mmf")), jvm.ReferenceValue(newByteArray(t, client, wipicrttest.OneNoteSMAF()))); err != nil {
 		t.Fatal(err)
 	}
 	return clip
@@ -220,5 +221,88 @@ func TestJavaAudioPauseRetainsCursorPCMAndRepeat(t *testing.T) {
 	}
 	if runtime.clip(clip).Handle != handle {
 		t.Fatal("pause or resume replaced the loaded clip")
+	}
+}
+
+// TestWIPICMediaPauseAndResumeKeepTheClipsPlace covers MC_mdaPause and
+// MC_mdaResume at 9 and 10, which a title reaches from its pauseApp and
+// resumeApp with the clip it is playing. Before they were bound both were
+// accepted and discarded, so a parked title's music ran on and its resume had
+// nothing to pick up. Pause holds the clip where it is, resume continues from
+// there, and every call the specification calls a failure answers M_E_ERROR.
+func TestWIPICMediaPauseAndResumeKeepTheClipsPlace(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	clock := wipicrt.NewManualClock(runtime.ClockBase)
+	client.Clock = clock
+	sink := &audioPauseProbe{}
+	client.Audio = backend.NewAudioWithClock(sink, clock.Now)
+
+	sound := wipicrttest.OneNoteSMAF()
+	clip := wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaClipCreate, 0, uint32(len(sound)), 0)
+	wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaClipPutData, clip, wipicrttest.GuestBytes(t, runtime.Runtime, sound), uint32(len(sound)))
+	// An authored decoded score: a held note whose gate the pause has to keep.
+	handle, err := client.Audio.LoadEvents([]smaf.Event{
+		{Type: smaf.EventNoteOn, Channel: 1, Note: 60, Velocity: 100},
+		{Time: 500, Type: smaf.EventNoteOff, Channel: 1, Note: 60},
+		{Time: 1000, Type: smaf.EventEnd},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &runtime.WIPICClips[clip].State
+	state.Handle, state.Loaded = handle, true
+
+	if result := wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaPause, clip); result != wipicrt.WipiErrorCode {
+		t.Fatalf("pause of a clip that is not playing answered %#x, want M_E_ERROR", result)
+	}
+	if result := wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaPlay, clip, 1); result != 0 {
+		t.Fatalf("play answered %#x", result)
+	}
+	client.ServiceAudio()
+	clock.Advance(250 * time.Millisecond)
+	if result := wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaPause, clip); result != 0 {
+		t.Fatalf("pause answered %#x, want 0", result)
+	}
+	if !client.Audio.Paused(handle) || len(sink.stopped) == 0 || sink.stopped[len(sink.stopped)-1] != handle {
+		t.Fatal("pause did not hold the clip and stop its output")
+	}
+	if result := wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaPause, clip); result != wipicrt.WipiErrorCode {
+		t.Fatalf("second pause answered %#x, want M_E_ERROR", result)
+	}
+	sink.events = nil
+	clock.Advance(10 * time.Second)
+	client.ServiceAudio()
+	if len(sink.events) != 0 {
+		t.Fatal("a paused clip emitted output")
+	}
+	if result := wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaResume, clip); result != 0 {
+		t.Fatalf("resume answered %#x, want 0", result)
+	}
+	if len(sink.resumed) != 1 || sink.resumed[0].note != 60 || sink.resumed[0].age != 250*time.Millisecond {
+		t.Fatalf("resumed notes = %+v, want the held note at age 250ms", sink.resumed)
+	}
+	if result := wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaResume, clip); result != wipicrt.WipiErrorCode {
+		t.Fatalf("resume of a playing clip answered %#x, want M_E_ERROR", result)
+	}
+	sink.events = nil
+	clock.Advance(249 * time.Millisecond)
+	client.ServiceAudio()
+	if len(sink.ofType(smaf.EventNoteOff)) != 0 {
+		t.Fatal("the held note ended before the rest of its gate")
+	}
+	clock.Advance(time.Millisecond)
+	client.ServiceAudio()
+	if offs := sink.ofType(smaf.EventNoteOff); len(offs) != 1 {
+		t.Fatalf("note-offs after the remaining gate = %+v, want one", offs)
+	}
+	wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaStop, clip)
+	for _, function := range []uint32{wipicrt.WIPICMediaPause, wipicrt.WIPICMediaResume} {
+		if result := wipicrttest.MediaCall(t, runtime.Runtime, function, clip); result != wipicrt.WipiErrorCode {
+			t.Fatalf("function %d on a stopped clip answered %#x, want M_E_ERROR", function, result)
+		}
+		// One title pauses and resumes a clip it never created.
+		if result := wipicrttest.MediaCall(t, runtime.Runtime, function, 0); result != wipicrt.WipiErrorCode {
+			t.Fatalf("function %d on a null clip answered %#x, want M_E_ERROR", function, result)
+		}
 	}
 }

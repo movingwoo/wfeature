@@ -1,6 +1,8 @@
 package armcore
 
-import "testing"
+import (
+	"testing"
+)
 
 // The blending arm of a clipped blit and the writer behind it, laid out after
 // the loop's own body so the flag's `bne` reaches the arm, the arm's call
@@ -510,4 +512,65 @@ func TestAFlaggedFillIsRecognisedInBothForms(t *testing.T) {
 		}
 		memory.endQuantum()
 	}
+}
+
+// A blended clipped blit whose destination covers its own flag word, behind a
+// writer that reads its mode from somewhere else: the guest's own store clears
+// the flag partway through the row and the rest of it is drawn plain, so the
+// stand-in, which treats the flag as fixed for the run, has to decline.
+func TestABlendedBlitOverItsOwnFlagIsLeftToTheInterpreter(t *testing.T) {
+	const base = 0x00100000
+	const pixels = 5
+	// The pixel the guest stores at the flag's low half has to come out zero
+	// for the flag to clear, which a zero source byte (palette entry zero)
+	// blended over the flag's own low half does.
+	const destination = spilledRecord + clippedFlagAt - 4
+	const modeAt = clippedFlagAt + 4
+	program := blendedBlitProgram(base)
+	writerAt := len(clippedBlitBody) + 10
+	program[writerAt+4] = 0x6f9a // ldr r2, [r3, #0x78] — the mode, no longer the flag
+	branchPC := base + uint32(len(clippedBlitBody)-1)*2
+
+	build := func() (*Memory, *Context) {
+		memory := clippedBlitMemory(t, program, base, destination, 0, pixels, pixels, 1)
+		if err := memory.Map(uint32(spilledStack-memoryPageSize), memoryPageSize, PermissionRead|PermissionWrite); err != nil {
+			t.Fatal(err)
+		}
+		memory.beginQuantum()
+		for address, value := range map[uint32]uint32{
+			blendedRecordSlot:      spilledRecord,
+			blendedTable:           base + uint32(writerAt)*2 + 18 + 1,
+			blendedTable + 4:       base + uint32(writerAt)*2 + 22 + 1,
+			spilledRecord + modeAt: 1,
+		} {
+			if err := memory.writeData32(address, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := memory.write8(spilledFrom+2, 0); err != nil {
+			t.Fatal(err)
+		}
+		memory.endQuantum()
+		return memory, clippedBlitContext(base, pixels)
+	}
+
+	// The comparison only means something if the guest really does clear its
+	// flag partway, so that is checked first: the pixel after the one that
+	// cleared it, which lands on the flag's high half, is the palette colour
+	// drawn plain rather than a blend.
+	interpreted, reference := build()
+	interpreted.standInsRefused = true
+	if _, err := (Engine{}).Run(reference, interpreted, branchPC+2, 1_000_000); err != nil {
+		t.Fatalf("interpreting the blit: %v", err)
+	}
+	interpreted.beginQuantum()
+	plain, err := interpreted.readData16(spilledRecord + clippedFlagAt + 2)
+	interpreted.endQuantum()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := uint16(0x0821 * 33 & 0xffff); plain != want {
+		t.Fatalf("pixel 3 is %#x, want the plain colour %#x the cleared flag sends it to", plain, want)
+	}
+	compareStandIn(t, branchPC+2, destination, pixels*2, build)
 }

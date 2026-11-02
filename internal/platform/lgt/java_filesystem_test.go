@@ -174,7 +174,7 @@ func TestFileSeekMovesTheCursorAbsolutely(t *testing.T) {
 // stores it, and the two openers share the one output stream a File may have.
 func TestFileDataOutputStreamWritesIntoTheFile(t *testing.T) {
 	ctx := context.Background()
-	client, store, _ := reviewFiles(t, map[string]string{"fs/record.dat": "head"})
+	client, store, _ := fileFixture(t, map[string]string{"fs/record.dat": "head"})
 	object := openJavaFile(t, client, "record.dat", 4)
 	if _, err := javaCall(t, client, javaFileClass+".seek(I)V", object, 4); err != nil {
 		t.Fatal(err)
@@ -216,5 +216,90 @@ func TestFileDataOutputStreamWritesIntoTheFile(t *testing.T) {
 	// The close ended the binding, so the File may open another stream.
 	if _, err := javaCall(t, client, key, object); err != nil {
 		t.Fatalf("a data output stream after the first one closed answered %v", err)
+	}
+}
+
+// openJavaFile opens a File the way a title's constructor call does.
+func openJavaFile(t *testing.T, client *Client, name string, mode uint32) uint32 {
+	t.Helper()
+	object, err := newTestObject(t, client, javaFileClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaFileOpen(client, context.Background(), client.thread, []uint32{object, newTestString(t, client, name), mode, 0}); err != nil {
+		t.Fatal(err)
+	}
+	return object
+}
+
+// A seek or a write that would take a file past the cap is refused before
+// anything is allocated for it: a title's garbage offset or length must not
+// size a host allocation. The cap is the common contract's 4 MiB, and a write
+// past it fails as a write does, with M_E_NOSPACE.
+func TestFileSeekAndWriteStopAtTheFileSizeCap(t *testing.T) {
+	client, _, files := fileFixture(t, nil)
+	handle := files.open("big.dat", fileOpenReadWrite)
+	seek := func(offset, whence uint32) int32 {
+		return int32(callSlot(t, client, slotFsSeek, handle, offset, whence))
+	}
+	if got := seek(maxFileBytes+1, 0); got != wipiError {
+		t.Fatalf("a seek past the cap answered %d", got)
+	}
+	if got := seek(0x7fffffff, 0); got != wipiError {
+		t.Fatalf("a seek to 0x7fffffff answered %d", got)
+	}
+	if got := seek(maxFileBytes, 0); got != maxFileBytes {
+		t.Fatalf("a seek to the cap itself answered %d", got)
+	}
+	if got := seek(1, 1); got != wipiError || client.files[handle].cursor != maxFileBytes {
+		t.Fatalf("a relative seek past the cap answered %d and left the cursor at %d", got, client.files[handle].cursor)
+	}
+	if got := int32(callSlot(t, client, slotFsWrite, handle, files.buffer, 1)); got != wipiNoSpace || len(client.files[handle].data) != 0 {
+		t.Fatalf("a write past the cap answered %d and left %d bytes", got, len(client.files[handle].data))
+	}
+	seek(0, 0)
+	if got := int32(callSlot(t, client, slotFsWrite, handle, files.buffer, 0xffffffff)); got != wipiNoSpace {
+		t.Fatalf("a write of 0xffffffff bytes answered %d", got)
+	}
+	// Inside the cap a write past the end fills the gap with zeros, as before.
+	seek(4, 0)
+	files.write(handle, "ab")
+	if open := client.files[handle]; string(open.data) != "\x00\x00\x00\x00ab" || open.cursor != 6 {
+		t.Fatalf("a write inside the cap left %q at %d", open.data, open.cursor)
+	}
+}
+
+// A cursor a checkpoint record restored far past the end of a file is kept, as
+// the record has it, and the first write there is refused rather than sizing a
+// host allocation from the record: the IOException a write through a File or
+// a stream on one fails with.
+func TestARestoredCursorPastTheCapCannotGrowAJavaFile(t *testing.T) {
+	ctx := context.Background()
+	store := newFaultStore(t, map[string]string{"fs/save.dat": "0123"})
+	fixture := newJavaThreadFixture(t, store)
+	client := fixture.client
+	object := openJavaFile(t, client, "save.dat", 4)
+	_, open, err := client.javaFileHandle(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open.cursor = maxFileBytes
+	if _, err := javaFileWriteByte(client, ctx, client.thread, []uint32{object, 'Z'}); thrownClass(err) != javaIOExceptionClass {
+		t.Fatalf("write(int) past the cap answered %v", err)
+	}
+	sink, err := javaFileOpenOutputStream(client, ctx, client.thread, []uint32{object})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.javaRun.sinks[sink] = []byte("MARKER")
+	if _, err := javaByteSinkFlush(client, ctx, client.thread, []uint32{sink}); thrownClass(err) != javaIOExceptionClass {
+		t.Fatalf("a stream drained past the cap answered %v", err)
+	}
+	if string(open.data) != "0123" || open.dirty {
+		t.Fatalf("the refused writes left %d bytes, dirty=%t", len(open.data), open.dirty)
+	}
+	open.cursor = 6
+	if written, err := javaFileWriteByte(client, ctx, client.thread, []uint32{object, 'Z'}); err != nil || written != 1 || string(open.data) != "0123\x00\x00Z" {
+		t.Fatalf("write(int) inside the cap = %d, %v, leaving %q", written, err, open.data)
 	}
 }

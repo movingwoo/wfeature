@@ -19,6 +19,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/testlocal"
 )
 
 const localInitializationAcceptanceMaxSteps = 10_000_000
@@ -99,9 +100,7 @@ func runClientEntry(ctx context.Context, client *Client) error {
 // data, not repository fixtures. It validates every local KTF outer archive
 // without executing third-party guest code.
 func TestLocalKTFArchivesParse(t *testing.T) {
-	if os.Getenv("WFEATURE_KTF_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_KTF_ACCEPTANCE=1 to parse ignored local KTF archives")
-	}
+	testlocal.Enabled(t, "WFEATURE_KTF_ACCEPTANCE", "parse ignored local KTF archives")
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate KTF acceptance test source")
@@ -144,9 +143,7 @@ func TestLocalKTFArchivesParse(t *testing.T) {
 // its bounded interface and WIPI initialization functions. No game lifecycle
 // callback is invoked.
 func TestLocalKTFArchivesInitialize(t *testing.T) {
-	if os.Getenv("WFEATURE_KTF_EXECUTE_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_KTF_EXECUTE_ACCEPTANCE=1 to execute ignored local KTF client entry points")
-	}
+	testlocal.Enabled(t, "WFEATURE_KTF_EXECUTE_ACCEPTANCE", "execute ignored local KTF client entry points")
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate KTF acceptance test source")
@@ -231,9 +228,7 @@ func TestLocalKTFArchivesInitialize(t *testing.T) {
 // probe through ExeInterface.GetClass for each archive's ADF MClass. It does
 // not instantiate the class or invoke lifecycle methods.
 func TestLocalKTFArchivesLoadMainClass(t *testing.T) {
-	if os.Getenv("WFEATURE_KTF_LIFECYCLE_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_KTF_LIFECYCLE_ACCEPTANCE=1 to load ignored local KTF main classes")
-	}
+	testlocal.Enabled(t, "WFEATURE_KTF_LIFECYCLE_ACCEPTANCE", "load ignored local KTF main classes")
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate KTF acceptance test source")
@@ -292,9 +287,7 @@ func TestLocalKTFArchivesLoadMainClass(t *testing.T) {
 // probe through allocation and the ADF MClass no-argument constructor. It does
 // not call startApp or any display/input lifecycle callback.
 func TestLocalKTFArchivesConstructMainClass(t *testing.T) {
-	if os.Getenv("WFEATURE_KTF_CONSTRUCT_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_KTF_CONSTRUCT_ACCEPTANCE=1 to construct ignored local KTF main classes")
-	}
+	testlocal.Enabled(t, "WFEATURE_KTF_CONSTRUCT_ACCEPTANCE", "construct ignored local KTF main classes")
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate KTF acceptance test source")
@@ -356,9 +349,7 @@ func TestLocalKTFArchivesConstructMainClass(t *testing.T) {
 // startApp([Ljava/lang/String;)V with an empty argument array, matching the
 // original runtime's launcher call.
 func TestLocalKTFArchivesStartMainClass(t *testing.T) {
-	if os.Getenv("WFEATURE_KTF_START_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_KTF_START_ACCEPTANCE=1 to start ignored local KTF main classes")
-	}
+	testlocal.Enabled(t, "WFEATURE_KTF_START_ACCEPTANCE", "start ignored local KTF main classes")
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate KTF acceptance test source")
@@ -448,9 +439,7 @@ func TestLocalKTFArchivesStartMainClass(t *testing.T) {
 // only way the probe answers for the path a Host actually takes — a paint that
 // a round skips, a wait the client thread declared, the guest exit.
 func TestLocalKTFArchivesRenderFirstFrame(t *testing.T) {
-	if os.Getenv("WFEATURE_KTF_FRAME_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_KTF_FRAME_ACCEPTANCE=1 to render ignored local KTF first frames")
-	}
+	testlocal.Enabled(t, "WFEATURE_KTF_FRAME_ACCEPTANCE", "render ignored local KTF first frames")
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate KTF acceptance test source")

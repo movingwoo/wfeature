@@ -7,6 +7,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/audio/smaf"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 func TestSpeedChangeCheckpointPreservesClockAndPausedAudio(t *testing.T) {
@@ -91,6 +92,74 @@ func TestSpeedChangeCheckpointPreservesClockAndPausedAudio(t *testing.T) {
 			}
 			if source.runtime.GuestElapsed() != elapsed || !source.client.Audio.Paused(handle) {
 				t.Fatal("restored playback changed the source")
+			}
+		})
+	}
+}
+
+func TestSpeedChangePreservesAudioGateAndRemainingPass(t *testing.T) {
+	for _, speed := range []float64{0.5, 2} {
+		t.Run(map[float64]string{0.5: "slower", 2: "faster"}[speed], func(t *testing.T) {
+			clock := wipicrt.NewManualClock(time.Unix(1700000000, 0))
+			client, runtime := newPacedTestRuntime(t, clock, 1)
+			sink := &audioPauseProbe{}
+			client.Audio = backend.NewAudioWithClock(sink, clock.Now)
+			handle, err := client.Audio.LoadEvents([]smaf.Event{
+				{Type: smaf.EventNoteOn, Note: 60, Velocity: 80},
+				{Time: 200, Type: smaf.EventNoteOff, Note: 60},
+				{Time: 300, Type: smaf.EventEnd},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			clock.Advance(900 * time.Millisecond)
+			if err := client.Audio.PlayCount(handle, runtime.GuestElapsed(), 2); err != nil {
+				t.Fatal(err)
+			}
+			client.ServiceAudio()
+			clock.Advance(100 * time.Millisecond)
+			client.ServiceAudio()
+			client.SetSpeed(speed)
+			if err := client.Audio.Pause(handle, runtime.GuestElapsed()); err != nil {
+				t.Fatalf("rate change invalidated a running clip's pause: %v", err)
+			}
+			saved, err := client.Audio.CaptureState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			sound := saved.Sounds[0]
+			if !sound.Paused || sound.Position != 100*time.Millisecond || sound.Remaining != 1 || sound.Completed != 0 || len(sink.ofType(smaf.EventNoteOff)) != 0 {
+				t.Fatalf("rate change consumed the remaining gate or repeat: position=%v, remaining=%d, completed=%d", sound.Position, sound.Remaining, sound.Completed)
+			}
+			clock.Advance(17 * time.Second)
+			client.ServiceAudio()
+			if err := client.Audio.Resume(handle, runtime.GuestElapsed()); err != nil {
+				t.Fatal(err)
+			}
+			if len(sink.resumed) != 1 || sink.resumed[0].age != 100*time.Millisecond {
+				t.Fatalf("resumed output lost its unscaled envelope age: %+v", sink.resumed)
+			}
+			sink.events = nil
+			advance := func(guest time.Duration) {
+				clock.Advance(time.Duration(float64(guest) / speed))
+				client.ServiceAudio()
+			}
+			advance(99 * time.Millisecond)
+			if len(sink.ofType(smaf.EventNoteOff)) != 0 {
+				t.Fatal("resumed gate ended early")
+			}
+			advance(time.Millisecond)
+			if len(sink.ofType(smaf.EventNoteOff)) != 1 {
+				t.Fatal("resumed gate did not end at the new rate")
+			}
+			advance(100 * time.Millisecond)
+			if len(sink.ofType(smaf.EventNoteOn)) != 1 {
+				t.Fatal("remaining pass did not start at the score boundary")
+			}
+			advance(300 * time.Millisecond)
+			progress, err := client.Audio.Playback(handle, runtime.GuestElapsed())
+			if err != nil || progress.Playing || progress.Completed != 2 || len(sink.ofType(smaf.EventNoteOn)) != 1 || len(sink.ofType(smaf.EventNoteOff)) != 2 {
+				t.Fatalf("finite pass count changed after speed and pause: %+v, %v", progress, err)
 			}
 		})
 	}

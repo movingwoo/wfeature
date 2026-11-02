@@ -3,10 +3,10 @@ package skt
 import (
 	"testing"
 
-	"github.com/movingwoo/wfeature/internal/backend"
-
 	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/api/skvm"
+	"github.com/movingwoo/wfeature/internal/api/wipi"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
@@ -115,4 +115,33 @@ func declares(definitions []jvm.ClassDefinition, class, name, descriptor string)
 		}
 	}
 	return false
+}
+
+// Card.move and Card.resize land in the fields a Card subclass reads with
+// getfield, under the interpreter's key and lock, and getX/getY agree.
+func TestCardMoveAndResizeReachTheFieldsASubclassReads(t *testing.T) {
+	session := startUIFixture(t)
+	card := &jvm.Object{ClassName: wipi.CardClass}
+	if _, err := session.wipiCardMove(session.VM, []jvm.Value{jvm.ReferenceValue(card), jvm.IntValue(3), jvm.IntValue(4)}); err != nil {
+		t.Fatalf("move() error = %v", err)
+	}
+	if _, err := session.wipiCardResize(session.VM, []jvm.Value{jvm.ReferenceValue(card), jvm.IntValue(30), jvm.IntValue(40)}); err != nil {
+		t.Fatalf("resize() error = %v", err)
+	}
+	for name, want := range map[string]int32{"x": 3, "y": 4, "w": 30, "h": 40} {
+		value, err := session.VM.Field(card, wipi.CardClass, name, "I")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := value.Int32(); got != want {
+			t.Fatalf("getfield Card.%s = %d, want %d", name, got, want)
+		}
+	}
+	value, err := session.VM.InvokeVirtual(card, "getX", "()I")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := value.Int32(); got != 3 {
+		t.Fatalf("getX() = %d, want 3", got)
+	}
 }

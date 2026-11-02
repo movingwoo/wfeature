@@ -148,7 +148,7 @@ func ruleXFile(t *testing.T, runtime *Runtime, name string, mode int32) *jvm.Obj
 
 func ruleXWrite(t *testing.T, runtime *Runtime, file *jvm.Object, data ...byte) {
 	t.Helper()
-	written := storeReviewInt(t, wipiStreamCall(t, runtime, file, "write", "([BII)I", ruleBytes(data...), jvm.IntValue(0), jvm.IntValue(int32(len(data)))))
+	written := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "write", "([BII)I", ruleBytes(data...), jvm.IntValue(0), jvm.IntValue(int32(len(data)))))
 	if written != int32(len(data)) {
 		t.Fatalf("XFile.write = %d, want %d", written, len(data))
 	}
@@ -158,7 +158,7 @@ func ruleXWrite(t *testing.T, runtime *Runtime, file *jvm.Object, data ...byte) 
 func ruleXRead(t *testing.T, runtime *Runtime, file *jvm.Object, limit int) []byte {
 	t.Helper()
 	buffer := jvm.NewByteArray(make([]byte, limit))
-	count := storeReviewInt(t, wipiStreamCall(t, runtime, file, "read", "([BII)I", jvm.ReferenceValue(buffer), jvm.IntValue(0), jvm.IntValue(int32(limit))))
+	count := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "read", "([BII)I", jvm.ReferenceValue(buffer), jvm.IntValue(0), jvm.IntValue(int32(limit))))
 	data, err := jvm.ByteArraySnapshot(buffer)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func ruleStatic(t *testing.T, runtime *Runtime, class, method, descriptor string
 	if err != nil {
 		t.Fatalf("%s.%s%s: %v", class, method, descriptor, err)
 	}
-	return storeReviewInt(t, value)
+	return storeInvokeInt(t, value)
 }
 
 func ruleRemove(t *testing.T, runtime *Runtime, name string) {
@@ -272,15 +272,15 @@ func TestWIPIFileWriteIsSeenAtOnceByEveryRead(t *testing.T) {
 	if exists, isFile, size := ruleFileSystem(t, runtime, "save"); !exists || !isFile || size != 3 {
 		t.Fatalf("FileSystem after an unclosed write: exists=%v isFile=%v sizeOf=%d, want true true 3", exists, isFile, size)
 	}
-	if size := storeReviewInt(t, wipiStreamCall(t, runtime, early, "sizeOf", "()I")); size != 3 {
+	if size := storeInvokeInt(t, wipiStreamCall(t, runtime, early, "sizeOf", "()I")); size != 3 {
 		t.Fatalf("File.sizeOf on a handle opened before the write = %d, want 3", size)
 	}
-	if value := storeReviewInt(t, wipiStreamCall(t, runtime, input, "read", "()I")); value != 7 {
+	if value := storeInvokeInt(t, wipiStreamCall(t, runtime, input, "read", "()I")); value != 7 {
 		t.Fatalf("input stream opened before the write read %d, want 7", value)
 	}
 	reader := wipiStreamFile(t, runtime, "save", wipiFileReadOnly)
 	buffer := jvm.NewByteArray(make([]byte, 8))
-	if count := storeReviewInt(t, wipiStreamCall(t, runtime, reader, "read", "([B)I", jvm.ReferenceValue(buffer))); count != 3 {
+	if count := storeInvokeInt(t, wipiStreamCall(t, runtime, reader, "read", "([B)I", jvm.ReferenceValue(buffer))); count != 3 {
 		t.Fatalf("a new READ_ONLY open read %d bytes, want 3", count)
 	}
 
@@ -298,10 +298,10 @@ func TestWIPIFileWriteIsSeenAtOnceByEveryRead(t *testing.T) {
 	if _, _, size := ruleFileSystem(t, runtime, "save"); size != 0 {
 		t.Fatalf("FileSystem.sizeOf after WRITE_TRUNC = %d, want 0", size)
 	}
-	if size := storeReviewInt(t, wipiStreamCall(t, runtime, early, "sizeOf", "()I")); size != 0 {
+	if size := storeInvokeInt(t, wipiStreamCall(t, runtime, early, "sizeOf", "()I")); size != 0 {
 		t.Fatalf("File.sizeOf after another handle's WRITE_TRUNC = %d, want 0", size)
 	}
-	if value := storeReviewInt(t, wipiStreamCall(t, runtime, input, "read", "()I")); value != -1 {
+	if value := storeInvokeInt(t, wipiStreamCall(t, runtime, input, "read", "()I")); value != -1 {
 		t.Fatalf("input stream after WRITE_TRUNC read %d, want the end", value)
 	}
 }
@@ -318,13 +318,13 @@ func TestXCEStreamWriteIsSeenAtOnceByEveryRead(t *testing.T) {
 	}
 	input := ruleNew(t, runtime, skvm.FileInputStreamClass, "(Ljava/lang/String;)V", ruleText(runtime, "stream"))
 	for _, want := range []int32{4, 5, -1} {
-		if value := storeReviewInt(t, wipiStreamCall(t, runtime, input, "read", "()I")); value != want {
+		if value := storeInvokeInt(t, wipiStreamCall(t, runtime, input, "read", "()I")); value != want {
 			t.Fatalf("FileInputStream.read = %d, want %d", value, want)
 		}
 	}
 	appender := ruleNew(t, runtime, skvm.FileOutputStreamClass, "(Ljava/lang/String;Z)V", ruleText(runtime, "stream"), jvm.IntValue(1))
 	wipiStreamCall(t, runtime, appender, "write", "(I)V", jvm.IntValue(6))
-	if value := storeReviewInt(t, wipiStreamCall(t, runtime, input, "read", "()I")); value != 6 {
+	if value := storeInvokeInt(t, wipiStreamCall(t, runtime, input, "read", "()I")); value != 6 {
 		t.Fatalf("an open FileInputStream read %d after an append, want 6", value)
 	}
 }
@@ -434,7 +434,7 @@ func TestXFileSeesATruncationAtOnceAndTheStoreHoldsIt(t *testing.T) {
 	if !ruleExists(t, runtime, "trunc") || ruleSize(t, runtime, "trunc") != 0 {
 		t.Fatal("a truncated file is not an existing empty file")
 	}
-	if available := storeReviewInt(t, wipiStreamCall(t, runtime, early, "available", "()I")); available != 0 {
+	if available := storeInvokeInt(t, wipiStreamCall(t, runtime, early, "available", "()I")); available != 0 {
 		t.Fatalf("an XFile open before the truncation still has %d bytes", available)
 	}
 	if list := store.removalList(); len(list) != 0 {
@@ -474,7 +474,7 @@ func TestXCEFileOutputStreamTruncatesWithoutRemoving(t *testing.T) {
 			input := ruleNew(t, runtime, skvm.FileInputStreamClass, "(Ljava/lang/String;)V", ruleText(runtime, "s"))
 			output := ruleNew(t, runtime, skvm.FileOutputStreamClass, form.descriptor, append([]jvm.Value{ruleText(runtime, "s")}, form.extra...)...)
 			ruleStoreHolds(t, store, "fs/s", []byte{})
-			if value := storeReviewInt(t, wipiStreamCall(t, runtime, input, "read", "()I")); value != -1 {
+			if value := storeInvokeInt(t, wipiStreamCall(t, runtime, input, "read", "()I")); value != -1 {
 				t.Fatalf("an open FileInputStream read %d after the truncation, want the end", value)
 			}
 			wipiStreamCall(t, runtime, output, "close", "()V")
@@ -773,7 +773,7 @@ func TestWIPIFileWritableOpenCreatesTheFile(t *testing.T) {
 			t.Fatalf("File(%q, %d): exists=%v isFile=%v sizeOf=%d, want an empty file", open.name, open.mode, exists, isFile, size)
 		}
 		reader := wipiStreamFile(t, runtime, open.name, wipiFileReadOnly)
-		if count := storeReviewInt(t, wipiStreamCall(t, runtime, reader, "read", "([B)I", ruleBytes(0, 0))); count != -1 {
+		if count := storeInvokeInt(t, wipiStreamCall(t, runtime, reader, "read", "([B)I", ruleBytes(0, 0))); count != -1 {
 			t.Fatalf("READ_ONLY of the made file read %d bytes, want the end", count)
 		}
 		wipiStreamCall(t, runtime, file, "close", "()V")
@@ -800,7 +800,7 @@ func TestXCEAppendingStreamCreatesAMissingFile(t *testing.T) {
 		t.Fatal("an appending FileOutputStream did not make the missing file")
 	}
 	input := ruleNew(t, runtime, skvm.FileInputStreamClass, "(Ljava/lang/String;)V", ruleText(runtime, "log"))
-	if value := storeReviewInt(t, wipiStreamCall(t, runtime, input, "read", "()I")); value != -1 {
+	if value := storeInvokeInt(t, wipiStreamCall(t, runtime, input, "read", "()I")); value != -1 {
 		t.Fatalf("FileInputStream of the made file read %d, want the end", value)
 	}
 	wipiStreamCall(t, runtime, output, "close", "()V")
@@ -923,5 +923,127 @@ func TestXFileProbesOfMissingPathsKeepNothing(t *testing.T) {
 	ruleXFile(t, runtime, "made", xFileWrite)
 	if !ruleExists(t, runtime, "made") {
 		t.Fatal("a path opened for writing does not exist")
+	}
+}
+
+func storeInvokeInt(t *testing.T, value jvm.Value) int32 {
+	t.Helper()
+	number, err := value.Int32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return number
+}
+
+// A seek far past the end and a one-byte write must not grow the buffer to
+// the seek position: the growth is refused like any other failed write.
+func TestXFileWriteRefusesGrowthPastTheBound(t *testing.T) {
+	runtime := wipiStreamRuntime(t, nil)
+	// An existing empty file, so the open makes nothing that waits to be
+	// stored and the refused write is the only thing that could.
+	runtime.Archive.Entries["huge"] = nil
+	file, err := runtime.VM.NewObject(skvm.XFileClass, "(Ljava/lang/String;I)V", jvm.ReferenceValue(runtime.VM.NewString("huge")), jvm.IntValue(xFileRead|xFileWrite))
+	if err != nil {
+		t.Fatal(err)
+	}
+	far := int32(xFileMaxBytes + 1)
+	if position := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "seek", "(II)I", jvm.IntValue(far), jvm.IntValue(0))); position != far {
+		t.Fatalf("seek = %d, want %d", position, far)
+	}
+	written := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "write", "([BII)I", jvm.ReferenceValue(jvm.NewByteArray([]byte{1})), jvm.IntValue(0), jvm.IntValue(1)))
+	if data := file.Native.(*xFileData).node; written != -1 || len(data.data) != 0 || data.dirty {
+		t.Fatalf("write past the bound = %d with %d buffered bytes, want -1 and nothing", written, len(data.data))
+	}
+	// Growth up to the bound, and writes inside what is already there, work.
+	wipiStreamCall(t, runtime, file, "seek", "(II)I", jvm.IntValue(xFileMaxBytes-1), jvm.IntValue(0))
+	if written := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "write", "([BII)I", jvm.ReferenceValue(jvm.NewByteArray([]byte{1})), jvm.IntValue(0), jvm.IntValue(1))); written != 1 {
+		t.Fatalf("write up to the bound = %d, want 1", written)
+	}
+}
+
+// A flush the store refused leaves the bytes dirty, so the close after it
+// writes them again rather than reporting nothing to do.
+func TestXFileFailedFlushIsRetriedByClose(t *testing.T) {
+	store := &refusingWIPIStreamStore{SaveStore: backend.NewDirectorySaveStore(t.TempDir()), refuse: true}
+	runtime := wipiStreamRuntime(t, store)
+	file, err := runtime.VM.NewObject(skvm.XFileClass, "(Ljava/lang/String;I)V", jvm.ReferenceValue(runtime.VM.NewString("keep")), jvm.IntValue(xFileWrite))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wipiStreamCall(t, runtime, file, "write", "([BII)I", jvm.ReferenceValue(jvm.NewByteArray([]byte{4, 2})), jvm.IntValue(0), jvm.IntValue(2))
+	wipiStreamCall(t, runtime, file, "flush", "()V")
+	if !file.Native.(*xFileData).node.dirty {
+		t.Fatal("refused flush marked the file clean")
+	}
+	store.refuse = false
+	wipiStreamCall(t, runtime, file, "close", "()V")
+	if data, ok := store.LoadSave("fs/keep"); !ok || !bytes.Equal(data, []byte{4, 2}) {
+		t.Fatalf("close after a refused flush stored %v (%v)", data, ok)
+	}
+	if file.Native.(*xFileData).node.dirty || len(runtime.pendingSaves) != 0 {
+		t.Fatal("successful retry left the write pending")
+	}
+}
+
+// FileOutputStream(name) and (name, false) start the file over, as the
+// java.io constructors they mirror do; (name, true) keeps it and appends.
+func TestXCEFileOutputStreamTruncatesUnlessAppending(t *testing.T) {
+	store := backend.NewDirectorySaveStore(t.TempDir())
+	runtime := wipiStreamRuntime(t, store)
+	write := func(descriptor string, arguments ...jvm.Value) {
+		t.Helper()
+		stream, err := runtime.VM.NewObject(skvm.FileOutputStreamClass, descriptor, arguments...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wipiStreamCall(t, runtime, stream, "write", "([BII)V", jvm.ReferenceValue(jvm.NewByteArray([]byte{6, 6})), jvm.IntValue(0), jvm.IntValue(2))
+		wipiStreamCall(t, runtime, stream, "close", "()V")
+	}
+	name := jvm.ReferenceValue(runtime.VM.NewString("/s"))
+	for _, form := range []struct {
+		descriptor string
+		arguments  []jvm.Value
+	}{
+		{"(Ljava/lang/String;)V", []jvm.Value{name}},
+		{"(Ljava/lang/String;Z)V", []jvm.Value{name, jvm.IntValue(0)}},
+	} {
+		if err := store.StoreSave("fs/s", []byte{1, 2, 3, 4}); err != nil {
+			t.Fatal(err)
+		}
+		write(form.descriptor, form.arguments...)
+		if data, _ := store.LoadSave("fs/s"); !bytes.Equal(data, []byte{6, 6}) {
+			t.Fatalf("FileOutputStream%s left %v, want only the new save", form.descriptor, data)
+		}
+	}
+	write("(Ljava/lang/String;Z)V", name, jvm.IntValue(1))
+	if data, _ := store.LoadSave("fs/s"); !bytes.Equal(data, []byte{6, 6, 6, 6}) {
+		t.Fatalf("appending FileOutputStream left %v", data)
+	}
+}
+
+// A zero-length read is 0 for java.io, not the end of the stream.
+func TestXCEFileInputStreamZeroLengthReadIsZero(t *testing.T) {
+	store := backend.NewDirectorySaveStore(t.TempDir())
+	if err := store.StoreSave("fs/in", []byte{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := wipiStreamRuntime(t, store)
+	stream, err := runtime.VM.NewObject(skvm.FileInputStreamClass, "(Ljava/lang/String;)V", jvm.ReferenceValue(runtime.VM.NewString("in")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := jvm.ReferenceValue(jvm.NewByteArray(nil))
+	if count := storeInvokeInt(t, wipiStreamCall(t, runtime, stream, "read", "([B)I", empty)); count != 0 {
+		t.Fatalf("read(new byte[0]) = %d, want 0", count)
+	}
+	buffer := jvm.ReferenceValue(jvm.NewByteArray(make([]byte, 4)))
+	if count := storeInvokeInt(t, wipiStreamCall(t, runtime, stream, "read", "([BII)I", buffer, jvm.IntValue(1), jvm.IntValue(0))); count != 0 {
+		t.Fatalf("read(b, 1, 0) = %d, want 0", count)
+	}
+	if count := storeInvokeInt(t, wipiStreamCall(t, runtime, stream, "read", "([BII)I", buffer, jvm.IntValue(0), jvm.IntValue(4))); count != 2 {
+		t.Fatalf("read after the empty reads = %d, want the 2 stored bytes", count)
+	}
+	if count := storeInvokeInt(t, wipiStreamCall(t, runtime, stream, "read", "([BII)I", buffer, jvm.IntValue(0), jvm.IntValue(4))); count != -1 {
+		t.Fatalf("read at end = %d, want -1", count)
 	}
 }

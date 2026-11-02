@@ -1,8 +1,11 @@
 package main
 
 import (
+	"errors"
 	"image"
 	"image/color"
+	"image/png"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -262,5 +265,49 @@ func TestZoomClipsToTheFrameAndRefusesABoxOutsideIt(t *testing.T) {
 	stderr.Reset()
 	if code := zoomFrame([]string{source, out, "-x", "80", "-y", "80"}, &stdout, &stderr); code == 0 {
 		t.Fatalf("zoom accepted a box outside the frame: %s", stdout.String())
+	}
+}
+
+// litFrames is a session whose screen has been flushed once with one lit
+// pixel on it.
+type litFrames struct{}
+
+func (litFrames) Flushes() uint32 { return 1 }
+
+func (litFrames) Frame() ([]byte, int, int, uint32) {
+	frame := make([]byte, 2*2*4)
+	frame[0], frame[3] = 0xff, 0xff
+	return frame, 2, 2, 1
+}
+
+// A probe stops at its first lit frame, and -framedir keeps that frame.
+func TestProbeFrameDirKeepsTheFirstLitFrame(t *testing.T) {
+	frameDir := t.TempDir()
+	dumped := uint32(0)
+	lit, err := probeFrame(litFrames{}, frameDir, false, 7, &dumped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lit {
+		t.Fatal("a probe did not stop at a lit frame")
+	}
+	file, err := os.Open(filepath.Join(frameDir, "tick0007.png"))
+	if err != nil {
+		t.Fatalf("the lit frame the probe stopped at is not in -framedir: %v", err)
+	}
+	defer file.Close()
+	picture, err := png.Decode(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _, _ := picture.At(0, 0).RGBA(); r == 0 {
+		t.Fatal("the frame written is not the lit one")
+	}
+	// Under -play nothing stops, and a frame already written is not again.
+	if lit, err := probeFrame(litFrames{}, frameDir, true, 8, &dumped); err != nil || lit {
+		t.Fatalf("under -play: lit %t, err %v", lit, err)
+	}
+	if _, err := os.Stat(filepath.Join(frameDir, "tick0008.png")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("an unchanged frame was written again: %v", err)
 	}
 }

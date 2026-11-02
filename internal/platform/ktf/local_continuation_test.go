@@ -13,16 +13,14 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/testlocal"
 )
 
 // This opt-in probe compares a restored client with its source at subsequent
 // manual-clock rounds. Save stores are private; it never reads or writes
 // the person's save directory and does not exercise live session replacement.
 func TestLocalKTFClientCheckpoint(t *testing.T) {
-	path := os.Getenv("WFEATURE_KTF_CALL_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_KTF_CALL_ARCHIVE to a local archive")
-	}
+	path := testlocal.Value(t, "WFEATURE_KTF_CALL_ARCHIVE", "a local archive")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -115,10 +113,7 @@ func TestLocalKTFClientCheckpoint(t *testing.T) {
 // This opt-in inventory reads a local archive and uses only in-memory saves.
 // It reports the pending call shapes; it does not produce a session checkpoint.
 func TestLocalKTFCallCheckpointInventory(t *testing.T) {
-	path := os.Getenv("WFEATURE_KTF_CALL_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_KTF_CALL_ARCHIVE to a local archive")
-	}
+	path := testlocal.Value(t, "WFEATURE_KTF_CALL_ARCHIVE", "a local archive")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

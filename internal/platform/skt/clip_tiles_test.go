@@ -3,8 +3,6 @@ package skt
 import (
 	_ "embed"
 	"math"
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/api/midp"
@@ -107,41 +105,5 @@ func TestClipCompatibilityDoesNotFollowProfile(t *testing.T) {
 		if archive.legacyClipEndpoints() {
 			t.Fatalf("profile %q enabled compatibility for unrelated code", profile)
 		}
-	}
-}
-
-// The real archive stays local. This also proves that changing any class
-// disables the exception without relying on a title or container filename.
-func TestLocalClipCompatibilityArchive(t *testing.T) {
-	path := os.Getenv("WFEATURE_SKT_CLIP_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_SKT_CLIP_ARCHIVE to the reported local archive")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	archive, err := Open(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !archive.legacyClipEndpoints() {
-		t.Fatalf("unrecognized code digest: %s", archive.clipCodeDigest())
-	}
-	archive.Descriptor.Name = "Renamed Archive"
-	if !archive.legacyClipEndpoints() {
-		t.Fatal("display name changed compatibility")
-	}
-	for name, data := range archive.Entries {
-		if !strings.HasSuffix(name, ".class") {
-			continue
-		}
-		changed := append([]byte(nil), data...)
-		changed[len(changed)-1] ^= 1
-		archive.Entries[name] = changed
-		if archive.legacyClipEndpoints() {
-			t.Fatalf("changed class %q retained compatibility", name)
-		}
-		archive.Entries[name] = data
 	}
 }

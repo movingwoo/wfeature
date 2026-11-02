@@ -2,12 +2,9 @@ package lgt
 
 import (
 	"bytes"
-	"context"
-	"os"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
-	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 func TestSaveSubscriberBranchPreservesChecksum(t *testing.T) {
@@ -89,42 +86,5 @@ func TestSaveSubscriberBranchRejectsUnexpectedCode(t *testing.T) {
 	}
 	if hasSaveIdentityCompatibility([]byte("unrecognized module")) {
 		t.Fatal("unknown revision matched")
-	}
-}
-
-func TestLocalSaveSubscriberArchive(t *testing.T) {
-	path := os.Getenv("WFEATURE_LGT_SAVE_SUBSCRIBER_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_LGT_SAVE_SUBSCRIBER_ARCHIVE")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original := bytes.Clone(data)
-	for _, disabled := range []bool{false, true} {
-		session, err := StartSession(context.Background(), data, SessionOptions{DisableAuthentication: disabled, Width: 240, Height: 320})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var code [2]byte
-		if err := session.client.core.Memory().Read(0x69d9a, code[:]); err != nil {
-			t.Fatal(err)
-		}
-		want := byte(0xe0)
-		status := backend.AuthenticationLGTSaveSubscriber
-		if disabled {
-			want = 0xd0
-			status = backend.AuthenticationOff
-		}
-		if code != [2]byte{2, want} || session.Authentication() != status {
-			t.Fatalf("disabled=%v code=%x status=%s", disabled, code, session.Authentication())
-		}
-		if err := session.Close(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !bytes.Equal(data, original) {
-		t.Fatal("original archive changed")
 	}
 }

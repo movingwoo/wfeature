@@ -2,10 +2,12 @@ package ktf
 
 import (
 	"encoding/binary"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
@@ -649,6 +651,107 @@ func TestAnEmptyRecordDatabaseRecordOutlivesTheSession(t *testing.T) {
 		}
 		if result := call(runtime, wipicRecordDatabaseSelect, handle, 1, buffer, 4); result != 0 {
 			t.Fatalf("%s session: select of the empty record = %#x, want 0", session, result)
+		}
+	}
+}
+
+// These hold the fixes a review of the storage contract made here
+// (docs/history/ktf.md#ktf-storage-review-2026-10-22).
+
+// Writing down when a database was opened or written read the clock the
+// guest reads, and every read there counts as the guest waiting on the time,
+// which changes how the step budget charges the call it came from. A title
+// that opens and writes a database at start-up ran on a different schedule
+// than before, and the same keys led it somewhere else.
+func TestDatabaseBookkeepingDoesNotReadTheGuestClock(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
+	before := client.GuestClockReads
+	database, err := openJavaDatabase(t, runtime, client, "scores", 8, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaCall(t, runtime, client, runtimeDataBaseInsert, database, jvm.ReferenceValue(jvm.NewByteArray([]byte("progress")))); err != nil {
+		t.Fatal(err)
+	}
+	modified := mustLong(must(javaCall(t, runtime, client, runtimeDataBaseLastModified, database)))
+	if modified == 0 {
+		t.Error("getLastModified of a database just written is 0")
+	}
+	if reads := client.GuestClockReads - before; reads != 0 {
+		t.Fatalf("opening and writing a database counted %d guest clock reads, want none", reads)
+	}
+}
+
+// Opening a database writes its record size down, and a store that refused
+// that write failed the open: the save was there, and the title was told it
+// was not. The open stands, and the object keeps the size.
+func TestOpeningADatabaseSurvivesARefusedSizeTable(t *testing.T) {
+	store := &refusableSaveStore{saves: map[string][]byte{"jdb/scores": wipicrt.EncodeSaveRecords([][]byte{[]byte("progress")})}}
+	client, runtime := newTestRuntime(t)
+	runtime.client.SaveStore = store
+	store.refuse = errors.New("the store is read-only")
+	database, err := openJavaDatabase(t, runtime, client, "scores", 8, false)
+	if err != nil {
+		t.Fatalf("open of a saved database over a store that refuses writes = %v", err)
+	}
+	if size := mustInt(must(javaCall(t, runtime, client, runtimeDataBaseRecordSize, database))); size != 8 {
+		t.Errorf("getRecordSize = %d, want the open's 8", size)
+	}
+	if record := must(javaCall(t, runtime, client, runtimeDataBaseSelect, database, jvm.IntValue(0))); string(mustBytes(t, record)) != "progress" {
+		t.Errorf("selectRecord(0) = %q, want the saved record", mustBytes(t, record))
+	}
+}
+
+// The record table read a name only to 512 bytes and stopped the run past
+// that. Every C storage call reads a name to 4096 bytes (docs/wipi-storage.md),
+// and a name that long is no database's, so it is refused as one.
+func TestRecordTableReadsNamesAsFarAsTheFileTable(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
+	long := strings.Repeat("n", 600)
+	if got := openRecordDatabase(t, runtime, long, 4, 1); got != wipicrt.WIPICErrorInvalid {
+		t.Errorf("MC_dbOpenDataBase(600 bytes) = %#x, want M_E_INVALID", got)
+	}
+	const address = wipicrt.PlatformDataBase + 0xa000
+	if err := runtime.client.Core().Memory().Write(address, append([]byte(long), 0)); err != nil {
+		t.Fatal(err)
+	}
+	for slot, want := range map[uint32]uint32{
+		wipicRecordDatabaseDelete:     wipicrt.WIPICErrorInvalid,
+		wipicRecordDatabaseAccessMode: wipicrt.WIPICErrorNotFound,
+	} {
+		thread := armcore.NewThread(armcore.Context{})
+		if err := thread.SetRegister(0, address); err != nil {
+			t.Fatal(err)
+		}
+		got, err := runtime.handleWIPICRecordDatabaseCall(thread, slot)
+		if err != nil {
+			t.Errorf("record slot %d with a 600-byte name stopped the run: %v", slot, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("record slot %d with a 600-byte name = %#x, want %#x", slot, got, want)
+		}
+	}
+}
+
+// TestRecordDatabaseHandlesAreRecycledAfterTheCounterRunsOut is the same rule
+// for the record database table, which issued its handles the same way.
+func TestRecordDatabaseHandlesAreRecycledAfterTheCounterRunsOut(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
+	for open := 0; open < maxRecordDatabaseHandles+16; open++ {
+		handle := openRecordDatabase(t, runtime, "scores", 8, 1)
+		if handle&0xfffff000 != recordDatabaseHandleBit || handle&0x0fff == 0 {
+			t.Fatalf("open %d answered %#x, want a record database handle", open+1, handle)
+		}
+		thread := armcore.NewThread(armcore.Context{})
+		if err := thread.SetRegister(0, handle); err != nil {
+			t.Fatal(err)
+		}
+		if result, err := runtime.handleWIPICRecordDatabaseCall(thread, wipicRecordDatabaseClose); err != nil || result != 0 {
+			t.Fatalf("close %#x = %#x, %v", handle, result, err)
 		}
 	}
 }

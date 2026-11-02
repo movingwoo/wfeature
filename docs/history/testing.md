@@ -8,6 +8,7 @@ This consolidation adds no execution or acceptance evidence.
 
 ## Contents
 
+- [Test layout cleanup (2026-11-02)](#test-layout-cleanup-2026-11-02)
 - [Keypad grid validation (2026-10-08)](#keypad-grid-validation-2026-10-08)
 - [Implementation and validation record](#implementation-testing)
 - [Running them](#implementation-running-them)
@@ -36,6 +37,134 @@ This consolidation adds no execution or acceptance evidence.
 - [Current phase-instrumented checks](#webkit-current-phase-instrumented-checks)
 - [Decision and remaining limit](#webkit-decision-and-remaining-limit)
 - [Text input exception audit (2026-09-23)](#text-input-audit-2026-09-23)
+
+## Test layout cleanup (2026-11-02)
+
+The Go tests had grown to 770 files and 174,940 lines, against 212,483 lines of
+the code they test, when they were reorganized in one pass. No assertion was
+changed. What changed is where the tests are, eleven probes that only printed
+numbers, and helpers that several packages had copied. The rules the pass left
+are in [test layout](../testing.md#test-layout).
+
+### Before
+
+- 3,742 test names: 3,683 tests, 41 benchmarks and 18 fuzz targets, of which 77
+  skipped without their environment variables.
+- `go test -count=1` over every package took 69 s on one machine; the two
+  slowest tests took 15.1 s and 8.1 s.
+- Under `-coverpkg` of every package there were 61,086 statement blocks: 44,006
+  covered in both of two release runs and 44,095 in a debug run.
+- `go test ./...` failed in the main checkout. Three directories under the
+  ignored `build/` held test files left by earlier sessions — copies of package
+  tests, and a page build without its images — and `./...` compiled them.
+
+### What changed
+
+1. **Leftovers.** The three directories were renamed with a leading `_`, which
+   Go skips (`build/_release-060-review`, `build/_worktree-leftovers-20261028`,
+   `build/padcheck/_head-web`). Nothing in the repository changed.
+2. **Local tests.** Eleven probes that only printed measurements, and whose
+   instructions were only in this history, were deleted: `TestPerfProbe`,
+   `TestPageSchedulingProbe`, `TestBudgetedSchedulingProbe`,
+   `TestSlowHostProbe`, `TestWallClockProbe` and `TestLoadCostProbe` (KTF's
+   `local_perf_test.go`), `TestHeavySceneProbe`, `TestLocalKTFGuestClockRate`
+   and `TestRoutedLoadProbe` (KTF), `TestRateSweep` (LGT) and
+   `TestLocalPauseResumeObservation` (`internal/session`). What they measured
+   stays in the sections that cite them; `git log --diff-filter=D -- <file>`
+   finds the commit that removed a file, and `git show <commit>^:<file>`
+   brings it back. Every other test that needs a local game or an external
+   input is now named `TestLocal…`, lives in a `local_*_test.go` file and gates
+   itself through the new `internal/testlocal`. The fingerprint checks of the
+   LGT and SKT compatibility registry entries were gathered into one
+   `local_compatibility_test.go` each. Renamed:
+
+   | Before | After |
+   | --- | --- |
+   | `TestADPCMMatchesAnExternalVectorPair` | `TestLocalADPCMMatchesAnExternalVectorPair` |
+   | `TestMatchesReferenceImplementation` | `TestLocalMatchesReferenceImplementation` |
+   | `TestKTFNativeStorageInventory` | `TestLocalKTFNativeStorageInventory` |
+   | `TestRegenerateWIPISurfaceReference` | `TestLocalRegenerateWIPISurfaceReference` |
+   | `TestLGTLoadCostProbe` | `TestLocalLGTLoadCostProbe` |
+   | `TestSessionCostProbe` | `TestLocalSessionCostProbe` |
+   | `TestTheEarlierKTFPackageIsOnePlatformNeutralSession` | `TestLocalEarlierKTFPackageIsOnePlatformNeutralSession` |
+   | `TestSessionRunsTheEarlierKTFPackage` | `TestLocalSessionRunsTheEarlierKTFPackage` |
+   | `TestLocalRelayDependencyRequiresProviderContract` | `TestTheLocalRelayDependencyRequiresProviderContract` |
+   | `TestLocalRelayRuntimeStreamRoundTripAndDisconnect` | `TestTheLocalRelayRuntimeStreamRoundTripAndDisconnect` |
+   | `TestLocaltimeAnswersAStructRatherThanNull` | `TestTheLocaltimeAnswersAStructRatherThanNull` |
+   | `TestLocaltimeReusesItsStorage` | `TestTheLocaltimeReusesItsStorage` |
+   | `TestLocaltimeWithoutATimeUsesTheGuestClock` | `TestTheLocaltimeWithoutATimeUsesTheGuestClock` |
+
+   The last five are ordinary tests that happened to begin with `TestLocal`;
+   they were renamed so the prefix means one thing. The patterns `make pgo`
+   passes to `-test.run` (`LGTLoadCost`, `SessionCostProbe`) still match.
+3. **Review-named files.** 87 files named after the review or pull request
+   that found their tests (`*_rest_review_test.go`, `*_rt_review_test.go`,
+   `*_jvm_review_test.go`, `*_pr235_review_test.go`, `*_regression_test.go`
+   and the like: 311 tests, 14,304 lines) were taken apart test by test into
+   the files of the subjects they check. Nineteen subject files were made where
+   none existed, among them `jvm/class_init_test.go`, `jvm/monitor_test.go`,
+   `ktf/runtime_graphics_test.go` and `skt/lcdui_game_test.go`. Helpers named
+   after the review (`reviewFiles`, `gfxReviewSurface`, `storeReviewInt` and
+   others) were renamed for what they do.
+4. **Engine tests.** Each KTF test file was first run alone under
+   `-coverpkg` of `ktf` and `wipicrt`. Twenty-five files reached no KTF code
+   beyond the fixture that built the engine, at most eight blocks of it, and
+   they moved — 116 tests and benchmarks — from `internal/platform/ktf` to
+   `internal/platform/wipicrt`, as the black-box package `wipicrt_test`. The
+   new `internal/platform/wipicrt/wipicrttest` builds the engine with no
+   platform above it and holds the helpers both packages use; KTF's tests call
+   the same ones instead of keeping copies. Four tests that need KTF's session,
+   Java graphics or audio pause probe stayed, and so did
+   `intermediate_frame_test.go`.
+5. **Shared helpers.** `itoa` (`internal/backend`, `internal/filter/hqx`) gave
+   way to `strconv.Itoa`; the three copies of `localLadderTicks` to
+   `testlocal.Int`; the three of `screens` and the LGT and SKT
+   `openingMovedOn` to `ladder.Screens` and `ladder.OpeningMovedOn`. KTF's own
+   `openingMovedOn` words a screen that never moved differently and stayed.
+   `logTraceShape`, which nothing called, was deleted.
+
+### Left as it was, and why
+
+- **The two slowest tests.** `TestAParkedGameThatWillNotCloseDoesNotHoldTheStop`
+  (`internal/webhost`, 15.1 s) waits out SKT's real destroy bound
+  (`backend.EndingBound`), which a webhost test could shorten only through a
+  hook the skt package would have to export.
+  `TestAConversionThatStopsAnywhereFinishes` (`internal/backend`, 8.1 s) takes
+  3 s alone; the rest is `fsync` contention with the packages running beside
+  it.
+- **`time.Sleep`.** About 60 of the 77 calls are the pause in a loop that polls
+  for a condition. Most of the fixed ones assert that nothing happens within a
+  time, or test a time itself — a read timeout, an idle page — where the sleep
+  is the point.
+- **Same-named tests on several platforms** (18 names, such as
+  `TestBoundedCurvesDrawWhatTheWholeWalkDrew` in LGT and SKT). Each checks its
+  own platform's binding; one table over the platforms would test different
+  code.
+- **Copies with no shared home.** `smafChunk` (LGT, SKT and `wipicrttest`) and
+  `rewrap` (KTF, LGT) have no package both sides already import without a
+  cycle. KTF keeps its own `readTestBytes`, which 49 call sites use with a
+  `*ktf.Client`. The ladders' other same-named helpers drive each platform's
+  own session API.
+
+### How it was checked
+
+Before the first change, the test names (`go test -list`) and the covered
+statement blocks (`go test -coverpkg=<every package> -coverprofile`, release
+twice and debug once) were saved. After each step the same were taken again
+and compared: every name that disappeared had to be an intended deletion or
+rename, and every block covered before had to be covered still. Fourteen blocks
+that come and go between runs of an unchanged tree — `select` arms and step
+renewals in `internal/webhost/session.go`, `internal/jvm/thread_checkpoint.go`,
+`internal/platform/skt` and `internal/platform/skt/clet` — were set aside; the
+one that went missing after the shared-helper step was covered in three runs of
+its package alone. Each step also passed `go vet` on the packages it touched.
+
+### After
+
+- 706 test files and 172,950 lines; 3,736 test names (3,677 tests, 41
+  benchmarks, 18 fuzz targets), of which 66 skip without their variables.
+- No covered block lost: 44,097 covered in a release run and 44,182 in a debug
+  run, the new support packages adding blocks of their own.
 
 ## Keypad grid validation (2026-10-08)
 

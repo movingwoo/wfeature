@@ -294,3 +294,82 @@ func TestAModulateChargesWhatItStoodInFor(t *testing.T) {
 		t.Errorf("charged %d steps, interpreting the same loop retired %d", stood, interpreted)
 	}
 }
+
+// modulateCompare runs a modulate body both ways over the fixture the
+// recogniser's own tests use.
+func modulateCompare(t *testing.T, body []uint16) {
+	t.Helper()
+	const base, data = 0x00100000, 0x00200000
+	const stack = 0x70000000
+	const first, second, factors = data, data + 0x800, 0x70000400
+	const steps = 27
+	branchPC := base + uint32(len(body)-1)*2
+	build := func() (*Memory, *Context) {
+		memory := modulateMemory(t, body, base, data)
+		memory.beginQuantum()
+		if err := memory.writeData32(stack+8, factors); err != nil {
+			t.Fatal(err)
+		}
+		for index := uint32(0); index < steps; index++ {
+			if err := memory.writeData32(first+index*4, 0x5a3c<<16|index*37); err != nil {
+				t.Fatal(err)
+			}
+			if err := memory.writeData32(second+index*4, 0xffff<<16|index*911); err != nil {
+				t.Fatal(err)
+			}
+			if err := memory.write8(factors+index, byte(index*5)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		memory.endQuantum()
+		value := NewContext()
+		context := &value
+		context.Registers[RegisterSP] = stack
+		context.Registers[6] = first
+		context.Registers[7] = second
+		context.Registers[12] = steps
+		context.setThumbPC(base)
+		return memory, context
+	}
+	compareStandIn(t, branchPC+2, data, 0x800+(steps+1)*4, build)
+}
+
+// The counter's minus one built in the register that also holds the first
+// mask: at the loop head that register is -1, not the mask the guest reloads
+// from its literal every step.
+func TestAModulateWhoseMaskRegisterIsReusedMatchesRunningIt(t *testing.T) {
+	const base, data = 0x00100000, 0x00200000
+	body := wordModulateBody()
+	body[33] = 0x2501 // movs r5, #1
+	body[34] = 0x426d // rsbs r5, r5, #0
+	body[37] = 0x44ac // add  r12, r5
+	memory := modulateMemory(t, body, base, data)
+	memory.beginQuantum()
+	loop := memory.analyseWordModulate(base, base+uint32(len(body)-1)*2)
+	memory.endQuantum()
+	if loop == nil {
+		t.Fatal("the modulate was not recognised; the comparison below would prove nothing")
+	}
+	modulateCompare(t, body)
+}
+
+// The first mask loaded into the register the step uses as scratch: the
+// step's own copy overwrites it before the mask is used, so the arithmetic is
+// not the modulate's and has to be left to the interpreter.
+func TestAModulateWhoseMaskIsAlsoItsScratchIsRefused(t *testing.T) {
+	const base, data = 0x00100000, 0x00200000
+	body := wordModulateBody()
+	body[1] = 0x4b1b  // ldr  r3, [pc, #108] — the first mask, in the scratch register
+	body[6] = 0x401b  // ands r3, r3
+	body[15] = 0x401a // ands r2, r3
+	body[22] = 0x401b // ands r3, r3
+	body[31] = 0x401a // ands r2, r3
+	memory := modulateMemory(t, body, base, data)
+	memory.beginQuantum()
+	loop := memory.analyseWordModulate(base, base+uint32(len(body)-1)*2)
+	memory.endQuantum()
+	if loop != nil {
+		t.Errorf("a mask sharing the scratch register was recognised: %+v", *loop)
+	}
+	modulateCompare(t, body)
+}

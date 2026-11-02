@@ -57,13 +57,13 @@ func wipiMustOpen(t *testing.T, runtime *Runtime, name string, recordSize int32,
 // wipiInt asks a DataBase one of its ()I questions.
 func wipiInt(t *testing.T, runtime *Runtime, db *jvm.Object, method string) int32 {
 	t.Helper()
-	return storeReviewInt(t, wipiStreamCall(t, runtime, db, method, "()I"))
+	return storeInvokeInt(t, wipiStreamCall(t, runtime, db, method, "()I"))
 }
 
 // wipiInsert inserts a whole array and answers the record id.
 func wipiInsert(t *testing.T, runtime *Runtime, db *jvm.Object, record ...byte) int32 {
 	t.Helper()
-	return storeReviewInt(t, wipiStreamCall(t, runtime, db, "insertRecord", "([B)I", ruleBytes(record...)))
+	return storeInvokeInt(t, wipiStreamCall(t, runtime, db, "insertRecord", "([B)I", ruleBytes(record...)))
 }
 
 func wipiSelect(t *testing.T, runtime *Runtime, db *jvm.Object, id int32) []byte {

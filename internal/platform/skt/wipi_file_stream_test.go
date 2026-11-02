@@ -224,3 +224,36 @@ func TestWIPIFileInputStreamRetainsArchiveEntryProvenance(t *testing.T) {
 		t.Fatal("input stream lost its archive entry provenance")
 	}
 }
+
+// WIPI File.read answers -1 for an end reached before any byte, so a
+// `!= -1` read loop ends. XFile keeps answering 0 there.
+func TestWIPIFileReadAnswersMinusOneAtEnd(t *testing.T) {
+	store := backend.NewDirectorySaveStore(t.TempDir())
+	if err := store.StoreSave("fs/eof", []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := wipiStreamRuntime(t, store)
+	file := wipiStreamFile(t, runtime, "eof", wipiFileReadOnly)
+	buffer := jvm.NewByteArray(make([]byte, 4))
+	if count := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "read", "([B)I", jvm.ReferenceValue(buffer))); count != 1 {
+		t.Fatalf("first read = %d, want 1", count)
+	}
+	if count := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "read", "([B)I", jvm.ReferenceValue(buffer))); count != -1 {
+		t.Fatalf("read([B) at end = %d, want -1", count)
+	}
+	if count := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "read", "([BII)I", jvm.ReferenceValue(buffer), jvm.IntValue(0), jvm.IntValue(4))); count != -1 {
+		t.Fatalf("read([BII) at end = %d, want -1", count)
+	}
+	if count := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "read", "([BII)I", jvm.ReferenceValue(buffer), jvm.IntValue(0), jvm.IntValue(0))); count != 0 {
+		t.Fatalf("zero-length read at end = %d, want 0", count)
+	}
+
+	xfile, err := runtime.VM.NewObject(skvm.XFileClass, "(Ljava/lang/String;I)V", jvm.ReferenceValue(runtime.VM.NewString("eof")), jvm.IntValue(xFileRead))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wipiStreamCall(t, runtime, xfile, "read", "([BII)I", jvm.ReferenceValue(buffer), jvm.IntValue(0), jvm.IntValue(4))
+	if count := storeInvokeInt(t, wipiStreamCall(t, runtime, xfile, "read", "([BII)I", jvm.ReferenceValue(buffer), jvm.IntValue(0), jvm.IntValue(4))); count != 0 {
+		t.Fatalf("XFile read at end = %d, want 0", count)
+	}
+}

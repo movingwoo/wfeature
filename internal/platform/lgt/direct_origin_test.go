@@ -2,7 +2,6 @@ package lgt
 
 import (
 	"bytes"
-	"os"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -68,54 +67,6 @@ func TestDirectFramebufferOriginRejectsUnexpectedCode(t *testing.T) {
 	if err := correctDirectFramebufferOrigin(memory); err == nil {
 		t.Fatal("unexpected initialization accepted")
 	}
-}
-
-func TestLocalDirectFramebufferOriginArchive(t *testing.T) {
-	testLocalStripOrigin(t, "WFEATURE_LGT_DIRECT_ORIGIN_ARCHIVE", 0x12bc, 0x23)
-}
-
-func TestLocalImageFramebufferOriginArchive(t *testing.T) {
-	testLocalStripOrigin(t, "WFEATURE_LGT_IMAGE_ORIGIN_ARCHIVE", 0x28a10, 0x22)
-}
-
-func testLocalStripOrigin(t *testing.T, variable string, address uint32, opcode byte) {
-	t.Helper()
-	path := os.Getenv(variable)
-	if path == "" {
-		t.Skip("set " + variable)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	archive, err := Open(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original := bytes.Clone(archive.Module)
-	check := func(want byte) {
-		t.Helper()
-		client, err := Load(archive, Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var instruction [2]byte
-		if err := client.core.Memory().Read(address, instruction[:]); err != nil {
-			t.Fatal(err)
-		}
-		if instruction != [2]byte{want, opcode} {
-			t.Fatalf("origin instruction = %x, want %02x%02x", instruction, want, opcode)
-		}
-	}
-	check(0)
-	if !bytes.Equal(original, archive.Module) {
-		t.Fatal("archive module changed")
-	}
-	archive.Descriptor.AID, archive.Descriptor.PID = "other", "other"
-	check(0)
-	archive.Module = bytes.Clone(original)
-	archive.Module[15] ^= 1 // Loader-ignored ELF padding still changes the identity.
-	check(24)
 }
 
 func TestImageFramebufferOrigin(t *testing.T) {

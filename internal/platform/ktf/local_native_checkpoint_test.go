@@ -11,14 +11,13 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/testlocal"
 )
 
 // Local archives remain ignored. Every run uses isolated temporary saves;
 // reports identify an archive by its digest instead of its title or filename.
 func TestLocalNativeCheckpointContinuation(t *testing.T) {
-	if os.Getenv("WFEATURE_KTF_NATIVE_CHECKPOINT_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_KTF_NATIVE_CHECKPOINT_ACCEPTANCE=1 to exercise local native archives")
-	}
+	testlocal.Enabled(t, "WFEATURE_KTF_NATIVE_CHECKPOINT_ACCEPTANCE", "exercise local native archives")
 	for _, file := range localNativePackages(t) {
 		archive, err := os.ReadFile(file)
 		if err != nil {

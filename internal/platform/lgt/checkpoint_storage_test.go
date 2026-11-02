@@ -1735,3 +1735,70 @@ func TestCheckpointAdaptersDeriveDiskStateAgain(t *testing.T) {
 		}
 	})
 }
+
+// A File opened to rewrite its save and closed while a stream is still open on
+// it has finished the rewrite: a quick save taken then records an ordinary
+// handle, and a load keeps a longer save written after the quick save whole
+// instead of cutting it back to what the File held, and the stream's close
+// stores it whole.
+func TestARewriteClosedBeforeAQuickSaveKeepsALaterSaveWhole(t *testing.T) {
+	ctx := context.Background()
+	store := newFaultStore(t, map[string]string{"fs/save.dat": "an older save"})
+	fixture := newJavaThreadFixture(t, store)
+	client := fixture.client
+	object := openJavaFile(t, client, "save.dat", 3)
+	sink := openJavaOutputStream(t, client, object)
+	writeJavaSink(t, client, sink, "short")
+	if _, err := javaFileClose(client, ctx, client.thread, []uint32{object}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.held("fs/save.dat"); got != "short" {
+		t.Fatalf("the close stored %q", got)
+	}
+	fixture.settle()
+	checkpoint := roundTripCheckpoint(t, fixture.archive, fixture.session)
+	const later = "a longer save written after the quick save"
+	store.behind(t, "fs/save.dat", later)
+	restored := mustCommitFixture(t, fixture.archive, checkpoint, fixture.session, store)
+	files := newGuestFiles(t, restored.client)
+	reader := files.open("save.dat", fileOpenReadOnly)
+	if got := files.read(reader, 64); got != later {
+		t.Fatalf("after the load the save reads %q", got)
+	}
+	files.close(reader)
+	if err := closeJavaSink(restored.client, sink); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.held("fs/save.dat"); got != later {
+		t.Fatalf("the stream's close stored %q", got)
+	}
+}
+
+// A quick save that stores packaged files the title rewrote reads nothing on
+// the live session for them: a packaged file never goes on the created list,
+// so the list is not asked. Read first, a list the store could not read
+// refused the quick save and every write of the session after it.
+func TestAQuickSaveOfRewrittenPackagedFilesReadsNoList(t *testing.T) {
+	store := newFaultStore(t, nil)
+	session := checkpointFixtureSession(t, fixtureArchive(t), store)
+	tickSession(t, session, 2)
+	files := newGuestFiles(t, session.client)
+	first := files.open("data/hello.txt", fileOpenReadWrite)
+	files.write(first, "mine")
+	second := files.open("data/other.txt", fileOpenReadWrite)
+	files.write(second, "also")
+	store.unreadable = fileCreatedKey
+	if _, err := session.CaptureCheckpoint(context.Background()); err != nil {
+		t.Fatalf("the quick save: %v", err)
+	}
+	if err := session.client.saveReadError; err != nil {
+		t.Fatalf("the quick save left the session unable to write: %v", err)
+	}
+	for key, prefix := range map[string]string{"fs/data/hello.txt": "mine", "fs/data/other.txt": "also"} {
+		if got := store.held(key); !strings.HasPrefix(got, prefix) {
+			t.Fatalf("the quick save left %q under %s", got, key)
+		}
+	}
+	files.close(first)
+	files.close(second)
+}

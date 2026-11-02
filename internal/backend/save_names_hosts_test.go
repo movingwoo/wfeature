@@ -475,3 +475,147 @@ func skipWhereEarlierNamesCannotBe(t *testing.T) {
 		t.Skip("Windows refuses or changes the earlier names this folder holds")
 	}
 }
+
+// A Hangul or kana save whose name the volume lists decomposed — HFS+, exFAT
+// and FAT on macOS do for every name, and a folder copied from one of them
+// keeps it so — is the composed key's save: a conversion leaves it where it
+// is, the key reads it, and a listing names the composed key. Read as listed,
+// the conversion moved it to a name with its jamo numbered, and the key's own
+// lookup found nothing.
+func TestADecomposedListingIsTheComposedKey(t *testing.T) {
+	if !normalizationInsensitive(t) {
+		t.Skip("the volume keeps a decomposed name apart from its composed one")
+	}
+	for _, record := range []bool{false, true} {
+		parent := t.TempDir()
+		state := []string{
+			"owner/fs/" + norm.NFD.String("가나") + "=hangul",
+			"owner/fs/" + norm.NFD.String("がぎ") + "=kana",
+			"owner/rms/" + norm.NFD.String("세이브") + "/" + norm.NFD.String("슬롯") + "=nested",
+		}
+		if record {
+			state = append(state, encodedRecord)
+		}
+		leftoverBuild(t, parent, state)
+		saves := map[string]string{"fs/가나": "hangul", "fs/がぎ": "kana", "rms/세이브/슬롯": "nested"}
+		root := filepath.Join(parent, "owner")
+		store := NewDirectorySaveStore(root)
+		wantSaves(t, store, saves)
+		listed, err := ReadSaveTree(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantEntries(t, listed, saves, "the listing")
+		snapshot, err := store.SnapshotSaves()
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantEntries(t, snapshot, saves, "the snapshot")
+		for _, name := range []string{"fs", "rms"} {
+			entries, err := os.ReadDir(filepath.Join(root, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				if strings.Contains(entry.Name(), "#+") {
+					t.Fatalf("the conversion numbered %+q", entry.Name())
+				}
+			}
+		}
+		if err := store.StoreSave("fs/가나", []byte("again")); err != nil {
+			t.Fatal(err)
+		}
+		wantSaves(t, store, map[string]string{"fs/가나": "again"})
+	}
+}
+
+// A segment is measured as the host measures a name: on macOS, iOS and
+// Windows in UTF-16 units, 255 of which a name may hold. A save of 150 Hangul
+// syllables, 450 bytes, is stored and read there, and so is one an earlier
+// build stored under such a name; one of 256 characters is refused.
+func TestASaveNameIsMeasuredAsTheHostMeasuresIt(t *testing.T) {
+	if saveNamesInUnits && (saveNameLength(strings.Repeat("가", 255)) != 255 || saveNameLength("\U0001F600") != 2) {
+		t.Fatal("a name is not measured in UTF-16 units")
+	}
+	if !saveNamesInUnits {
+		if saveNameLength(strings.Repeat("가", 85)) != 255 {
+			t.Fatal("a name is not measured in bytes")
+		}
+		t.Skip("this host measures a name in bytes")
+	}
+	parent := t.TempDir()
+	long, earlier := strings.Repeat("가", 150), strings.Repeat("나", 150)
+	leftoverBuild(t, parent, []string{"owner/fs/" + earlier + "=earlier"})
+	store := NewDirectorySaveStore(filepath.Join(parent, "owner"))
+	if err := store.StoreSave("fs/"+long, []byte("new")); err != nil {
+		t.Fatalf("a 150-syllable name: %v", err)
+	}
+	wantSaves(t, store, map[string]string{"fs/" + long: "new", "fs/" + earlier: "earlier"})
+	if err := store.StoreSave("fs/"+strings.Repeat("a", 256), []byte("x")); !errors.Is(err, errSaveNameTooLong) {
+		t.Fatalf("a 256-character name: %v, want it refused as too long", err)
+	}
+}
+
+// A key whose path, written out below the save directory, is longer than the
+// host opens has no save: a read finds none rather than meeting the file
+// system's error, and a write is refused up front with the limit named. The
+// macOS and iOS limit is forced on every host: written out, a key of 512 bytes
+// made of this segment stays below the 4,095 bytes Linux opens, and Windows
+// checks none.
+func TestASavePathLongerThanTheHostOpensIsNoSave(t *testing.T) {
+	limit := maxSavePathBytes
+	maxSavePathBytes = savePathLimit("darwin")
+	t.Cleanup(func() { maxSavePathBytes = limit })
+	segment := "a" + strings.Repeat("́", 30)
+	key := strings.TrimSuffix(strings.Repeat(segment+"/", 1+maxSavePathBytes/(len(encodeSaveName(segment))+1)), "/")
+	if _, err := NormalizeSaveKey(key); err != nil {
+		t.Fatalf("the probe key is no key: %v", err)
+	}
+	store := NewDirectorySaveStore(filepath.Join(t.TempDir(), "owner"))
+	if err := store.StoreSave("fs/kept", []byte("kept")); err != nil {
+		t.Fatal(err)
+	}
+	if data, found, err := store.ReadSave(key); err != nil || found {
+		t.Fatalf("a read of a key longer than a path: %q, found %t, %v", data, found, err)
+	}
+	if err := store.StoreSave(key, []byte("x")); !errors.Is(err, errSaveNameTooLong) {
+		t.Fatalf("a write of a key longer than a path: %v, want it refused as too long", err)
+	}
+	wantSaves(t, store, map[string]string{"fs/kept": "kept"})
+}
+
+// The companion macOS writes beside a file on exFAT and FAT, "._" and the
+// file's name in the AppleDouble format, is no save: a snapshot and an export
+// leave it out, a conversion leaves it where it is, and a restore does not
+// remove it. A file of that name that is not AppleDouble is a save.
+func TestAnAppleDoubleCompanionIsNoSave(t *testing.T) {
+	companion := "\x00\x05\x16\x07\x00\x02\x00\x00metadata"
+	parent := t.TempDir()
+	leftoverBuild(t, parent, []string{
+		"owner/fs/Upper=upper", "owner/fs/._Upper=" + companion,
+		"owner/fs/plain=plain", "owner/fs/._plain=" + companion,
+		"owner/fs/._mine=a save of its own",
+	})
+	root := filepath.Join(parent, "owner")
+	saves := map[string]string{"fs/Upper": "upper", "fs/plain": "plain", "fs/._mine": "a save of its own"}
+	store := NewDirectorySaveStore(root)
+	wantSaves(t, store, saves)
+	snapshot, err := store.SnapshotSaves()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEntries(t, snapshot, saves, "the snapshot")
+	listed, err := ReadSaveTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEntries(t, listed, saves, "the listing")
+	if _, _, err := WriteSaveTree(root, listed); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"._Upper", "._plain"} {
+		if _, err := os.Lstat(filepath.Join(root, "fs", name)); err != nil {
+			t.Fatalf("the companion %s is gone: %v", name, err)
+		}
+	}
+}

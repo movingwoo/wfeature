@@ -2,6 +2,7 @@ package armcore
 
 import (
 	"errors"
+	"sync"
 	"testing"
 )
 
@@ -115,4 +116,48 @@ func TestCommittedRegionsCoalescesWritablePages(t *testing.T) {
 	if len(partial) != 3 || (partial[2] != CommittedRegion{Base: 0x300000, Size: 0x180}) {
 		t.Fatalf("partial-page regions = %+v", partial)
 	}
+}
+
+// Host reads share the lock: they read the last-mapping cache the guest's
+// accesses keep and write no cache at all. Two of them at once must not race;
+// run with -race. The two mappings lie a whole number of page-cache ways
+// apart, so their pages share ways, and a read that went through the page
+// cache, which refreshes a way on every miss, would race here.
+func TestConcurrentHostReadsDoNotRace(t *testing.T) {
+	memory := NewMemory()
+	bases := []uint32{0x100000, 0x100000 + dataPageWays<<memoryPageShift}
+	for _, base := range bases {
+		if dataPageWay(base>>memoryPageShift) != dataPageWay(bases[0]>>memoryPageShift) {
+			t.Fatalf("mapping %#x does not share the first mapping's page-cache way", base)
+		}
+		if err := memory.Map(base, 0x2000, PermissionReadWrite); err != nil {
+			t.Fatal(err)
+		}
+		if err := memory.Write(base, []byte{1, 2, 3, 4}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var group sync.WaitGroup
+	for _, base := range bases {
+		group.Add(1)
+		go func(base uint32) {
+			defer group.Done()
+			buffer := make([]byte, 4)
+			for range 2000 {
+				if err := memory.Read(base, buffer); err != nil {
+					t.Error(err)
+					return
+				}
+				if err := memory.Read(base+0x1000, buffer); err != nil {
+					t.Error(err)
+					return
+				}
+				if !memory.Holds([]Span{{Address: base, Data: []byte{1, 2, 3, 4}}, {Address: base + 0x1000, Data: buffer}}) {
+					t.Error("guest memory does not hold what was written and read")
+					return
+				}
+			}
+		}(base)
+	}
+	group.Wait()
 }

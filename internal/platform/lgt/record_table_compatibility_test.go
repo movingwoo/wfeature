@@ -2,7 +2,6 @@ package lgt
 
 import (
 	"bytes"
-	"os"
 	"testing"
 )
 
@@ -102,51 +101,5 @@ func TestRecordTableTerminatorCorrectsOnlyTheSelectedArchiveCopy(t *testing.T) {
 	client.sessionFiles[key] = written
 	if data, ok := client.titleFile(recordTableName); !ok || !bytes.Equal(data, written) {
 		t.Fatalf("the title's own file read %x, %v", data, ok)
-	}
-}
-
-// TestLocalRecordTableArchive checks the recognized revision itself, from the
-// absolute path in WFEATURE_LGT_RECORD_TABLE_ARCHIVE: its module is selected,
-// the search for each of the two maps without a record runs past the table as
-// packaged, and leaves by the exit for a missing record once corrected.
-func TestLocalRecordTableArchive(t *testing.T) {
-	path := os.Getenv("WFEATURE_LGT_RECORD_TABLE_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_LGT_RECORD_TABLE_ARCHIVE")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	archive, err := Open(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !hasRecordTableTerminator(archive.Module) {
-		t.Fatal("the archive's module is not selected")
-	}
-	packaged, ok := archive.Resource(recordTableName)
-	if !ok {
-		t.Fatalf("the archive has no %s", recordTableName)
-	}
-	packaged = bytes.Clone(packaged)
-	client, err := Load(archive, Options{Width: 240, Height: 320})
-	if err != nil {
-		t.Fatal(err)
-	}
-	corrected, ok := client.titleFile(recordTableName)
-	if !ok || !bytes.Equal(corrected, append(bytes.Clone(packaged), recordTableEnd...)) {
-		t.Fatalf("the title read %d bytes for a %d-byte table", len(corrected), len(packaged))
-	}
-	for _, missing := range []byte{124, 126} {
-		if got := searchRecord(packaged, 0, missing); got != "past" {
-			t.Fatalf("map %d over the packaged table answered %s", missing, got)
-		}
-		if got := searchRecord(corrected, 0, missing); got != "end" {
-			t.Fatalf("map %d over the corrected table answered %s", missing, got)
-		}
-	}
-	if current, _ := archive.Resource(recordTableName); !bytes.Equal(current, packaged) {
-		t.Fatal("the archive's own copy changed")
 	}
 }

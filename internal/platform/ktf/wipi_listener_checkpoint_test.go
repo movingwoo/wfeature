@@ -10,6 +10,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -247,7 +248,7 @@ func newKTFWIPIBaseClip(t *testing.T, fixture *ktfWIPIListenerFixture) *jvm.Obje
 func TestKTFWIPIListenerCheckpointPreservesBaseClipPlayback(t *testing.T) {
 	fixture := newKTFWIPIListenerFixture(t)
 	fixture.clip = newKTFWIPIBaseClip(t, fixture)
-	data := oneNoteSMAF()
+	data := wipicrttest.OneNoteSMAF()
 	result, err := fixture.client.JVM().InvokeVirtual(fixture.clip, "setBuffer", "([BI)Z",
 		jvm.ReferenceValue(newByteArray(t, fixture.client, data)), jvm.IntValue(int32(len(data))))
 	if ok, valueErr := result.Int32(); err != nil || valueErr != nil || ok != 1 {

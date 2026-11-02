@@ -6,6 +6,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
 
 // listCall drives MC_fsList with a buffer of the given size and answers the
@@ -17,7 +18,7 @@ func listCall(t *testing.T, runtime *initializationRuntime, directory string, si
 	if err := runtime.client.Core().Memory().Write(buffer, fill); err != nil {
 		t.Fatal(err)
 	}
-	result := databaseCall(t, runtime, wipicrt.WIPICFileList, directory, buffer, size, 1)
+	result := wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileList, directory, buffer, size, 1)
 	got := make([]byte, size+8)
 	if err := runtime.client.Core().Memory().Read(buffer, got); err != nil {
 		t.Fatal(err)
@@ -59,7 +60,7 @@ func TestListNamesSavedFilesAfterARestart(t *testing.T) {
 	_, first := newTestRuntime(t)
 	first.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
 	for _, name := range []string{"slot1.sav", "slots/a", "slots/b", "gone.sav", "./dotted.sav"} {
-		databaseCall(t, first, wipicrt.WIPICFileOpen, name, 4)
+		wipicrttest.DatabaseCall(t, first.Runtime, wipicrt.WIPICFileOpen, name, 4)
 		first.CFiles[name].Data = []byte("progress " + name)
 		if err := first.CFiles[name].Persist(first.Runtime); err != nil {
 			t.Fatal(err)
@@ -68,18 +69,18 @@ func TestListNamesSavedFilesAfterARestart(t *testing.T) {
 	// The second is removed under the spelling it was made with, which the
 	// store keeps without its "." segment.
 	for _, name := range []string{"gone.sav", "./dotted.sav"} {
-		if got := int32(databaseCall(t, first, wipicrt.WIPICFileDelete, name, 1)); got != 0 {
+		if got := int32(wipicrttest.DatabaseCall(t, first.Runtime, wipicrt.WIPICFileDelete, name, 1)); got != 0 {
 			t.Fatalf("delete(%q) = %d", name, got)
 		}
 	}
-	if got := int32(databaseCall(t, first, wipicrt.WIPICFileMakeDirectory, "maps", 1)); got != 0 {
+	if got := int32(wipicrttest.DatabaseCall(t, first.Runtime, wipicrt.WIPICFileMakeDirectory, "maps", 1)); got != 0 {
 		t.Fatalf("mkdir = %d", got)
 	}
 
 	_, second := newTestRuntime(t)
 	second.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
 	second.client.Files = map[string][]byte{"res/title.png": {1}, "intro.dat": {2}}
-	databaseCall(t, second, wipicrt.WIPICFileOpen, "live.tmp", 4)
+	wipicrttest.DatabaseCall(t, second.Runtime, wipicrt.WIPICFileOpen, "live.tmp", 4)
 
 	result, got := listCall(t, second, "/", 64)
 	if result != 0 {
@@ -93,10 +94,10 @@ func TestListNamesSavedFilesAfterARestart(t *testing.T) {
 	if result, got = listCall(t, second, "slots", 16); result != 0 || !bytes.HasPrefix(got, []byte("a\x00b\x00\x00")) {
 		t.Fatalf("MC_fsList(slots) = %d, %q", result, got[:5])
 	}
-	if count := databaseCall(t, second, wipicrt.WIPICFileGetCounts, "/slots/", 1); count != 2 {
+	if count := wipicrttest.DatabaseCall(t, second.Runtime, wipicrt.WIPICFileGetCounts, "/slots/", 1); count != 2 {
 		t.Fatalf("MC_fsGetCounts(slots) = %d, want 2", count)
 	}
-	if count := databaseCall(t, second, wipicrt.WIPICFileGetCounts, "", 1); count != 6 {
+	if count := wipicrttest.DatabaseCall(t, second.Runtime, wipicrt.WIPICFileGetCounts, "", 1); count != 6 {
 		t.Fatalf("MC_fsGetCounts(root) = %d, want 6", count)
 	}
 }
@@ -109,7 +110,7 @@ func TestListAnswersTheSpecificationsFailures(t *testing.T) {
 	if result, got := listCall(t, runtime, "empty", 8); result != 0 || !bytes.HasPrefix(got, []byte{0, 0, 0xee}) {
 		t.Fatalf("MC_fsList(empty) = %d, %x", result, got[:3])
 	}
-	databaseCall(t, runtime, wipicrt.WIPICFileOpen, "a-long-file-name.sav", 4)
+	wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileOpen, "a-long-file-name.sav", 4)
 	// A buffer the list does not fit is refused and left as it was.
 	result, got := listCall(t, runtime, "", 8)
 	if result != wipicrt.WIPICErrorShortBuf || got[0] != 0xee {
@@ -127,27 +128,27 @@ func TestRemoveDirectory(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
 
-	if got := databaseCall(t, runtime, wipicrt.WIPICFileRemoveDirectory, "never", 1); got != wipicrt.WIPICErrorNotFound {
+	if got := wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileRemoveDirectory, "never", 1); got != wipicrt.WIPICErrorNotFound {
 		t.Fatalf("rmdir of a directory never made = %d, want M_E_NOENT", got)
 	}
-	databaseCall(t, runtime, wipicrt.WIPICFileMakeDirectory, "save", 1)
-	databaseCall(t, runtime, wipicrt.WIPICFileOpen, "save/slot", 4)
-	if got := databaseCall(t, runtime, wipicrt.WIPICFileRemoveDirectory, "save", 1); got != wipicrt.WIPICErrorNotEmpty {
+	wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileMakeDirectory, "save", 1)
+	wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileOpen, "save/slot", 4)
+	if got := wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileRemoveDirectory, "save", 1); got != wipicrt.WIPICErrorNotEmpty {
 		t.Fatalf("rmdir of a directory holding a file = %d, want M_E_NOTEMPTY", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileDelete, "save/slot", 1)); got != 0 {
+	if got := int32(wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileDelete, "save/slot", 1)); got != 0 {
 		t.Fatalf("delete = %d", got)
 	}
-	if got := int32(databaseCall(t, runtime, wipicrt.WIPICFileRemoveDirectory, "/save", 1)); got != 0 {
+	if got := int32(wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileRemoveDirectory, "/save", 1)); got != 0 {
 		t.Fatalf("rmdir of an empty directory = %d, want 0", got)
 	}
-	if got := databaseCall(t, runtime, wipicrt.WIPICFileExists, "save"); got != wipicrt.WIPICErrorNotFound {
+	if got := wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileExists, "save"); got != wipicrt.WIPICErrorNotFound {
 		t.Fatalf("exists after rmdir = %d, want M_E_NOENT", got)
 	}
 
 	_, second := newTestRuntime(t)
 	second.client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
-	if got := databaseCall(t, second, wipicrt.WIPICFileExists, "save"); got != wipicrt.WIPICErrorNotFound {
+	if got := wipicrttest.DatabaseCall(t, second.Runtime, wipicrt.WIPICFileExists, "save"); got != wipicrt.WIPICErrorNotFound {
 		t.Fatalf("the removed directory came back in a second session: exists = %d", got)
 	}
 }
@@ -155,7 +156,7 @@ func TestRemoveDirectory(t *testing.T) {
 func TestSetModeChecksTheModeAndTheFile(t *testing.T) {
 	_, runtime := newTestRuntime(t)
 	runtime.client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
-	databaseCall(t, runtime, wipicrt.WIPICFileOpen, "save.dat", 4)
+	wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileOpen, "save.dat", 4)
 
 	for _, check := range []struct {
 		name string
@@ -169,7 +170,7 @@ func TestSetModeChecksTheModeAndTheFile(t *testing.T) {
 		{"missing.dat", 1, wipicrt.WIPICErrorNotFound},
 		{"../outside", 1, wipicrt.WIPICErrorBadFileName},
 	} {
-		if got := databaseCall(t, runtime, wipicrt.WIPICFileSetMode, check.name, check.mode, 1); got != check.want {
+		if got := wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileSetMode, check.name, check.mode, 1); got != check.want {
 			t.Errorf("MC_fsSetMode(%q, %d) = %#x, want %#x", check.name, check.mode, got, check.want)
 		}
 	}

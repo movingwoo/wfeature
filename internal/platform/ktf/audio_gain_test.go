@@ -8,10 +8,11 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
 
 type audioGainProbe struct {
-	countingSink
+	wipicrttest.CountingSink
 	gains map[backend.AudioHandle]uint16
 	notes map[backend.AudioHandle][]uint8
 	stops map[backend.AudioHandle]int
@@ -75,7 +76,7 @@ func TestJavaAudioGainFollowsClipAndSharedDeviceControls(t *testing.T) {
 			t.Fatalf("guest result = %d, %v; want %d", got, err, want)
 		}
 	}
-	sound := oneNoteSMAF()
+	sound := wipicrttest.OneNoteSMAF()
 	buffer := newByteArray(t, client, sound)
 	newClip := func() *jvm.Object {
 		t.Helper()
@@ -135,7 +136,7 @@ func TestJavaAudioGainFollowsClipAndSharedDeviceControls(t *testing.T) {
 	wantGains(0, 8000)
 	setClip(first, 50, 50)
 	wantGains(4000, 8000)
-	mediaCall(t, runtime, wipicrt.WIPICMediaSetVolume, 40)
+	wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaSetVolume, 40)
 	wantInt(static(volumeClass, "get", "()I"), 40)
 	wantGains(2000, 4000)
 	static(volumeClass, "set", "(I)V", jvm.IntValue(-1))

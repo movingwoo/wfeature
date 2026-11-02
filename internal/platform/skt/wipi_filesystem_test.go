@@ -88,7 +88,7 @@ func TestWIPIStorageMembersAreServed(t *testing.T) {
 func wipiWriteFile(t *testing.T, runtime *Runtime, name string, data ...byte) {
 	t.Helper()
 	file := wipiStreamFile(t, runtime, name, wipiFileWriteTrunc)
-	if written := storeReviewInt(t, wipiStreamCall(t, runtime, file, "write", "([B)I", ruleBytes(data...))); written != int32(len(data)) {
+	if written := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "write", "([B)I", ruleBytes(data...))); written != int32(len(data)) {
 		t.Fatalf("write %q = %d", name, written)
 	}
 	wipiStreamCall(t, runtime, file, "close", "()V")
@@ -104,7 +104,7 @@ func wipiList(t *testing.T, runtime *Runtime, directory string, flag ...int32) (
 	if vector == nil || vector.ClassName != jvm.VectorClass {
 		t.Fatalf("list(%q) answered %v, want a Vector", directory, vector)
 	}
-	size := storeReviewInt(t, wipiStreamCall(t, runtime, vector, "size", "()I"))
+	size := storeInvokeInt(t, wipiStreamCall(t, runtime, vector, "size", "()I"))
 	names := make([]string, 0, size)
 	for index := range size {
 		element, _ := wipiStreamCall(t, runtime, vector, "elementAt", "(I)Ljava/lang/Object;", jvm.IntValue(index)).Reference()
@@ -123,7 +123,7 @@ func wipiFileSystemAsk(t *testing.T, runtime *Runtime, member, name string, flag
 	if err != nil {
 		t.Fatalf("FileSystem.%s(%q, %v): %v", member, name, flag, err)
 	}
-	return storeReviewInt(t, value) != 0
+	return storeInvokeInt(t, value) != 0
 }
 
 // wipiFileSystemCall calls a one-name FileSystem member, with the access flag
@@ -194,7 +194,7 @@ func TestWIPIFileSystemRoot(t *testing.T) {
 		if !wipiFileSystemAsk(t, runtime, "exists", root) || !wipiFileSystemAsk(t, runtime, "isDirectory", root) || wipiFileSystemAsk(t, runtime, "isFile", root) {
 			t.Fatalf("%q is not the root directory", root)
 		}
-		if created, err := wipiFileSystemCall(runtime, "getCreationTime", root); err != nil || storeReviewInt(t, created) != -1 {
+		if created, err := wipiFileSystemCall(runtime, "getCreationTime", root); err != nil || storeInvokeInt(t, created) != -1 {
 			t.Fatalf("getCreationTime(%q) = %v, %v", root, created, err)
 		}
 		if names, err := wipiList(t, runtime, root); err != nil || !slices.Equal(names, want) {
@@ -308,10 +308,10 @@ func TestWIPIStorageBackslashSeparatesSegments(t *testing.T) {
 			t.Fatalf("list(%q) = %q, %v; want the root's", spelling, names, err)
 		}
 	}
-	if size, err := wipiFileSystemCall(runtime, "sizeOf", `data\save.dat`); err != nil || storeReviewInt(t, size) != 2 {
+	if size, err := wipiFileSystemCall(runtime, "sizeOf", `data\save.dat`); err != nil || storeInvokeInt(t, size) != 2 {
 		t.Fatalf(`sizeOf(data\save.dat) = %v, %v`, size, err)
 	}
-	if created, err := wipiFileSystemCall(runtime, "getCreationTime", `data\save.dat`); err != nil || storeReviewInt(t, created) != 0 {
+	if created, err := wipiFileSystemCall(runtime, "getCreationTime", `data\save.dat`); err != nil || storeInvokeInt(t, created) != 0 {
 		t.Fatalf(`getCreationTime(data\save.dat) = %v, %v`, created, err)
 	}
 	if _, err := wipiFileSystemCall(runtime, "mkdir", `made\deep`); err != nil {
@@ -510,7 +510,7 @@ func TestWIPIFileSystemDirectories(t *testing.T) {
 	if names, _ := wipiList(t, runtime, "/"); !slices.Contains(names, "made") {
 		t.Fatalf("list(/) = %q, missing the made directory", names)
 	}
-	if created, err := wipiFileSystemCall(runtime, "getCreationTime", "made"); err != nil || storeReviewInt(t, created) != -1 {
+	if created, err := wipiFileSystemCall(runtime, "getCreationTime", "made"); err != nil || storeInvokeInt(t, created) != -1 {
 		t.Fatalf("getCreationTime(made) = %v, %v; want the directory's -1", created, err)
 	}
 	if err := call("mkdir", "made"); !wipiIOException(runtime, err) {
@@ -554,7 +554,7 @@ func TestWIPIFileSystemDirectories(t *testing.T) {
 	if err := call("rmdir", "a"); !wipiIOException(runtime, err) {
 		t.Fatalf("rmdir of a directory holding a made one: %v", err)
 	}
-	if created, err := wipiFileSystemCall(runtime, "getCreationTime", "plain", wipi.PrivateAccess); err != nil || storeReviewInt(t, created) != 0 {
+	if created, err := wipiFileSystemCall(runtime, "getCreationTime", "plain", wipi.PrivateAccess); err != nil || storeInvokeInt(t, created) != 0 {
 		t.Fatalf("getCreationTime(plain) = %v, %v; want 0, the store keeps no time", created, err)
 	}
 	if _, err := wipiFileSystemCall(runtime, "getCreationTime", "missing"); !wipiIOException(runtime, err) {
@@ -877,7 +877,7 @@ func TestWIPIFileWritesAreBoundedAt4MiB(t *testing.T) {
 		t.Fatalf("an output stream's write past 4 MiB: %v", err)
 	}
 	wipiStreamCall(t, runtime, file, "seek", "(I)V", jvm.IntValue(0))
-	if written := storeReviewInt(t, wipiStreamCall(t, runtime, file, "write", "([B)I", ruleBytes(7))); written != 1 {
+	if written := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "write", "([B)I", ruleBytes(7))); written != 1 {
 		t.Fatalf("a write within the bound = %d", written)
 	}
 	if ruleSize(t, runtime, "big") != wipiFileMaxBytes {
@@ -908,7 +908,7 @@ func TestWIPIFileSystemSmallMembersAndFileWriteByte(t *testing.T) {
 
 	file := wipiStreamFile(t, runtime, "bytes", wipiFileReadWrite)
 	for _, b := range []int32{0x41, 0x1ff} {
-		if written := storeReviewInt(t, wipiStreamCall(t, runtime, file, "write", "(I)I", jvm.IntValue(b))); written != 1 {
+		if written := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "write", "(I)I", jvm.IntValue(b))); written != 1 {
 			t.Fatalf("write(%#x) = %d, want 1", b, written)
 		}
 	}
@@ -922,5 +922,71 @@ func TestWIPIFileSystemSmallMembersAndFileWriteByte(t *testing.T) {
 	}
 	if got := ruleXRead(t, runtime, reader, 4); !bytes.Equal(got, []byte{0x41, 0xff}) {
 		t.Fatalf("written bytes read back %v", got)
+	}
+}
+
+// The WIPI File modes are an enumeration — 1 read-only, 2 append, 3 truncate,
+// 4 read-write — and not the XFile bits the same handle uses underneath.
+func TestWIPIFileModesFollowTheEnumeration(t *testing.T) {
+	store := backend.NewDirectorySaveStore(t.TempDir())
+	if err := store.StoreSave("fs/save", []byte{1, 2, 3, 4, 5}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := wipiStreamRuntime(t, store)
+	for name, want := range map[string]int32{"READ_ONLY": 1, "WRITE": 2, "WRITE_TRUNC": 3, "READ_WRITE": 4} {
+		value, err := runtime.VM.StaticField(wipi.FileClass, name, "I")
+		if err != nil || storeInvokeInt(t, value) != want {
+			t.Fatalf("File.%s = %v (%v), want %d", name, value, err, want)
+		}
+	}
+
+	file := wipiStreamFile(t, runtime, "save", wipiFileReadWrite)
+	buffer := jvm.NewByteArray(make([]byte, 2))
+	if count := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "read", "([B)I", jvm.ReferenceValue(buffer))); count != 2 {
+		t.Fatalf("READ_WRITE read = %d, want the existing save", count)
+	}
+	wipiStreamCall(t, runtime, file, "write", "([B)I", jvm.ReferenceValue(jvm.NewByteArray([]byte{9})))
+	wipiStreamCall(t, runtime, file, "close", "()V")
+	if data, _ := store.LoadSave("fs/save"); !bytes.Equal(data, []byte{1, 2, 9, 4, 5}) {
+		t.Fatalf("READ_WRITE save = %v, want the third byte rewritten in place", data)
+	}
+	wipiStreamFile(t, runtime, "fresh", wipiFileReadWrite)
+
+	file = wipiStreamFile(t, runtime, "save", wipiFileWriteTrunc)
+	if size := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "sizeOf", "()I")); size != 0 {
+		t.Fatalf("WRITE_TRUNC size = %d, want an emptied file", size)
+	}
+	wipiStreamCall(t, runtime, file, "write", "([B)I", jvm.ReferenceValue(jvm.NewByteArray([]byte{7})))
+	wipiStreamCall(t, runtime, file, "close", "()V")
+	if data, _ := store.LoadSave("fs/save"); !bytes.Equal(data, []byte{7}) {
+		t.Fatalf("WRITE_TRUNC save = %v, want only the new bytes", data)
+	}
+
+	file = wipiStreamFile(t, runtime, "save", wipiFileWrite)
+	if position := storeInvokeInt(t, wipiStreamCall(t, runtime, file, "tell", "()I")); position != 1 {
+		t.Fatalf("WRITE position = %d, want the end of the file", position)
+	}
+	wipiStreamCall(t, runtime, file, "write", "([B)I", jvm.ReferenceValue(jvm.NewByteArray([]byte{8})))
+	wipiStreamCall(t, runtime, file, "close", "()V")
+	if data, _ := store.LoadSave("fs/save"); !bytes.Equal(data, []byte{7, 8}) {
+		t.Fatalf("WRITE save = %v, want the new bytes appended", data)
+	}
+
+	// Truncating is the open itself, so closing without a write still empties.
+	file = wipiStreamFile(t, runtime, "save", wipiFileWriteTrunc)
+	wipiStreamCall(t, runtime, file, "close", "()V")
+	if data, ok := store.LoadSave("fs/save"); !ok || len(data) != 0 {
+		t.Fatalf("WRITE_TRUNC close = %v (%v), want an empty file", data, ok)
+	}
+
+	for _, mode := range []int32{0, 5} {
+		_, err := runtime.VM.NewObject(wipi.FileClass, "(Ljava/lang/String;I)V", jvm.ReferenceValue(runtime.VM.NewString("save")), jvm.IntValue(mode))
+		if !runtime.VM.IsGuestException(err, jvm.IOExceptionClass) {
+			t.Fatalf("mode %d error = %v, want IOException", mode, err)
+		}
+	}
+	_, err := runtime.VM.NewObject(wipi.FileClass, "(Ljava/lang/String;I)V", jvm.ReferenceValue(runtime.VM.NewString("missing")), jvm.IntValue(wipiFileReadOnly))
+	if !runtime.VM.IsGuestException(err, jvm.IOExceptionClass) {
+		t.Fatalf("READ_ONLY of a missing file error = %v, want IOException", err)
 	}
 }

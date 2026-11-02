@@ -1,6 +1,7 @@
 package lgt
 
 import (
+	"context"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -311,5 +312,53 @@ func TestFileInputStreamReadsFromTheFilesPosition(t *testing.T) {
 	// One byte was consumed before the stream and two through it.
 	if got := client.files[handle].cursor; got != 3 {
 		t.Errorf("the file is at %d after the stream closed, want 3", got)
+	}
+}
+
+func TestJavaByteSinkStopsAtTheLargestArrayItCouldBecome(t *testing.T) {
+	client := fixtureClient(t)
+	runtime := client.javaRuntimeState()
+	const sink = 0x7ffff000
+	if _, err := javaByteSinkConstructor(client, nil, nil, []uint32{sink}); err != nil {
+		t.Fatal(err)
+	}
+	array, err := client.newJavaByteArray([]byte{1, 2, 3, 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	writes := map[string]func() (uint32, error){
+		"write(I)":    func() (uint32, error) { return javaByteSinkWrite(client, ctx, nil, []uint32{sink, 7}) },
+		"write([BII)": func() (uint32, error) { return javaByteSinkWriteRange(client, ctx, nil, []uint32{sink, array, 0, 4}) },
+		"write([B)":   func() (uint32, error) { return javaByteSinkWriteAll(client, ctx, nil, []uint32{sink, array}) },
+		"writeInt":    func() (uint32, error) { return javaSinkAppend(4)(client, ctx, nil, []uint32{sink, 7}) },
+		"writeLong":   func() (uint32, error) { return javaSinkWriteLong(client, ctx, nil, []uint32{sink, 7, 0}) },
+		"writeUTF": func() (uint32, error) {
+			return javaSinkWriteUTF(client, ctx, nil, []uint32{sink, newTestString(t, client, "ab")})
+		},
+	}
+	for name, write := range writes {
+		// Room for exactly one byte: a write of one fits, a wider one does not.
+		runtime.sinks[sink] = make([]byte, maxJavaSinkBytes-1)
+		_, err := write()
+		if name == "write(I)" {
+			if err != nil {
+				t.Errorf("%s into the last free byte: %v", name, err)
+			}
+			if len(runtime.sinks[sink]) != maxJavaSinkBytes {
+				t.Errorf("%s left %d bytes, want %d", name, len(runtime.sinks[sink]), maxJavaSinkBytes)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("%s past the bound was taken", name)
+		}
+		if len(runtime.sinks[sink]) != maxJavaSinkBytes-1 {
+			t.Errorf("%s past the bound changed the sink to %d bytes", name, len(runtime.sinks[sink]))
+		}
+	}
+	runtime.sinks[sink] = make([]byte, maxJavaSinkBytes)
+	if _, err := javaByteSinkWrite(client, ctx, nil, []uint32{sink, 7}); err == nil {
+		t.Error("a byte past a full sink was taken")
 	}
 }

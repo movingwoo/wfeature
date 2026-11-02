@@ -667,7 +667,7 @@ func rootEntries(files *contractFiles) (int32, []string) {
 // not make "dir" a directory, and a title's own file "save.db" sits beside the
 // database "save" without touching it.
 func TestStorageContractDatabasesAreNoFiles(t *testing.T) {
-	client, store, _ := reviewFiles(t, nil)
+	client, store, _ := fileFixture(t, nil)
 	fixture := databaseFixture{t: t, client: client}
 	fixture.insert(fixture.mustOpen("save", 8, true), "kept")
 	fixture.insert(fixture.mustOpen("dir/scores", 8, true), "deep")
@@ -720,5 +720,26 @@ func TestStorageContractDatabasesAreNoFiles(t *testing.T) {
 		if got := string(databaseRecord(t, next, later.mustOpen(name, 8, false), 0)); got != want {
 			t.Errorf("in a later session database %q reads %q", name, got)
 		}
+	}
+}
+
+// A database made while the store refused the index stays a database the
+// listing names: the index waits in the session, the next create starts from
+// it rather than from the store's, and the store has both names once it takes
+// the index again.
+func TestADatabaseMadeWhileTheIndexWasRefusedIsListed(t *testing.T) {
+	client, store, _ := fileFixture(t, nil)
+	store.refuse = true
+	openFixtureDatabase(t, client, "first", 16)
+	store.refuse = false
+	if names := client.databaseNames(); !reflect.DeepEqual(names, []string{"first"}) {
+		t.Fatalf("while the index waits listDataBases answers %q", names)
+	}
+	openFixtureDatabase(t, client, "second", 16)
+	if names := client.databaseNames(); !reflect.DeepEqual(names, []string{"first", "second"}) {
+		t.Fatalf("listDataBases answers %q", names)
+	}
+	if got := store.held(databaseIndexKey); got != "first\nsecond" {
+		t.Fatalf("the index holds %q", got)
 	}
 }

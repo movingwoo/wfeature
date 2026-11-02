@@ -156,12 +156,12 @@ leaves the others at the compiler's guess:
 
 | Run | Driver | Ticks |
 |---|---|---|
-| an LGT Clet (Thumb), driven by a route | `TestLGTLoadCostProbe` in `internal/platform/lgt` | `PGO_LGT_TICKS`, 20,000 |
-| an LGT AOT Java title (mostly ARM), driven by a route | `TestLGTLoadCostProbe` | `PGO_LGT_TICKS`, 20,000 |
-| a KTF title | `TestSessionCostProbe` in `internal/webhost` | `PGO_KTF_TICKS`, 1,500 |
-| an SKT title, for `internal/jvm`, which no engine run reaches | `TestSessionCostProbe` | `PGO_SKT_TICKS`, 3,000 |
+| an LGT Clet (Thumb), driven by a route | `TestLocalLGTLoadCostProbe` in `internal/platform/lgt` | `PGO_LGT_TICKS`, 20,000 |
+| an LGT AOT Java title (mostly ARM), driven by a route | `TestLocalLGTLoadCostProbe` | `PGO_LGT_TICKS`, 20,000 |
+| a KTF title | `TestLocalSessionCostProbe` in `internal/webhost` | `PGO_KTF_TICKS`, 1,500 |
+| an SKT title, for `internal/jvm`, which no engine run reaches | `TestLocalSessionCostProbe` | `PGO_SKT_TICKS`, 3,000 |
 
-`TestSessionCostProbe` presses a fixed key cycle (`WFEATURE_PERF_KEYS=mash`) and
+`TestLocalSessionCostProbe` presses a fixed key cycle (`WFEATURE_PERF_KEYS=mash`) and
 encodes every picture and sound batch as the server does, so the encoder is
 profiled too. The archives and routes are local files under `var/` and are given
 on the command line (`PGO_LGT_CLET`, `PGO_LGT_CLET_ROUTE`, `PGO_LGT_JAVA`,

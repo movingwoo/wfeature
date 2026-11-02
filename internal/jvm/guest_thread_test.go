@@ -1,6 +1,8 @@
 package jvm
 
 import (
+	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -196,5 +198,70 @@ func TestWaitAsGuestThreadEndsWhenTheReasonEnds(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the wait was not cut short")
+	}
+}
+
+// A sleep or wait far longer than a session lasts still waits: it does not
+// wrap around to a negative duration that returns at once.
+func TestLongSleepDoesNotOverflow(t *testing.T) {
+	vm := New(libraryContractsSource(), Options{})
+	defer vm.Close()
+	result, err := vm.InvokeStatic("LibraryContracts", "sleepForever", "()Ljava/lang/Thread;")
+	if err != nil {
+		t.Fatalf("sleepForever() error = %v", err)
+	}
+	thread, err := result.Reference()
+	if err != nil || thread == nil {
+		t.Fatalf("sleepForever() = %v/%v", thread, err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := contractInt(t, vm, "sleeper"); got != 0 {
+		t.Fatalf("sleep(Long.MAX_VALUE) ended on its own with %d", got)
+	}
+	if _, err := vm.InvokeVirtual(thread, "interrupt", "()V"); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitForContract(t, vm, "sleeper", 0); got != 2 {
+		t.Fatalf("interrupted sleep ended with %d, want 2", got)
+	}
+
+	// The same on the Host's own pass, which is not a guest thread: it waits
+	// until the machine closes rather than returning at once.
+	done := make(chan error, 1)
+	go func() {
+		_, err := vm.InvokeStatic(ThreadClass, "sleep", "(J)V", LongValue(math.MaxInt64))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Host sleep(Long.MAX_VALUE) returned at once: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	vm.Close()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("Host sleep after Close error = %v, want ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Host sleep was not released by Close")
+	}
+
+	slow := New(nil, Options{Speed: func() float64 { return 0.5 }})
+	if got := slow.guestDelay(time.Duration(math.MaxInt64)); got <= 0 {
+		t.Fatalf("guestDelay of the longest wait at half speed = %v, want positive", got)
+	}
+}
+
+// An interrupt is consumed by the sleep that throws for it, so the next sleep
+// sleeps.
+func TestInterruptedSleepConsumesTheInterrupt(t *testing.T) {
+	vm := New(libraryContractsSource(), Options{})
+	defer vm.Close()
+	if _, err := vm.InvokeStatic("LibraryContracts", "interruptSelfThenSleepTwice", "()V"); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitForContract(t, vm, "interrupts", -1); got != 1 {
+		t.Fatalf("InterruptedExceptions from two sleeps after one interrupt = %d, want 1", got)
 	}
 }

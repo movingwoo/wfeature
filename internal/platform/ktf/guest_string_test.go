@@ -3,9 +3,11 @@ package ktf
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
@@ -101,5 +103,26 @@ func TestAGuestStringReadsAsItDidAByteAtATime(t *testing.T) {
 				t.Fatalf("at %#x for %d bytes: the walk left %q in its buffer, want %q", start, limit, buffer[:len(want)], want)
 			}
 		}
+	}
+}
+
+// toCString converts text, not a file name. Applying the name rules to it
+// turned a backslash into a slash and threw IOException, which toCString does
+// not declare, for 256 bytes of text or a name the store keeps for itself.
+// LGT, SKT and earlier builds here convert the text as it is.
+func TestToCStringConvertsTextAsItIs(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	for _, text := range []string{`C:\dir\x`, strings.Repeat("n", 300), ".dirs", "a/../b"} {
+		value, err := javaCall(t, runtime, client, runtimeFileSystemCString, javaName(client, text))
+		if err != nil {
+			t.Errorf("toCString(%.20q) = %v", text, err)
+			continue
+		}
+		if got := mustBytes(t, value); string(got) != text+"\x00" {
+			t.Errorf("toCString(%.20q) = %.24q, want the text and a NUL", text, got)
+		}
+	}
+	if _, err := javaCall(t, runtime, client, runtimeFileSystemCString, jvm.ReferenceValue(nil)); !isGuestException(err, "java/lang/NullPointerException") {
+		t.Errorf("toCString(null) = %v, want NullPointerException", err)
 	}
 }

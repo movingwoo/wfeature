@@ -1,6 +1,10 @@
 package armcore
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+)
 
 // A stand-in charges the instructions it stood in for, so the step count a
 // quantum reports has to be the one the interpreter would have reported for
@@ -87,5 +91,64 @@ func TestAQuantumReportsTheChargeItOverran(t *testing.T) {
 	}
 	if result.Steps < pixels {
 		t.Errorf("the quantum reported %d steps for a %d-pixel fill", result.Steps, pixels)
+	}
+}
+
+// limitHookSteps runs a Thumb fill of count halfwords followed by `b .` under
+// a step budget, and answers how many guest steps had been retired when the
+// limit hook was called for the stop-th time.
+func limitHookSteps(t *testing.T, refuse bool, budget uint64, count uint32, stop int) uint64 {
+	t.Helper()
+	core := NewCore(CoreOptions{MaxSteps: 1 << 20})
+	core.Memory().standInsRefused = refuse
+	loadThumb(t, core.Memory(), 0x1000,
+		0x8001, // strh r1, [r0]
+		0x3002, // adds r0, #2
+		0x3a01, // subs r2, #1
+		0xd2fb, // bhs  -10
+		0xe7fe, // b    .
+	)
+	if err := core.Memory().Map(0x4000, 0x1000, PermissionReadWrite); err != nil {
+		t.Fatal(err)
+	}
+	initial := NewContext()
+	if err := initial.SetPC(0x1001); err != nil {
+		t.Fatal(err)
+	}
+	initial.Registers[0] = 0x4000
+	initial.Registers[1] = 0xbeef
+	initial.Registers[2] = count
+	thread := NewThread(initial)
+	thread.SetStepBudget(budget)
+	calls := 0
+	var at uint64
+	finished := errors.New("enough windows")
+	thread.SetLimitHook(func(context.Context) error {
+		calls++
+		if calls == stop {
+			at = core.Steps()
+			return finished
+		}
+		return nil
+	})
+	if _, err := core.Run(context.Background(), thread, 0x3000, nil); !errors.Is(err, finished) {
+		t.Fatalf("Run() error = %v, want the hook's own stop", err)
+	}
+	return at
+}
+
+// A stand-in charges every instruction the loop it replaced would have
+// retired, which can be several budget windows at once. The windows it used
+// up have to reach the hook, which paces the guest by them, rather than being
+// dropped when the hook grants the next one.
+func TestALimitHookSeesTheWindowsAStandInUsedUp(t *testing.T) {
+	const budget, count, stop = 100, 200, 12
+	interpreted := limitHookSteps(t, true, budget, count, stop)
+	stood := limitHookSteps(t, false, budget, count, stop)
+	if interpreted != budget*stop {
+		t.Fatalf("interpreted run reached hook %d at step %d, want %d", stop, interpreted, budget*stop)
+	}
+	if stood != interpreted {
+		t.Fatalf("the stand-in run reached hook %d at step %d, the interpreted run at %d", stop, stood, interpreted)
 	}
 }

@@ -14,10 +14,12 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/platform/lgt"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
 	"github.com/movingwoo/wfeature/internal/platform/skt/clet"
+	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
 // sktFixture is the MIDlet that paints into whatever surface it is handed. It
@@ -51,93 +53,6 @@ func TestInspectNamesTheGameAndItsSaveOwner(t *testing.T) {
 	// platform or the Host cannot find a game's progress.
 	if summary.SaveOwner == "" {
 		t.Error("no save owner")
-	}
-}
-
-// localKTFNativeArchive finds the earlier KTF package in the ignored local
-// game directory. Real games are not in Git, so this is opt-in.
-func localKTFNativeArchive(t *testing.T) []byte {
-	t.Helper()
-	if os.Getenv("WFEATURE_KTF_NATIVE_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_KTF_NATIVE_ACCEPTANCE=1 to run the ignored local KTF native package")
-	}
-	entries, err := os.ReadDir(filepath.Join("..", "..", "var", "games", "ktf"))
-	if err != nil {
-		t.Skipf("read the local KTF game directory: %v", err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".zip" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join("..", "..", "var", "games", "ktf", entry.Name()))
-		if err != nil {
-			t.Fatalf("read %s: %v", entry.Name(), err)
-		}
-		if ktf.IsNativeArchive(data) {
-			return data
-		}
-	}
-	t.Skip("no local KTF native package present")
-	return nil
-}
-
-// The carrier's earlier download package reaches a Host through the same four
-// moves as everything else, and this is where that is checked: a Host has no
-// switch of its own, so a package the shared layer does not carry is a package
-// no Host can run.
-func TestTheEarlierKTFPackageIsOnePlatformNeutralSession(t *testing.T) {
-	archive := localKTFNativeArchive(t)
-	summary, err := Inspect(archive)
-	if err != nil {
-		t.Fatalf("Inspect: %v", err)
-	}
-	if summary.Platform != "ktf" {
-		t.Fatalf("platform = %q, want ktf — it is the same vendor in an earlier package", summary.Platform)
-	}
-	if summary.Name == "" || summary.SaveOwner == "" {
-		t.Fatalf("summary = %+v, want a name and a save owner", summary)
-	}
-
-	started, err := Start(context.Background(), archive, Options{})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer started.Close()
-	if !started.Running() {
-		t.Fatal("the session is not running after a successful start")
-	}
-	if width, height := started.Screen(); width != DefaultWidth || height != DefaultHeight {
-		t.Errorf("screen = %dx%d, want the handset's %dx%d", width, height, DefaultWidth, DefaultHeight)
-	}
-
-	// The title paces itself, so a tick answers with what is left of the
-	// interval it asked for. Ticking for that long and no longer is what a
-	// Host does with the answer.
-	painted := false
-	for round := 0; round < 400 && !painted; round++ {
-		progress, err := started.Tick(context.Background(), 0)
-		if err != nil {
-			t.Fatalf("tick %d: %v", round, err)
-		}
-		if progress.Flushes > 0 {
-			painted = true
-		}
-	}
-	if !painted {
-		t.Fatal("the title ended no frame")
-	}
-	frame, width, height, ok := started.Frame()
-	if !ok || width != DefaultWidth || height != DefaultHeight || len(frame) != width*height*4 {
-		t.Fatalf("frame = %d bytes at %dx%d (%v), want a full handset screen", len(frame), width, height, ok)
-	}
-	if elapsed, ok := started.GuestElapsed(); !ok || elapsed <= 0 {
-		t.Errorf("guest elapsed = %v (%v), want time to have passed", elapsed, ok)
-	}
-	// A key runs guest code, and the shared vocabulary is what a Host sends.
-	for _, action := range []string{KeyPress, KeyRelease} {
-		if err := started.SendKey(context.Background(), action, 148); err != nil {
-			t.Fatalf("send %s: %v", action, err)
-		}
 	}
 }
 
@@ -781,5 +696,92 @@ func TestAGuestThatEndedDuringItsStartIsAnEnding(t *testing.T) {
 	}
 	if err := startEndedOrFailed(nil); err != nil {
 		t.Fatalf("a start that worked answered %v", err)
+	}
+}
+
+// Closing an LGT session whose destroyClet never returns ends in closeWait:
+// the call is cut off there and the close returns. The call used to run under
+// a context that never ended, so such a title held a stopping server, and an
+// app reopened behind it, for ever.
+func TestClosingAnLGTSessionWhoseDestroyNeverReturnsEnds(t *testing.T) {
+	wait := closeWait
+	closeWait = 200 * time.Millisecond
+	t.Cleanup(func() { closeWait = wait })
+	archive, err := testfixture.LGTEndlessDestroyArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := backend.NewMemorySaveStore([]backend.SaveEntry{{Key: "fs/progress", Data: []byte("saved")}})
+	s, err := Start(t.Context(), archive, Options{SaveStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lgtCheckpointTicks(t, s, 2)
+	closed := make(chan struct{})
+	go func() {
+		s.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("closing the session still waits on a destroyClet that never returns")
+	}
+	if data, found, err := backend.ReadSave(store, "fs/progress"); err != nil || !found || string(data) != "saved" {
+		t.Fatalf("after the close the save holds %q (found=%t, err=%v)", data, found, err)
+	}
+}
+
+// A title whose menu quits on a held key ends inside the handset repeat a
+// tick delivers before it runs the guest. That ending carries its reason the
+// same as one from anywhere else: a Host reports exits from ExitReason, and
+// an ending with nothing attached reads as a crash.
+func TestAnEndingInsideAKeyRepeatKeepsItsReason(t *testing.T) {
+	running, clock := startSpeedChangeFixture(t, 1)
+	vm := running.KTF().Client.JVM()
+	const card = "test/QuitOnRepeat"
+	for name, descriptor := range map[string]string{
+		"showNotify": "(Z)V",
+		"paint":      "(Lorg/kwis/msp/lcdui/Graphics;)V",
+	} {
+		if err := vm.RegisterNative(card, name, descriptor, func(*jvm.VM, []jvm.Value) (jvm.Value, error) {
+			return jvm.VoidValue(), nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := vm.RegisterNative(card, "keyNotify", "(II)Z", func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		if eventType, _ := arguments[1].Int32(); eventType == ktf.KeyRepeated {
+			return jvm.VoidValue(), fmt.Errorf("Jlet.notifyDestroyed: %w", ktf.ErrGuestExited)
+		}
+		return jvm.IntValue(0), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	display := &jvm.Object{ClassName: "org/kwis/msp/lcdui/Display", Fields: map[string]jvm.Value{}}
+	quitting := &jvm.Object{ClassName: card, Fields: map[string]jvm.Value{}}
+	if _, err := vm.InvokeVirtual(display, "pushCard", "(Lorg/kwis/msp/lcdui/Card;)V", jvm.ReferenceValue(quitting)); err != nil {
+		t.Fatalf("push the quitting card: %v", err)
+	}
+
+	if _, err := running.Tick(t.Context(), 8*time.Millisecond); err != nil {
+		t.Fatalf("anchoring tick: %v", err)
+	}
+	if err := running.SendKey(t.Context(), KeyPress, '5'); err != nil {
+		t.Fatalf("press: %v", err)
+	}
+	clock.Advance(600 * time.Millisecond)
+	progress, err := running.Tick(t.Context(), 8*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if !progress.Exited {
+		t.Fatalf("progress = %+v, want the repeat to have ended the game", progress)
+	}
+	if !strings.Contains(progress.ExitReason, "Jlet.notifyDestroyed") {
+		t.Fatalf("ExitReason = %q, want the platform's own text", progress.ExitReason)
+	}
+	if progress.ExitReason != running.ExitReason() {
+		t.Fatalf("ExitReason = %q, session recorded %q", progress.ExitReason, running.ExitReason())
 	}
 }

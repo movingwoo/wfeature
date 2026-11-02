@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
@@ -173,23 +172,5 @@ func TestSubscriberReceiptRequiresRecognizedExecutable(t *testing.T) {
 	a := &Archive{Files: files, JAR: &JAR{Client: ClientImage{Data: []byte("unrecognized")}, Entries: map[string][]byte{"work.bar": table}}}
 	if got := authenticationSubscriberReceipt(base, a, "01024681357"); got != base {
 		t.Fatal("unrecognized executable adapted")
-	}
-}
-func TestLocalSubscriberReceiptRecognition(t *testing.T) {
-	path := os.Getenv("WFEATURE_KTF_RECEIPT_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_KTF_RECEIPT_ARCHIVE")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	archive, err := Open(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := wipicrt.NewDirectorySaveStore(t.TempDir())
-	if _, ok := authenticationSubscriberReceipt(base, archive, "01012349876").(*subscriberReceiptStore); !ok {
-		t.Fatal("local receipt revision not recognized")
 	}
 }

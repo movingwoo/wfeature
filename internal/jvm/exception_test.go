@@ -28,3 +28,26 @@ type emptyClassSource struct{}
 func (emptyClassSource) ClassBytes(string) ([]byte, bool) {
 	return nil, false
 }
+
+// An empty message is a message: getMessage answers "" and toString keeps
+// the separator, where a missing one answers null.
+func TestThrowableKeepsAnEmptyMessage(t *testing.T) {
+	vm := New(libraryContractsSource(), Options{})
+	if got := contractInt(t, vm, "emptyMessageLength"); got != 0 {
+		t.Fatalf("new Exception(\"\").getMessage().length() = %d, want 0", got)
+	}
+	if got := contractString(t, vm, "emptyMessageText"); got != "java.lang.Exception: " {
+		t.Fatalf("new Exception(\"\").toString() = %q", got)
+	}
+	empty, err := vm.NewObject("java/lang/Exception", "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := vm.InvokeVirtual(empty, "getMessage", "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if object, _ := message.Reference(); object != nil {
+		t.Fatalf("new Exception().getMessage() = %v, want null", object)
+	}
+}

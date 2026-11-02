@@ -4,7 +4,11 @@ import (
 	"bytes"
 	_ "embed"
 	"math"
+	"slices"
+	"strings"
 	"testing"
+
+	"golang.org/x/text/encoding/korean"
 )
 
 //go:embed testdata/Streams.class
@@ -110,5 +114,76 @@ func TestDataOutputStreamCanonicalizesNaNThroughTheInterface(t *testing.T) {
 				t.Fatalf("%s(noncanonical NaN) = % x, want canonical % x", probe.method, got, probe.want)
 			}
 		})
+	}
+}
+
+// A record is read until the stream runs out, and the end is told apart from
+// a broken stream by the exception's class: DataInput raises EOFException,
+// and a handler written for it must see one.
+func TestDataInputRaisesEOFExceptionAtTheEnd(t *testing.T) {
+	vm := New(libraryContractsSource(), Options{})
+	if got := contractInt(t, vm, "readIntPastEnd"); got != 1 {
+		t.Fatalf("readInt past the end took branch %d, want 1 (EOFException)", got)
+	}
+	if got := contractInt(t, vm, "readRecordsUntilEnd"); got != 7 {
+		t.Fatalf("readShort until the end = %d, want 7", got)
+	}
+	if got := contractInt(t, vm, "readUTFPastEnd"); got != 1 {
+		t.Fatalf("readUTF past the end took branch %d, want 1 (EOFException)", got)
+	}
+}
+
+func readerUnits(t *testing.T, vm *VM, data []byte) []uint16 {
+	t.Helper()
+	result, err := vm.InvokeStatic("LibraryContracts", "readerUnits", "([B)[C", ReferenceValue(NewByteArray(data)))
+	if err != nil {
+		t.Fatalf("readerUnits(% x) error = %v", data, err)
+	}
+	array, err := result.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, values, err := ArraySnapshot(array)
+	if err != nil {
+		t.Fatal(err)
+	}
+	units := make([]uint16, len(values))
+	for index, value := range values {
+		unit, _ := value.Int32()
+		units[index] = uint16(unit)
+	}
+	return units
+}
+
+// A byte the charset cannot read is one replacement character, and the bytes
+// after it are read as what they are. A character outside the basic plane is
+// the two units of its surrogate pair.
+func TestInputStreamReaderKeepsTheBytesAfterABadOne(t *testing.T) {
+	utf8 := New(libraryContractsSource(), Options{})
+	for _, probe := range []struct {
+		data []byte
+		want []uint16
+	}{
+		{[]byte{0xff, 'A', 'B', 'C'}, []uint16{0xfffd, 'A', 'B', 'C'}},
+		{[]byte{0xe0, 'A'}, []uint16{0xfffd, 'A'}},
+		{[]byte("가😀!"), []uint16{0xac00, 0xd83d, 0xde00, '!'}},
+		{[]byte{'A', 0xe0}, []uint16{'A', 0xfffd}},
+	} {
+		if got := readerUnits(t, utf8, probe.data); !slices.Equal(got, probe.want) {
+			t.Errorf("UTF-8 reader over % x = %x, want %x", probe.data, got, probe.want)
+		}
+	}
+
+	euckr := New(libraryContractsSource(), Options{ByteDecoder: func(data []byte) string {
+		decoded, err := korean.EUCKR.NewDecoder().Bytes(data)
+		if err != nil {
+			return strings.ToValidUTF8(string(data), "�")
+		}
+		return string(decoded)
+	}})
+	data := []byte{0xb0, 0xa1, 0xff, 'A', 'B', 0xb0, 0xa1}
+	want := []uint16{0xac00, 0xfffd, 'A', 'B', 0xac00}
+	if got := readerUnits(t, euckr, data); !slices.Equal(got, want) {
+		t.Errorf("EUC-KR reader over % x = %x, want %x", data, got, want)
 	}
 }

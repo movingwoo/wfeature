@@ -237,7 +237,7 @@ func TestStorageContractJavaRemove(t *testing.T) {
 // A removal the store refuses is IOException to both forms of remove, and
 // the file is still there.
 func TestStorageContractJavaRemoveRefused(t *testing.T) {
-	client, store, _ := reviewFiles(t, map[string]string{"fs/save.dat": "kept"})
+	client, store, _ := fileFixture(t, map[string]string{"fs/save.dat": "kept"})
 	store.refuse = true
 	for key, flag := range map[string][]uint32{fsRemove: nil, fsRemoveIn: {1}} {
 		arguments := append([]uint32{newTestString(t, client, "save.dat")}, flag...)
