@@ -160,6 +160,12 @@ export class PageAudio {
     this.lateAt = null;
     this.presentationInterrupted = false;
     this.scheduledTime = null;
+    // Seconds every sound is held back beyond the lead, for a picture that
+    // reaches the eye later than the sound reaches the ear (av-sync.js). A
+    // change waits for a rebuilt timeline rather than moving sounds already
+    // scheduled, which could put a release in front of its attack.
+    this.extraDelay = 0;
+    this.extraDelayChanged = false;
     this.master = null;
     // Melody and sound effects get their own gain so the page's two sliders
     // can trade them off: on these games the music is continuous and the
@@ -630,6 +636,14 @@ export class PageAudio {
     return Math.pow(2, bendSemitones / 12);
   }
 
+  // setExtraDelay holds every sound back this many seconds more, up to one.
+  setExtraDelay(seconds) {
+    const delay = Number.isFinite(seconds) ? Math.min(1, Math.max(0, seconds)) : 0;
+    if (delay === this.extraDelay) return;
+    this.extraDelay = delay;
+    this.extraDelayChanged = true;
+  }
+
   // A timed batch ends with the server's current presentation clock. Check
   // the whole batch before scheduling any node: a delayed packet must recover
   // current output instead of compressing its history onto one render block.
@@ -660,10 +674,15 @@ export class PageAudio {
       return null;
     }
     if (this.presentationInterrupted && !reset) return false;
+    // A changed delay asks for the current output, as an out-of-window batch
+    // does: the rebuilt timeline is anchored with the new lead, and nothing
+    // already scheduled is moved.
+    if (this.extraDelayChanged && !reset && this.presentationAnchor !== null) return false;
+    this.extraDelayChanged = false;
     const current = context.currentTime;
     const latency = Number.isFinite(context.baseLatency) ? context.baseLatency : 0;
-    const lead = Math.min(0.25, Math.max(0.1, latency));
-    const horizon = current + 0.35;
+    const lead = Math.min(0.25, Math.max(0.1, latency)) + this.extraDelay;
+    const horizon = current + 0.35 + this.extraDelay;
     let anchor = (!reset && this.presentationAnchor) || { audio: current + lead, presentation: clock.at };
     let refused = null;
     let lateBy = 0;
@@ -800,7 +819,7 @@ export class PageAudio {
     if (this.scheduledTime !== null) return this.scheduledTime;
     const current = this.context.currentTime;
     const wall = performance.now() / 1000;
-    const lead = Math.min(0.25, Math.max(0.01, this.context.baseLatency || 0));
+    const lead = Math.min(0.25, Math.max(0.01, this.context.baseLatency || 0)) + this.extraDelay;
     let at = this.scheduleAnchor && this.scheduleAnchor.audio + wall - this.scheduleAnchor.wall;
     if (at === null || at < current || this.context.state !== "running") {
       at = current + lead;

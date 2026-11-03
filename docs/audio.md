@@ -634,6 +634,19 @@ from 0.10 s to 0.23 s and back to about 0.10 s three to four seconds later; an
 ordinary session moves the anchor a few tens of milliseconds as its first
 batches settle ([runs](testing.md#anchor-steering)).
 
+The settings panel's 화면·소리 맞춤 slider moves the picture and the sound
+against each other (`web/av-sync.js`), for an output the browser cannot see
+into: a Bluetooth headset leaves the sound behind the picture by more than the
+lead. Its setting, −500 to +1,000 ms in steps of 10, is held for the browser
+(`wfeature:avSync`) and carried by the settings file. A positive value holds
+each composed picture back that long: the receiver lends one canvas, so a held
+picture is a copy, shown on the animation frame it falls due with the dirty
+area of every picture it skipped, at most 64 MiB of copies before the oldest
+waiting one is dropped. A negative value joins the sound's lead, and the
+horizon moves with it. Moving sounds already scheduled could put a release in
+front of its attack, so a changed sound delay refuses the next batch, which
+asks for the current output, and the rebuilt timeline takes the new lead.
+
 A batch later than 200 ms still asks, because the output it would continue is
 by then further from the truth than a rebuild. The request is negotiated and
 output-epoch checked. Definitions are invalidated too, so a malformed first

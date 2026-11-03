@@ -443,3 +443,47 @@ test("all-off immediately cancels future and retired sources before replacing th
   assert.equal(audio.sources.size, 0);
   assert.equal(audio.presentationAnchor, null);
 });
+
+// Picture against sound (av-sync.js): a sound delay joins the lead, so the
+// first timed sound is scheduled that much later than one lead ahead.
+test("a sound delay schedules the timeline that much later", t => {
+  const { audio, sources } = setup(t);
+  audio.setExtraDelay(0.3);
+  assert.equal(playAudioEvents(audio, [
+    { kind: "allOff" },
+    { kind: "noteOn", sound: 1, note: 60, velocity: 100, at: 0 },
+    { kind: "clock", at: 0 },
+  ]), true);
+  close(sources[0].started, 1 + 0.1 + 0.3);
+});
+
+// Moving sounds already scheduled could put a release in front of its attack,
+// so a changed delay asks for the current output and the rebuilt timeline
+// takes the new lead; what was scheduled before stays where it was.
+test("a changed sound delay rebuilds the timeline instead of moving it", t => {
+  const { audio, sources } = setup(t);
+  assert.equal(playAudioEvents(audio, [
+    { kind: "allOff" },
+    { kind: "noteOn", sound: 1, note: 60, velocity: 100, at: 0 },
+    { kind: "clock", at: 0 },
+  ]), true);
+  const first = sources[0].started;
+  close(first, 1.1);
+  audio.setExtraDelay(0.2);
+  audio.context.currentTime += 0.05;
+  assert.equal(playAudioEvents(audio, [
+    { kind: "noteOff", sound: 1, note: 60, at: 0.05 },
+    { kind: "clock", at: 0.05 },
+  ]), false, "the batch after a change asks for the current output");
+  close(sources[0].started, first);
+  assert.equal(playAudioEvents(audio, [
+    { kind: "allOff" },
+    { kind: "noteResume", sound: 1, note: 60, velocity: 100, age: 50, at: 0.05 },
+    { kind: "clock", at: 0.05 },
+  ]), true);
+  close(sources.at(-1).started, 1.05 + 0.1 + 0.2);
+  // Setting the same delay again changes nothing.
+  audio.setExtraDelay(0.2);
+  audio.context.currentTime += 0.05;
+  assert.equal(playAudioEvents(audio, [{ kind: "clock", at: 0.1 }]), true);
+});
