@@ -18,8 +18,11 @@ the combined image and BSS are limited to 256 MiB. A duplicate entry is
 inflated to be compared with the first and counts against the 512 MiB
 expansion bound like any other. It maps the image at
 `0x00100000`, enters Thumb code at `0x00100001`, and validates the returned
-initialization and class metadata before using it. Saves belong to the
-descriptor's PID, or to its AID when the PID is absent.
+initialization and class metadata before using it. The callbacks table its
+initialization is handed answers slots 0 to 11 and slot 20, which one runtime
+generation asks for an object's class record
+([history](history/ktf.md#ktf-new-archives-2026-11-03-object-class)). Saves
+belong to the descriptor's PID, or to its AID when the PID is absent.
 
 An older generation carries a relocatable module in the same `client.bin<BSS>`
 entry: a header naming the BSS size and a relocation table, then a segment

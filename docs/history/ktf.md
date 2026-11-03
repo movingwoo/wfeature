@@ -10138,3 +10138,42 @@ one moves between runs of either build, and eight existing KTF titles move
 every run. Their last frames show the same screen at another point of its
 animation — the clock that now moves during `startApp` — and every one runs
 all 500 ticks under both builds.
+
+<a id="ktf-new-archives-2026-11-03"></a>
+
+## Newly added archives — 2026-11-03
+
+A batch of plaintext WIPI 2.0 KTF archives, two LGT archives of one title and a
+repackaged KTF archive, launched by hand. Two of the stops were this platform's
+and are fixed below.
+
+<a id="ktf-new-archives-2026-11-03-object-class"></a>
+
+### The callbacks table's slot 20
+
+One title failed in `startApp` with `execute guest memory at 0x74636568`. Its
+AOT runtime resolves a field reference the first time it is used and checks
+access as it does: it hands the object being written to slot 20 of the
+initialization callbacks table (`[table+0x50]`) and walks the superclass chain
+of the class record that comes back. Its array store asks the same slot for the
+array's class before reading the element class at the descriptor's `+0x14`,
+where the other generations read the object header's second word themselves.
+The table stopped at slot 11, so the guest branched through the next words of
+the arena: the name of `java/lang/Object`, `"ject"`. Of the 330 local client
+images, this runtime is the only one that calls the slot.
+
+Slot 20 now answers the class record the object's header names
+(`initSVCJavaObjectClass`, through `aotObjectClassAddress`), for an instance
+and an array alike; slots 12 to 19 stay empty, since nothing calls them. The
+same runtime also reads slot 7, from the root enumerator the client exports at
+`WipiExe` word 8 for a collector to call, which this platform never calls, and
+slot 10, from `startClet`'s argument copy, which runs only for a non-empty
+argument array; neither is reached. The title shows its own start notice, its
+user authentication fails offline and it carries on, as it does without a
+network, and it reaches its menu and its first map.
+`TestInitializationCallbackSlotTwentyAnswersAnObjectsClass` fails without the
+slot.
+
+A checkpoint carries its arena and its stub table, so one taken before this
+change keeps the twelve-slot table it was taken with. A fresh session places
+everything allocated after the table 36 bytes later.
