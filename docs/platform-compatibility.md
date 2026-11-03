@@ -46,7 +46,7 @@ fixes require `native_module`.
 
 ### Registered fixes
 
-The registry holds 18 entries (last changed 2026-10-30). The `evidence` field of
+The registry holds 19 entries (last changed 2026-11-03). The `evidence` field of
 each entry is the authoritative index; this table groups them by fix.
 
 | Fix | Entries | Effect | Evidence |
@@ -62,6 +62,7 @@ each entry is the authoritative index; this table groups them by fix.
 | `lgt.wide_exclusive_clip` | 1 | Keeps the wide context's clip ends exclusive | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-second-color-report-wide-context-proof) |
 | `lgt.save_subscriber_identity` | 1 | Lets a recognized save reader accept a foreign subscriber identity | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison) |
 | `lgt.certificate_message` | 2 | Selects the recognized two-stage local certificate exchange | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility), [second revision](history/lgt.md#lgt-new-archives-2026-10-19-certificate-message) |
+| `lgt.packaged_certificate` | 1 | Serves an archive's own packaged certificate at the bare name the title opens it by | [LGT QA](history/lgt.md#lgt-new-archives-2026-11-03-packaged-certificate) |
 | `lgt.record_table_terminator` | 1 | Appends the end sequence a record-table search stops on, which the packaged table lacks | [LGT QA](history/lgt.md#lgt-qa-2026-10-28-unterminated-record-table) |
 | `skt.native_discard_owner_state` | 1 | Withholds a recognized device dump's install directory so the game starts fresh | [SKT native](skt-native.md#skt-native-identity-discard) |
 | `skt.native_save_identity` | 1 | Lets a recognized native executable accept its packaged save's handset digits | [SKT native](skt-native.md#skt-native-identity-save) |

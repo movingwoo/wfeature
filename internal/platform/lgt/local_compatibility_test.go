@@ -258,3 +258,48 @@ func TestLocalRecordTableArchive(t *testing.T) {
 		t.Fatal("the archive's own copy changed")
 	}
 }
+
+// The packaged-certificate fix aliases a recognized archive's shipped
+// certificate to the bare name the title opens it by. The original archive
+// recognizes it; a byte changed in the module does not, so no alias is added.
+func TestLocalPackagedCertificateArchive(t *testing.T) {
+	path := testlocal.Value(t, "WFEATURE_LGT_PACKAGED_CERTIFICATE_ARCHIVE", "a local archive")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := Open(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served, ok := archive.Resource(certificateBareName)
+	if !ok {
+		t.Fatalf("the recognized archive does not serve %q", certificateBareName)
+	}
+	var packaged []byte
+	for name, bytes := range archive.Packaged {
+		if filepathBase(name) == certificateBareName {
+			packaged = bytes
+		}
+	}
+	if packaged == nil || string(served) != string(packaged) {
+		t.Fatalf("%q is not served from the packaged certificate", certificateBareName)
+	}
+	if !packagedCertificateRecognized(archive.Module) {
+		t.Fatal("the original module is not recognized")
+	}
+	changed := append([]byte(nil), archive.Module...)
+	changed[len(changed)/2] ^= 0xff
+	if packagedCertificateRecognized(changed) {
+		t.Fatal("a changed module is still recognized")
+	}
+}
+
+func filepathBase(name string) string {
+	for i := len(name) - 1; i >= 0; i-- {
+		if name[i] == '/' {
+			return name[i+1:]
+		}
+	}
+	return name
+}

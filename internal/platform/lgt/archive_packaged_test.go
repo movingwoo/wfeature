@@ -161,3 +161,37 @@ func removeAll(names []string, name string) []string {
 	}
 	return kept
 }
+
+// A title whose online certificate exchange cannot complete offline reads its
+// certificate from the bare name its save holds; the archive ships it under a
+// directory, where the bare name does not reach it. For a recognized archive
+// the shipped certificate is aliased to the bare name. The alias is added only
+// when the module is recognized, and a certificate the save holds wins.
+func TestAliasPackagedCertificate(t *testing.T) {
+	packaged := map[string][]byte{
+		"somedir/c.nm":   []byte("present"),
+		"somedir/hd.nm":  []byte("data"),
+		"img/picture.ir": []byte("art"),
+	}
+	if got := aliasPackagedCertificate(packaged, nil, false); got != nil {
+		t.Errorf("an unrecognized archive got an alias: %v", got)
+	}
+	got := aliasPackagedCertificate(packaged, nil, true)
+	if string(got[certificateBareName]) != "present" {
+		t.Errorf("c.nm = %q, want the packaged certificate", got[certificateBareName])
+	}
+	if _, aliased := got["hd.nm"]; aliased {
+		t.Error("a non-certificate packaged file was aliased")
+	}
+	// An archive that ships no certificate is left alone, so the bare name is
+	// not created out of nothing.
+	if got := aliasPackagedCertificate(map[string][]byte{"img/a.ir": nil}, nil, true); got != nil {
+		t.Errorf("an archive with no c.nm got an alias: %v", got)
+	}
+	// An existing supplemental map is extended, not replaced.
+	base := map[string][]byte{"other": []byte("x")}
+	got = aliasPackagedCertificate(packaged, base, true)
+	if string(got["other"]) != "x" || string(got[certificateBareName]) != "present" {
+		t.Errorf("supplemental was not extended in place: %v", got)
+	}
+}

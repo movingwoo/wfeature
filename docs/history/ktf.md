@@ -10198,3 +10198,43 @@ It runs before the two checksum repairs, whose walks stop at a chunk that runs
 past the data. All three platforms' image routers end in `wipic.DecodeStandard`,
 so the tolerance is the same on each. The title reaches its menu and a mission.
 `TestAPictureCutShortInItsEndStillDecodes` fails without the repair.
+
+<a id="ktf-new-archives-2026-11-03-rest"></a>
+
+### The rest of the batch
+
+- **A title that needs its server.** Its first run restarts itself by design;
+  the second asks to authenticate once and to accept advertising messages, and
+  either answer dials. The dial fails as every dial here does, and the title's
+  own failure path draws a dialog over a screen whose image is loaded only after
+  a successful login, reading through a null image. Nothing here can stand in
+  for the server.
+- **A title that is slow, and its server prompts.** Its "connecting" dialogs are
+  its ranking server being refused, which it reports and recovers from. The
+  slowness was its software renderer; see
+  [the keyed blit and the tint fill](armcore.md#implementation-a-keyed-blit-and-a-tint-fill-2026-11-03).
+- **A first run that fails once.** A title finds the packaged saves of the
+  handset the archive was dumped from, deletes them as another handset's, and
+  then reads through a pointer the deleted saves would have set. Its second run
+  starts from its own new saves and plays.
+- **A repackaged archive** whose descriptor names one application id and whose
+  JAR is named after another is refused as having no JAR for its id; renaming
+  the JAR after the descriptor's id is the whole repair. It is the only such
+  archive of the 334 local KTF descriptor packages.
+- Two titles carry the previous owner's licence or authentication state,
+  bound to the handset the archive was dumped from, and stop on it here; they
+  are not adapted yet. The LGT title of the batch that stopped on its own
+  certificate dialog reads the certificate its archive ships
+  ([packaged certificate](lgt.md#lgt-new-archives-2026-11-03-packaged-certificate)).
+
+<a id="ktf-new-archives-2026-11-03-validation"></a>
+
+### Validation
+
+Unit tests for the slot, the PNG end, the two stand-ins and the packaged
+certificate; `make test`, `make test-debug`, `go test -race ./internal/...` and
+`go vet ./...`. Each fixed title was run past where it stopped. The 611 local
+archives at 500 ticks from an empty save, under the build before these changes
+and with them: the KTF and LGT ones end on the same digest except the two
+titles that now start, one of each, and the SKT ones that moved also move
+between runs of either build.

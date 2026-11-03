@@ -8387,3 +8387,34 @@ daylight saving reported, which is what the SKT Clet library reports. Run for
 before, so none of them shows the time that early. `TestLocaltimeAnswersAStructRatherThanNull`
 now builds its instant in the local zone, and in a zone other than UTC it fails
 on the old code.
+
+<a id="lgt-new-archives-2026-11-03-packaged-certificate"></a>
+
+## A packaged certificate served at the name a title opens — 2026-11-03
+
+One archive stops on its own certificate dialog on a fresh save: "인증서가
+없습니다 … 인증서를 받으시겠습니까?", and choosing to receive one dials the
+publisher's server (the same endpoint two `lgt-certificate-message`
+revisions already reach), which is not there. The title opens its certificate
+by the bare name `c.nm`, which its save holds; an empty save has none, so the
+title asks.
+
+The archive ships the certificate the title wants — a 20-byte presence record,
+no subscriber identity in it — under a directory of its own, where the bare
+name does not reach it. For the recognized module (SHA-256
+`b27f192f95bed260aa55e3da44c0f2948ad174876b28db1f6b21078805d4e635`, registry
+`lgt-packaged-certificate-001`, fix `lgt.packaged_certificate`) the shipped
+certificate is aliased to the bare name, so a first run reads it present and
+reaches the title and menu rather than the dialog. `readFile` answers a save
+before any packaged file, so a certificate the title writes still wins, and
+nothing is written to the save by the alias. The exchange is not modelled: its
+second request is a seven-byte query (`00 07 00 1e 00 04 31`) rather than the
+seventy-nine-byte handset record the two existing revisions send, so it is a
+different protocol variant, and serving the shipped certificate is both simpler
+and the certificate the archive already carries.
+
+The cash-shop repack of the same title has a different module, already patched
+past its own authentication, and is not recognized. No other local LGT archive
+ships a `c.nm`, so the alias is added for this module alone and every other
+archive is byte-identical. Choosing to receive a certificate offline is the
+case served here.

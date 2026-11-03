@@ -7,6 +7,8 @@ package lgt
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"path"
@@ -16,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/platform/detect"
 	"github.com/movingwoo/wfeature/internal/zipentry"
 )
@@ -153,6 +156,47 @@ func ParseDescriptor(data []byte) (Descriptor, error) {
 }
 
 // Open reads an LGT archive: a zip holding app_info and the game's JAR.
+// certificateBareName is the name a recognized title opens its certificate by,
+// which its archive ships under a directory rather than at this bare name.
+const certificateBareName = "c.nm"
+
+// moduleDigest is the lowercase hex SHA-256 the compatibility registry keys a
+// native module by.
+func moduleDigest(module []byte) string {
+	sum := sha256.Sum256(module)
+	return hex.EncodeToString(sum[:])
+}
+
+// packagedCertificateRecognized reports whether the registry selects the
+// packaged-certificate fix for this module.
+func packagedCertificateRecognized(module []byte) bool {
+	return compatibility.HasFix("lgt", compatibility.NativeModule, moduleDigest(module), compatibility.LGTPackagedCertificate)
+}
+
+// aliasPackagedCertificate adds the recognized archive's shipped certificate at
+// the bare name the title opens it by. A title whose online certificate
+// exchange cannot complete offline reads its certificate from a bare name its
+// save holds; the archive ships that certificate under a directory of its own,
+// where the bare name does not reach it, so a first run stops on the
+// certificate dialog. The alias lets the first run read it present instead. A
+// certificate the title later writes is a save, which readFile answers before
+// any packaged file, so it still wins, and nothing is written to the save here.
+// See docs/history/lgt.md#lgt-new-archives-2026-11-03-packaged-certificate.
+func aliasPackagedCertificate(packaged, supplemental map[string][]byte, recognized bool) map[string][]byte {
+	if !recognized {
+		return supplemental
+	}
+	for name, data := range packaged {
+		if filepath.Base(name) == certificateBareName {
+			if supplemental == nil {
+				supplemental = map[string][]byte{}
+			}
+			supplemental[certificateBareName] = data
+		}
+	}
+	return supplemental
+}
+
 func Open(data []byte) (*Archive, error) {
 	files, err := readZIP(data, "LGT archive")
 	if err != nil {
@@ -198,6 +242,7 @@ func Open(data []byte) (*Archive, error) {
 	if err != nil {
 		return nil, err
 	}
+	supplemental = aliasPackagedCertificate(packaged, supplemental, packagedCertificateRecognized(module))
 	return &Archive{
 		Descriptor:   descriptor,
 		Module:       module,
