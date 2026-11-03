@@ -305,6 +305,34 @@ Native browser rendering of the PCM controls
 outstanding. Bend, gate, looping and retrigger rules are open
 (see [Deliberately incomplete](#deliberately-incomplete)).
 
+### A sound of PCM tracks alone lasts as long as its samples
+
+A sound made only of PCM audio tracks ends when the last sample it triggered
+has played, or at the end of its sequences when that is later. A wave plays to
+the end of its sample whatever its gate says
+([deliberately incomplete](#deliberately-incomplete)), and a sound's end is its
+length: what a media API answers for its duration, when a title is told the
+sound is over, when a one-shot sound is stopped and where a repeat starts
+again. Until 2026-11-03 such a sound ended with its sequence, so one whose
+sample outlasted the sequence was reported finished early, and a one-shot one
+was cut there.
+
+That was most of the sampled effects. Of the PCM-only sounds in the local KTF,
+LGT and SKT archives, 2,418 have a sample that runs past the end of their
+sequence by 201–600 ms, almost all of them by 505–509 ms, and the part past the
+end is sound, not padding: its power is half the rest's at the median, and only
+20 of them are near silence. Internal testing found one KTF title's effects
+cut about half a second early, and that title's sounds are among them
+([census](history/audio.md#pcm-tracks-that-end-before-their-samples)).
+
+A sound with a score track keeps the score's timeline, which is where a
+looping piece starts again; its PCM samples and stream waves sound past it as
+they always have. Twelve such sounds have a PCM sample past the score's end.
+Restored checkpoints keep the event lists they were decoded with; a sound
+loaded after the change uses the new end. Over 500 ticks of every local KTF,
+LGT and SKT archive no KTF or LGT screen changed, and the SKT runs that changed
+change between two runs of the same build too.
+
 ### Decoder resource limits
 
 One decode shares a budget across every track, sequence and nested chunk.
@@ -1545,7 +1573,9 @@ empty media is refused rather than yielding an inert player.
   sample out is the handset's choice, as are short-sample looping and
   same-channel retrigger. A hard cutoff would trim more than a tenth from 5,042
   of the 8,752 local wave triggers, so the natural tail stays until a handset is
-  heard. Stream waves follow their note's velocity
+  heard, and a sound of PCM tracks alone lasts until its samples have played
+  ([PCM-only sound length](#a-sound-of-pcm-tracks-alone-lasts-as-long-as-its-samples)).
+  Stream waves follow their note's velocity
   ([stream wave levels](#stream-wave-levels)); PCM track waves have none, and
   profile-specific mapping needs profile evidence. See [PCM controls](#live-pcm-track-controls)
   and [the census](history/audio.md#pcm-contract-evidence).

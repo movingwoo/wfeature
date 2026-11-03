@@ -116,10 +116,12 @@ func playWithBudget(data []byte, budget *decodeBudget) []Event {
 	handyToneMap := newToneMap()
 	handyToneMap.voices = voices
 	pcmTracks := 0
+	scored := false
 
 	for _, chunk := range file.Chunks {
 		switch chunk.Kind {
 		case ChunkScoreTrack:
+			scored = true
 			trackEvents, nextOffset := scoreTrackEvents(chunk.ScoreTrack, handyChannelOffset, handyToneMap, budget)
 			events = append(events, trackEvents...)
 			handyChannelOffset = nextOffset
@@ -132,12 +134,35 @@ func playWithBudget(data []byte, budget *decodeBudget) []Event {
 			base := uint16((pcmTracks-1)*4 + 1)
 			events = append(events, pcmTrackEvents(chunk.PCMAudioTrack, base, budget)...)
 		case ChunkSoftbankSequence:
+			scored = true
 			tones := newToneMap()
 			tones.voices = voices
 			tones.initTrack(HandyPhoneStandard, nil, handyChannelOffset)
 			trackEvents, nextOffset := sequenceEvents(chunk.SoftbankSequence, softbankTimebase, softbankTimebase, handyChannelOffset, true, nil, tones, budget)
 			events = append(events, trackEvents...)
 			handyChannelOffset = nextOffset
+		}
+		if budget.err != nil {
+			return nil
+		}
+	}
+
+	// **A sound made only of PCM tracks lasts until its last sample has
+	// played.** A wave plays to the end of its sample whatever its gate says,
+	// and about 2,400 PCM-only sounds across the local KTF, LGT and SKT
+	// archives end their sequence about half a second before their sample
+	// does, with sound rather than padding in that half second. Ending them
+	// with the sequence reported them finished early, and a one-shot one was
+	// stopped there. A sound with a score keeps the score's timeline: that is
+	// where a looping piece starts again, and its samples sound past it as
+	// they always have. See docs/audio.md.
+	if !scored {
+		var last uint32
+		for _, event := range events {
+			last = max(last, event.Time)
+		}
+		if end := pcmSampleEnd(events, budget); budget.err == nil && end > last {
+			events = budget.emit(events, Event{Time: end, Type: EventEnd})
 		}
 		if budget.err != nil {
 			return nil
@@ -517,6 +542,22 @@ func pcmTrackEvents(track *PCMAudioTrack, base uint16, budget *decodeBudget) []E
 		}
 	}
 	return budget.emit(events, Event{Time: now, Type: EventEnd})
+}
+
+// pcmSampleEnd is when the last sample a PCM track triggered has played out:
+// its start plus its length at its own rate. Stream waves a score attaches
+// (group zero) are not counted.
+func pcmSampleEnd(events []Event, budget *decodeBudget) uint32 {
+	var end uint32
+	for _, event := range events {
+		if event.Type != EventWave || event.PCMChannel == 0 || event.SamplingRate == 0 || event.WaveChannels == 0 {
+			continue
+		}
+		frames := uint64(len(event.Wave) / int(event.WaveChannels))
+		played := (frames*1000 + uint64(event.SamplingRate) - 1) / uint64(event.SamplingRate)
+		end = max(end, budget.milliseconds(uint64(event.Time)+played))
+	}
+	return end
 }
 
 func waveChannelCount(channels Channels) uint8 {

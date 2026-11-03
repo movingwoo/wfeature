@@ -4,7 +4,9 @@ Each loaded sound owns its output. Two clips on the same MIDI channel, including
 the same pitch, stay independent. Explicit stop, close and restart cancel only
 that clip's MIDI voices, PCM, percussion and release tails. Natural score
 completion releases its MIDI voices without truncating PCM that extends past the
-score's last event. Applying SMAF wave gates is separate open work
+score's last event, and a sound of PCM tracks alone lasts until its last
+sample has played ([PCM-only sound length](audio.md#a-sound-of-pcm-tracks-alone-lasts-as-long-as-its-samples)).
+Applying SMAF wave gates is separate open work
 ([PCM timing](audio.md#deliberately-incomplete)). The contract comes from the
 2026-10-08 repair of the shared stop and ownership findings in the
 [sound audit](history/audio.md#cross-platform-sound-audit).
