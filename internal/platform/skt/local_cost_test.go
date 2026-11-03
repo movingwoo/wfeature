@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
+	"github.com/movingwoo/wfeature/internal/testlocal"
 )
 
 // TestLocalSKTArchiveCost runs one ignored local archive for a while so a Go
@@ -26,10 +27,7 @@ import (
 // Read the result against "Do not read a macOS Go CPU profile" in
 // docs/history/testing.md — the allocation profile is the cheaper clue here.
 func TestLocalSKTArchiveCost(t *testing.T) {
-	path := os.Getenv("WFEATURE_SKT_COST_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_SKT_COST_ARCHIVE to an archive to profile")
-	}
+	path := testlocal.Value(t, "WFEATURE_SKT_COST_ARCHIVE", "an archive to profile")
 	ticks := 300
 	if value, err := strconv.Atoi(os.Getenv("WFEATURE_SKT_COST_TICKS")); err == nil && value > 0 {
 		ticks = value

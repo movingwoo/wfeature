@@ -163,9 +163,9 @@ type guestClock struct {
 // a frame's computation is charged to the guest's own clock, **whether a title
 // gets the frame period it asks for**.
 //
-// It is a variable rather than a constant only so the measurement that picked
-// it can be repeated: `TestRateSweep` sets it and puts it back. Nothing in the
-// running emulator writes it.
+// It is a variable rather than a constant only so a local measurement can try
+// another rate: `TestLocalLGTLoadCostProbe` takes one from `WFEATURE_GUEST_MIPS`
+// and puts it back. Nothing in the running emulator writes it.
 //
 // The number is 150,000 because that is where the local corpus stops being
 // held back by it — see `docs/history/lgt.md`, "What the rate has to be for a title to

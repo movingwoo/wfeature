@@ -19,7 +19,7 @@ Two checks make that translation verifiable rather than trusted:
 
 - **All 256 patterns appear exactly once** in each of the three, with no gaps
   and no duplicates, so a case dropped by the translator shows up.
-- **`reference_test.go` compares against the original, pixel for pixel.** It
+- **`local_reference_test.go` compares against the original, pixel for pixel.** It
   catches the failure counting cannot: a case present but routed to the wrong
   blend. It needs a Rust build of the reference named by
   `WFEATURE_HQX_REFERENCE`; the harness reads width, height and scale as

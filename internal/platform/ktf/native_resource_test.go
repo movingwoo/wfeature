@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"encoding/binary"
+	"image/color"
 	"testing"
 )
 
@@ -198,5 +199,35 @@ func TestNativeLoadResourceHandsBackTheItem(t *testing.T) {
 	}
 	if len(platform.ResourceNotes()) != 2 {
 		t.Errorf("notes = %q, want one for each request that went unanswered", platform.ResourceNotes())
+	}
+}
+
+// TestNativeDestroyObjectFreesTheBitmapCopy covers the platform's own copy of
+// an image's bitmap, which the factory allocates beside the object. Destroying
+// the object freed only the object, so every image a title destroyed left its
+// bitmap in the native arena for the rest of the session.
+func TestNativeDestroyObjectFreesTheBitmapCopy(t *testing.T) {
+	platform := newTestNativePlatform(t, nil)
+	bitmap := buildBitmap(1, 1, []color.RGBA{{A: 255}, {R: 11, A: 255}}, []byte{1, 0, 0, 0})
+	address, err := platform.client.Allocate(uint32(len(bitmap)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := platform.client.core.Memory().Write(address, bitmap); err != nil {
+		t.Fatal(err)
+	}
+	object := nativeCall(t, platform.createObject, nativeClassImage, address)
+	if object == 0 {
+		t.Fatal("the factory refused the bitmap")
+	}
+	kept := platform.images[object].data
+	if got := nativeCall(t, platform.destroyObject, object); got != 1 {
+		t.Fatalf("destroy answered %d", got)
+	}
+	if _, live := platform.client.blocks[object]; live {
+		t.Error("the destroyed object is still allocated")
+	}
+	if _, live := platform.client.blocks[kept]; live {
+		t.Error("the destroyed image's bitmap copy is still allocated")
 	}
 }

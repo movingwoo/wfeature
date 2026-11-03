@@ -8,6 +8,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
 
 // sortCall drives MC_dbSortRecords on the client's own thread, whose stack
@@ -17,7 +18,7 @@ func sortCall(t *testing.T, client *Client, runtime *initializationRuntime, hand
 	const buffer = wipicrt.PlatformDataBase + 0xc000
 	thread := client.Thread
 	runtime.CurrentThread, runtime.CurrentContext = thread, context.Background()
-	writeGuestWords(t, runtime, buffer, make([]uint32, 8)...)
+	wipicrttest.WriteGuestWords(t, runtime.Runtime, buffer, make([]uint32, 8)...)
 	// The thread's stack pointer starts at the top of the stack, which is the
 	// first byte past it; the call's fifth argument sits below.
 	top, err := thread.Register(armcore.RegisterSP)
@@ -29,7 +30,7 @@ func sortCall(t *testing.T, client *Client, runtime *initializationRuntime, hand
 		t.Fatal(err)
 	}
 	defer thread.SetRegister(armcore.RegisterSP, top)
-	writeGuestWords(t, runtime, stack, filter)
+	wipicrttest.WriteGuestWords(t, runtime.Runtime, stack, filter)
 	for index, value := range []uint32{handle, buffer, capacity, compare} {
 		if err := thread.SetRegister(index, value); err != nil {
 			t.Fatal(err)

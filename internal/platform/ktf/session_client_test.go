@@ -74,3 +74,27 @@ func TestDetachedSessionClientRestoresOlderModuleWithoutEntry(t *testing.T) {
 		t.Fatalf("restored module lookup changed execution: %#x, %v", got, err)
 	}
 }
+
+func TestDiagnosticsSnapshotIsACopy(t *testing.T) {
+	runtime := detachedRuntime(&wipicrt.Client{})
+	runtime.Trace = wipicrt.TraceRing{Limit: 4}
+	client := runtime.client
+	session := &Session{Client: client}
+	client.runtime.CountDiagnostic("load Main")
+
+	diagnostics := session.Diagnostics()
+	diagnostics.Counts["load Main"] = 99
+	if got := client.runtime.DiagnosticCounts()["load Main"]; got != 1 {
+		t.Errorf("mutating the snapshot changed the runtime count to %d, want 1", got)
+	}
+	if diagnostics.Traced != 1 {
+		t.Errorf("reported %d traced events, want 1", diagnostics.Traced)
+	}
+}
+
+func TestNilSessionDiagnosticsAreEmpty(t *testing.T) {
+	var session *Session
+	if diagnostics := session.Diagnostics(); len(diagnostics.Counts) != 0 || diagnostics.Trace != nil {
+		t.Errorf("nil session reported %+v, want an empty report", diagnostics)
+	}
+}

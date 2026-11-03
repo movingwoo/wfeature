@@ -64,7 +64,7 @@ func readWIPIHandle(t *testing.T, runtime *Runtime, handle *xFileData) int32 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count := storeReviewInt(t, value); count != 1 {
+	if count := storeInvokeInt(t, value); count != 1 {
 		return count
 	}
 	data, _ := jvm.ByteArraySnapshot(buffer)
@@ -136,7 +136,7 @@ func TestJavaCheckpointInThePreviousFileFormRestoresOntoSharedFiles(t *testing.T
 	if shared == nil || gone == nil {
 		t.Fatal("restored stream registry lost a File")
 	}
-	if value := storeReviewInt(t, wipiStreamCall(t, restored, sharedStream, "read", "()I")); value != 9 {
+	if value := storeInvokeInt(t, wipiStreamCall(t, restored, sharedStream, "read", "()I")); value != 9 {
 		t.Fatalf("restored input stream read %d, want the current file's first byte", value)
 	}
 	// The title writes through its XFile; the File restored beside it reads
@@ -147,7 +147,7 @@ func TestJavaCheckpointInThePreviousFileFormRestoresOntoSharedFiles(t *testing.T
 	if value := readWIPIHandle(t, restored, shared); value != 6 {
 		t.Fatalf("restored File read %d after the XFile's write, want 6", value)
 	}
-	if value := storeReviewInt(t, wipiStreamCall(t, restored, sharedStream, "read", "()I")); value != 8 {
+	if value := storeInvokeInt(t, wipiStreamCall(t, restored, sharedStream, "read", "()I")); value != 8 {
 		t.Fatalf("restored input stream lost its own position: read %d, want 8", value)
 	}
 	if value := readWIPIHandle(t, restored, gone); value != -1 {

@@ -385,10 +385,11 @@ against; see [the fixture guide](history/testing.md#implementation-compiling-a-j
 `internal/platform/lgt/wipic_net_test.go` builds a two-instruction Thumb
 callback in guest memory, dials, and checks that nothing is reported before the
 delay, that the callback then runs with `M_E_ERROR` exactly once, and that
-`MC_netClose` drops an unreported dial. `internal/platform/ktf/wipic_net_test.go`
-covers the KTF C table: failure through the given callback, the synchronous
-refusal without one, the queue bound, close dropping pending callbacks, and the
-rest of the table refusing.
+`MC_netClose` drops an unreported dial. `internal/platform/wipicrt/wipic_net_test.go`
+covers the net table of the shared WIPI-C engine, on KTF's platform values:
+failure through the given callback, the synchronous refusal without one, the
+queue bound, close dropping pending callbacks, and the rest of the table
+refusing.
 
 `internal/platform/skt/connector_test.go` drives a fixture MIDlet through every
 `Connector` entry point and checks that each one refuses, that the refusal is

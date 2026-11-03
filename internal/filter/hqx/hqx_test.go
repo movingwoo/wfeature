@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// The reference comparison in reference_test.go is the real correctness check,
+// The reference comparison in local_reference_test.go is the real correctness check,
 // but it needs a Rust toolchain and the original source. These lock the same
 // behaviour in so an ordinary test run still catches a regression: the digests
 // below were taken from the implementation on the day it was verified against

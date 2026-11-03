@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/testlocal"
 	"github.com/movingwoo/wfeature/internal/wsproto"
 )
 
@@ -31,10 +32,7 @@ import (
 // mark. `session.TestAGuestThatEndedDuringItsStartIsAnEnding` pins the first
 // and `web/session.test.mjs` the second; this is the seam between them.
 func TestLocalStartEndingProbe(t *testing.T) {
-	path := os.Getenv("WFEATURE_ENDING_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_ENDING_ARCHIVE to a local archive whose first run installs it")
-	}
+	path := testlocal.Value(t, "WFEATURE_ENDING_ARCHIVE", "a local archive whose first run installs it")
 	archive, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

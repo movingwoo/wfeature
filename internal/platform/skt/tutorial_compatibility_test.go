@@ -3,7 +3,6 @@ package skt
 import (
 	"bytes"
 	_ "embed"
-	"os"
 	"strings"
 	"testing"
 
@@ -89,31 +88,5 @@ func TestTutorialCacheRefusesInvalidTransforms(t *testing.T) {
 	}
 	if replaceTutorialPhaseStore(original, "transition", "()V", 1, "TutorialCacheMIDlet", "other", "names") != nil {
 		t.Fatal("wrong field accepted")
-	}
-}
-
-func TestLocalTutorialCompatibilityFingerprint(t *testing.T) {
-	path := os.Getenv("WFEATURE_SKT_TUTORIAL_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_SKT_TUTORIAL_ARCHIVE to an original local archive")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	archive, err := Open(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original := bytes.Clone(archive.Entries["f.class"])
-	if len(prepareTutorialCompatibility(archive)) != 1 {
-		t.Fatal("original revision not adapted")
-	}
-	if !bytes.Equal(original, archive.Entries["f.class"]) {
-		t.Fatal("original archive changed")
-	}
-	archive.Entries["extra.class"] = []byte("changed class set")
-	if len(prepareTutorialCompatibility(archive)) != 0 {
-		t.Fatal("changed revision adapted")
 	}
 }

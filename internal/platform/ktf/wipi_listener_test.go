@@ -635,3 +635,37 @@ func TestKTFParkedLoopingClipSurvivesALongPark(t *testing.T) {
 		t.Fatalf("the first tick after a long park failed: %v", err)
 	}
 }
+
+// TestNotifyFanOutSurvivesAListenerRemovingItself covers a Jlet listener that
+// removes itself inside notifyEvent. The removal shifts the listener list in
+// place under the loop delivering the event, which skipped the next listener
+// and delivered to the last one twice.
+func TestNotifyFanOutSurvivesAListenerRemovingItself(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	var seen []string
+	listeners := make([]*jvm.Object, 3)
+	for index, name := range []string{"A", "B", "C"} {
+		className := "fixture/FanOut" + name
+		listener := &jvm.Object{ClassName: className}
+		listeners[index] = listener
+		if err := client.JVM().RegisterNative(className, "notifyEvent", "(III)V", func(vm *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
+			seen = append(seen, name)
+			if name == "A" {
+				return runtimeDisplayRemoveListener(runtime, vm, []jvm.Value{jvm.ReferenceValue(nil), jvm.ReferenceValue(listener)})
+			}
+			return jvm.VoidValue(), nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.jletListeners = slices.Clone(listeners)
+	if err := runtime.dispatchNotifyEvent(client.JVM(), wipicrt.GuestEvent{Kind: wipicrt.EventKindNotify, Param1: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"A", "B", "C"}; !slices.Equal(seen, want) {
+		t.Fatalf("notified %v, want each listener once: %v", seen, want)
+	}
+	if !slices.Equal(runtime.jletListeners, listeners[1:]) {
+		t.Fatalf("listeners after the removal = %d entries, want B and C", len(runtime.jletListeners))
+	}
+}

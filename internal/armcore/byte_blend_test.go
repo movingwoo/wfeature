@@ -1,6 +1,8 @@
 package armcore
 
-import "testing"
+import (
+	"testing"
+)
 
 // The blend this recognises, as one title emits it: a constant in a frame
 // slot, two byte pointers walking together, and a store the guard lets through
@@ -211,4 +213,58 @@ func TestAByteBlendChargesTheStoresItMade(t *testing.T) {
 	if control.Steps != result.Steps {
 		t.Errorf("charged %d steps, interpreting the same loop retired %d", result.Steps, control.Steps)
 	}
+}
+
+// The guarded byte blend with its source advanced before the byte is read.
+func TestAByteBlendThatAdvancesItsSourceFirstIsRefused(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	const stack, source = 0x70000000, 0x70000400
+	const bytes, constant = 61, 0x20
+	body := []uint16{
+		0x3401, // adds r4, #1     — the source, before it is read
+		0x9a03, // ldr  r2, [sp, #12]
+		0x7827, // ldrb r7, [r4]
+		0x1abb, // subs r3, r7, r2
+		0x780a, // ldrb r2, [r1]
+		0x4293, // cmp  r3, r2
+		0xdd00, // ble  +0 — over the store
+		0x700b, // strb r3, [r1]
+		0x3801, // subs r0, #1
+		0x3101, // adds r1, #1
+		0x2800, // cmp  r0, #0
+		0xd1f3, // bne  head
+	}
+	branchPC := base + uint32(len(body)-1)*2
+	build := func() (*Memory, *Context) {
+		memory := fillLoopMemory(t, body, base, destination)
+		memory.beginQuantum()
+		if err := memory.writeData32(stack+12, constant); err != nil {
+			t.Fatal(err)
+		}
+		for index := 0; index <= bytes; index++ {
+			if err := memory.write8(source+uint32(index), byte(index*7)); err != nil {
+				t.Fatal(err)
+			}
+			if err := memory.write8(destination+uint32(index), byte(200-index*3)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		memory.endQuantum()
+		value := NewContext()
+		context := &value
+		context.Registers[RegisterSP] = stack
+		context.Registers[0] = bytes
+		context.Registers[1] = destination
+		context.Registers[4] = source
+		context.setThumbPC(base)
+		return memory, context
+	}
+	memory, _ := build()
+	memory.beginQuantum()
+	loop := memory.analyseByteBlend(base, branchPC)
+	memory.endQuantum()
+	if loop != nil {
+		t.Errorf("a pre-incremented source was recognised as a byte blend: %+v", *loop)
+	}
+	compareStandIn(t, branchPC+2, destination, bytes+1, build)
 }

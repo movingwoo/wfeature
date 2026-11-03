@@ -14,6 +14,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
@@ -72,7 +73,7 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 	}
 	store := newNativeSaveFixtureStore(t)
 	clock := wipicrt.NewManualClock(time.Unix(1, 0))
-	sink := &countingSink{}
+	sink := &wipicrttest.CountingSink{}
 	source, err := StartNativeSession(t.Context(), archive, NativeSessionOptions{Clock: clock, SaveStore: store, AudioSink: sink, Width: 32, Height: 48})
 	if err != nil {
 		t.Fatal(err)
@@ -112,12 +113,12 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 	if err := source.Client.core.Memory().Write(p.images[object].data+pixel, []byte{2}); err != nil {
 		t.Fatal(err)
 	}
-	nativeCall(t, p.setClip, 0, 0, put(source, oneNoteSMAF()))
+	nativeCall(t, p.setClip, 0, 0, put(source, wipicrttest.OneNoteSMAF()))
 	nativeCall(t, p.playClip)
 	clock.Advance(30 * time.Millisecond)
 	p.audio.Advance(p.guestElapsed())
-	if sink.noteOns != 1 {
-		t.Fatalf("fixture has no live note: %d", sink.noteOns)
+	if sink.NoteOns != 1 {
+		t.Fatalf("fixture has no live note: %d", sink.NoteOns)
 	}
 	callback, counter := uint32(testfixture.KTFNativeCheckpointCallback), uint32(testfixture.KTFNativeCheckpointCallbackCounter)
 	nativeCall(t, p.addListener(nativeInterfaceTimed), 0, callback, counter)
@@ -140,7 +141,7 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 	// first's as the capture left it: the same disk, seen by another process.
 	freshClock := wipicrt.NewManualClock(time.Unix(500, 0))
 	freshStore := newNativeSaveFixtureStore(t, store.snapshot(t)...)
-	freshSink := &countingSink{}
+	freshSink := &wipicrttest.CountingSink{}
 	prepared, err := PrepareNativeSessionCheckpoint(archive, saved, NativeSessionOptions{Clock: freshClock, SaveStore: freshStore, AudioSink: freshSink})
 	if err != nil {
 		t.Fatal(err)
@@ -156,11 +157,11 @@ func TestNativeCheckpointPreservesDevicesAndReopensFiles(t *testing.T) {
 	}
 	defer restored.Close()
 	r := restored.platform
-	if freshSink.noteOns != 0 {
+	if freshSink.NoteOns != 0 {
 		t.Fatal("detached restoration emitted audio")
 	}
 	restored.ResumeCheckpointOutput()
-	if freshSink.noteOns != 1 {
+	if freshSink.NoteOns != 1 {
 		t.Fatal("restored output did not reconstruct the playing note")
 	}
 	if r.images[object].frame.RGBAAt(0, 0).R != 11 {

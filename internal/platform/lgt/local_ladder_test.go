@@ -7,12 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/ladder"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
+	"github.com/movingwoo/wfeature/internal/testlocal"
 )
 
 // Two rungs above a first frame.
@@ -135,10 +135,8 @@ var localLadderKeys = []string{"fire", "soft1", "soft2", "5", "down"}
 //
 //	WFEATURE_LGT_SUSTAINED_ACCEPTANCE=1 go test -run TestLocalLGTArchivesSustainAFrame -v ./internal/platform/lgt
 func TestLocalLGTArchivesSustainAFrame(t *testing.T) {
-	if os.Getenv("WFEATURE_LGT_SUSTAINED_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_LGT_SUSTAINED_ACCEPTANCE=1 to run ignored local LGT archives past their first frame")
-	}
-	sustain := localLadderTicks(t, "WFEATURE_LGT_SUSTAIN_TICKS", localLadderSustainTicks)
+	testlocal.Enabled(t, "WFEATURE_LGT_SUSTAINED_ACCEPTANCE", "run ignored local LGT archives past their first frame")
+	sustain := testlocal.Int(t, "WFEATURE_LGT_SUSTAIN_TICKS", localLadderSustainTicks)
 	eachLocalLGTArchive(t, func(t *testing.T, _ string, launch func(*testing.T) *Session) {
 		for launched := 1; ; launched++ {
 			session := launch(t)
@@ -175,10 +173,8 @@ func TestLocalLGTArchivesSustainAFrame(t *testing.T) {
 //
 //	WFEATURE_LGT_INTERACTIVE_ACCEPTANCE=1 go test -run TestLocalLGTArchivesAnswerAKey -v ./internal/platform/lgt
 func TestLocalLGTArchivesAnswerAKey(t *testing.T) {
-	if os.Getenv("WFEATURE_LGT_INTERACTIVE_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_LGT_INTERACTIVE_ACCEPTANCE=1 to send keys to ignored local LGT archives")
-	}
-	hold := localLadderTicks(t, "WFEATURE_LGT_HOLD_TICKS", localLadderHoldTicks)
+	testlocal.Enabled(t, "WFEATURE_LGT_INTERACTIVE_ACCEPTANCE", "send keys to ignored local LGT archives")
+	hold := testlocal.Int(t, "WFEATURE_LGT_HOLD_TICKS", localLadderHoldTicks)
 	eachLocalLGTArchive(t, func(t *testing.T, saves string, launch func(*testing.T) *Session) {
 		for launched := 1; ; launched++ {
 			// What the save directory held before this launch. A launch that
@@ -266,7 +262,7 @@ func TestLocalLGTArchivesAnswerAKey(t *testing.T) {
 				continue
 			}
 			t.Fatalf("no key changed the screen%s: tried %s, held %d ticks each over %d settled %s, %d flushes since it settled%s",
-				openingMovedOn(moved), strings.Join(tried, ", "), hold, rounds, screens(rounds),
+				ladder.OpeningMovedOn(moved, localLadderOpeningTicks), strings.Join(tried, ", "), hold, rounds, ladder.Screens(rounds),
 				session.Flushes()-presents, afterRestart(launched))
 		}
 	})
@@ -319,25 +315,6 @@ func tickUntilScreenMoves(session *Session, screen *ladder.Watcher, budget int) 
 		}
 	}
 	return false, waited, nil
-}
-
-// openingMovedOn says, in a failure, whether the screen that answered no key
-// was the one the title booted to or one its opening moved on to. The two are
-// different defects and a line that spelled them the same way would send
-// whoever read it to the wrong place.
-func openingMovedOn(moved int) string {
-	if moved == 0 {
-		return fmt.Sprintf(", and it did not move on its own in the %d ticks after", localLadderOpeningTicks)
-	}
-	return fmt.Sprintf(", over %d %s its opening moved on to", moved, screens(moved))
-}
-
-// screens is "screen" or "screens", so a count reads as a sentence.
-func screens(count int) string {
-	if count == 1 {
-		return "screen"
-	}
-	return "screens"
 }
 
 // afterRestart says, in a log line, that what is being reported is the second
@@ -520,19 +497,4 @@ func pressAndWatch(session *Session, key uint32, screen *ladder.Watcher, hold, a
 	}
 	changed, err = watch(after)
 	return changed, elapsed, err
-}
-
-// localLadderTicks lets a window be widened from the environment, for the
-// investigation that follows a rung nobody expected an archive to miss.
-func localLadderTicks(t *testing.T, name string, fallback int) int {
-	t.Helper()
-	value := os.Getenv(name)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		t.Fatalf("invalid %s %q", name, value)
-	}
-	return parsed
 }

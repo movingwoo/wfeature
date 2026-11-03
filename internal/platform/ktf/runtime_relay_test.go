@@ -15,7 +15,7 @@ func enableTestSlotRelay(client *Client) {
 	client.image.Data = append([]byte("com/vdigm/billcom/relay/a\x00"), relayHostConstant()...)
 }
 
-func TestLocalRelayDependencyRequiresProviderContract(t *testing.T) {
+func TestTheLocalRelayDependencyRequiresProviderContract(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	lookup := func() int {
 		t.Helper()
@@ -49,7 +49,7 @@ func TestLocalRelayDependencyRequiresProviderContract(t *testing.T) {
 	}
 }
 
-func TestLocalRelayRuntimeStreamRoundTripAndDisconnect(t *testing.T) {
+func TestTheLocalRelayRuntimeStreamRoundTripAndDisconnect(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	enableTestSlotRelay(client)
 	vm := client.vm

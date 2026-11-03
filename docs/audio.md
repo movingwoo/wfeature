@@ -192,7 +192,7 @@ counts larger per sample, and like every ADPCM error the excess stays in every
 later sample. A published MA ADPCM test pair, an encoded stream and its 34,340
 decoded samples, decodes exactly under the per-bit sum and up to 76 counts off
 under the single rounding. The pair is not in this repository:
-`TestADPCMMatchesAnExternalVectorPair` checks it when `WFEATURE_ADPCM_VECTOR`
+`TestLocalADPCMMatchesAnExternalVectorPair` checks it when `WFEATURE_ADPCM_VECTOR`
 names a directory holding `out.adpcm` and `out.pcm`, and
 `TestADPCMDifferenceSumsEachBitsTruncatedShare` locks a vector worked out by
 hand.

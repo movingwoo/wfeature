@@ -2,7 +2,6 @@ package lgt
 
 import (
 	"bytes"
-	"os"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -81,43 +80,4 @@ func TestColorKeyCalibrationRejectsUnexpectedCode(t *testing.T) {
 	if err := correctColorKeySampleOrigin(memory); err == nil {
 		t.Fatal("unexpected code accepted")
 	}
-}
-
-func TestLocalColorKeyCalibrationArchive(t *testing.T) {
-	path := os.Getenv("WFEATURE_LGT_COLOR_KEY_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_LGT_COLOR_KEY_ARCHIVE")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	archive, err := Open(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original := bytes.Clone(archive.Module)
-	check := func(want byte) {
-		t.Helper()
-		client, err := Load(archive, Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var code [2]byte
-		if err := client.core.Memory().Read(0x1746, code[:]); err != nil {
-			t.Fatal(err)
-		}
-		if code != [2]byte{want, 0x22} {
-			t.Fatalf("sample coordinate instruction=%x", code)
-		}
-	}
-	check(24)
-	if !bytes.Equal(original, archive.Module) {
-		t.Fatal("archive module changed")
-	}
-	archive.Descriptor.AID, archive.Descriptor.PID = "other", "other"
-	check(24)
-	archive.Module = bytes.Clone(original)
-	archive.Module[15] ^= 1
-	check(0)
 }

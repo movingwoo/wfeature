@@ -42,7 +42,7 @@ func closeJavaSink(client *Client, sink uint32) error {
 // reach it, a database cannot take its name, and a listing does not show it,
 // including from a created list an earlier build wrote with it in.
 func TestTheDatabaseIndexIsNotAGuestFile(t *testing.T) {
-	client, store, files := reviewFiles(t, nil)
+	client, store, files := fileFixture(t, nil)
 	openFixtureDatabase(t, client, "save", 16)
 	indexKey := databaseIndexKey
 	if got := store.held(indexKey); got != "save" {
@@ -155,7 +155,7 @@ func TestACollectedObjectKeepsAWriteTheStoreRefused(t *testing.T) {
 			name = "closed by the title"
 		}
 		t.Run("a database "+name, func(t *testing.T) {
-			client, store, _ := reviewFiles(t, nil)
+			client, store, _ := fileFixture(t, nil)
 			object := openFixtureDatabase(t, client, "save", 16)
 			store.refuse = true
 			insertFixtureRecord(t, client, object, []byte("kept"))
@@ -188,7 +188,7 @@ func TestACollectedObjectKeepsAWriteTheStoreRefused(t *testing.T) {
 		})
 	}
 	t.Run("a file", func(t *testing.T) {
-		client, store, _ := reviewFiles(t, nil)
+		client, store, _ := fileFixture(t, nil)
 		runtime := client.javaRuntimeState()
 		handle := uint32(client.openFile("orphan.sav", fileOpenReadWrite))
 		file := newCollectableObject(t, client, javaFileClass)
@@ -215,7 +215,7 @@ func TestACollectedObjectKeepsAWriteTheStoreRefused(t *testing.T) {
 // key for is refused by the file calls and leaves them as they are, and an
 // entry of that kind a list holds is read as nothing.
 func TestPathListsHoldOnlyNamesWithASave(t *testing.T) {
-	client, store, files := reviewFiles(t, nil)
+	client, store, files := fileFixture(t, nil)
 	for _, name := range []string{"/.created", "../outside.dat", "/.removed/inside", "/.directories"} {
 		if handle := int32(callSlot(t, client, slotFsOpen, files.name(name), fileOpenReadWrite)); handle != wipiBadFileName {
 			t.Fatalf("open %q answered %d, want M_E_BADFILENAME", name, handle)
@@ -298,7 +298,7 @@ func storelessSessionKeepsWhatItWrote(t *testing.T, client *Client) {
 // own, and the listing shows it beside the packaged one, in this session and
 // the next. The packaged file rewritten under its own spelling is listed once.
 func TestASaveThatDiffersByCaseFromAPackagedFileIsListed(t *testing.T) {
-	client, store, files := reviewFiles(t, nil)
+	client, store, files := fileFixture(t, nil)
 	for _, name := range []string{"data/HELLO.TXT", "data/hello.txt"} {
 		handle := files.open(name, fileOpenWriteTruncate)
 		files.write(handle, "mine")

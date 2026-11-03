@@ -990,3 +990,50 @@ func TestSaveDirectoryListingsAreKeptUntilTheDirectoryChanges(t *testing.T) {
 		t.Fatalf("a removed name is spelled there: %t (%v)", present, err)
 	}
 }
+
+// A name that reads as a segment no key holds — "." or "\\" written by its
+// number — is not a key's encoded name. A file of that name in an encoded
+// directory is an earlier build's key of its own, and a snapshot of the
+// directory does not fail over it.
+func TestANameForASegmentNoKeyHoldsIsNoEncodedName(t *testing.T) {
+	parent := t.TempDir()
+	leftoverBuild(t, parent, []string{encodedRecord, "owner/fs/#+00002e=dot", "owner/fs/#+00005c=backslash", "owner/fs/kept=kept"})
+	store := NewDirectorySaveStore(filepath.Join(parent, "owner"))
+	snapshot, err := store.SnapshotSaves()
+	if err != nil {
+		t.Fatalf("the snapshot: %v", err)
+	}
+	wantEntries(t, snapshot, map[string]string{"fs/#+00002e": "dot", "fs/#+00005c": "backslash", "fs/kept": "kept"}, "the snapshot")
+}
+
+// A key with a byte that is not UTF-8 — an LGT C Clet's EUC-KR file name — is
+// stored with the byte by its number, so macOS, which refuses such a name,
+// holds the save, and Windows does not make two keys one.
+func TestAKeyThatIsNotUTF8IsStored(t *testing.T) {
+	store := NewDirectorySaveStore(filepath.Join(t.TempDir(), "owner"))
+	keys := map[string]string{"fs/\xbc\xbc\xc0\xcc.dat": "first", "fs/\xbc\xbd\xc0\xcc.dat": "second"}
+	for key, data := range keys {
+		if err := store.StoreSave(key, []byte(data)); err != nil {
+			t.Fatalf("store %+q: %v", key, err)
+		}
+	}
+	wantSaves(t, store, keys)
+	snapshot, err := store.SnapshotSaves()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEntries(t, snapshot, keys, "the snapshot")
+}
+
+// A raw name with a byte that is not UTF-8, which an earlier build wrote on a
+// host that keeps such names (Linux, Android), converts with the folder.
+func TestAnEarlierNameThatIsNotUTF8Converts(t *testing.T) {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" || runtime.GOOS == "windows" {
+		t.Skip("this host keeps no name that is not UTF-8")
+	}
+	parent := t.TempDir()
+	leftoverBuild(t, parent, []string{"owner/fs/\xbc\xbc.dat=earlier", "owner/fs/Save=upper"})
+	store := NewDirectorySaveStore(filepath.Join(parent, "owner"))
+	wantSaves(t, store, map[string]string{"fs/\xbc\xbc.dat": "earlier", "fs/Save": "upper"})
+	leftoverExpect(t, parent, []string{encodedRecord, leftoverReserved + "/lock=", "owner/fs/#-bc#-bc.dat=earlier", "owner/fs/#Save=upper"}, "after the conversion")
+}

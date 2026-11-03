@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/testlocal"
 )
 
 // localAcceptanceTicks is far enough for a title to get past its notice screen
@@ -24,9 +26,7 @@ const localAcceptanceTicks = 60
 //
 //	WFEATURE_LGT_ACCEPTANCE=1 go test -run TestLocalLGTArchivesBootAndPaint -v ./internal/platform/lgt
 func TestLocalLGTArchivesBootAndPaint(t *testing.T) {
-	if os.Getenv("WFEATURE_LGT_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_LGT_ACCEPTANCE=1 to run ignored local LGT archives")
-	}
+	testlocal.Enabled(t, "WFEATURE_LGT_ACCEPTANCE", "run ignored local LGT archives")
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate LGT acceptance test source")

@@ -3,6 +3,7 @@ package lgt
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"testing"
 )
 
@@ -78,5 +79,30 @@ func TestACletThatDeclaresNoLifecycleIsNotAFailure(t *testing.T) {
 	}
 	if err := session.Resume(ctx); err != nil {
 		t.Fatalf("Resume() over a Clet with no resume entry = %v", err)
+	}
+}
+
+// A start that fails after the title started a thread ends that thread: the
+// session is never returned, so nothing would close it.
+func TestAFailedStartStopsTheThreadsItStarted(t *testing.T) {
+	fixture := newJavaThreadFixture(t, nil)
+	run := fixture.install(func(a *assembler) {
+		top := a.here()
+		fixture.call(a, "yield")
+		fixture.loop(a, top)
+	})
+	fixture.start("Runner", run)
+	client := fixture.client
+	if len(client.javaRun.workers) != 1 {
+		t.Fatalf("the fixture started %d threads", len(client.javaRun.workers))
+	}
+	worker := client.javaRun.workers[0]
+	cause := errors.New("the title stopped")
+	failure := startFailure(client, cause)
+	if !errors.Is(failure, cause) {
+		t.Fatalf("the failure reports %v", failure)
+	}
+	if !worker.done || !client.javaThreadsStopped || len(client.javaRun.workers) != 0 {
+		t.Fatal("a failed start left the title's thread waiting for a slice")
 	}
 }

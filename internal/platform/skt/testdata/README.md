@@ -246,14 +246,14 @@ JAR's `META-INF/MANIFEST.MF`.
 | JAR | Source | Manifest | Used by |
 | --- | --- | --- | --- |
 | `arithmetic.jar` | `internal/jvm/testdata/Arithmetic.java` | `MANIFEST.MF` | `runtime_test.go` (JAR to bytecode execution) |
-| `lifecycle.jar` | `src/LifecycleMIDlet.java` | `LIFECYCLE.MF` | `runtime_test.go`, `destroy_wait_review_test.go` (`hangNextDestroy("loop")` and `("wait")`), `cmd/cli/exit_test.go` |
+| `lifecycle.jar` | `src/LifecycleMIDlet.java` | `LIFECYCLE.MF` | `runtime_test.go` (with `hangNextDestroy("loop")` and `("wait")`), `cmd/cli/exit_test.go` |
 | `deferred-start.jar` | `src/LifecycleMIDlet.java` | `DEFERRED_START.MF` (`Fixture-Defer-Start: true`) | `runtime_test.go` |
 | `runtime-failure.jar` | `src/LifecycleMIDlet.java` | `RUNTIME_FAILURE.MF` (`Fixture-Fail-Start: true`) | `runtime_test.go`, `cmd/cli/exit_test.go` |
-| `hang-destroy.jar` | `src/LifecycleMIDlet.java` | `HANG_DESTROY.MF` (`Fixture-Hang-Destroy: wait`, a `destroyApp` that waits for a notification nobody sends) | `internal/webhost/close_sessions_review_test.go` and `web/acceptance/android-lifecycle.mjs`, through `hang-destroy-skt.zip` |
+| `hang-destroy.jar` | `src/LifecycleMIDlet.java` | `HANG_DESTROY.MF` (`Fixture-Hang-Destroy: wait`, a `destroyApp` that waits for a notification nobody sends) | `internal/webhost/shutdown_test.go` and `web/acceptance/android-lifecycle.mjs`, through `hang-destroy-skt.zip` |
 | `display.jar` | `src/DisplayMIDlet.java` | `DISPLAY.MF` | `runtime_test.go` (display selection) |
 | `canvas.jar` | `src/CanvasMIDlet.java`, resources `fixture.png` and `data.bin` from `FIXTURE.PNG.b64` and `DATA.BIN.b64` | `CANVAS.MF` | `runtime_test.go`, `internal/platform/detect` |
 | `connector.jar` | `src/ConnectorMIDlet.java` | `CONNECTOR.MF` | `connector_test.go` |
 | `recordstore.jar` | `src/RecordStoreMIDlet.java` | `RECORDSTORE.MF` | `rms_test.go`; recipe in [`rms.md`](../../../../docs/rms.md) |
 | `ui.jar` | `src/UIMIDlet.java` | `UI.MF` | `lcdui_test.go`; recipe in [`lcdui.md`](../../../../docs/lcdui.md) |
 | `skvm.jar` | `src/SKVMMIDlet.java` | `SKVM.MF` | `skt_test.go`; recipe in [SKT history](../../../../docs/history/skt.md#implementation-validation) |
-| `jvm-contracts.jar` | `src/JVMContractsMIDlet.java` | `JVM_CONTRACTS.MF` | `jvm_contracts_review_test.go` (interpreter and core-library contracts through a MIDlet JAR) |
+| `jvm-contracts.jar` | `src/JVMContractsMIDlet.java` | `JVM_CONTRACTS.MF` | `jvm_contracts_test.go` (interpreter and core-library contracts through a MIDlet JAR) |

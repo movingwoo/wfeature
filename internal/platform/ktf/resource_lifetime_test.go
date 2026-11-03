@@ -2,11 +2,13 @@ package ktf
 
 import (
 	"runtime"
+	goruntime "runtime"
 	"testing"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
 
 func makeOrphanImage(t *testing.T, rt *initializationRuntime) uint32 {
@@ -51,7 +53,7 @@ func makeOrphanClip(t *testing.T, rt *initializationRuntime, play bool) backend.
 	t.Helper()
 	object := &jvm.Object{ClassName: "org/kwis/msp/media/Clip"}
 	state := rt.clip(object)
-	handle, err := rt.client.Audio.Load(oneNoteSMAF())
+	handle, err := rt.client.Audio.Load(wipicrttest.OneNoteSMAF())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,4 +137,76 @@ func TestGuestImageCollectionAndReusedSurfaceOwnership(t *testing.T) {
 		t.Fatal("old owner freed the replacement surface")
 	}
 	runtime.KeepAlive(object)
+}
+
+func orphanDecodedImageSurface(t *testing.T, rt *initializationRuntime) uint32 {
+	t.Helper()
+	value, err := runtimeImageFromEncoded(rt, wipicrttest.EncodePalettedPNG(t, 2, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, _ := value.Reference()
+	handle, err := rt.imageFramebufferHandle(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handle
+}
+
+func orphanCopiedImageSurface(t *testing.T, rt *initializationRuntime, source jvm.Value, sub bool) uint32 {
+	t.Helper()
+	var value jvm.Value
+	var err error
+	if sub {
+		value, err = runtimeImageCreateSubImage(rt, rt.client.vm, []jvm.Value{source, jvm.IntValue(0), jvm.IntValue(0), jvm.IntValue(1), jvm.IntValue(1), jvm.IntValue(0)})
+	} else {
+		value, err = runtimeImageCreateCopy(rt, rt.client.vm, []jvm.Value{source})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, _ := value.Reference()
+	handle, err := object.Fields["guestFramebuffer:I"].Int32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return uint32(handle)
+}
+
+// The frame buffer a decoded image is rasterized into on first use, and the
+// one createImage(Image) and createSubImage copy into, go back to the arena
+// when the image dies, as createImage(int, int) always did.
+func TestImageSurfacesMadeLazilyOrByCopyAreReclaimed(t *testing.T) {
+	_, rt := newTestRuntime(t)
+	for i := 0; i < 4; i++ {
+		handle := orphanDecodedImageSurface(t, rt)
+		goruntime.GC()
+		rt.collectHostObjects()
+		if _, exists := rt.WIPICAllocations[handle]; exists {
+			t.Fatal("a dead decoded image kept the frame buffer it was rasterized into")
+		}
+	}
+	source, err := runtimeImageFromEncoded(rt, wipicrttest.EncodePalettedPNG(t, 2, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceObject, _ := source.Reference()
+	sourceHandle, err := rt.imageFramebufferHandle(sourceObject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sub := range []bool{false, true} {
+		for i := 0; i < 4; i++ {
+			handle := orphanCopiedImageSurface(t, rt, source, sub)
+			goruntime.GC()
+			rt.collectHostObjects()
+			if _, exists := rt.WIPICAllocations[handle]; exists {
+				t.Fatalf("a dead copied image (sub-image %v) kept its frame buffer", sub)
+			}
+			if _, exists := rt.WIPICAllocations[sourceHandle]; !exists {
+				t.Fatal("a live source image lost its frame buffer")
+			}
+		}
+	}
+	goruntime.KeepAlive(sourceObject)
 }

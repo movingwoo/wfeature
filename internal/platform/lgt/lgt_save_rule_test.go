@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 // The save rule every platform's file layer keeps, from the side of the store:
@@ -105,7 +107,7 @@ func TestATruncatingOpenEmptiesTheStoreAtTheOpen(t *testing.T) {
 // the session, which every read of the path sees, and which the ending gives
 // the store again.
 func TestATruncationTheStoreRefusedIsAWriteThatWaits(t *testing.T) {
-	client, store, files := reviewFiles(t, map[string]string{"fs/slot.dat": "OLD SAVE"})
+	client, store, files := fileFixture(t, map[string]string{"fs/slot.dat": "OLD SAVE"})
 	store.refuse = true
 	handle := files.open("slot.dat", fileOpenWriteTruncate)
 	store.refuse = false
@@ -491,7 +493,7 @@ func TestOpeningAMissingFileForWritingCreatesIt(t *testing.T) {
 	}
 	for _, flag := range []uint32{fileOpenWriteOnly, fileOpenWriteTruncate, fileOpenReadWrite} {
 		t.Run(fmt.Sprintf("MC_fsOpen flag %d", flag), func(t *testing.T) {
-			client, store, files := reviewFiles(t, nil)
+			client, store, files := fileFixture(t, nil)
 			handle := files.open("made.dat", flag)
 			made(t, client, store, files)
 			files.close(handle)
@@ -532,7 +534,7 @@ func TestOpeningAMissingFileForWritingCreatesIt(t *testing.T) {
 		}
 	})
 	t.Run("a create the store refuses", func(t *testing.T) {
-		client, store, files := reviewFiles(t, nil)
+		client, store, files := fileFixture(t, nil)
 		store.refuse = true
 		handle := files.open("made.dat", fileOpenReadWrite)
 		if size, found := files.stat("made.dat"); !found || size != 0 || store.held("fs/made.dat") != "<absent>" {
@@ -552,7 +554,7 @@ func TestOpeningAMissingFileForWritingCreatesIt(t *testing.T) {
 // Rule 2. A handle closed last does not put the file as it was when that
 // handle was opened over a write another handle made in the meantime.
 func TestTheLastCloseKeepsAnotherHandlesWrite(t *testing.T) {
-	_, store, files := reviewFiles(t, map[string]string{"fs/save.dat": "0123456789"})
+	_, store, files := fileFixture(t, map[string]string{"fs/save.dat": "0123456789"})
 	first := files.open("save.dat", fileOpenReadWrite)
 	second := files.open("save.dat", fileOpenReadWrite)
 	files.write(second, "XY")
@@ -606,7 +608,7 @@ func TestTheEndingGivesTheStoreWhatItRefusedEarlier(t *testing.T) {
 // file: the ending does not bring the file back. A write through that handle
 // after the removal is a write of the path, which is back at once.
 func TestARemovalTakesTheWritesWaitingOnTheFile(t *testing.T) {
-	client, store, files := reviewFiles(t, map[string]string{"fs/save.dat": "stored"})
+	client, store, files := fileFixture(t, map[string]string{"fs/save.dat": "stored"})
 	handle := files.open("save.dat", fileOpenReadWrite)
 	files.write(handle, "pending")
 	callSlot(t, client, slotFsRemove, files.name("save.dat"))
@@ -646,7 +648,7 @@ func (store keyRefusingWrites) StoreSave(name string, data []byte) error {
 // bytes the removal hid. The session itself sees the write, which waits in
 // its handle.
 func TestARefusedWriteLeavesTheRemovalOnTheList(t *testing.T) {
-	client, store, files := reviewFiles(t, map[string]string{"fs/save.dat": "the removed save"})
+	client, store, files := fileFixture(t, map[string]string{"fs/save.dat": "the removed save"})
 	callSlot(t, client, slotFsRemove, files.name("save.dat"))
 	client.saveStore = keyRefusingWrites{faultStore: store, key: "fs/save.dat"}
 	// The open makes the file again, which is a write of the path too, and
@@ -746,5 +748,370 @@ func TestDataBaseObjectsOnOneDatabaseAreOneSetOfRecords(t *testing.T) {
 	attempts := store.attempts
 	if _, err := fixture.session.CaptureCheckpoint(ctx); err != nil || store.attempts != attempts {
 		t.Fatalf("a quick save after the deletion = %v, after %d store writes", err, store.attempts-attempts)
+	}
+}
+
+// What the review of the 2026-10-17 file fixes found: a rewrite a stream
+// outlived recorded as one in progress, a list read on the live session for a
+// packaged file, a packaged Korean name not known under its raw spelling, a
+// read-only close refused for another handle's write, a rename onto a name with
+// no save, a backslash path the removal list dropped, a wrapper's close that
+// left its stream's file open, an adapter over no store that kept every file
+// twice, and a database name a refused index lost.
+
+// A handle opened only to read has nothing of its own to store, so its close
+// succeeds while another handle's write waits on a store that refuses it, in
+// C and in Java alike. The write is stored by its own handle's close.
+func TestAReadOnlyCloseIgnoresAnotherHandlesRefusedWrite(t *testing.T) {
+	ctx := context.Background()
+	client, store, files := fileFixture(t, map[string]string{"fs/save.dat": "stored"})
+	writer := files.open("save.dat", fileOpenReadWrite)
+	files.write(writer, "new")
+	store.refuse = true
+	reader := files.open("save.dat", fileOpenReadOnly)
+	if result := int32(callSlot(t, client, slotFsClose, reader)); result != 0 {
+		t.Fatalf("a read-only close answered %d", result)
+	}
+	object := openJavaFile(t, client, "save.dat", 1)
+	if _, err := javaFileClose(client, ctx, client.thread, []uint32{object}); err != nil {
+		t.Fatalf("a read-only File's close answered %v", err)
+	}
+	store.refuse = false
+	files.close(writer)
+	if got := store.held("fs/save.dat"); got != "newred" {
+		t.Fatalf("the writer's close stored %q", got)
+	}
+}
+
+// A rename onto a name the store cannot hold is refused with the
+// specification's bad-name code, and the file stays where it was.
+func TestARenameOntoANameWithNoSaveIsRefused(t *testing.T) {
+	client, store, files := fileFixture(t, map[string]string{"fs/save.dat": "progress"})
+	for _, target := range []string{"__databases__.db", ".created", ".removed/x"} {
+		if got := int32(callSlot(t, client, slotFsRename, files.name("save.dat"), files.name(target))); got != wipiBadFileName {
+			t.Fatalf("a rename onto %q answered %d, want %d", target, got, wipiBadFileName)
+		}
+		if !files.exists("save.dat") {
+			t.Fatalf("the rename onto %q took the file away", target)
+		}
+	}
+	if got := store.held("fs/save.dat"); got != "progress" {
+		t.Fatalf("the save holds %q", got)
+	}
+}
+
+// A backslash separates a path as a slash does, which is how the archive
+// lookup reads it: a removal of the backslash spelling hides the packaged
+// file, in this session and the next, and a write of one is stored under the
+// slash path. An entry an earlier build wrote with one is one of that build's
+// other spellings: it still hides that spelling, and a rewrite of the list
+// keeps it.
+func TestABackslashPathIsTheSlashPath(t *testing.T) {
+	client, store, files := fileFixture(t, nil)
+	callSlot(t, client, slotFsRemove, files.name(`data\hello.txt`))
+	if files.exists("data/hello.txt") {
+		t.Fatal("the packaged file is still there after its removal")
+	}
+	handle := files.open(`data\saved.dat`, fileOpenReadWrite)
+	files.write(handle, "kept")
+	files.close(handle)
+	if got := store.held("fs/data/saved.dat"); got != "kept" {
+		t.Fatalf("a write of a backslash path stored %q", got)
+	}
+	next := fixtureClient(t)
+	next.saveStore = store
+	nextFiles := newGuestFiles(t, next)
+	if nextFiles.exists("data/hello.txt") {
+		t.Fatal("the removed packaged file came back in the next session")
+	}
+	store.behind(t, fileRemovedKey, `data\other.txt`)
+	earlier := fixtureClient(t)
+	earlier.saveStore = store
+	earlierFiles := newGuestFiles(t, earlier)
+	if earlierFiles.exists(`data\other.txt`) {
+		t.Fatal("an earlier build's backslash entry no longer hides its spelling")
+	}
+	callSlot(t, earlier, slotFsRemove, earlierFiles.name("data/hello.txt"))
+	if list := store.held(fileRemovedKey); !strings.Contains(list, `data\other.txt`) {
+		t.Fatalf("a rewrite of the list dropped the earlier build's entry: %q", list)
+	}
+}
+
+// An authentication adapter over no store keeps the file it rewrites and
+// nothing else, and the session keeps the title's other files itself, within
+// its bound: once, not twice.
+func TestAnAdapterOverNoStoreKeepsOnlyItsOwnFile(t *testing.T) {
+	client := fixtureClient(t)
+	contract := &certificate100Contract{name: "state.dat", application: client.archive.Descriptor.AID, token: "Example"}
+	adapter := newAuthenticationCertificate100Store(nil, contract)
+	client.saveStore = adapter
+	files := newGuestFiles(t, client)
+	handle := files.open("save.dat", fileOpenReadWrite)
+	files.write(handle, "progress")
+	files.close(handle)
+	if _, held := adapter.volatile["fs/save.dat"]; held {
+		t.Fatal("the adapter kept the title's save beside the session")
+	}
+	if got := string(client.sessionFiles["fs/save.dat"]); got != "progress" {
+		t.Fatalf("the session keeps %q", got)
+	}
+	reader := files.open("save.dat", fileOpenReadOnly)
+	if got := files.read(reader, 16); got != "progress" {
+		t.Fatalf("the save reads %q", got)
+	}
+	files.close(reader)
+}
+
+// The file and record store boundary, from the side a title cannot see: what
+// reaches the save store, and what one view of a file tells another.
+
+// fileFixture is a client over a store of its own, driven through the file
+// slots the way a Clet drives them.
+func fileFixture(t *testing.T, entries map[string]string) (*Client, *faultStore, *guestFiles) {
+	t.Helper()
+	store := newFaultStore(t, entries)
+	client := fixtureClient(t)
+	client.saveStore = store
+	return client, store, newGuestFiles(t, client)
+}
+
+// A file opened to be rewritten is empty from the open on, in the store as
+// well, and stays empty when the title closes it without writing: that is how
+// a title clears a save slot.
+func TestATruncatingOpenEmptiesTheSaveWithoutAWrite(t *testing.T) {
+	store := newFaultStore(t, map[string]string{"fs/slot.dat": "OLD SAVE", "fs/java.dat": "OLD SAVE"})
+	fixture := newJavaThreadFixture(t, store)
+	client := fixture.client
+	files := newGuestFiles(t, client)
+	handle := files.open("slot.dat", fileOpenWriteTruncate)
+	info, err := client.allocate(12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if callSlot(t, client, slotFsFileAttribute, files.name("slot.dat"), info) != 0 {
+		t.Fatal("the file being rewritten is not there")
+	}
+	if size, _ := client.readWord(info + 8); size != 0 {
+		t.Fatalf("the file being rewritten reports %d bytes", size)
+	}
+	// The open emptied the store already, so a session the Host ends here
+	// leaves the slot cleared.
+	if got := store.held("fs/slot.dat"); got != "" {
+		t.Fatalf("after the truncating open the store holds %q", got)
+	}
+	client.flushOpenFiles()
+	files.close(handle)
+	if got := store.held("fs/slot.dat"); got != "" {
+		t.Fatalf("after a truncating open and a close the store holds %q", got)
+	}
+	// Java's truncating mode is the same open.
+	object := openJavaFile(t, client, "java.dat", 3)
+	if _, err := javaFileClose(client, context.Background(), client.thread, []uint32{object}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.held("fs/java.dat"); got != "" {
+		t.Fatalf("after File(name, 3).close() the store holds %q", got)
+	}
+}
+
+// A close the store refuses keeps the write: the handle stays open with it, the
+// title is told the close failed, and the ending and a later close try again.
+func TestAWriteTheStoreRefusesAtCloseIsKept(t *testing.T) {
+	client, store, files := fileFixture(t, map[string]string{"fs/save.dat": "old"})
+	handle := files.open("save.dat", fileOpenReadWrite)
+	files.write(handle, "new")
+	store.refuse = true
+	if got := int32(callSlot(t, client, slotFsClose, handle)); got != wipiError {
+		t.Fatalf("a close the store refused answered %d", got)
+	}
+	if open := client.files[handle]; open == nil || !open.dirty || string(open.data) != "new" {
+		t.Fatalf("a close the store refused dropped the write: %+v", open)
+	}
+	client.flushOpenFiles()
+	if open := client.files[handle]; !open.dirty {
+		t.Fatal("an ending the store refused marked the write stored")
+	}
+	store.refuse = false
+	client.flushOpenFiles()
+	if store.held("fs/save.dat") != "new" || client.files[handle].dirty {
+		t.Fatalf("the ending stored %q", store.held("fs/save.dat"))
+	}
+	files.close(handle)
+	if client.files[handle] != nil {
+		t.Fatal("a close the store took left the handle open")
+	}
+	// A rename whose new name the store refuses leaves the old name in place.
+	store.refuse = true
+	if got := int32(callSlot(t, client, slotFsRename, files.name("save.dat"), files.name("moved.dat"))); got != wipiError {
+		t.Fatalf("a rename the store refused answered %d", got)
+	}
+	store.refuse = false
+	if !files.exists("save.dat") || files.exists("moved.dat") {
+		t.Fatal("a rename the store refused removed the old name or made the new one")
+	}
+
+	// A Java File closed over a refusing store stays open with its write, and
+	// the title is thrown the IOException the close declares.
+	fixture := newJavaThreadFixture(t, store)
+	java := fixture.client
+	object := openJavaFile(t, java, "java.dat", 4)
+	if _, err := javaFileWriteByte(java, context.Background(), java.thread, []uint32{object, 'J'}); err != nil {
+		t.Fatal(err)
+	}
+	store.refuse = true
+	if _, err := javaFileClose(java, context.Background(), java.thread, []uint32{object}); thrownClass(err) != javaIOExceptionClass {
+		t.Fatalf("a File close the store refused answered %v", err)
+	}
+	if _, open, err := java.javaFileHandle(object); err != nil || !open.dirty {
+		t.Fatalf("a File close the store refused dropped the write: %v", err)
+	}
+	store.refuse = false
+	if _, err := javaFileClose(java, context.Background(), java.thread, []uint32{object}); err != nil {
+		t.Fatal(err)
+	}
+	if store.held("fs/java.dat") != "J" {
+		t.Fatalf("the second close stored %q", store.held("fs/java.dat"))
+	}
+	if _, _, err := java.javaFileHandle(object); err == nil {
+		t.Fatal("a close the store took left the File open")
+	}
+}
+
+func mustByteArray(t *testing.T, client *Client, text string) uint32 {
+	t.Helper()
+	array, err := client.newJavaByteArray([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return array
+}
+
+// A platform list and the scope itself are not guest files: a title cannot
+// open a file under one of those names — the file calls refuse it as a name
+// no file can have — so it cannot change what the platform reads back as its
+// list, or put a file where the scope's directory is.
+func TestAGuestFileCannotTakeThePlatformsKeys(t *testing.T) {
+	t.Run("the path lists", func(t *testing.T) {
+		client, store, files := fileFixture(t, nil)
+		kept := files.open("real.dat", fileOpenReadWrite)
+		files.write(kept, "keep")
+		files.close(kept)
+		for _, name := range []string{"/.removed", ".CREATED", "/.created/inside", "/.Directories"} {
+			if handle := int32(callSlot(t, client, slotFsOpen, files.name(name), fileOpenReadWrite)); handle != wipiBadFileName {
+				t.Fatalf("open %q answered %d, want M_E_BADFILENAME", name, handle)
+			}
+		}
+		if strings.Contains(store.held("fs/.removed"), "real.dat") || strings.Contains(store.held("fs/.created"), "bogus") {
+			t.Fatalf("the guest wrote over the platform's lists: %q, %q", store.held("fs/.removed"), store.held("fs/.created"))
+		}
+		next := fixtureClient(t)
+		next.saveStore = store
+		if _, exists := next.readFile("real.dat"); !exists {
+			t.Fatal("the next session reads a guest file as its removal list")
+		}
+		if containsName(next.listDirectory("/"), "bogus") {
+			t.Fatal("the next session lists a guest file's contents")
+		}
+	})
+	// A directory store keeps the scope as a directory, and a file put where
+	// it has to be leaves every later save with nowhere to go.
+	t.Run("the scope itself", func(t *testing.T) {
+		root := t.TempDir()
+		client := fixtureClient(t)
+		client.saveStore = backend.NewDirectorySaveStore(root)
+		files := newGuestFiles(t, client)
+		if handle := int32(callSlot(t, client, slotFsOpen, files.name("/"), fileOpenReadWrite)); handle != wipiBadFileName {
+			t.Fatalf("open \"/\" answered %d, want M_E_BADFILENAME", handle)
+		}
+		handle := files.open("real.dat", fileOpenReadWrite)
+		files.write(handle, "keep")
+		files.close(handle)
+		data, found, err := backend.ReadSave(backend.NewDirectorySaveStore(root), "fs/real.dat")
+		if err != nil || !found || string(data) != "keep" {
+			t.Fatalf("after a write of \"/\" the save store holds %q for real.dat (found=%t, err=%v)", data, found, err)
+		}
+	})
+}
+
+// A removal hides the file under every spelling the store gives one key to,
+// and only that file: a name that differs only by case is another file.
+func TestARemovalHidesTheFileUnderEverySpelling(t *testing.T) {
+	client, _, files := fileFixture(t, map[string]string{"fs/save.dat": "progress", "fs/SAVE.DAT": "another file"})
+	if callSlot(t, client, slotFsRemove, files.name("./save.dat")) != 0 {
+		t.Fatal("the remove was refused")
+	}
+	spellings := []string{"save.dat", "/save.dat", "//save.dat", "./save.dat"}
+	for _, spelling := range spellings {
+		if files.exists(spelling) {
+			t.Fatalf("%q exists after the file was removed as ./save.dat", spelling)
+		}
+	}
+	if !files.exists("SAVE.DAT") {
+		t.Fatal("removing ./save.dat removed SAVE.DAT")
+	}
+	handle := files.open("//save.dat", fileOpenReadWrite)
+	files.write(handle, "new game")
+	files.close(handle)
+	for _, spelling := range spellings {
+		if !files.exists(spelling) {
+			t.Fatalf("%q is missing after the file was written as //save.dat", spelling)
+		}
+	}
+}
+
+// A removal list an earlier build wrote keeps meaning what it meant. An entry
+// under a spelling other than the plain one hid that spelling only, and the
+// file may have been written since under the plain one, which the earlier
+// build did not clear; so such an entry still hides that spelling only. A write
+// under any spelling clears it.
+func TestARemovalListFromAnEarlierBuildKeepsItsMeaning(t *testing.T) {
+	_, store, files := fileFixture(t, map[string]string{
+		"fs/save.dat": "written after the removal",
+		"fs/gone.dat": "removed",
+		"fs/.removed": "./save.dat\ngone.dat",
+	})
+	if files.exists("gone.dat") || files.exists("./gone.dat") {
+		t.Fatal("a plain entry no longer hides its file")
+	}
+	if !files.exists("save.dat") || files.exists("./save.dat") {
+		t.Fatal("an entry under another spelling changed its meaning")
+	}
+	handle := files.open("save.dat", fileOpenReadWrite)
+	files.write(handle, "again")
+	files.close(handle)
+	if !files.exists("./save.dat") || strings.Contains(store.held("fs/.removed"), "save.dat") {
+		t.Fatalf("a write left the earlier entry behind: %q", store.held("fs/.removed"))
+	}
+}
+
+// A write waiting in an open handle is what a second open, a stat and a rename
+// of the same path see, and a rename takes the handle with the file.
+func TestAnUnclosedWriteIsWhatTheNextOpenSees(t *testing.T) {
+	client, store, files := fileFixture(t, map[string]string{"fs/save.dat": "old"})
+	writer := files.open("save.dat", fileOpenReadWrite)
+	files.write(writer, "newer progress")
+	reader := files.open("./save.dat", fileOpenReadOnly)
+	if got := files.read(reader, 32); got != "newer progress" {
+		t.Fatalf("a second open reads %q", got)
+	}
+	files.close(reader)
+	info, err := client.allocate(12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if callSlot(t, client, slotFsFileAttribute, files.name("save.dat"), info) != 0 {
+		t.Fatal("the stat was refused")
+	}
+	if size, _ := client.readWord(info + 8); size != uint32(len("newer progress")) {
+		t.Fatalf("the stat reports %d bytes", size)
+	}
+	if callSlot(t, client, slotFsRename, files.name("save.dat"), files.name("moved.dat")) != 0 {
+		t.Fatal("the rename was refused")
+	}
+	files.write(writer, "!")
+	files.close(writer)
+	if store.held("fs/moved.dat") != "newer progress!" || files.exists("save.dat") {
+		t.Fatalf("after the rename and the close the store holds %q, and the old name exists: %t",
+			store.held("fs/moved.dat"), files.exists("save.dat"))
 	}
 }

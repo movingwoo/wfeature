@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/testlocal"
 	"github.com/movingwoo/wfeature/internal/wsproto"
 )
 
@@ -25,10 +26,7 @@ import (
 // the runner resolving an engine off the session, and the page deciding a
 // panel belongs on this platform. A build that compiles proves neither.
 func TestLocalCheatProbe(t *testing.T) {
-	path := os.Getenv("WFEATURE_CHEAT_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_CHEAT_ARCHIVE to a local game archive")
-	}
+	path := testlocal.Value(t, "WFEATURE_CHEAT_ARCHIVE", "a local game archive")
 	archive, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

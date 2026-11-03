@@ -2,6 +2,7 @@ package lgt
 
 import (
 	"bytes"
+	"context"
 	"testing"
 )
 
@@ -48,5 +49,39 @@ func TestJavaFileModesPreserveReadWriteAndTruncateExplicitly(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A DataInputStream is the stream it wraps, so closing the wrapper lets go of
+// the file the stream under it holds open after its File closed, at once
+// rather than at a collection.
+func TestClosingAWrapperLetsTheFileUnderItGo(t *testing.T) {
+	ctx := context.Background()
+	store := newFaultStore(t, map[string]string{"fs/save.dat": "0123"})
+	fixture := newJavaThreadFixture(t, store)
+	client := fixture.client
+	object := openJavaFile(t, client, "save.dat", 1)
+	stream, err := javaFileOpenInputStream(client, ctx, client.thread, []uint32{object})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper, err := newTestObject(t, client, javaDataInputStreamClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaWrapStream(client, ctx, client.thread, []uint32{wrapper, stream}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaFileClose(client, ctx, client.thread, []uint32{object}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaStreamClose(client, ctx, client.thread, []uint32{wrapper}); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.files) != 0 || len(client.javaRun.files) != 0 {
+		t.Fatalf("closing the wrapper left %d handles and %d bindings", len(client.files), len(client.javaRun.files))
+	}
+	if _, err := javaStreamClose(client, ctx, client.thread, []uint32{stream}); err != nil {
+		t.Fatalf("closing the stream after its wrapper answered %v", err)
 	}
 }

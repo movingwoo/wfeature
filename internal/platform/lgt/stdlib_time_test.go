@@ -31,7 +31,7 @@ func callStdlib(t *testing.T, client *Client, slot uint32, arguments ...uint32) 
 // a tm struct. One does: it calls localtime and loads the field at offset 4
 // straight off the result, so a null answer faulted in the title's own code
 // with nothing to say the platform had caused it.
-func TestLocaltimeAnswersAStructRatherThanNull(t *testing.T) {
+func TestTheLocaltimeAnswersAStructRatherThanNull(t *testing.T) {
 	client := fixtureClient(t)
 
 	// A time_t the guest points at, rather than the guest clock: the argument
@@ -78,7 +78,7 @@ func TestLocaltimeAnswersAStructRatherThanNull(t *testing.T) {
 // ANSI C says the caller does not own localtime's result, so a second call
 // has to land in the same storage rather than allocating a new struct every
 // time — a title calling it once a frame would otherwise exhaust the arena.
-func TestLocaltimeReusesItsStorage(t *testing.T) {
+func TestTheLocaltimeReusesItsStorage(t *testing.T) {
 	client := fixtureClient(t)
 
 	first := callStdlib(t, client, stdlibLocaltime, 0)
@@ -90,7 +90,7 @@ func TestLocaltimeReusesItsStorage(t *testing.T) {
 
 // A null argument means "use the current time" rather than "fail", because
 // the guest clock is the only time this platform has.
-func TestLocaltimeWithoutATimeUsesTheGuestClock(t *testing.T) {
+func TestTheLocaltimeWithoutATimeUsesTheGuestClock(t *testing.T) {
 	client := fixtureClient(t)
 
 	result := callStdlib(t, client, stdlibLocaltime, 0)

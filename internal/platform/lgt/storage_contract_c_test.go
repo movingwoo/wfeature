@@ -91,7 +91,7 @@ func (files *contractFiles) attribute(name string) (int32, [3]uint32) {
 // is the longest name and a longer one is M_E_LONGNAME — to every C call that
 // takes a name.
 func TestStorageContractCNames(t *testing.T) {
-	client, _, _ := reviewFiles(t, nil)
+	client, _, _ := fileFixture(t, nil)
 	files := newContractFiles(t, client)
 	files.save("/save.dat", "one")
 	for _, spelling := range []string{"save.dat", "./save.dat", "//save.dat", "/./save.dat", "\\save.dat", ".\\save.dat"} {
@@ -170,7 +170,7 @@ func TestStorageContractCNames(t *testing.T) {
 // — one made, one a file lies below, and the root. A parent nobody made is
 // not asked for.
 func TestStorageContractCMakeDirectory(t *testing.T) {
-	client, _, _ := reviewFiles(t, nil)
+	client, _, _ := fileFixture(t, nil)
 	files := newContractFiles(t, client)
 	files.save("save.dat", "x")
 	if code := files.code(slotFsMkDir, "saves", 1); code != wipiSuccess {
@@ -190,7 +190,7 @@ func TestStorageContractCMakeDirectory(t *testing.T) {
 // anything below it, a file or a made directory; M_E_NOENT for a name that is
 // not a directory, a file's included; M_E_BADFILENAME for the root.
 func TestStorageContractCRemoveDirectory(t *testing.T) {
-	client, _, _ := reviewFiles(t, nil)
+	client, _, _ := fileFixture(t, nil)
 	files := newContractFiles(t, client)
 	files.save("full/slot.dat", "x")
 	files.save("save.dat", "x")
@@ -229,7 +229,7 @@ func TestStorageContractCRemoveDirectory(t *testing.T) {
 // MC_FILE_IS_DIR and size 0 for a directory, creation time 0 for both, and
 // M_E_NOENT for a missing name. A name that is a file is not a directory.
 func TestStorageContractCExistsAndKind(t *testing.T) {
-	client, _, _ := reviewFiles(t, nil)
+	client, _, _ := fileFixture(t, nil)
 	files := newContractFiles(t, client)
 	files.save("save.dat", "twelve bytes")
 	files.save("below/slot.dat", "x")
@@ -269,7 +269,7 @@ func TestStorageContractCExistsAndKind(t *testing.T) {
 // buffer M_E_SHORTBUF with nothing written. MC_fsGetCounts counts the same
 // names.
 func TestStorageContractCListAndCount(t *testing.T) {
-	client, _, _ := reviewFiles(t, nil)
+	client, _, _ := fileFixture(t, nil)
 	files := newContractFiles(t, client)
 	files.save("dir/b.dat", "x")
 	files.save("dir/a.dat", "x")
@@ -319,7 +319,7 @@ func TestStorageContractCListAndCount(t *testing.T) {
 // Mode: 1 to 3 and 0x10, 0x20, 0x30 are accepted for a file or a directory and
 // kept nowhere; another mode is M_E_INVALID; a missing name M_E_NOENT.
 func TestStorageContractCSetMode(t *testing.T) {
-	client, store, _ := reviewFiles(t, nil)
+	client, store, _ := fileFixture(t, nil)
 	files := newContractFiles(t, client)
 	files.save("save.dat", "x")
 	files.code(slotFsMkDir, "made", 1)
@@ -353,7 +353,7 @@ func TestStorageContractCSetMode(t *testing.T) {
 // Remove a file: 0, and M_E_NOENT for a name that is not a file — missing, a
 // directory, the root — which changes nothing.
 func TestStorageContractCRemove(t *testing.T) {
-	client, _, _ := reviewFiles(t, nil)
+	client, _, _ := fileFixture(t, nil)
 	files := newContractFiles(t, client)
 	files.save("save.dat", "x")
 	files.code(slotFsMkDir, "made", 1)
@@ -379,7 +379,7 @@ func TestStorageContractCRemove(t *testing.T) {
 // the file is still there in the session and in the next one, and nothing
 // waits to remove it later.
 func TestStorageContractCRemoveRefused(t *testing.T) {
-	client, store, _ := reviewFiles(t, nil)
+	client, store, _ := fileFixture(t, nil)
 	files := newContractFiles(t, client)
 	files.save("save.dat", "kept")
 	store.refuse = true
@@ -406,7 +406,7 @@ func TestStorageContractCRemoveRefused(t *testing.T) {
 // database's record bytes, not the platform's own lists — never below zero,
 // and nothing is refused to keep it true.
 func TestStorageContractCSpace(t *testing.T) {
-	client, _, _ := reviewFiles(t, nil)
+	client, _, _ := fileFixture(t, nil)
 	files := newContractFiles(t, client)
 	quota := uint32(1 << 20)
 	available := func() int32 { return int32(callSlot(t, client, slotFsAvailable)) }
@@ -452,7 +452,7 @@ func TestStorageContractCSpace(t *testing.T) {
 // packaged file rewritten as "//data\hello.txt" counts only what it adds,
 // while the write waits in its handle and once it is stored.
 func TestStorageContractCSpaceSpellings(t *testing.T) {
-	client, _, _ := reviewFiles(t, nil)
+	client, _, _ := fileFixture(t, nil)
 	files := newContractFiles(t, client)
 	quota := int32(1 << 20)
 	handle := files.open("//data\\hello.txt", fileOpenWriteTruncate)
@@ -474,7 +474,7 @@ func TestStorageContractCSpaceSpellings(t *testing.T) {
 // One file holds at most 4 MiB: a write that would pass it fails with
 // M_E_NOSPACE and leaves the file as it was.
 func TestStorageContractCFileBound(t *testing.T) {
-	client, _, _ := reviewFiles(t, nil)
+	client, _, _ := fileFixture(t, nil)
 	files := newContractFiles(t, client)
 	handle := files.open("big.dat", fileOpenReadWrite)
 	if maxFileBytes != 4<<20 {

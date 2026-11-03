@@ -357,3 +357,22 @@ func TestJavaVectorCopyIntoSlotFillsTheFrontOfTheArray(t *testing.T) {
 		t.Fatalf("refused int[] written: %#x, %v", first, err)
 	}
 }
+
+func TestJavaVectorStopsAtTheLargestArrayItCouldBecome(t *testing.T) {
+	client := fixtureClient(t)
+	runtime := client.javaRuntimeState()
+	const vector = 0x7ffff000
+	runtime.vectors[vector] = make([]uint32, maxJavaArrayLength-1)
+	if _, err := javaVectorAdd(client, nil, nil, []uint32{vector, 1}); err != nil {
+		t.Fatalf("the last element that fits: %v", err)
+	}
+	if _, err := javaVectorAdd(client, nil, nil, []uint32{vector, 1}); err == nil {
+		t.Error("addElement past the bound was taken")
+	}
+	if _, err := javaVectorInsertAt(client, nil, nil, []uint32{vector, 1, 0}); err == nil {
+		t.Error("insertElementAt past the bound was taken")
+	}
+	if len(runtime.vectors[vector]) != maxJavaArrayLength {
+		t.Errorf("the vector holds %d elements, want %d", len(runtime.vectors[vector]), maxJavaArrayLength)
+	}
+}

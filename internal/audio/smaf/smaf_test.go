@@ -749,3 +749,50 @@ func hasPlayedFunc(events []Event, match func(Event) bool) bool {
 	}
 	return false
 }
+
+// A data byte with its top bit set is not MIDI. Like the PCM track's controls,
+// a score control carrying one is ignored and the timeline after it is kept.
+func TestScoreControlsWithEightBitDataAreIgnored(t *testing.T) {
+	cases := map[string][]byte{
+		"mobile controller number": buildSMAF(limitsScore(MobileStandardNoCompress, chunk("Mtsq", []byte{
+			0x00, 0xb0, 0x87, 0x10,
+			0x02, 0xb0, 0x07, 0x40,
+		}))),
+		"mobile controller value": buildSMAF(limitsScore(MobileStandardNoCompress, chunk("Mtsq", []byte{
+			0x00, 0xb0, 0x07, 0x90,
+			0x02, 0xb0, 0x07, 0x40,
+		}))),
+		"handset pan": buildSMAF(limitsScore(HandyPhoneStandard, chunk("Mtsq", []byte{
+			0x00, 0x00, 0x3a, 0x90,
+			0x02, 0x00, 0x37, 0x40,
+		}))),
+		"handset modulation": buildSMAF(limitsScore(HandyPhoneStandard, chunk("Mtsq", []byte{
+			0x00, 0x00, 0x33, 0xc8,
+			0x02, 0x00, 0x37, 0x40,
+		}))),
+		"handset volume in a mobile track": buildSMAF(limitsScore(MobileStandardNoCompress, chunk("SEQU", []byte{
+			0x00, 0x00, 0x37, 0x90,
+			0x02, 0x00, 0x37, 0x40,
+		}))),
+		"handset expression in a mobile track": buildSMAF(limitsScore(MobileStandardNoCompress, chunk("SEQU", []byte{
+			0x00, 0x00, 0x36, 0x90,
+			0x02, 0x00, 0x37, 0x40,
+		}))),
+	}
+	for name, data := range cases {
+		t.Run(name, func(t *testing.T) {
+			events, err := Decode(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertPlayableMIDI(t, events)
+			// The well-formed volume after the malformed control still lands
+			// two one-millisecond units later.
+			if !hasPlayedFunc(events, func(event Event) bool {
+				return event.Type == EventControlChange && event.Control == 7 && event.Time == 2
+			}) {
+				t.Fatalf("the control after the malformed one moved or vanished: %+v", events)
+			}
+		})
+	}
+}

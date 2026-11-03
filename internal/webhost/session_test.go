@@ -18,7 +18,6 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
-	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/wsproto"
 )
 
@@ -254,96 +253,6 @@ func TestSessionRunsAGameAndSendsPictures(t *testing.T) {
 	send(t, connection, clientMessage{Kind: clientKey, Action: "release", Code: -6})
 	send(t, connection, clientMessage{Kind: clientKey, Action: "press", Code: 148})
 	expectFrame(t, connection)
-}
-
-// The carrier's earlier download package has to reach a browser through the
-// same protocol as everything else, and the only way to know it does is to
-// drive it: a real handshake, the real archive, real frames, and no browser
-// anywhere. It is opt-in because real games are ignored local data.
-func TestSessionRunsTheEarlierKTFPackage(t *testing.T) {
-	if os.Getenv("WFEATURE_KTF_NATIVE_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_KTF_NATIVE_ACCEPTANCE=1 to run the ignored local KTF native package")
-	}
-	archive, name := localKTFNativePackage(t)
-	root := t.TempDir()
-	gameRoot := filepath.Join(root, "games")
-	if err := os.MkdirAll(filepath.Join(gameRoot, "ktf"), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(gameRoot, "ktf", name), archive, 0o644); err != nil {
-		t.Fatalf("write the archive: %v", err)
-	}
-	server := newTestServer(t, Options{
-		GameRoot: gameRoot,
-		SaveRoot: filepath.Join(root, "savedata", "ktf"),
-		LogRoot:  filepath.Join(root, "logs"),
-	})
-	httpServer := httptest.NewServer(server)
-	t.Cleanup(httpServer.Close)
-	connection, _, err := wsproto.Dial("ws://"+strings.TrimPrefix(httpServer.URL, "http://")+"/api/session", nil)
-	if err != nil {
-		t.Fatalf("dial the session: %v", err)
-	}
-	t.Cleanup(func() { _ = connection.Close() })
-
-	expectMessage(t, connection, serverReady)
-	send(t, connection, clientMessage{Kind: clientStart, Game: "games/ktf/" + name})
-	started := expectMessage(t, connection, serverStarted)
-	if started.Started == nil {
-		t.Fatal("the started message carries no description")
-	}
-	if started.Started.Platform != "ktf" {
-		t.Errorf("platform = %q, want ktf", started.Started.Platform)
-	}
-	if started.Started.Width != 240 || started.Started.Height != 320 {
-		t.Errorf("screen = %dx%d, want 240x320", started.Started.Width, started.Started.Height)
-	}
-	// This platform runs on a memory image with instrumented stores, so the
-	// panel's write-watch control means something here and is offered.
-	if !started.Started.CanWatch {
-		t.Error("a WIPI session said it cannot watch writes; the panel would hide a control that works")
-	}
-	// Without an owner the session would silently play with no persistence,
-	// and this package's owner comes out of its module information file.
-	if started.Started.SaveOwner == "" {
-		t.Error("no save owner")
-	}
-	width, height := expectFrame(t, connection)
-	if width != 240 || height != 320 {
-		t.Fatalf("frame is %dx%d, want 240x320", width, height)
-	}
-	// The key the page sends for fire is what opens this title's own menu, so
-	// a further picture after it is input reaching the game.
-	send(t, connection, clientMessage{Kind: clientKey, Action: "press", Code: 148})
-	send(t, connection, clientMessage{Kind: clientKey, Action: "release", Code: 148})
-	expectFrame(t, connection)
-}
-
-// localKTFNativePackage finds the earlier KTF package in the ignored local
-// game directory, with the name to serve it under.
-func localKTFNativePackage(t *testing.T) ([]byte, string) {
-	t.Helper()
-	directory := filepath.Join("..", "..", "var", "games", "ktf")
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		t.Skipf("read the local KTF game directory: %v", err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".zip" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
-		if err != nil {
-			t.Fatalf("read %s: %v", entry.Name(), err)
-		}
-		if ktf.IsNativeArchive(data) {
-			// The archive's own name is EUC-KR and the served path is a URL,
-			// so it is served under a plain one.
-			return data, "earlier-package.zip"
-		}
-	}
-	t.Skip("no local KTF native package present")
-	return nil, ""
 }
 
 // A handful of titles were packaged for a smaller phone and load their artwork
@@ -876,5 +785,47 @@ func TestTheExitedMessageCarriesItsReason(t *testing.T) {
 	}
 	if !strings.Contains(decoded.Message, "0x1959") {
 		t.Fatalf("the page is not told where the game exited: %q", decoded.Message)
+	}
+}
+
+// The socket's report command writes into the same directory the debug-log
+// route does, so it keeps that route's two rules: a release writes no reports
+// at all, and a debug build writes no more than the rate allows.
+func TestTheSessionReportFollowsTheDebugLogRules(t *testing.T) {
+	connection, logRoot := sessionFixture(t)
+	expectMessage(t, connection, serverReady)
+	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/canvas.zip"})
+	expectMessage(t, connection, serverStarted)
+
+	if !backend.DebugBuild() {
+		send(t, connection, clientMessage{Kind: clientReport, ID: 5})
+		if reply := expectMessage(t, connection, serverError); reply.ID != 5 {
+			t.Fatalf("reply = %+v, want the request refused", reply)
+		}
+		if _, err := os.Stat(logRoot); !os.IsNotExist(err) {
+			t.Fatalf("a release wrote into the log directory anyway (%v)", err)
+		}
+		return
+	}
+
+	for attempt := 0; attempt < debugLogBurst; attempt++ {
+		id := uint64(attempt + 1)
+		// Reports written in one millisecond share a name unless their
+		// labels differ, and the count below is of files.
+		send(t, connection, clientMessage{Kind: clientReport, ID: id, Label: fmt.Sprint("report", attempt)})
+		if reply := expectMessage(t, connection, serverResult); reply.ID != id {
+			t.Fatalf("report %d answered %+v", attempt, reply)
+		}
+	}
+	send(t, connection, clientMessage{Kind: clientReport, ID: 99})
+	if reply := expectMessage(t, connection, serverError); reply.ID != 99 {
+		t.Fatalf("the report over the rate answered %+v", reply)
+	}
+	entries, err := os.ReadDir(logRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != debugLogBurst {
+		t.Fatalf("the log directory holds %d reports, want %d", len(entries), debugLogBurst)
 	}
 }

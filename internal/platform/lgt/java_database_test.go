@@ -1,6 +1,8 @@
 package lgt
 
 import (
+	"context"
+	"reflect"
 	"testing"
 )
 
@@ -180,4 +182,93 @@ func TestJavaDatabaseNameIsAPath(t *testing.T) {
 			t.Errorf("%q was accepted as the database %q", name, got)
 		}
 	}
+}
+
+// Two DataBase objects on one database are one store of records: what one
+// saves, the other reads and keeps, and neither puts an older copy back.
+func TestTwoDataBaseObjectsShareTheirRecords(t *testing.T) {
+	ctx := context.Background()
+	stored := func(t *testing.T, store *faultStore) []string {
+		t.Helper()
+		data, ok := store.MemorySaveStore.LoadSave("jdb/save.db")
+		if !ok {
+			return nil
+		}
+		database := &databaseContent{}
+		if err := database.decode(data); err != nil {
+			t.Fatal(err)
+		}
+		var records []string
+		for index, record := range database.records {
+			if !database.deleted[index] {
+				records = append(records, string(record))
+			}
+		}
+		return records
+	}
+	closeDatabase := func(t *testing.T, client *Client, object uint32) {
+		t.Helper()
+		if _, err := javaCloseDataBase(client, ctx, client.thread, []uint32{object}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("a close after another object saved", func(t *testing.T) {
+		client, store, _ := fileFixture(t, nil)
+		settings := openFixtureDatabase(t, client, "save", 16)
+		insertFixtureRecord(t, client, settings, []byte("settings"))
+		progress := openFixtureDatabase(t, client, "save", 16)
+		insertFixtureRecord(t, client, progress, []byte("progress"))
+		closeDatabase(t, client, progress)
+		closeDatabase(t, client, settings)
+		if got := stored(t, store); !reflect.DeepEqual(got, []string{"settings", "progress"}) {
+			t.Fatalf("the store holds %q", got)
+		}
+	})
+	t.Run("an update after another object saved", func(t *testing.T) {
+		client, store, _ := fileFixture(t, nil)
+		first := openFixtureDatabase(t, client, "save", 16)
+		insertFixtureRecord(t, client, first, []byte("one"))
+		second := openFixtureDatabase(t, client, "save", 16)
+		insertFixtureRecord(t, client, second, []byte("two"))
+		closeDatabase(t, client, second)
+		if count, _ := javaDataBaseRecordCount(client, ctx, client.thread, []uint32{first}); count != 2 {
+			t.Fatalf("the first object counts %d records", count)
+		}
+		array, err := client.newJavaByteArray([]byte("uno"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := javaUpdateRecord(client, ctx, client.thread, []uint32{first, 0, array}); err != nil {
+			t.Fatal(err)
+		}
+		if got := stored(t, store); !reflect.DeepEqual(got, []string{"uno", "two"}) {
+			t.Fatalf("the store holds %q", got)
+		}
+	})
+	t.Run("a close after the database was deleted", func(t *testing.T) {
+		client, store, _ := fileFixture(t, nil)
+		object := openFixtureDatabase(t, client, "save", 16)
+		insertFixtureRecord(t, client, object, []byte("old"))
+		if _, err := javaDeleteDataBase(client, ctx, client.thread, []uint32{newTestString(t, client, "save")}); err != nil {
+			t.Fatal(err)
+		}
+		attempts := store.attempts
+		closeDatabase(t, client, object)
+		if _, exists := client.readFile(databaseFileName("save")); exists || store.attempts != attempts {
+			t.Fatal("closing an object the title changed nothing through brought a deleted database back")
+		}
+	})
+	t.Run("a close retries a refused store", func(t *testing.T) {
+		client, store, _ := fileFixture(t, nil)
+		object := openFixtureDatabase(t, client, "save", 16)
+		store.refuse = true
+		if _, err := javaInsertRecord(client, ctx, client.thread, []uint32{object, mustByteArray(t, client, "kept")}); err != nil {
+			t.Fatal(err)
+		}
+		store.refuse = false
+		closeDatabase(t, client, object)
+		if got := stored(t, store); !reflect.DeepEqual(got, []string{"kept"}) {
+			t.Fatalf("the close stored %q", got)
+		}
+	})
 }

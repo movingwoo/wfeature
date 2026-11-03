@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/testlocal"
 )
 
 // Real games are the only source of SMAF files this project can check itself
@@ -17,9 +19,7 @@ import (
 //
 //	WFEATURE_SMAF_ACCEPTANCE=1 go test ./internal/audio/smaf
 func TestLocalArchiveSMAFFilesPlay(t *testing.T) {
-	if os.Getenv("WFEATURE_SMAF_ACCEPTANCE") != "1" {
-		t.Skip("set WFEATURE_SMAF_ACCEPTANCE=1 to play SMAF files out of local game archives")
-	}
+	testlocal.Enabled(t, "WFEATURE_SMAF_ACCEPTANCE", "play SMAF files out of local game archives")
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate SMAF acceptance test source")

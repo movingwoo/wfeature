@@ -6,6 +6,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
 
 // The guest's vibration used to reach a diagnostic counter and stop there,
@@ -69,7 +70,7 @@ func TestVibratorZeroDurationIsUntilStopped(t *testing.T) {
 // vibrator here — which is the Host's answer rather than this runtime's.
 func TestWIPICVibratorReachesTheSameBoundary(t *testing.T) {
 	runtime := vibrationRuntime(t)
-	if result := mediaCall(t, runtime, wipicrt.WIPICMediaVibrator, 40, 120); result != 0 {
+	if result := wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaVibrator, 40, 120); result != 0 {
 		t.Errorf("MC_mdaVibrator answered %d, want success", result)
 	}
 	state := runtime.client.Vibrator.State()
@@ -79,7 +80,7 @@ func TestWIPICVibratorReachesTheSameBoundary(t *testing.T) {
 
 	// Level zero is how the guest turns it off through this call too; the
 	// local titles pass (0, 0).
-	if result := mediaCall(t, runtime, wipicrt.WIPICMediaVibrator, 0, 0); result != 0 {
+	if result := wipicrttest.MediaCall(t, runtime.Runtime, wipicrt.WIPICMediaVibrator, 0, 0); result != 0 {
 		t.Errorf("MC_mdaVibrator(0, 0) answered %d, want success", result)
 	}
 	if state := runtime.client.Vibrator.State(); state.Active() || state.Request != 2 {

@@ -13,6 +13,8 @@ reasoning behind the probes; [coverage audits](history/coverage.md) keep the
 - [Required gates](#required-gates), [continuous integration](#continuous-integration)
   and [release archives](#release-archives)
 - [Test boundaries](#test-boundaries) and [fuzz targets](#fuzz-targets)
+- [Test layout](#test-layout) and
+  [local tests and their variables](#local-tests-and-their-variables)
 - [Local acceptance](#local-acceptance)
 - [Browser and device acceptance](#browser-and-device-acceptance):
   [grid keypad](#grid-keypad), [rapid-fire input](#rapid-fire-input),
@@ -155,6 +157,116 @@ its entries, and comes back from that list unchanged beside another name. Why
 they exist, and the four-way archive bound every loader enforces
 (`TestAnArchiveIsBoundedFourWays`), is recorded in
 [what a hostile archive may not do](history/testing.md#implementation-what-a-hostile-archive-may-not-do).
+
+## Test layout
+
+Where a test lives says what it checks, so the tests of one behavior are found
+in one file. The rules below are what the
+[test layout cleanup](history/testing.md#test-layout-cleanup-2026-11-02)
+brought the tree to.
+
+- **One subject per file.** A test goes in the file named for the code or the
+  behavior it checks: `<subject>_test.go` beside `<subject>.go`, or a name for
+  the behavior when it spans files (`class_init_test.go`,
+  `local_compatibility_test.go`). A regression test joins the file of the
+  behavior it pins, and its doc comment says what broke. No file is named for
+  the review, pull request, date or session that found its tests.
+- **The WIPI-C engine is tested where it lives.** Behavior of
+  `internal/platform/wipicrt` is tested in that directory, in the black-box
+  package `wipicrt_test`, on the engine `wipicrttest.NewRuntime` builds with no
+  platform above it: KTF's platform values, a small image and a supervisor
+  handler that answers the WIPI-C calls. A platform package keeps the tests that
+  need the platform — KTF's Java bindings and sessions, its record database,
+  its interface tables. Helpers both sides use (`MediaCall`, `DatabaseCall`,
+  `ReadSurfacePixels` and the rest) live in `wipicrttest`, because a `_test.go`
+  file cannot be imported from another package.
+- **Local tests are named and filed as such.** A test that needs what the
+  repository does not hold — a game under `var/games`, a reference binary, an
+  external sample — or that only reports, is named `TestLocal…`, lives in a
+  `local_*_test.go` file, and gates itself through `internal/testlocal`:
+  `Enabled` for a `=1` switch, `Value` for a path, `Int` for a window. `make
+  test` and CI see it skipped; `go test -run '^TestLocal' ./...` lists them
+  all, and [the table below](#local-tests-and-their-variables) names their
+  variables.
+- **A measurement that only reports is kept while it is a tool.** A probe that
+  prints numbers and never fails stays only while it is documented as
+  something to run: here, in the [CLI reference](cli.md), or in
+  [`armcore.md`](armcore.md) for `make pgo`. Once its numbers are recorded, the
+  record goes to the history and the probe goes;
+  `git log --diff-filter=D -- <file>` finds the commit that removed one.
+- **Helpers shared between packages** live in a test-support package that
+  imports nothing that would close a cycle: `internal/testlocal` (gates),
+  `internal/platform/wipicrt/wipicrttest` (the engine),
+  `internal/ladder` (the interactive rungs' judgments and the words of their
+  reports), `internal/testfixture` (authored archives and saves for the
+  session and Host tests). Within one package a helper sits beside the tests
+  that use it most.
+
+### Local tests and their variables
+
+Every local test, with the variable a run needs. A test that reads further
+variables lists them where it is documented: the [CLI reference](cli.md) for
+the diagnostic probes, [`armcore.md`](armcore.md) for the profile runs, the
+[ladder table](#local-acceptance) for the rungs. `=1` marks a switch; the
+others take an absolute path.
+
+| Test | Package | Run with | What it is |
+| --- | --- | --- | --- |
+| `TestLocalArchiveSMAFFilesPlay` | `internal/audio/smaf` | `WFEATURE_SMAF_ACCEPTANCE=1` | every SMAF file in the local archives decodes and plays |
+| `TestLocalADPCMMatchesAnExternalVectorPair` | `internal/audio/smaf` | `WFEATURE_ADPCM_VECTOR` | MA ADPCM against an external sample pair ([audio](audio.md)) |
+| `TestLocalMatchesReferenceImplementation` | `internal/filter/hqx` | `WFEATURE_HQX_REFERENCE` | the scaler against the reference binary, pixel for pixel ([hqx](hqx.md)) |
+| `TestLocalKTFArchivesParse` | `internal/platform/ktf` | `WFEATURE_KTF_ACCEPTANCE=1` | rung 1 |
+| `TestLocalKTFArchivesInitialize` | `internal/platform/ktf` | `WFEATURE_KTF_EXECUTE_ACCEPTANCE=1` | rung 2 |
+| `TestLocalKTFArchivesLoadMainClass` | `internal/platform/ktf` | `WFEATURE_KTF_LIFECYCLE_ACCEPTANCE=1` | rung 3 |
+| `TestLocalKTFArchivesConstructMainClass` | `internal/platform/ktf` | `WFEATURE_KTF_CONSTRUCT_ACCEPTANCE=1` | rung 4 |
+| `TestLocalKTFArchivesStartMainClass` | `internal/platform/ktf` | `WFEATURE_KTF_START_ACCEPTANCE=1` | rung 5 |
+| `TestLocalKTFArchivesRenderFirstFrame` | `internal/platform/ktf` | `WFEATURE_KTF_FRAME_ACCEPTANCE=1` | rung 6 |
+| `TestLocalKTFArchivesSustainAFrame` | `internal/platform/ktf` | `WFEATURE_KTF_SUSTAINED_ACCEPTANCE=1` | rung 7 |
+| `TestLocalKTFArchivesAnswerAKey` | `internal/platform/ktf` | `WFEATURE_KTF_INTERACTIVE_ACCEPTANCE=1` | rung 8 |
+| `TestLocalKTFStoppedScreenAnswersEveryKey` | `internal/platform/ktf` | `WFEATURE_KTF_STOPPED_PROBE=1`, `WFEATURE_KTF_STOPPED_ARCHIVE` | every key against one archive's settled screen |
+| `TestLocalSubscriberReceiptRecognition` | `internal/platform/ktf` | `WFEATURE_KTF_RECEIPT_ARCHIVE` | the recognized subscriber-receipt revision against its archive |
+| `TestLocalKTFClientCheckpoint` | `internal/platform/ktf` | `WFEATURE_KTF_CALL_ARCHIVE` | a restored client against its source over later rounds |
+| `TestLocalKTFCallCheckpointInventory` | `internal/platform/ktf` | `WFEATURE_KTF_CALL_ARCHIVE` | the pending call shapes of an archive (report) |
+| `TestLocalNativeCheckpointContinuation` | `internal/platform/ktf` | `WFEATURE_KTF_NATIVE_CHECKPOINT_ACCEPTANCE=1` | native-package checkpoints continue as the run did |
+| `TestLocalKTFNativePackageParses` | `internal/platform/ktf` | `WFEATURE_KTF_NATIVE_ACCEPTANCE=1` | the earlier native package parses |
+| `TestLocalKTFNativePackageRuns` | `internal/platform/ktf` | `WFEATURE_KTF_NATIVE_ACCEPTANCE=1` | the earlier native package boots and runs its frame |
+| `TestLocalKTFNativePackageScreenshot` | `internal/platform/ktf` | `WFEATURE_KTF_NATIVE_ACCEPTANCE=1`, `WFEATURE_KTF_NATIVE_SHOT` | its screen after a key route, as a PNG |
+| `TestLocalKTFStorageInventory` | `internal/platform/ktf` | `WFEATURE_KTF_STORAGE_INVENTORY=1` | storage tables of the local descriptor archives (report) |
+| `TestLocalKTFNativeStorageInventory` | `internal/platform/ktf` | `WFEATURE_KTF_STORAGE_INVENTORY=1` | file tables of the authored native packages (report) |
+| `TestLocalRegenerateWIPISurfaceReference` | `internal/platform/ktf` | `WFEATURE_WIPI_REFERENCE_SOURCE` | rewrites `testdata/wipi_java_surface.txt` |
+| `TestLocalBreakpointProbe` | `internal/platform/ktf` | `WFEATURE_BREAKPOINT_ARCHIVE` | registers and memory at guest addresses ([CLI](cli.md)) |
+| `TestLocalDisassembleProbe` | `internal/platform/ktf`, `internal/platform/lgt` | `WFEATURE_DISASSEMBLE_ARCHIVE`, `WFEATURE_DISASSEMBLE_RANGES` | guest code ranges as hex ([CLI](cli.md)) |
+| `TestLocalSymbolizeProbe` | `internal/platform/ktf` | `WFEATURE_SYMBOLIZE_ARCHIVE` | AOT method names for crash addresses ([CLI](cli.md)) |
+| `TestLocalNativeWatchProbe` | `internal/platform/ktf` | `WFEATURE_NATIVE_WATCH_ARCHIVE`, `WFEATURE_NATIVE_WATCH_OFFSETS` | what writes a word of an earlier-package title ([CLI](cli.md)) |
+| `TestLocalLGTArchivesBootAndPaint` | `internal/platform/lgt` | `WFEATURE_LGT_ACCEPTANCE=1` | rung 1 |
+| `TestLocalLGTArchivesSustainAFrame` | `internal/platform/lgt` | `WFEATURE_LGT_SUSTAINED_ACCEPTANCE=1` | rung 2 |
+| `TestLocalLGTArchivesAnswerAKey` | `internal/platform/lgt` | `WFEATURE_LGT_INTERACTIVE_ACCEPTANCE=1` | rung 3 |
+| `TestLocalLGTCheckpointsContinueIdentically` | `internal/platform/lgt` | `WFEATURE_LGT_CHECKPOINT=1` | quick save and load over the local archives ([LGT checkpoints](#lgt-checkpoints)) |
+| `TestLocalLGTCollectionKeepsTheFrame` | `internal/platform/lgt` | `WFEATURE_LGT_COLLECT_PROBE=1` | a collection leaves what a title draws unchanged |
+| `TestLocalLGTStorageInventory` | `internal/platform/lgt` | `WFEATURE_LGT_STORAGE_INVENTORY=1` | storage tables of the local archives (report) |
+| `TestLocalCertificateMessageSelection` | `internal/platform/lgt` | `WFEATURE_LGT_CERTIFICATE_MESSAGE_ARCHIVE` | registry entry `lgt.certificate_message` against its archive |
+| `TestLocalSaveSubscriberArchive` | `internal/platform/lgt` | `WFEATURE_LGT_SAVE_SUBSCRIBER_ARCHIVE` | registry entry `lgt.save_subscriber_identity` |
+| `TestLocalColorKeyCalibrationArchive` | `internal/platform/lgt` | `WFEATURE_LGT_COLOR_KEY_ARCHIVE` | registry entry `lgt.color_key_sample_origin` |
+| `TestLocalDirectFramebufferOriginArchive` | `internal/platform/lgt` | `WFEATURE_LGT_DIRECT_ORIGIN_ARCHIVE` | registry entry `lgt.direct_framebuffer_origin` |
+| `TestLocalImageFramebufferOriginArchive` | `internal/platform/lgt` | `WFEATURE_LGT_IMAGE_ORIGIN_ARCHIVE` | registry entry `lgt.image_framebuffer_origin` |
+| `TestLocalFramebufferOriginArchive` | `internal/platform/lgt` | `WFEATURE_LGT_ORIGIN_ARCHIVE` | registry entry `lgt.visible_framebuffer_origin` |
+| `TestLocalRecordTableArchive` | `internal/platform/lgt` | `WFEATURE_LGT_RECORD_TABLE_ARCHIVE` | registry entry `lgt.record_table_terminator` |
+| `TestLocalAPIDemandProbe` | `internal/platform/lgt` | `WFEATURE_API_DEMAND_ARCHIVE` | the members an LGT Java title links against ([CLI](cli.md)) |
+| `TestLocalLGTLoadCostProbe` | `internal/platform/lgt` | `WFEATURE_PERF_ARCHIVE` | what a routed run costs the host; a `make pgo` run ([armcore](armcore.md)) |
+| `TestLocalSKTArchivesBootAndPaint` | `internal/platform/skt` | `WFEATURE_SKT_ACCEPTANCE=1` | rung 1 |
+| `TestLocalSKTArchivesSustainAFrame` | `internal/platform/skt` | `WFEATURE_SKT_SUSTAINED_ACCEPTANCE=1` | rung 2 |
+| `TestLocalSKTArchivesAnswerAKey` | `internal/platform/skt` | `WFEATURE_SKT_INTERACTIVE_ACCEPTANCE=1` | rung 3 |
+| `TestLocalSKTArchiveSoundsDecode` | `internal/platform/skt` | `WFEATURE_SKT_ACCEPTANCE=1` | every SMAF resource decodes |
+| `TestLocalClipCompatibilityArchive` | `internal/platform/skt` | `WFEATURE_SKT_CLIP_ARCHIVE` | registry entry `skt.inclusive_set_clip` |
+| `TestLocalResumeCompatibilityFingerprints` | `internal/platform/skt` | `WFEATURE_SKT_RESUME_ARCHIVES` | registry entry `skt.resume_without_start`, over comma-separated archives |
+| `TestLocalTutorialCompatibilityFingerprint` | `internal/platform/skt` | `WFEATURE_SKT_TUTORIAL_ARCHIVE` | registry entry `skt.tutorial_name_cache` |
+| `TestLocalSKTArchiveCost` | `internal/platform/skt` | `WFEATURE_SKT_COST_ARCHIVE` | a run for the Go profiler ([JVM](jvm.md)) |
+| `TestLocalSKTCheckpoint` | `internal/session` | `WFEATURE_SKT_CHECKPOINT_ACCEPTANCE=1` | SKT checkpoints over the local archives ([SKT checkpoints](skt-checkpoints.md)) |
+| `TestLocalEarlierKTFPackageIsOnePlatformNeutralSession` | `internal/session` | `WFEATURE_KTF_NATIVE_ACCEPTANCE=1` | the earlier KTF package through the shared session |
+| `TestLocalSessionRunsTheEarlierKTFPackage` | `internal/webhost` | `WFEATURE_KTF_NATIVE_ACCEPTANCE=1` | the earlier KTF package over the page's protocol |
+| `TestLocalCheatProbe` | `internal/webhost` | `WFEATURE_CHEAT_ARCHIVE` | the page's cheat path against a real archive ([CLI](cli.md)) |
+| `TestLocalStartEndingProbe` | `internal/webhost` | `WFEATURE_ENDING_ARCHIVE` | the two runs a self-installing title takes ([CLI](cli.md)) |
+| `TestLocalSessionCostProbe` | `internal/webhost` | `WFEATURE_PERF_ARCHIVE` | what a page's session costs the host; a `make pgo` run ([armcore](armcore.md)) |
 
 ## Local acceptance
 
@@ -1206,7 +1318,7 @@ gameplay; the route runs above are the gameplay evidence.
 
 **Cost while running (2026-10-02).** The work adds two things to a tick, the
 order timers fire in and a generator that keeps its own state; everything else
-runs at a save or a load. `TestLGTLoadCostProbe` was built from `4ae66a7` and
+runs at a save or a load. `TestLocalLGTLoadCostProbe` was built from `4ae66a7` and
 from this work and run over the two gameplay routes above, 2,400 and 6,400
 ticks, as six alternating pairs on one Go CPU with nothing else running. Both
 binaries retired the same number of instructions on each route, 3,420,023,111
@@ -1623,7 +1735,7 @@ boundaries, in in-memory stores:
 
 ```sh
 WFEATURE_LGT_STORAGE_INVENTORY=1 go test -run TestLocalLGTStorageInventory -v ./internal/platform/lgt
-WFEATURE_KTF_STORAGE_INVENTORY=1 go test -run 'TestLocalKTFStorageInventory|TestKTFNativeStorageInventory' -v ./internal/platform/ktf
+WFEATURE_KTF_STORAGE_INVENTORY=1 go test -run 'TestLocalKTFStorageInventory|TestLocalKTFNativeStorageInventory' -v ./internal/platform/ktf
 ```
 
 `WFEATURE_STORAGE_INVENTORY_OUT` names a directory outside the repository for
@@ -2898,7 +3010,7 @@ Each rule has a unit test written to fail on the previous code, and did:
 `TestChannelNineNoteNPlaysWaveNPlusOne`, `TestADPCMDifferenceSumsEachBitsTruncatedShare`,
 `TestHandsetChannelSoundsOneNoteAtATime`, the velocity and attack tests in
 `web/fm-synth.test.mjs`, and `web/audio-wave-velocity.test.mjs`. The opt-in
-`TestADPCMMatchesAnExternalVectorPair` (`WFEATURE_ADPCM_VECTOR`) passed against
+`TestLocalADPCMMatchesAnExternalVectorPair` (`WFEATURE_ADPCM_VECTOR`) passed against
 a published MA ADPCM pair kept outside the repository. Checkpoint tests cover
 v11 and every older shape, and `TestAudioWaveVelocitySurvivesCaptureAndReconstruction`
 a sounding wave's velocity through capture, the record codec and replay.

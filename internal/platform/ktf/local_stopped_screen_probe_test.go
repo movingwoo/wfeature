@@ -14,6 +14,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/ladder"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/testlocal"
 )
 
 // A stopped screen is read by trying every key, and by not pressing one.
@@ -65,26 +66,21 @@ import (
 // STOPPED_TRACE how many boundary crossings to print at the end — which is
 // what says what a stopped title is looping on.
 func TestLocalKTFStoppedScreenAnswersEveryKey(t *testing.T) {
-	if os.Getenv("WFEATURE_KTF_STOPPED_PROBE") != "1" {
-		t.Skip("set WFEATURE_KTF_STOPPED_PROBE=1 to sweep every key against one archive's settled screen")
-	}
-	archive := os.Getenv("WFEATURE_KTF_STOPPED_ARCHIVE")
-	if archive == "" {
-		t.Skip("set WFEATURE_KTF_STOPPED_ARCHIVE to an absolute archive path")
-	}
-	hold := localLadderTicks(t, "WFEATURE_KTF_HOLD_TICKS", localLadderHoldTicks)
-	release := localLadderTicks(t, "WFEATURE_KTF_RELEASE_TICKS", localLadderReleaseTicks)
-	launches := localLadderTicks(t, "WFEATURE_KTF_LAUNCHES", localLadderLaunches)
-	rounds := localLadderTicks(t, "WFEATURE_KTF_STOPPED_ROUNDS", ladder.SettleRounds)
+	testlocal.Enabled(t, "WFEATURE_KTF_STOPPED_PROBE", "sweep every key against one archive's settled screen")
+	archive := testlocal.Value(t, "WFEATURE_KTF_STOPPED_ARCHIVE", "an absolute archive path")
+	hold := testlocal.Int(t, "WFEATURE_KTF_HOLD_TICKS", localLadderHoldTicks)
+	release := testlocal.Int(t, "WFEATURE_KTF_RELEASE_TICKS", localLadderReleaseTicks)
+	launches := testlocal.Int(t, "WFEATURE_KTF_LAUNCHES", localLadderLaunches)
+	rounds := testlocal.Int(t, "WFEATURE_KTF_STOPPED_ROUNDS", ladder.SettleRounds)
 	sweepAt := 0
 	if value := os.Getenv("WFEATURE_KTF_STOPPED_SWEEP_ROUND"); value != "" {
-		sweepAt = localLadderTicks(t, "WFEATURE_KTF_STOPPED_SWEEP_ROUND", 0)
+		sweepAt = testlocal.Int(t, "WFEATURE_KTF_STOPPED_SWEEP_ROUND", 0)
 	}
-	opening := localLadderTicks(t, "WFEATURE_KTF_OPENING_TICKS", localLadderOpeningTicks)
-	quiet := localLadderTicks(t, "WFEATURE_KTF_STOPPED_QUIET", opening)
+	opening := testlocal.Int(t, "WFEATURE_KTF_OPENING_TICKS", localLadderOpeningTicks)
+	quiet := testlocal.Int(t, "WFEATURE_KTF_STOPPED_QUIET", opening)
 	idle := 0
 	if value := os.Getenv("WFEATURE_KTF_STOPPED_IDLE"); value != "" {
-		idle = localLadderTicks(t, "WFEATURE_KTF_STOPPED_IDLE", 0)
+		idle = testlocal.Int(t, "WFEATURE_KTF_STOPPED_IDLE", 0)
 	}
 	frames := os.Getenv("WFEATURE_KTF_STOPPED_FRAMEDIR")
 	keys := allProbeKeys()
@@ -107,7 +103,7 @@ func TestLocalKTFStoppedScreenAnswersEveryKey(t *testing.T) {
 			Clock:      wipicrt.NewManualClock(time.Time{}),
 			SaveRoot:   saves,
 			Logger:     probeLogger(t),
-			TraceLimit: localLadderTicks(t, "WFEATURE_KTF_STOPPED_TRACE", 1) - 1,
+			TraceLimit: testlocal.Int(t, "WFEATURE_KTF_STOPPED_TRACE", 1) - 1,
 		})
 		if err != nil {
 			t.Fatalf("launch %d start: %v", launched, err)

@@ -2,6 +2,8 @@ package ktf
 
 import (
 	"context"
+	"math"
+	goruntime "runtime"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -264,5 +266,29 @@ func TestBlendMixesEachChannel(t *testing.T) {
 	}
 	if heavy := wipicrt.Blend565(white, black, 0xc0); heavy>>11&0x1f >= red {
 		t.Fatalf("coverage 0xc0 gave red %d, want darker than 0x80's %d", heavy>>11&0x1f, red)
+	}
+}
+
+// A draw-string length is a guest argument, and the host buffer it sized was
+// allocated before the range was known to exist.
+func TestWIPICDrawStringLengthIsCheckedBeforeAllocating(t *testing.T) {
+	_, rt := newTestRuntime(t)
+	pointer, err := rt.AllocateBytes([]byte{'a', 0, 'b', 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after goruntime.MemStats
+	goruntime.ReadMemStats(&before)
+	_, err = rt.WIPICReadString(pointer, math.MaxInt32, true)
+	goruntime.ReadMemStats(&after)
+	if err == nil {
+		t.Fatal("read a string running past mapped memory")
+	}
+	if grown := after.TotalAlloc - before.TotalAlloc; grown > 16<<20 {
+		t.Fatalf("allocated %d bytes before checking the range", grown)
+	}
+	text, err := rt.WIPICReadString(pointer, 2, true)
+	if err != nil || string(text) != "ab" {
+		t.Fatalf("ordinary string = %q, %v", string(text), err)
 	}
 }

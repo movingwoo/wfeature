@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,5 +203,53 @@ func TestApplyStartPatchesAcceptsAnUnkeyedTableWithANotice(t *testing.T) {
 	// so is what keeps the next hour from starting on a wrong belief.
 	if !strings.Contains(text, "frozen value") || !strings.Contains(text, "watch") {
 		t.Fatalf("the parts -patch does not apply went unreported: %q", text)
+	}
+}
+
+// The console a -cheat run reads from the terminal is the only one whose
+// `save` and `load` reach the file system. Every other console — the one the
+// browser host drives over its session socket above all — keeps them off,
+// which holds only while nothing outside this command turns them on.
+func TestOnlyTheTerminalConsoleReachesFiles(t *testing.T) {
+	memory := newPatchMemory()
+	console := cheat.NewConsole(cheat.NewSession(memory))
+	target := filepath.Join(t.TempDir(), "table.json")
+	if output := console.Execute("save " + target); !strings.HasPrefix(output, "cheat: ") {
+		t.Fatalf("a console nobody attached saved: %q", output)
+	}
+	attachCheatConsole(console, "no-such-archive.zip")
+	if output := console.Execute("save " + target); !strings.Contains(output, "saved") {
+		t.Fatalf("the terminal console did not save: %q", output)
+	}
+
+	root := filepath.Join("..", "..")
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case "var", "build", "node_modules", ".git", ".claude":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !bytes.Contains(data, []byte(".AllowFiles(")) {
+			return nil
+		}
+		if relative, _ := filepath.Rel(root, path); filepath.Dir(relative) != filepath.Join("cmd", "cli") {
+			t.Errorf("%s gives a cheat console the file system; only the terminal one may", relative)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

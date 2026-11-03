@@ -3,6 +3,7 @@ package jvm
 import (
 	_ "embed"
 	"testing"
+	"time"
 )
 
 //go:embed testdata/CoreMembers.class
@@ -75,5 +76,72 @@ func TestAnInheritedFieldIsOneFieldUnderBothNames(t *testing.T) {
 	// it: both are read back through the subclass's name for them.
 	if value, _ := result.Int32(); value != 63 {
 		t.Fatalf("read() = %d, want 63", value)
+	}
+}
+
+//go:embed testdata/LibraryContracts.class
+var libraryContractsClass []byte
+
+//go:embed testdata/LibraryContracts$1.class
+var libraryContracts1Class []byte
+
+//go:embed testdata/LibraryContracts$2.class
+var libraryContracts2Class []byte
+
+//go:embed testdata/LibraryContracts$3.class
+var libraryContracts3Class []byte
+
+//go:embed testdata/LibraryContracts$Key.class
+var libraryContractsKeyClass []byte
+
+func libraryContractsSource() mapClassSource {
+	return mapClassSource{
+		"LibraryContracts":     libraryContractsClass,
+		"LibraryContracts$1":   libraryContracts1Class,
+		"LibraryContracts$2":   libraryContracts2Class,
+		"LibraryContracts$3":   libraryContracts3Class,
+		"LibraryContracts$Key": libraryContractsKeyClass,
+	}
+}
+
+func contractInt(t *testing.T, vm *VM, method string) int32 {
+	t.Helper()
+	result, err := vm.InvokeStatic("LibraryContracts", method, "()I")
+	if err != nil {
+		t.Fatalf("%s() error = %v", method, err)
+	}
+	value, err := result.Int32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func contractString(t *testing.T, vm *VM, method string) string {
+	t.Helper()
+	result, err := vm.InvokeStatic("LibraryContracts", method, "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatalf("%s() error = %v", method, err)
+	}
+	object, err := result.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := StringText(object)
+	return text
+}
+
+// waitForContract polls a static int until it leaves its starting value.
+func waitForContract(t *testing.T, vm *VM, method string, unset int32) int32 {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if value := contractInt(t, vm, method); value != unset {
+			return value
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s() still %d after the deadline", method, unset)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

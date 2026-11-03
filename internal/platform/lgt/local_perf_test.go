@@ -13,9 +13,10 @@ import (
 	// CLI reaches for the same one when it runs an LGT route.
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/route"
+	"github.com/movingwoo/wfeature/internal/testlocal"
 )
 
-// TestLGTLoadCostProbe is the LGT counterpart of the KTF load probe: it runs a
+// TestLocalLGTLoadCostProbe is the LGT counterpart of the KTF load probe: it runs a
 // real archive for a fixed number of ticks and reports what the run cost the
 // host. It exists to be run under `-cpuprofile`, because "the emulator is
 // slower here than on the other platform" is a question about where the host's
@@ -23,11 +24,8 @@ import (
 //
 //	WFEATURE_PERF_ARCHIVE=var/games/lgt/game.zip \
 //	  go test ./internal/platform/lgt -run LGTLoadCost -cpuprofile cpu.out
-func TestLGTLoadCostProbe(t *testing.T) {
-	path := os.Getenv("WFEATURE_PERF_ARCHIVE")
-	if path == "" {
-		t.Skip("set WFEATURE_PERF_ARCHIVE to a local game archive")
-	}
+func TestLocalLGTLoadCostProbe(t *testing.T) {
+	path := testlocal.Value(t, "WFEATURE_PERF_ARCHIVE", "a local game archive")
 	ticks := 600
 	if value := os.Getenv("WFEATURE_LOAD_TICKS"); value != "" {
 		parsed, err := strconv.Atoi(value)

@@ -164,3 +164,40 @@ func TestARestoreRefusesAKeyOnlyAWindowsNameHoldsBeforeWriting(t *testing.T) {
 	}
 	leftoverExpect(t, parent, append(slices.Clone(state), leftoverReserved+"/lock="), "after the refused restore")
 }
+
+// On a host that drops a '.' or ' ' at the end of a path segment, as Win32
+// does, an earlier build stored "fs/save." as "fs/save". That file is read for
+// the key until the key's own first write, which goes to the key's encoded
+// name, and the file stays the save of "fs/save", which shared it.
+func TestASaveWindowsStoredWithoutItsEndingIsRead(t *testing.T) {
+	win32 := saveNamesWin32
+	saveNamesWin32 = true
+	t.Cleanup(func() { saveNamesWin32 = win32 })
+	for _, record := range []bool{false, true} {
+		parent := t.TempDir()
+		state := []string{"owner/fs/save=stored without its dot", "owner/jdb/SAVE=stored without its spaces"}
+		if record {
+			state = []string{encodedRecord, "owner/fs/save=stored without its dot", "owner/jdb/#S#A#V#E=stored without its spaces"}
+		}
+		leftoverBuild(t, parent, state)
+		store := NewDirectorySaveStore(filepath.Join(parent, "owner"))
+		wantSaves(t, store, map[string]string{
+			"fs/save.": "stored without its dot", "jdb/SAVE    ": "stored without its spaces",
+			"fs/save": "stored without its dot",
+		})
+		if err := store.StoreSave("fs/save.", []byte("its own")); err != nil {
+			t.Fatal(err)
+		}
+		wantSaves(t, store, map[string]string{"fs/save.": "its own", "fs/save": "stored without its dot"})
+	}
+}
+
+// A name the encoding wrote before it numbered a '~' before a digit reads as
+// its key and moves to the name it has now.
+func TestAnEarlierShortNameShapeMoves(t *testing.T) {
+	parent := t.TempDir()
+	leftoverBuild(t, parent, []string{encodedRecord, "owner/fs/savefi~1.dat=earlier"})
+	store := NewDirectorySaveStore(filepath.Join(parent, "owner"))
+	wantSaves(t, store, map[string]string{"fs/savefi~1.dat": "earlier"})
+	leftoverExpect(t, parent, []string{encodedRecord, leftoverReserved + "/lock=", "owner/fs/savefi#+00007e1.dat=earlier"}, "after the read")
+}

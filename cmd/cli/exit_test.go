@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
 	"github.com/movingwoo/wfeature/internal/platform/lgt"
+	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
 // A run that ended on a tick failure has to say so in its exit code. Without
@@ -241,4 +245,81 @@ func TestEndRunAnswersAnInterrupt(t *testing.T) {
 			t.Fatalf("endRun = %v, want %v", err, want)
 		}
 	})
+}
+
+// A failed frame on the earlier package exits non-zero, as one on the other
+// package does. The fault is a patch over the first instruction of the frame
+// the fixture schedules.
+func TestRunKTFNativeTickFailureExitsNonZero(t *testing.T) {
+	archive, err := testfixture.KTFNativeCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writeTempFixture(t, "native.zip", archive)
+	table := writeTempFixture(t, "fault.json", []byte(`{"patches":[{"name":"fault","patches":[
+		{"address":"0x00100100","expect":"10402de9","replace":"f000f0e7"}]}]}`))
+	var stdout, stderr bytes.Buffer
+	code := runKTF(path, []string{"-save", t.TempDir(), "-ticks", "8", "-patch", table}, &stdout, &stderr)
+	if !strings.Contains(stdout.String(), "tick_error") {
+		t.Fatalf("the patched frame did not fail (exit %d):\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+	if code != 1 {
+		t.Fatalf("a run whose frame failed exited %d", code)
+	}
+}
+
+// containsBytes reports whether any file under root holds needle.
+func containsBytes(t *testing.T, root string, needle []byte) bool {
+	t.Helper()
+	found := false
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || found {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		found = bytes.Contains(data, needle)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return found
+}
+
+// A MIDlet that saves in destroyApp keeps that save after a run ends on its
+// tick count: the run destroys it the way closing a server session does.
+func TestRunSKTDestroysTheMIDletSoItsExitSaveLands(t *testing.T) {
+	saves := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"runskt", filepath.Join("testdata", "destroy-save.jar"), "-ticks", "2", "-save", saves}, &stdout, &stderr); code != 0 {
+		t.Fatalf("runskt = %d: %s", code, stderr.String())
+	}
+	if !containsBytes(t, saves, []byte("written-by-destroyApp")) {
+		t.Fatal("the record store destroyApp writes is not in the save directory")
+	}
+}
+
+// An LGT title's write to a file it left open lands when the run ends: the run
+// closes its session, which flushes the file, as the server does.
+func TestRunLGTClosesItsSessionSoAnOpenFileLands(t *testing.T) {
+	archive, err := testfixture.LGTSaveArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writeTempFixture(t, "save.zip", archive)
+	saves := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if code := runLGT(path, []string{"-save", saves, "-ticks", "8", "-key", "2:9"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("runlgt = %d: %s", code, stderr.String())
+	}
+	data, found, err := backend.ReadSave(backend.NewDirectorySaveStore(saves), testfixture.LGTSaveFileKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || len(data) < 4 || binary.LittleEndian.Uint32(data) != 0 {
+		t.Fatalf("the held save after the run = %x (found %t), want part A written", data, found)
+	}
 }

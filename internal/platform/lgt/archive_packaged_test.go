@@ -1,6 +1,8 @@
 package lgt
 
-import "testing"
+import (
+	"testing"
+)
 
 // A handset stored a title's whole download in the title's own directory, so a
 // file packaged beside the JAR is one the title can open by name. Three local
@@ -129,4 +131,33 @@ func TestSupplementalApplicationDirectoryRejectsAmbiguousRoots(t *testing.T) {
 	if err == nil {
 		t.Fatal("ambiguous supplemental roots accepted")
 	}
+}
+
+// A C Clet that names a packaged Korean file in its own EUC-KR bytes names the
+// packaged file, as the archive lookup reads it: rewriting it keeps it off the
+// created list, and the directory lists it once.
+func TestARawSpellingOfAPackagedKoreanNameIsThePackagedFile(t *testing.T) {
+	client, store, files := fileFixture(t, nil)
+	client.archive.Resources["data/세이브.dat"] = []byte("packaged")
+	raw := "data/" + string([]byte{0xbc, 0xbc, 0xc0, 0xcc, 0xba, 0xea}) + ".dat"
+	handle := files.open(raw, fileOpenWriteTruncate)
+	files.write(handle, "mine")
+	files.close(handle)
+	if list := store.held(fileCreatedKey); list != "<absent>" && list != "" {
+		t.Fatalf("the created list holds %q", list)
+	}
+	listed := client.listDirectory("data")
+	if count := len(listed) - len(removeAll(listed, "세이브.dat")); count != 1 || len(listed) != 3 {
+		t.Fatalf("data lists %q", listed)
+	}
+}
+
+func removeAll(names []string, name string) []string {
+	var kept []string
+	for _, entry := range names {
+		if entry != name {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
 }

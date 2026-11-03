@@ -695,3 +695,51 @@ func TestAStandInStillReportsWatchedStores(t *testing.T) {
 		t.Errorf("hit origin = %s, want the guest's own store", hits[0].Origin)
 	}
 }
+
+// A fill whose pointer advances before the store writes [p+2, p+2n], and one
+// whose store goes through a register other than the one advanced writes the
+// same halfword over and over. Neither is the counted fill the stand-in
+// implements, so both have to be left to the interpreter.
+func TestAFillThatAdvancesFirstOrStoresElsewhereIsRefused(t *testing.T) {
+	const base, destination = 0x00100000, 0x00200000
+	const count = uint32(40)
+	for _, test := range []struct {
+		name string
+		body []uint16
+	}{
+		{"pre-increment", []uint16{
+			0x3002, // adds r0, #2
+			0x8001, // strh r1, [r0]
+			0x3a01, // subs r2, #1
+			0xd2fb, // bhs  head
+		}},
+		{"store through another register", []uint16{
+			0x8019, // strh r1, [r3]
+			0x3002, // adds r0, #2
+			0x3a01, // subs r2, #1
+			0xd2fb, // bhs  head
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			branchPC := base + uint32(len(test.body)-1)*2
+			memory := fillLoopMemory(t, test.body, base, destination)
+			memory.beginQuantum()
+			loop := memory.analyseStoreLoop(base, branchPC)
+			memory.endQuantum()
+			if loop != nil {
+				t.Errorf("the body was recognised as a counted fill: %+v", *loop)
+			}
+			compareStandIn(t, branchPC+2, destination, 0x200, func() (*Memory, *Context) {
+				memory := fillLoopMemory(t, test.body, base, destination)
+				value := NewContext()
+				context := &value
+				context.Registers[0] = destination
+				context.Registers[1] = 0xbeef
+				context.Registers[2] = count
+				context.Registers[3] = destination + 0x100
+				context.setThumbPC(base)
+				return memory, context
+			})
+		})
+	}
+}

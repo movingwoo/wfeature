@@ -2,6 +2,7 @@ package cheat
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -293,5 +294,64 @@ func TestConsoleScanFreezeFlow(t *testing.T) {
 	}
 	if output := console.Execute("nonsense"); !strings.Contains(output, "unknown command") {
 		t.Fatalf("unknown command output = %q", output)
+	}
+}
+
+// flatMemory is a region of zeroes the size a test asks for.
+type flatMemory struct{ size uint32 }
+
+func (memory flatMemory) ReadMemory(address uint32, destination []byte) error {
+	clear(destination)
+	return nil
+}
+
+func (memory flatMemory) WriteMemory(uint32, []byte) error { return nil }
+
+func (memory flatMemory) Regions() []Region {
+	return []Region{{Base: 0x10000, Size: memory.size, Label: "flat"}}
+}
+
+// An unknown-value search seeds one candidate per address, so its size follows
+// guest memory; the search refuses a set it cannot hold rather than growing
+// the heap without bound.
+func TestUnknownScanRefusesMoreCandidatesThanItCanHold(t *testing.T) {
+	valueType, _ := ParseValueType("u8")
+	scanner := NewScanner(valueType)
+	_, err := scanner.Scan(flatMemory{size: maxScanCandidates + 1}, ScanFilter{Op: FilterUnknown})
+	if !errors.Is(err, ErrTooManyCandidates) {
+		t.Fatalf("scan err = %v, want ErrTooManyCandidates", err)
+	}
+	if scanner.Started() || scanner.Len() != 0 {
+		t.Fatalf("a refused sweep left a search behind: started %t, %d candidates", scanner.Started(), scanner.Len())
+	}
+	session := NewSession(flatMemory{size: maxScanCandidates + 1})
+	if _, err := PanelScan(session, "u8", "unknown", 0); !errors.Is(err, ErrPanelTooManyCandidates) {
+		t.Fatalf("panel err = %v, want the panel's own words", err)
+	}
+}
+
+// Undo history holds what it can afford: repeated `unchanged` scans over a
+// wide search keep at most the budget, dropping the oldest steps first.
+func TestScanHistoryStaysWithinItsBudget(t *testing.T) {
+	valueType, _ := ParseValueType("u8")
+	scanner := NewScanner(valueType)
+	memory := flatMemory{size: maxScanHistoryCandidates/2 + 1}
+	if _, err := scanner.Scan(memory, ScanFilter{Op: FilterUnknown}); err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		if _, err := scanner.Scan(memory, ScanFilter{Op: FilterUnchanged}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	retained := 0
+	for _, snapshot := range scanner.history {
+		retained += len(snapshot)
+	}
+	if retained > maxScanHistoryCandidates {
+		t.Fatalf("history holds %d candidates, budget %d", retained, maxScanHistoryCandidates)
+	}
+	if !scanner.Undo() || scanner.Len() != int(memory.size) {
+		t.Fatalf("undo after a trimmed history: len %d, want %d", scanner.Len(), memory.size)
 	}
 }

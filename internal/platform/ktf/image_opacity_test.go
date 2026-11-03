@@ -3,41 +3,14 @@ package ktf
 import (
 	"bytes"
 	"image"
-	"image/color"
 	"image/png"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
-
-// encodePalettedPNG builds the shape the games' sprite assets have: a palette
-// image whose first entry is fully transparent, which PNG carries as a tRNS
-// chunk rather than as pixel data. Column 0 uses that entry and column 1 a
-// solid colour.
-func encodePalettedPNG(t *testing.T, width, height int) []byte {
-	t.Helper()
-	palette := color.Palette{
-		color.NRGBA{R: 0, G: 0, B: 0, A: 0},
-		color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff},
-	}
-	source := image.NewPaletted(image.Rect(0, 0, width, height), palette)
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			if x == 0 {
-				source.SetColorIndex(x, y, 0)
-				continue
-			}
-			source.SetColorIndex(x, y, 1)
-		}
-	}
-	var encoded bytes.Buffer
-	if err := png.Encode(&encoded, source); err != nil {
-		t.Fatal(err)
-	}
-	return encoded.Bytes()
-}
 
 // A sprite whose encoding marks pixels transparent must leave the target alone
 // there. Dropping that transparency paints the sprite's unused border as solid
@@ -64,7 +37,7 @@ func TestDrawImageKeepsTargetWhereTheEncodingIsTransparent(t *testing.T) {
 		t.Fatal("background fill did not reach the screen")
 	}
 
-	imageValue, err := runtimeImageFromEncoded(runtime, encodePalettedPNG(t, 2, 2))
+	imageValue, err := runtimeImageFromEncoded(runtime, wipicrttest.EncodePalettedPNG(t, 2, 2))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +59,7 @@ func TestDrawImageKeepsTargetWhereTheEncodingIsTransparent(t *testing.T) {
 // sprites into a scratch surface before drawing it gets the same result.
 func TestCreateImageCopyInheritsEncodedTransparency(t *testing.T) {
 	client, runtime := newTestRuntime(t)
-	source, err := runtimeImageFromEncoded(runtime, encodePalettedPNG(t, 2, 2))
+	source, err := runtimeImageFromEncoded(runtime, wipicrttest.EncodePalettedPNG(t, 2, 2))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +96,7 @@ func TestCreateImageCopyInheritsEncodedTransparency(t *testing.T) {
 // objects each inside a black rectangle.
 func TestCreateImageRecordsTransparencyUnderTheImageHandle(t *testing.T) {
 	_, runtime := newTestRuntime(t)
-	encoded := encodePalettedPNG(t, 2, 2)
+	encoded := wipicrttest.EncodePalettedPNG(t, 2, 2)
 
 	data, err := runtime.AllocateWIPIC(uint32(len(encoded)))
 	if err != nil {

@@ -1,10 +1,7 @@
 package skt
 
 import (
-	"bytes"
 	_ "embed"
-	"os"
-	"strings"
 	"testing"
 )
 
@@ -27,36 +24,6 @@ func TestResumeCompatibilityDoesNotSkipDeferredInitialStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertLifecycleState(t, runtime, StateActive, 2)
-}
-
-func TestLocalResumeCompatibilityFingerprints(t *testing.T) {
-	paths := os.Getenv("WFEATURE_SKT_RESUME_ARCHIVES")
-	if paths == "" {
-		t.Skip("set WFEATURE_SKT_RESUME_ARCHIVES to original local archives")
-	}
-	for _, path := range strings.Split(paths, string(os.PathListSeparator)) {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		archive, err := Open(data)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !archive.resumeWithoutRestart() {
-			t.Fatal("recognized class set lost its resume correction")
-		}
-		for name, original := range archive.Entries {
-			if !strings.HasSuffix(name, ".class") {
-				continue
-			}
-			archive.Entries[name] = append(bytes.Clone(original), 0)
-			if archive.resumeWithoutRestart() {
-				t.Fatal("changed class set received the resume correction")
-			}
-			archive.Entries[name] = original
-		}
-	}
 }
 
 func TestRecognizedResumePreservesCanvasProgressAndWorkers(t *testing.T) {
