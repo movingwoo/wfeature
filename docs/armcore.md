@@ -141,7 +141,11 @@ ARM title pays for: the Thumb hook costs 2 to 6% of a run where it never fires,
 of which keeping refusals in the decode entry won back about half on some
 titles and nothing on others (see `fill_loop.go`). A report of the title running too slow is
 what would change the answer, and the answer then is a stand-in for exactly
-those two loops.
+those two loops. That is how the keyed palette blit (`keyed_blit.go`) and the
+fill that blends toward one colour (`tint_fill.go`) came in: one title was
+reported slow, and the second is matched against a template because the two
+titles carrying it emit it byte for byte
+([history](history/armcore.md#implementation-a-keyed-blit-and-a-tint-fill-2026-11-03)).
 
 `Backend` is the execution seam, and the interpreter is the conformance oracle.
 Only the interpreter is registered by default. A future backend must agree on

@@ -182,6 +182,14 @@ func (memory *Memory) runStoreLoop(context *Context, head, branchPC uint32) (uin
 		if fill := memory.analyseFlaggedFill(head, branchPC); fill != nil {
 			return memory.runFlaggedFill(context, fill)
 		}
+		// A palette blit that skips a key colour, and a fill that blends
+		// every pixel toward one colour; see keyed_blit.go and tint_fill.go.
+		if keyed := memory.analyseKeyedBlit(head, branchPC); keyed != nil {
+			return memory.runKeyedBlit(context, keyed)
+		}
+		if memory.analyseTintFill(head, branchPC) {
+			return memory.runTintFill(context)
+		}
 		modulate := memory.analyseWordModulate(head, branchPC)
 		if modulate == nil {
 			// Refused by analysis, which is the only answer that cannot
