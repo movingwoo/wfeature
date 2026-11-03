@@ -765,6 +765,16 @@ func (runtime *initializationRuntime) handleInitCall(thread *armcore.Thread, id 
 		if err != nil {
 			return 0, err
 		}
+		if object == 0 {
+			// Both callers hand over the object a field is written through or
+			// an array is stored into, and either through a null is a
+			// NullPointerException. A word that is not an object at all is
+			// still refused below: no answer for it could be right.
+			return 0, runtime.raiseGuestException(thread, &jvm.GuestException{
+				Object:  &jvm.Object{ClassName: "java/lang/NullPointerException", Native: "class of a null object"},
+				Message: "class of a null object",
+			})
+		}
 		return runtime.aotObjectClassAddress(object)
 	case initSVCAlloc:
 		size, err := thread.Register(0)

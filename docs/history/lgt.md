@@ -8418,3 +8418,11 @@ past its own authentication, and is not recognized. No other local LGT archive
 ships a `c.nm`, so the alias is added for this module alone and every other
 archive is byte-identical. Choosing to receive a certificate offline is the
 case served here.
+
+The alias is the one packaged file found by its base name, which the mount of
+the declared application's directory never does, so it is kept narrow by the
+order of its checks: a `c.nm` that directory already mounts stays, the archive
+has to ship exactly one `c.nm` inside a directory (two would leave the choice
+to a map's order), and only then is the module hashed and the registry asked.
+One of the 144 local LGT archives gets that far, so opening any other one, as
+the library's save-owner scan does for every archive, costs no hash.

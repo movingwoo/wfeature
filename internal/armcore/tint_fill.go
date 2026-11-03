@@ -98,18 +98,18 @@ func (memory *Memory) analyseTintFill(head, branchPC uint32) bool {
 	if branchPC <= head || branchPC-head != tintFillBytes {
 		return false
 	}
-	var buffer [len(tintFillBody) + 1]uint16
-	code, ok := memory.thumbHalfwords(head, branchPC, buffer[:])
+	var buffer [len(tintFillBody) + 1]decodedThumb
+	code, ok := memory.thumbBody(head, branchPC, buffer[:])
 	if !ok || len(code) != len(tintFillBody)+1 {
 		return false
 	}
 	for index, want := range tintFillBody {
-		if code[index] != want {
+		if code[index].instruction != want {
 			return false
 		}
 	}
 	// bne head
-	branch := uint32(code[len(tintFillBody)])
+	branch := uint32(code[len(tintFillBody)].instruction)
 	return branch&0xff00 == 0xd100 && uint32(int32(branchPC+4)+int32(int8(branch))*2) == head
 }
 
@@ -141,8 +141,7 @@ func (memory *Memory) runTintFill(context *Context) (uint32, error) {
 	// The masks and the target are read once and the guest reads them every
 	// pixel, so a destination over the frame would be a loop whose later
 	// pixels do not do what its first did. Refused rather than modelled.
-	if uint64(stack)+tintFillFrameLow < uint64(destination)+span &&
-		uint64(destination) < uint64(stack)+tintFillFrameHigh {
+	if spansOverlap(stack+tintFillFrameLow, tintFillFrameHigh-tintFillFrameLow, destination, span) {
 		return 0, nil
 	}
 	var frame [4]uint32

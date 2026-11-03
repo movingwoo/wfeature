@@ -127,10 +127,8 @@ func (memory *Memory) runKeyedBlit(context *Context, loop *keyedBlit) (uint32, e
 	// a destination over either frame slot, over the palette or over the
 	// source would be a loop whose later pixels do not do what its first one
 	// did. Refused rather than modelled.
-	overlaps := func(from uint32, length uint64) bool {
-		return uint64(from) < uint64(destination)+span && uint64(destination) < uint64(from)+length
-	}
-	if overlaps(sourceSlot, 4) || overlaps(tableSlot, 4) || overlaps(table, 256*4) || overlaps(source, uint64(iterations)) {
+	if spansOverlap(sourceSlot, 4, destination, span) || spansOverlap(tableSlot, 4, destination, span) ||
+		spansOverlap(table, 256*4, destination, span) || spansOverlap(source, uint64(iterations), destination, span) {
 		return 0, nil
 	}
 
@@ -229,11 +227,16 @@ func (memory *Memory) runKeyedBlit(context *Context, loop *keyedBlit) (uint32, e
 	return charged, nil
 }
 
-// thumbHalfwords reads the instructions from head to branchPC, the branch
-// included, through the decode cache, or answers false.
-func (memory *Memory) thumbHalfwords(head, branchPC uint32, into []uint16) ([]uint16, bool) {
+// thumbBody reads the instructions from head to branchPC, the branch
+// included, through the decode cache, or answers false. The walk is counted
+// rather than run up to branchPC, so a body at the top of the address space
+// cannot wrap it, and a body longer than into holds is refused unread.
+func (memory *Memory) thumbBody(head, branchPC uint32, into []decodedThumb) ([]decodedThumb, bool) {
+	if branchPC < head || (branchPC-head)/2 >= uint32(cap(into)) {
+		return nil, false
+	}
 	into = into[:0]
-	for address := head; address <= branchPC; address += 2 {
+	for count, address := (branchPC-head)/2+1, head; count > 0; count, address = count-1, address+2 {
 		decoded, cached := memory.decodedThumbFast(address)
 		if !cached {
 			var err error
@@ -241,7 +244,7 @@ func (memory *Memory) thumbHalfwords(head, branchPC uint32, into []uint16) ([]ui
 				return nil, false
 			}
 		}
-		into = append(into, decoded.instruction)
+		into = append(into, decoded)
 	}
 	return into, true
 }
@@ -252,27 +255,27 @@ func (memory *Memory) analyseKeyedBlit(head, branchPC uint32) *keyedBlit {
 	if branchPC <= head || branchPC-head > maxKeyedBlitBytes {
 		return nil
 	}
-	var buffer [maxKeyedBlitBytes/2 + 1]uint16
-	code, ok := memory.thumbHalfwords(head, branchPC, buffer[:])
+	var buffer [maxKeyedBlitBytes/2 + 1]decodedThumb
+	code, ok := memory.thumbBody(head, branchPC, buffer[:])
 	if !ok || len(code) != 12 && len(code) != 13 {
 		return nil
 	}
 	loop := &memory.keyedBlitScratch
 	*loop = keyedBlit{mirrored: len(code) == 13, steps: uint32(len(code))}
 	at := 0
-	next := func() uint32 {
-		instruction := uint32(code[at])
+	nextDecoded := func() decodedThumb {
+		decoded := code[at]
 		at++
-		return instruction
+		return decoded
 	}
+	next := func() uint32 { return uint32(nextDecoded().instruction) }
 
 	// ldr rS, [sp, #s]
-	instruction := next()
-	if instruction&0xf800 != 0x9800 {
+	sourceBase, sourceSlot, ok := thumbFrameLoad(nextDecoded())
+	if !ok {
 		return nil
 	}
-	sourceBase, sourceSlot := instruction>>8&7, (instruction&0xff)*4
-	var value, index uint32
+	var instruction, value, index uint32
 	if loop.mirrored {
 		// subs rV, rS, rI, then ldrb rV, [rV]
 		instruction = next()
@@ -292,11 +295,10 @@ func (memory *Memory) analyseKeyedBlit(head, branchPC uint32) *keyedBlit {
 		index, value = instruction>>6&7, instruction&7
 	}
 	// ldr rT, [sp, #t]
-	instruction = next()
-	if instruction&0xf800 != 0x9800 {
+	tableBase, tableSlot, ok := thumbFrameLoad(nextDecoded())
+	if !ok {
 		return nil
 	}
-	tableBase, tableSlot := instruction>>8&7, (instruction&0xff)*4
 	// lsls rV, rV, #2; ldr rV, [rV, rT]
 	if next() != 2<<6|value<<3|value || next() != 0x5800|tableBase<<6|value<<3|value {
 		return nil

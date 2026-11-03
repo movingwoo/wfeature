@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -263,8 +264,8 @@ func TestLocalRecordTableArchive(t *testing.T) {
 // certificate to the bare name the title opens it by. The original archive
 // recognizes it; a byte changed in the module does not, so no alias is added.
 func TestLocalPackagedCertificateArchive(t *testing.T) {
-	path := testlocal.Value(t, "WFEATURE_LGT_PACKAGED_CERTIFICATE_ARCHIVE", "a local archive")
-	data, err := os.ReadFile(path)
+	location := testlocal.Value(t, "WFEATURE_LGT_PACKAGED_CERTIFICATE_ARCHIVE", "a local archive")
+	data, err := os.ReadFile(location)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +279,7 @@ func TestLocalPackagedCertificateArchive(t *testing.T) {
 	}
 	var packaged []byte
 	for name, bytes := range archive.Packaged {
-		if filepathBase(name) == certificateBareName {
+		if path.Base(name) == certificateBareName {
 			packaged = bytes
 		}
 	}
@@ -293,13 +294,4 @@ func TestLocalPackagedCertificateArchive(t *testing.T) {
 	if packagedCertificateRecognized(changed) {
 		t.Fatal("a changed module is still recognized")
 	}
-}
-
-func filepathBase(name string) string {
-	for i := len(name) - 1; i >= 0; i-- {
-		if name[i] == '/' {
-			return name[i+1:]
-		}
-	}
-	return name
 }

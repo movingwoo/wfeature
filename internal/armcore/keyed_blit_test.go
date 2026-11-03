@@ -123,53 +123,6 @@ func (test keyedBlitCase) build(t *testing.T) func() (*Memory, *Context) {
 	}
 }
 
-// standInMatches runs a loop twice from the same start, once with the
-// recognisers refused, and fails on any register, flag, byte of the given
-// span or charged instruction that differs.
-func standInMatches(t *testing.T, end, from, length uint32, build func() (*Memory, *Context)) {
-	t.Helper()
-	interpreted, reference := build()
-	stood, subject := build()
-	interpreted.standInsRefused = true
-	control, err := (Engine{}).Run(reference, interpreted, end, 10_000_000)
-	if err != nil {
-		t.Fatalf("interpreting the loop: %v", err)
-	}
-	result, err := (Engine{}).Run(subject, stood, end, 10_000_000)
-	if err != nil {
-		t.Fatalf("standing in for the loop: %v", err)
-	}
-	if control.Steps != result.Steps {
-		t.Errorf("charged %d steps, interpreting the same loop retired %d", result.Steps, control.Steps)
-	}
-	for register := 0; register < 16; register++ {
-		if reference.Registers[register] != subject.Registers[register] {
-			t.Errorf("r%d = %#x after standing in, %#x after interpreting",
-				register, subject.Registers[register], reference.Registers[register])
-		}
-	}
-	if reference.CPSR != subject.CPSR {
-		t.Errorf("CPSR = %#x after standing in, %#x after interpreting", subject.CPSR, reference.CPSR)
-	}
-	interpreted.beginQuantum()
-	stood.beginQuantum()
-	defer interpreted.endQuantum()
-	defer stood.endQuantum()
-	for offset := uint32(0); offset < length; offset++ {
-		want, err := interpreted.read8(from + offset)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := stood.read8(from + offset)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if want != got {
-			t.Fatalf("byte at %#x is %#x after standing in, %#x after interpreting", from+offset, got, want)
-		}
-	}
-}
-
 func TestAKeyedBlitIsRecognised(t *testing.T) {
 	for name, test := range map[string]struct {
 		body                    []uint16
@@ -245,7 +198,7 @@ func TestStandingInForAKeyedBlitMatchesRunningIt(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			branchPC := keyedBlitBase + uint32(len(test.body)-1)*2
-			standInMatches(t, branchPC+2, test.destination, (test.pixels+8)*2, test.build(t))
+			compareStandIn(t, branchPC+2, test.destination, (test.pixels+8)*2, test.build(t))
 		})
 	}
 }
@@ -279,7 +232,7 @@ func TestAKeyedBlitOverWhatItReadsIsLeftToTheInterpreter(t *testing.T) {
 			// where that leads is the guest's business: only the decline is
 			// asserted for it.
 			if name != "over a frame slot" {
-				standInMatches(t, branchPC+2, destination&^0xff, 0x200, test.build(t))
+				compareStandIn(t, branchPC+2, destination&^0xff, 0x200, test.build(t))
 			}
 		})
 	}
@@ -317,5 +270,24 @@ func TestAKeyedBlitIsStoodInFor(t *testing.T) {
 				t.Errorf("destination = %#x, want %#x", got, test.destination+pixels*2)
 			}
 		})
+	}
+}
+
+// thumbBody counts its walk and is bounded by the buffer it is given: a body
+// longer than that is refused before anything is read.
+func TestThumbBodyIsBoundedByItsBuffer(t *testing.T) {
+	memory := fillLoopMemory(t, keyedBlitBody, keyedBlitBase, keyedBlitPainted)
+	memory.beginQuantum()
+	defer memory.endQuantum()
+	var buffer [4]decodedThumb
+	if code, ok := memory.thumbBody(keyedBlitBase, keyedBlitBase+3*2, buffer[:]); !ok || len(code) != 4 ||
+		code[0].instruction != keyedBlitBody[0] || code[3].instruction != keyedBlitBody[3] {
+		t.Errorf("a four-instruction body read %v, %v", code, ok)
+	}
+	if _, ok := memory.thumbBody(keyedBlitBase, keyedBlitBase+4*2, buffer[:]); ok {
+		t.Error("a five-instruction body was read into a four-instruction buffer")
+	}
+	if _, ok := memory.thumbBody(keyedBlitBase+2, keyedBlitBase, buffer[:]); ok {
+		t.Error("a body that ends before it starts was read")
 	}
 }

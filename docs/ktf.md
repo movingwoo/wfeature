@@ -19,8 +19,9 @@ inflated to be compared with the first and counts against the 512 MiB
 expansion bound like any other. It maps the image at
 `0x00100000`, enters Thumb code at `0x00100001`, and validates the returned
 initialization and class metadata before using it. The callbacks table its
-initialization is handed answers slots 0 to 11 and slot 20, which one runtime
-generation asks for an object's class record
+initialization is handed fills slots 0 to 2, 4 to 6, 8 and 11, and slot 20,
+which one runtime generation asks for an object's class record; the others stay
+zero, as nothing that runs calls them
 ([history](history/ktf.md#ktf-new-archives-2026-11-03-object-class)). Saves
 belong to the descriptor's PID, or to its AID when the PID is absent.
 

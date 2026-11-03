@@ -441,9 +441,18 @@ func TestInitializationCallbackSlotTwentyAnswersAnObjectsClass(t *testing.T) {
 			t.Errorf("%s: slot 20 answered %#x, want the class record %#x", test.name, got, test.want)
 		}
 	}
-	context := armcore.NewContext()
-	if _, err := runtime.handleInitCall(armcore.NewThread(context), initSVCJavaObjectClass); err == nil {
-		t.Error("slot 20 answered a class for a null object")
+	// A null object is the NullPointerException a field write or an array
+	// store through it is, raised in the guest rather than ending the session.
+	_, err = runtime.handleInitCall(armcore.NewThread(armcore.NewContext()), initSVCJavaObjectClass)
+	var uncaught *UncaughtAOTException
+	if !errors.As(err, &uncaught) || uncaught.Exception == nil || uncaught.Exception.Object.ClassName != "java/lang/NullPointerException" {
+		t.Errorf("slot 20 for a null object = %v, want an uncaught NullPointerException", err)
+	}
+	// A word that is not an object address has no class to answer.
+	unaligned := armcore.NewContext()
+	unaligned.Registers[0] = object + 2
+	if _, err := runtime.handleInitCall(armcore.NewThread(unaligned), initSVCJavaObjectClass); err == nil || errors.As(err, &uncaught) {
+		t.Errorf("slot 20 for an unaligned word = %v, want a refusal", err)
 	}
 }
 

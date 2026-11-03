@@ -166,32 +166,62 @@ func removeAll(names []string, name string) []string {
 // certificate from the bare name its save holds; the archive ships it under a
 // directory, where the bare name does not reach it. For a recognized archive
 // the shipped certificate is aliased to the bare name. The alias is added only
-// when the module is recognized, and a certificate the save holds wins.
+// when the module is recognized, and the registry is asked only for an archive
+// that is a candidate at all.
 func TestAliasPackagedCertificate(t *testing.T) {
 	packaged := map[string][]byte{
 		"somedir/c.nm":   []byte("present"),
 		"somedir/hd.nm":  []byte("data"),
 		"img/picture.ir": []byte("art"),
 	}
-	if got := aliasPackagedCertificate(packaged, nil, false); got != nil {
+	asked := 0
+	recognized := func(answer bool) func() bool {
+		return func() bool { asked++; return answer }
+	}
+	if got := aliasPackagedCertificate(packaged, nil, recognized(false)); got != nil {
 		t.Errorf("an unrecognized archive got an alias: %v", got)
 	}
-	got := aliasPackagedCertificate(packaged, nil, true)
+	got := aliasPackagedCertificate(packaged, nil, recognized(true))
 	if string(got[certificateBareName]) != "present" {
 		t.Errorf("c.nm = %q, want the packaged certificate", got[certificateBareName])
 	}
 	if _, aliased := got["hd.nm"]; aliased {
 		t.Error("a non-certificate packaged file was aliased")
 	}
-	// An archive that ships no certificate is left alone, so the bare name is
-	// not created out of nothing.
-	if got := aliasPackagedCertificate(map[string][]byte{"img/a.ir": nil}, nil, true); got != nil {
-		t.Errorf("an archive with no c.nm got an alias: %v", got)
-	}
 	// An existing supplemental map is extended, not replaced.
 	base := map[string][]byte{"other": []byte("x")}
-	got = aliasPackagedCertificate(packaged, base, true)
+	got = aliasPackagedCertificate(packaged, base, recognized(true))
 	if string(got["other"]) != "x" || string(got[certificateBareName]) != "present" {
 		t.Errorf("supplemental was not extended in place: %v", got)
+	}
+	if asked != 3 {
+		t.Fatalf("the registry was asked %d times for three candidates", asked)
+	}
+
+	asked = 0
+	for _, test := range []struct {
+		name         string
+		packaged     map[string][]byte
+		supplemental map[string][]byte
+	}{
+		// An archive that ships no certificate is left alone, so the bare name
+		// is not created out of nothing.
+		{name: "no certificate", packaged: map[string][]byte{"img/a.ir": nil}},
+		// One at the bare name already is what the title opens.
+		{name: "bare certificate", packaged: map[string][]byte{"c.nm": []byte("bare")}},
+		// Two certificates: which one the title meant is unknown, and a map's
+		// order must not decide it.
+		{name: "two certificates", packaged: map[string][]byte{"a/c.nm": []byte("a"), "b/c.nm": []byte("b")}},
+		// The declared application's directory mounts its own.
+		{name: "mounted certificate", packaged: packaged, supplemental: map[string][]byte{"c.nm": []byte("mounted")}},
+	} {
+		before := len(test.supplemental)
+		got := aliasPackagedCertificate(test.packaged, test.supplemental, recognized(true))
+		if len(got) != before || (before > 0 && string(got[certificateBareName]) != "mounted") {
+			t.Errorf("%s: supplemental became %q", test.name, got)
+		}
+	}
+	if asked != 0 {
+		t.Errorf("the registry was asked %d times for archives that are not candidates", asked)
 	}
 }

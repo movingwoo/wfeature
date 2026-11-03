@@ -10164,7 +10164,10 @@ images, this runtime is the only one that calls the slot.
 
 Slot 20 now answers the class record the object's header names
 (`initSVCJavaObjectClass`, through `aotObjectClassAddress`), for an instance
-and an array alike; slots 12 to 19 stay empty, since nothing calls them. The
+and an array alike. A null object raises a NullPointerException in the guest,
+which is what a field write or an array store through null is, rather than
+ending the session; a word that is not an object address is still refused.
+Slots 12 to 19 stay empty, since nothing calls them. The
 same runtime also reads slot 7, from the root enumerator the client exports at
 `WipiExe` word 8 for a collector to call, which this platform never calls, and
 slot 10, from `startClet`'s argument copy, which runs only for a non-empty

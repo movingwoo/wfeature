@@ -131,8 +131,8 @@ func TestStandingInForATintFillMatchesRunningIt(t *testing.T) {
 					return memory, context
 				}
 			}
-			standInMatches(t, branchPC+2, test.destination, (test.pixels+8)*2, build)
-			standInMatches(t, branchPC+2, tintFillStack, 0x48, build)
+			compareStandIn(t, branchPC+2, test.destination, (test.pixels+8)*2, build)
+			compareStandIn(t, branchPC+2, tintFillStack, 0x48, build)
 
 			memory, context := build()
 			memory.beginQuantum()
@@ -181,5 +181,5 @@ func TestATintFillItCannotProveIsLeftToTheInterpreter(t *testing.T) {
 	if err != nil || steps != 0 {
 		t.Fatalf("stood in for %d steps (error %v) under a watch", steps, err)
 	}
-	standInMatches(t, branchPC+2, tintFillPainted, 56, watched)
+	compareStandIn(t, branchPC+2, tintFillPainted, 56, watched)
 }
