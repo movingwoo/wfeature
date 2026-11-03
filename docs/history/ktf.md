@@ -10177,3 +10177,24 @@ slot.
 A checkpoint carries its arena and its stub table, so one taken before this
 change keeps the twelve-slot table it was taken with. A fresh session places
 everything allocated after the table 36 bytes later.
+
+<a id="ktf-new-archives-2026-11-03-png-end"></a>
+
+### A picture handed over without its end
+
+A second title failed its first timer with a read at `0x18`:
+`MC_grpCreateImage` answered `M_E_INVALID` for a 214-byte PNG it had been handed
+209 bytes of, and the title went on with the null image. Most of its pictures
+carry five bytes after `IEND` (`48 00 00 00 00`), and its loader hands over each
+picture's length without them; this one was packaged without them, so the five
+bytes the loader leaves off are the end of its `IEND`. The pixels are all there.
+A handset's decoder draws once the pixel stream has inflated; Go's reads every
+chunk to `IEND` and refuses the picture with `unexpected EOF`.
+
+`wipic.RepairPNGEnd` cuts such a picture after its last whole chunk and supplies
+the `IEND`, only after a decode has failed and only for a picture whose pixel
+stream it reached, so a picture cut inside its pixels still fails to inflate.
+It runs before the two checksum repairs, whose walks stop at a chunk that runs
+past the data. All three platforms' image routers end in `wipic.DecodeStandard`,
+so the tolerance is the same on each. The title reaches its menu and a mission.
+`TestAPictureCutShortInItsEndStillDecodes` fails without the repair.

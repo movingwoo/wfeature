@@ -186,6 +186,59 @@ func RepairPNGPixelChecksum(data []byte) ([]byte, bool) {
 	return repaired, true
 }
 
+// pngEnd is the whole IEND chunk: an empty payload and the CRC-32 of its tag.
+var pngEnd = []byte{0, 0, 0, 0, 'I', 'E', 'N', 'D', 0xae, 0x42, 0x60, 0x82}
+
+// RepairPNGEnd answers a copy of a PNG that stops short of its IEND chunk, cut
+// back to its last whole chunk with an IEND after it, and reports whether the
+// picture needed it.
+//
+// **A title hands the decoder fewer bytes than the file holds**, and the bytes
+// it leaves off are the end of the picture rather than any of it. One local
+// title's loader keeps a five-byte record after most of its pictures and passes
+// the length without it; a picture packaged without the record loses the last
+// five bytes of its IEND instead. A handset's decoder draws once the pixel
+// stream has inflated and never reads that far. Go's reads every chunk to IEND
+// and refuses the whole picture over the eight bytes it could not finish.
+//
+// Only the end is supplied. The cut is made after the last chunk the data holds
+// whole, so a picture whose pixel stream was itself cut short still fails to
+// inflate, and one that never reached its first IDAT is not a picture that
+// lost its end. A PNG that already ends in IEND, or is not walkable before the
+// cut, answers false and no copy.
+func RepairPNGEnd(data []byte) ([]byte, bool) {
+	if !IsPNG(data) {
+		return nil, false
+	}
+	whole, pixels := pngHeader, false
+	for at := pngHeader; at < len(data); {
+		if at+2*pngChunkTag > len(data) {
+			break
+		}
+		length := binary.BigEndian.Uint32(data[at:])
+		if length > maxPNGChunk {
+			return nil, false
+		}
+		end := at + 2*pngChunkTag + int(length) + pngChunkTag
+		if end > len(data) || end < at {
+			break
+		}
+		switch string(data[at+pngChunkTag : at+2*pngChunkTag]) {
+		case "IEND":
+			return nil, false
+		case "IDAT":
+			pixels = true
+		}
+		whole, at = end, end
+	}
+	if !pixels {
+		return nil, false
+	}
+	repaired := make([]byte, 0, whole+len(pngEnd))
+	repaired = append(repaired, data[:whole]...)
+	return append(repaired, pngEnd...), true
+}
+
 // adam7Passes are the interlace passes as column and row offset, then column
 // and row step.
 var adam7Passes = [7][4]uint64{{0, 0, 8, 8}, {4, 0, 8, 8}, {0, 4, 4, 8}, {2, 0, 4, 4}, {0, 2, 2, 4}, {1, 0, 2, 2}, {0, 1, 1, 2}}
@@ -270,8 +323,9 @@ func decodeBounded(data []byte) (stdimage.Image, string, error) {
 }
 
 // DecodeStandard decodes with the standard library's own readers, and retries
-// over a PNG whose checksums a title rewrote — first the chunk CRCs, then the
-// Adler-32 the compressed pixels carry.
+// over a PNG handed over without its end — RepairPNGEnd — and over one whose
+// checksums a title rewrote — first the chunk CRCs, then the Adler-32 the
+// compressed pixels carry.
 //
 // It is where the three platforms' image routers end up once they have ruled
 // out the formats the standard library does not register — the handset bitmap
@@ -281,6 +335,14 @@ func DecodeStandard(data []byte) (stdimage.Image, string, error) {
 	decoded, format, err := decodeBounded(data)
 	if err == nil {
 		return decoded, format, nil
+	}
+	// The end comes first because the two checksum walks stop at a chunk that
+	// runs past the data, which is exactly what a cut-off IEND is.
+	if ended, mended := RepairPNGEnd(data); mended {
+		if decoded, format, retryErr := decodeBounded(ended); retryErr == nil {
+			return decoded, format, nil
+		}
+		data = ended
 	}
 	if repaired, mended := RepairPNGChecksums(data); mended {
 		if decoded, format, retryErr := decodeBounded(repaired); retryErr == nil {

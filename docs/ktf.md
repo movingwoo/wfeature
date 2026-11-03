@@ -244,7 +244,9 @@ does the WIPI-C polygon fill (`curve.FillPolygonWithin`). Image
 decoding reads the header first and refuses a picture of more than 16,777,216
 pixels (`backend.MaxFramebufferPixels`, the rule SKT already applied) before
 allocating, and the checksum repair for a picture with a wrong zlib trailer
-stops at the size its header implies.
+stops at the size its header implies. A picture handed over without the end
+of its `IEND` decodes, as a handset's decoder draws it
+([history](history/ktf.md#ktf-new-archives-2026-11-03-png-end)).
 
 ## Files and records
 

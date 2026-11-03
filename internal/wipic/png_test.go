@@ -377,3 +377,63 @@ func TestPixelChecksumRepairKeepsEveryPixelLayout(t *testing.T) {
 		})
 	}
 }
+
+// A title hands the decoder the picture less its last five bytes, which a
+// picture packaged without the trailer it expects loses from its IEND. The
+// pixels are all there; the standard reader refuses the picture anyway, and a
+// handset's decoder, which stops once the pixels have inflated, does not.
+func TestAPictureCutShortInItsEndStillDecodes(t *testing.T) {
+	encoded := palettePNG(t)
+	for _, cut := range []int{1, 5, 8, 12} {
+		short := encoded[:len(encoded)-cut]
+		if _, _, err := decodeBounded(short); err == nil {
+			t.Fatalf("cut %d: the short picture decoded without a repair, so this proves nothing", cut)
+		}
+		decoded, _, err := DecodeStandard(short)
+		if err != nil {
+			t.Fatalf("cut %d: %v", cut, err)
+		}
+		if got := color.NRGBAModel.Convert(decoded.At(1, 1)).(color.NRGBA); got.R != 0xff || got.G != 0 || got.B != 0xff {
+			t.Errorf("cut %d: the marked pixel decoded as %+v", cut, got)
+		}
+	}
+}
+
+// Only the end is supplied. A picture that already has its IEND, one cut inside
+// its pixel stream, and one that never reached its first IDAT are not pictures
+// that lost their end, and none of them is reported as repaired into one that
+// decodes.
+func TestRepairPNGEndSuppliesOnlyTheEnd(t *testing.T) {
+	encoded := palettePNG(t)
+	if _, mended := RepairPNGEnd(encoded); mended {
+		t.Error("a whole picture was reported as missing its end")
+	}
+	data, checksum := findChunk(t, encoded, "IDAT")
+	inside := encoded[:data+(checksum-data)/2]
+	if repaired, mended := RepairPNGEnd(inside); mended {
+		if _, err := png.Decode(bytes.NewReader(repaired)); err == nil {
+			t.Error("a picture cut inside its pixel stream decoded")
+		}
+	}
+	if _, _, err := DecodeStandard(inside); err == nil {
+		t.Error("DecodeStandard decoded a picture cut inside its pixel stream")
+	}
+	before, _ := findChunk(t, encoded, "IDAT")
+	if _, mended := RepairPNGEnd(encoded[:before-2*pngChunkTag]); mended {
+		t.Error("a picture with no pixel stream was given an end")
+	}
+	if _, mended := RepairPNGEnd([]byte("BM not a png")); mended {
+		t.Error("a bitmap was given a PNG end")
+	}
+	short := encoded[:len(encoded)-5]
+	repaired, mended := RepairPNGEnd(short)
+	if !mended {
+		t.Fatal("a picture missing part of its IEND was not repaired")
+	}
+	if !bytes.Equal(repaired, encoded) {
+		t.Error("the repaired picture is not the picture before the cut")
+	}
+	if len(short) != len(encoded)-5 || &short[0] == &repaired[0] {
+		t.Error("the repair wrote over the bytes it was given")
+	}
+}

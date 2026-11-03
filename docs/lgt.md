@@ -215,7 +215,9 @@ reach, so a guest box at the integer extremes returns at once; the pixels are
 those an unclipped walk draws. Image decoding reads the header first and
 refuses a picture of more than 16,777,216 pixels (`backend.MaxFramebufferPixels`,
 the rule SKT already applied) before allocating, and the checksum repair for a
-picture with a wrong zlib trailer stops at the size its header implies.
+picture with a wrong zlib trailer stops at the size its header implies. A
+picture handed over without the end of its `IEND` decodes, as a handset's
+decoder draws it ([history](history/ktf.md#ktf-new-archives-2026-11-03-png-end)).
 
 The image slots follow the v2.x order: `MC_grpCreateImage` `0xe9`,
 `MC_grpCreateSubImage` `0xea`, `MC_grpDestroyImage` `0xeb`,
