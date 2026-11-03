@@ -10,8 +10,7 @@ import (
 
 // A slot holds execution state and nothing a load could put back over the
 // game's saves: the envelope has two sections and a reserved word where the
-// earlier format kept the length of a save generation. The sections follow the
-// header deflated, and they are all that follows it.
+// earlier format kept the length of a save generation.
 func TestCheckpointEnvelopeCarriesNoSaves(t *testing.T) {
 	identity := SaveIdentity([]byte("authored checkpoint archive"))
 	saved := Checkpoint{Identity: identity, Variant: CheckpointKTFJava, Session: []byte("session"), Runtime: []byte("runtime")}
@@ -19,15 +18,12 @@ func TestCheckpointEnvelopeCarriesNoSaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binary.LittleEndian.Uint16(data[8:10]) != 4 || binary.LittleEndian.Uint32(data[52:56]) != 0 {
-		t.Fatalf("version %d with reserved word %#x, want version 4 and zero",
+	if want := checkpointHeaderSize + len("session") + len("runtime"); len(data) != want {
+		t.Fatalf("the envelope is %d bytes, want the header and two sections: %d", len(data), want)
+	}
+	if binary.LittleEndian.Uint16(data[8:10]) != 3 || binary.LittleEndian.Uint32(data[52:56]) != 0 {
+		t.Fatalf("version %d with reserved word %#x, want version 3 and zero",
 			binary.LittleEndian.Uint16(data[8:10]), binary.LittleEndian.Uint32(data[52:56]))
-	}
-	if session, runtime := binary.LittleEndian.Uint32(data[44:48]), binary.LittleEndian.Uint32(data[48:52]); session != 7 || runtime != 7 {
-		t.Fatalf("section lengths are %d and %d, want the sections' own 7 and 7", session, runtime)
-	}
-	if sections, err := inflateCheckpoint(data[checkpointHeaderSize:], 14); err != nil || string(sections) != "sessionruntime" {
-		t.Fatalf("the deflated body is %q, %v; want the two sections and nothing else", sections, err)
 	}
 	first := bytes.Clone(data)
 	got, err := DecodeCheckpoint(data, identity)
@@ -90,89 +86,6 @@ func TestCheckpointRefusesAnEarlierFormatByVersion(t *testing.T) {
 	}
 }
 
-// A quick save an earlier build wrote is version 3: the same header with the
-// sections stored as they are. This build reads it, so upgrading keeps every
-// slot that was already there, and it judges its damage the same way.
-func TestCheckpointReadsTheVersion3AnEarlierBuildWrote(t *testing.T) {
-	identity := SaveIdentity([]byte("authored checkpoint archive"))
-	saved := Checkpoint{Identity: identity, Variant: CheckpointLGTJava, Session: []byte("{}"), Runtime: bytes.Repeat([]byte("guest memory "), 64)}
-	earlier := append(checkpointHeader(checkpointVersion, saved), saved.Session...)
-	earlier = append(earlier, saved.Runtime...)
-	got, err := DecodeCheckpoint(earlier, identity)
-	if err != nil {
-		t.Fatalf("a version 3 slot was refused: %v", err)
-	}
-	if !reflect.DeepEqual(got, saved) {
-		t.Fatalf("a version 3 slot decoded as %+v", got)
-	}
-	for name, damaged := range map[string][]byte{
-		"truncated": earlier[:len(earlier)-1],
-		"trailing":  append(bytes.Clone(earlier), 0),
-		"payload":   append(bytes.Clone(earlier[:len(earlier)-1]), earlier[len(earlier)-1]+1),
-	} {
-		if _, err := DecodeCheckpoint(damaged, identity); !errors.Is(err, ErrCheckpointDamaged) {
-			t.Fatalf("a %s version 3 slot was refused with %v, want damaged", name, err)
-		}
-	}
-	// Writing it again stores the deflated form.
-	again, err := EncodeCheckpoint(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if binary.LittleEndian.Uint16(again[8:10]) != checkpointDeflatedVersion || len(again) >= len(earlier) {
-		t.Fatalf("rewritten slot is version %d and %d bytes, want version 4 below %d bytes",
-			binary.LittleEndian.Uint16(again[8:10]), len(again), len(earlier))
-	}
-}
-
-// The header says how long the sections are, and the deflated stream must
-// produce exactly that: a stream that runs short or long is damage, however
-// small the file. A file that only claims large sections allocates what its
-// stream really produces.
-func TestCheckpointRefusesDeflatedSectionsThatDisagreeWithTheirLengths(t *testing.T) {
-	identity := SaveIdentity([]byte("authored checkpoint archive"))
-	saved := Checkpoint{Identity: identity, Variant: CheckpointSKTJava, Session: []byte("{}"), Runtime: []byte("runtime")}
-	data, err := EncodeCheckpoint(saved)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, runtime := range []uint32{6, 8, checkpointRuntimeLimit} {
-		edited := bytes.Clone(data)
-		binary.LittleEndian.PutUint32(edited[48:52], runtime)
-		if _, err := DecodeCheckpoint(edited, identity); !errors.Is(err, ErrCheckpointDamaged) {
-			t.Fatalf("a stream of 9 bytes declared as 2 and %d was refused with %v, want damaged", runtime, err)
-		}
-	}
-	// A stream that is not deflate at all is damage too.
-	garbage := append(bytes.Clone(data[:checkpointHeaderSize]), 0xff, 0xff, 0xff, 0xff)
-	if _, err := DecodeCheckpoint(garbage, identity); !errors.Is(err, ErrCheckpointDamaged) {
-		t.Fatalf("an undeflatable body was refused with %v, want damaged", err)
-	}
-}
-
-// Guest memory is mostly runs and repeats, which is why the sections are
-// deflated: a megabyte of it is stored in a small fraction of that.
-func TestCheckpointDeflatesItsSections(t *testing.T) {
-	identity := SaveIdentity([]byte("authored checkpoint archive"))
-	runtime := make([]byte, 1<<20)
-	for index := range runtime {
-		if index%4096 < 64 {
-			runtime[index] = byte(index)
-		}
-	}
-	data, err := EncodeCheckpoint(Checkpoint{Identity: identity, Variant: CheckpointKTFNative, Session: []byte("{}"), Runtime: runtime})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(data) > len(runtime)/10 {
-		t.Fatalf("a megabyte of sparse memory was stored in %d bytes", len(data))
-	}
-	got, err := DecodeCheckpoint(data, identity)
-	if err != nil || !bytes.Equal(got.Runtime, runtime) {
-		t.Fatalf("the deflated runtime did not come back whole: %v", err)
-	}
-}
-
 func TestCheckpointContainerRejectsDamageIdentityAndUnsupportedVariants(t *testing.T) {
 	identity := SaveIdentity([]byte("authored checkpoint archive"))
 	data, err := EncodeCheckpoint(Checkpoint{Identity: identity, Variant: CheckpointKTFJava, Session: []byte("{}"), Runtime: []byte("{}")})
@@ -192,7 +105,7 @@ func TestCheckpointContainerRejectsDamageIdentityAndUnsupportedVariants(t *testi
 			// The digest is made right again, so the reserved word is the one
 			// thing wrong with this envelope.
 			binary.LittleEndian.PutUint32(b[52:56], 1)
-			copy(b[56:88], checkpointDigest(b, []byte("{}"), []byte("{}")))
+			copy(b[56:88], checkpointDigest(b))
 			return b
 		}, ErrCheckpointDamaged},
 		{"digest", func(b []byte) []byte { b[checkpointHeaderSize-1]++; return b }, ErrCheckpointDamaged},

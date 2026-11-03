@@ -490,22 +490,14 @@ release:
 | Offset | Size | Field |
 | --- | --- | --- |
 | 0 | 8 | `WFSTATE\0` |
-| 8 | 2 | Version: 4 written, 3 also read |
+| 8 | 2 | Version, 3 |
 | 10 | 2 | Execution variant: 1 KTF Java, 2 KTF module, 3 KTF native, 4 LGT Clet, 5 LGT Java, 6 SKT Java, 7 SKT script, 8 SKT native (Clet) |
 | 12 | 32 | SHA-256 of the whole archive |
 | 44 | 4 | Session section length, at most 64 KiB |
 | 48 | 4 | Runtime section length, at most 128 MiB |
 | 52 | 4 | Reserved, zero; version 1 kept the length of an embedded save here |
 | 56 | 32 | SHA-256 of bytes 0–55 and both sections |
-| 88 | — | Session section, then runtime section: version 4 deflates the two as one stream, version 3 stores them as they are |
-
-The lengths and the digest are the sections' own, before deflating. A version
-4 stream must inflate to exactly those lengths and end with the file; the
-output grows with what the stream really produces, so a short file that claims
-large sections costs no more than its own output. A record is mostly guest
-memory: on 2026-11-03 an LGT title's 3,828,867-byte quick save became 353,572
-bytes and a KTF title's 2,380,635 became 376,721, taking 12–15 ms to deflate
-and 4–6 ms to inflate.
+| 88 | — | Session section, then runtime section |
 
 The version is read before the size is bounded, so an envelope of an earlier
 format is refused as unsupported whatever its size. The checksum detects damage;
@@ -519,15 +511,12 @@ A directory store keeps one Host checkpoint slot per exact archive at
 owner directory. Reads are bounded and confined to the reserved directory, and
 links and nonregular files are refused. Writes validate the envelope and use the
 ordinary synced temporary-file replacement. Slots stay outside ordinary save
-exports. The file name carries the version of the records inside, so no build
-writes over another format's slot; the earlier names are listed under
+exports. The file name carries the envelope version, so no build writes over
+another format's slot; the earlier names are listed under
 [leftovers](#leftovers-from-earlier-builds). Version 3 keeps version 2's layout;
 it exists because the audio, JVM heap and media-listener records inside it
 changed, and without the bump a 0.5.2 slot would be read as current and refused
-as damaged. Version 4 holds version 3's records deflated, so it keeps the
-version 3 name: a slot an earlier build wrote is read and the next quick save
-rewrites it smaller, and an earlier build refuses a version 4 slot as a version
-it does not support and leaves it in place. A future incompatible state or ABI change must bump the version the
+as damaged. A future incompatible state or ABI change must bump the version the
 same way. A slot is outside what an upgrade promises to keep working: an
 incompatible one is refused with its reason and left in place.
 
