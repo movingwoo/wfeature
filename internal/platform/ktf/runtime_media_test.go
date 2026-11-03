@@ -3,7 +3,10 @@ package ktf
 import (
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
 
 func newByteArray(t *testing.T, client *Client, data []byte) *jvm.Object {
@@ -129,5 +132,63 @@ func TestAClipNamingAResourceTheArchiveLacksIsEmptyRatherThanFatal(t *testing.T)
 	}
 	if _, err := runtimeClipConstructor(runtime, client.JVM(), arguments); err == nil {
 		t.Fatal("a clip naming a resource outside the package was accepted")
+	}
+}
+
+// TestClearDataLeavesTheSoundThePlayerTook pins what clearing a clip does once
+// Player.play has taken its bytes. A title keeps one Clip for every sound and
+// changes music with `Player.stop`, `putData` and `Player.play`, and its
+// PlayListener answers STOP by calling `clearData`. The STOP of the old sound
+// is delivered after the new one has started, so clearing the clip closed the
+// new title music in the same millisecond it began and the title screen stayed
+// silent. The clip is emptied for its next fill; the playing sound is the
+// player's and keeps playing until it is stopped or the clip is refilled.
+func TestClearDataLeavesTheSoundThePlayerTook(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	clock := wipicrt.NewManualClock(runtime.ClockBase)
+	client.Clock = clock
+	client.Audio = backend.NewAudioWithClock(&audioPauseProbe{}, clock.Now)
+	clip := newJavaAudioPauseClip(t, client, runtime)
+	vm := client.JVM()
+	clearData := func() {
+		t.Helper()
+		if _, err := runtimeClipClearData(runtime, vm, []jvm.Value{jvm.ReferenceValue(clip)}); err != nil {
+			t.Fatalf("clearData: %v", err)
+		}
+	}
+
+	javaAudioPauseCall(t, client, clip, "Clip", "play", 1, 1)
+	playing := runtime.clip(clip).Handle
+	clearData()
+	if !client.Audio.Playing(playing) {
+		t.Fatal("clearData stopped the sound Player.play had taken")
+	}
+	if state := runtime.clip(clip); len(state.Data) != 0 {
+		t.Fatalf("clip still holds %d bytes after clearData", len(state.Data))
+	}
+	// An emptied clip has nothing to start, and refusing does not touch the
+	// sound that is playing.
+	javaAudioPauseCall(t, client, clip, "Clip", "play", 0, 0)
+	if !client.Audio.Playing(playing) {
+		t.Fatal("a refused play stopped the playing sound")
+	}
+
+	// Refilling the clip starts its next sound, which ends the old one.
+	sound := wipicrttest.OneNoteSMAF()
+	fill := []jvm.Value{jvm.ReferenceValue(clip), jvm.ReferenceValue(newByteArray(t, client, sound)), jvm.IntValue(0), jvm.IntValue(int32(len(sound)))}
+	if _, err := runtimeClipPutData(runtime, vm, fill); err != nil {
+		t.Fatalf("putData: %v", err)
+	}
+	if client.Audio.Playing(playing) {
+		t.Fatal("the old sound kept playing after the clip was refilled")
+	}
+	javaAudioPauseCall(t, client, clip, "Clip", "play", 1, 0)
+
+	// A stopped clip has no sound of the player's to keep: clearing it
+	// releases the decoded sound as before.
+	javaAudioPauseCall(t, client, clip, "Clip", "stop", 1)
+	clearData()
+	if runtime.clip(clip).Loaded {
+		t.Fatal("clearData kept the decoded sound of a stopped clip")
 	}
 }

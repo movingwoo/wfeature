@@ -311,6 +311,19 @@ func runtimeClipClearData(runtime *initializationRuntime, _ *jvm.VM, arguments [
 		}
 	}
 	state.Data = nil
+	// **Clearing a clip does not stop what the player took from it.** The
+	// specification has clearData discard the data still available in the
+	// clip, and once Player.play has taken the clip's bytes there is none —
+	// the same model runtimeClipPutData follows. A title that changes music
+	// with stop, putData and play answers the STOP of the old sound with
+	// clearData, and that STOP arrives after the new sound has started, so
+	// closing the sound here silenced its title music the moment it began.
+	// The sound keeps playing until it is stopped or the clip is refilled,
+	// which starts a new one; an idle clip still drops its decoded sound.
+	if state.Played && runtime.client.Audio != nil &&
+		(runtime.client.Audio.Playing(state.Handle) || runtime.client.Audio.Paused(state.Handle)) {
+		return jvm.VoidValue(), nil
+	}
 	runtime.invalidateJavaClip(state)
 	return jvm.VoidValue(), nil
 }

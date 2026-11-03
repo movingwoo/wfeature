@@ -1029,6 +1029,26 @@ same binary twice gave 4,325 and 4,320 messages on one archive, and 1,075 and
 1,039 on another), so only a count that falls to zero, or one that moves as far
 as this title's did, is evidence.
 
+### Clearing a clip does not stop what the player took
+
+The same title's `PlayListener` answers STOP with `clearData()`. When it moves
+from its logo sting to its title music it calls `Player.stop`, `putData` and
+`Player.play`, and the STOP of the sting is delivered after the music has
+started, because listener events wait for the next round
+([KTF delivery](#ktf-delivery-and-ownership)). `clearData` closed the clip's
+decoded sound, so the music was cut in the millisecond it began and the title
+screen stayed silent: 1,200 paced ticks recorded 16 note-ons, all within the
+first 1.6 seconds (2026-11-03).
+
+The specification has `clearData` discard the data still available in the
+clip, and by the rule above a play has taken what the clip held. So on KTF,
+`clearData` on a clip whose sound is playing or paused empties the clip and
+leaves the sound alone. A later `putData` still starts a new sound and ends the
+old one, `Player.play` on the emptied clip refuses as on any empty clip, and an
+idle clip still drops its decoded sound. The same run then played the music
+throughout: 999 note-ons, about 114 every two seconds. LGT keeps its own clip
+model, in which every fill releases the clip's sound, and is unchanged.
+
 ## A play that returns at once is a busy loop in the game
 
 `com.skt.m.AudioClip.play` does not return until the clip has finished, and
