@@ -14,8 +14,11 @@ import (
 // Hosts retain their directory claim while capturing and writing a slot or
 // while loading and adopting one.
 //
-// The file name carries the envelope version. A slot written in an earlier
-// format keeps its earlier name and is never written, renamed or removed here:
+// The file name carries the version of the records inside: version 4 holds
+// version 3's records deflated and keeps the version 3 name, so a version 3
+// slot an earlier build wrote is read and the next quick save rewrites it. A
+// slot written in an earlier format keeps its earlier name and is never
+// written, renamed or removed here:
 // it is reported as present, refused when it is loaded, and left for its owner.
 // A new quick save is written beside it under the current name, so no build
 // overwrites another format's slot.
