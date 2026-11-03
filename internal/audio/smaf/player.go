@@ -67,6 +67,12 @@ type Event struct {
 	SysEx      []byte
 }
 
+// EndOfSamples is the Value of the EventEnd a sound made only of PCM tracks
+// gets where its last sample has played, when that is after its sequences
+// end. It is the sound's last event; the one before it is where the sequences
+// end, and that is where a repeat starts again.
+const EndOfSamples uint8 = 1
+
 const (
 	midiDrumChannel = 9
 	maxSMAFChannels = 64
@@ -153,16 +159,18 @@ func playWithBudget(data []byte, budget *decodeBudget) []Event {
 	// archives end their sequence about half a second before their sample
 	// does, with sound rather than padding in that half second. Ending them
 	// with the sequence reported them finished early, and a one-shot one was
-	// stopped there. A sound with a score keeps the score's timeline: that is
-	// where a looping piece starts again, and its samples sound past it as
-	// they always have. See docs/audio.md.
+	// stopped there. The end is marked EndOfSamples: a repeat still starts
+	// again where the sequences end, and only the last pass waits for the
+	// samples. A sound with a score keeps the score's timeline: that is where
+	// a looping piece starts again, and its samples sound past it as they
+	// always have. See docs/audio.md.
 	if !scored {
 		var last uint32
 		for _, event := range events {
 			last = max(last, event.Time)
 		}
 		if end := pcmSampleEnd(events, budget); budget.err == nil && end > last {
-			events = budget.emit(events, Event{Time: end, Type: EventEnd})
+			events = budget.emit(events, Event{Time: end, Type: EventEnd, Value: EndOfSamples})
 		}
 		if budget.err != nil {
 			return nil

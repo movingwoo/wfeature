@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 	"time"
+	"weak"
 
 	"github.com/movingwoo/wfeature/internal/api/wipi"
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -277,9 +278,26 @@ func (runtime *initializationRuntime) syncJavaClips(time.Duration) error {
 }
 
 func (runtime *initializationRuntime) deliverClipEvent(event clipEvent) error {
+	previous := runtime.replacedStop
+	if runtime.outlivedStop(event) {
+		runtime.replacedStop = event.clip
+	}
+	defer func() { runtime.replacedStop = previous }()
 	_, err := runtime.client.vm.InvokeVirtual(event.listener, "playUpdate", clipUpdateSignature,
 		jvm.ReferenceValue(event.clip), jvm.IntValue(event.code), jvm.IntValue(0))
 	return runtime.client.absorbUncaughtCallback("playUpdate", err)
+}
+
+// outlivedStop reports a STOP whose clip is playing, or paused, again by the
+// time it is delivered: the stop it reports was of a sound the clip has
+// since replaced. It looks the clip up without creating its state.
+func (runtime *initializationRuntime) outlivedStop(event clipEvent) bool {
+	if event.code != wipi.PlayEventStop || event.clip == nil || runtime.client.Audio == nil {
+		return false
+	}
+	state := runtime.clips[weak.Make(event.clip)]
+	return state != nil && state.Loaded &&
+		(runtime.client.Audio.Playing(state.Handle) || runtime.client.Audio.Paused(state.Handle))
 }
 
 // Media callbacks use the Host's event service even when a guest event loop

@@ -3,6 +3,7 @@ package ktf
 import (
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/api/wipi"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
@@ -135,15 +136,16 @@ func TestAClipNamingAResourceTheArchiveLacksIsEmptyRatherThanFatal(t *testing.T)
 	}
 }
 
-// TestClearDataLeavesTheSoundThePlayerTook pins what clearing a clip does once
-// Player.play has taken its bytes. A title keeps one Clip for every sound and
-// changes music with `Player.stop`, `putData` and `Player.play`, and its
-// PlayListener answers STOP by calling `clearData`. The STOP of the old sound
-// is delivered after the new one has started, so clearing the clip closed the
-// new title music in the same millisecond it began and the title screen stayed
-// silent. The clip is emptied for its next fill; the playing sound is the
-// player's and keeps playing until it is stopped or the clip is refilled.
-func TestClearDataLeavesTheSoundThePlayerTook(t *testing.T) {
+// TestClearDataAnsweringAnOutlivedStopKeepsTheNewSound pins what clearing a
+// clip does from a listener answering a STOP the clip has outlived. A title
+// keeps one Clip for every sound and changes music with `Player.stop`,
+// `putData` and `Player.play`, and its PlayListener answers STOP by calling
+// `clearData`. Listener events wait for the next round, so the STOP of the
+// old sound arrives after the new one has started, and clearing the clip
+// closed the new title music in the same millisecond it began: the title
+// screen stayed silent. The STOP reports a sound that is already gone, so the
+// call clears nothing; anywhere else clearData still stops the clip's sound.
+func TestClearDataAnsweringAnOutlivedStopKeepsTheNewSound(t *testing.T) {
 	client, runtime := newTestRuntime(t)
 	clock := wipicrt.NewManualClock(runtime.ClockBase)
 	client.Clock = clock
@@ -156,39 +158,41 @@ func TestClearDataLeavesTheSoundThePlayerTook(t *testing.T) {
 			t.Fatalf("clearData: %v", err)
 		}
 	}
+	stop := clipEvent{clip: clip, code: wipi.PlayEventStop}
 
+	// The clip is playing when its STOP is delivered: the STOP is outlived.
 	javaAudioPauseCall(t, client, clip, "Clip", "play", 1, 1)
 	playing := runtime.clip(clip).Handle
+	if !runtime.outlivedStop(stop) {
+		t.Fatal("a STOP delivered while its clip plays again was not recognized")
+	}
+	for _, other := range []int32{wipi.PlayEventStart, wipi.PlayEventEndOfData} {
+		if runtime.outlivedStop(clipEvent{clip: clip, code: other}) {
+			t.Fatalf("event %d was taken for an outlived STOP", other)
+		}
+	}
+	held := len(runtime.clip(clip).Data)
+	runtime.replacedStop = clip
 	clearData()
-	if !client.Audio.Playing(playing) {
-		t.Fatal("clearData stopped the sound Player.play had taken")
-	}
-	if state := runtime.clip(clip); len(state.Data) != 0 {
-		t.Fatalf("clip still holds %d bytes after clearData", len(state.Data))
-	}
-	// An emptied clip has nothing to start, and refusing does not touch the
-	// sound that is playing.
-	javaAudioPauseCall(t, client, clip, "Clip", "play", 0, 0)
-	if !client.Audio.Playing(playing) {
-		t.Fatal("a refused play stopped the playing sound")
+	runtime.replacedStop = nil
+	if !client.Audio.Playing(playing) || len(runtime.clip(clip).Data) != held {
+		t.Fatal("clearData answering an outlived STOP touched the new sound or its data")
 	}
 
-	// Refilling the clip starts its next sound, which ends the old one.
+	// Outside that answer clearData empties the clip and stops its sound.
+	clearData()
+	if client.Audio.Playing(playing) || len(runtime.clip(clip).Data) != 0 || runtime.clip(clip).Loaded {
+		t.Fatal("clearData did not stop the playing sound and empty the clip")
+	}
+	// A STOP for a clip that stays stopped is not outlived.
 	sound := wipicrttest.OneNoteSMAF()
 	fill := []jvm.Value{jvm.ReferenceValue(clip), jvm.ReferenceValue(newByteArray(t, client, sound)), jvm.IntValue(0), jvm.IntValue(int32(len(sound)))}
 	if _, err := runtimeClipPutData(runtime, vm, fill); err != nil {
 		t.Fatalf("putData: %v", err)
 	}
-	if client.Audio.Playing(playing) {
-		t.Fatal("the old sound kept playing after the clip was refilled")
-	}
 	javaAudioPauseCall(t, client, clip, "Clip", "play", 1, 0)
-
-	// A stopped clip has no sound of the player's to keep: clearing it
-	// releases the decoded sound as before.
 	javaAudioPauseCall(t, client, clip, "Clip", "stop", 1)
-	clearData()
-	if runtime.clip(clip).Loaded {
-		t.Fatal("clearData kept the decoded sound of a stopped clip")
+	if runtime.outlivedStop(stop) {
+		t.Fatal("a STOP for a stopped clip was taken for an outlived one")
 	}
 }

@@ -481,8 +481,14 @@ func TestPCMOnlySoundLastsUntilItsSampleHasPlayed(t *testing.T) {
 		{"a missing wave plays nothing", []byte{10, 0x02, 20, 30, 0, 0, 0, 0, 0}, 40},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if end := last(t, limitsPCM(chunk("Atsq", test.sequence), wave)); end.Type != EventEnd || end.Time != test.want {
+			end := last(t, limitsPCM(chunk("Atsq", test.sequence), wave))
+			if end.Type != EventEnd || end.Time != test.want {
 				t.Fatalf("sound ends with %+v, want EventEnd at %d ms", end, test.want)
+			}
+			// Only an end the samples pushed past the sequences is marked,
+			// because a repeat starts again before it.
+			if marked := end.Value == EndOfSamples; marked != (test.want == 111) {
+				t.Fatalf("end %+v marked %t", end, marked)
 			}
 		})
 	}

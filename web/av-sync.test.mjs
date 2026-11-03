@@ -30,8 +30,11 @@ const canvasFactory = () => {
   const made = [];
   const createCanvas = (width, height) => {
     const canvas = {
-      width, height, number: null,
-      getContext: () => ({ drawImage: source => { canvas.number = source.number; }, globalCompositeOperation: "" }),
+      width, height, number: null, options: [],
+      getContext: (kind, options) => {
+        canvas.options.push(options);
+        return { drawImage: source => { canvas.number = source.number; }, globalCompositeOperation: "" };
+      },
     };
     made.push(canvas);
     return canvas;
@@ -133,12 +136,12 @@ test("past the byte bound the oldest waiting copy goes and its change stays", ()
   held.setDelay(100);
   at(0);
   held.push(picture(1), { dirty: { left: 0, top: 0, right: 1, bottom: 1 } });
-  at(5);
+  at(10);
   held.push(picture(2), { dirty: { left: 2, top: 2, right: 3, bottom: 3 } });
-  at(9);
+  at(20);
   held.push(picture(3), { dirty: { left: 1, top: 1, right: 2, bottom: 2 } });
   assert.equal(held.holding, 2);
-  frame(105);
+  frame(115);
   // The first picture never shows; the second carries what it changed.
   assert.deepEqual(shown, [{ number: 2, scale: 1, dirty: { left: 0, top: 0, right: 3, bottom: 3 } }]);
 });
@@ -172,4 +175,38 @@ test("a steady delay reuses its copies instead of allocating each picture", () =
   const waiting = held.holding;
   held.push(picture(99, 0, 0));
   assert.equal(held.holding, waiting, "an empty picture is not held");
+});
+
+test("pictures that would share an animation frame share one copy", () => {
+  const { held, shown, made, frame, at } = harness();
+  held.setDelay(100);
+  at(0);
+  held.push(picture(1), { dirty: { left: 0, top: 0, right: 1, bottom: 1 } });
+  at(5);
+  held.push(picture(2), { scale: 2, dirty: { left: 2, top: 2, right: 3, bottom: 3 } });
+  assert.equal(held.holding, 1);
+  assert.equal(made.length, 1);
+  frame(100);
+  assert.deepEqual(shown, [{ number: 2, scale: 2, dirty: { left: 0, top: 0, right: 3, bottom: 3 } }]);
+});
+
+test("copies are read back often and keep being reused after the picture changes size", () => {
+  const { held, made, frame, at } = harness();
+  held.setDelay(20);
+  for (let index = 0; index < 10; index++) {
+    at(index * 10);
+    held.push(picture(index));
+    frame(index * 10 + 1);
+  }
+  const before = made.length;
+  // The game's screen changes size: the spare copies are resized, not kept
+  // beside new ones.
+  for (let index = 10; index < 40; index++) {
+    at(index * 10);
+    held.push(picture(index, 6, 5));
+    frame(index * 10 + 1);
+  }
+  assert.ok(made.length <= before + 2, `${made.length - before} canvases made after the size changed`);
+  assert.ok(made.every(canvas => canvas.options.every(options => options?.willReadFrequently === true)),
+    "a copy's context was made without the read-back hint");
 });

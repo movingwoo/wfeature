@@ -1014,7 +1014,10 @@ starts again: the twelve in the table's last row have a PCM sample past it,
 and 161 KTF, 243 LGT and 1 SKT sounds a stream wave. A first version extended
 every PCM track's end, and an authored SKT test that loops a 400 ms score over
 a ten-second sample caught the moved repeat point; the rule was narrowed to
-sounds without a score.
+sounds without a score. A review then pointed out that a looping PCM-only
+effect would still restart half a second later each pass, a quarter slower for
+a two-second loop, so its end is now marked and a repeat starts again where the
+sequences end; only the last pass waits for the samples.
 
 Validation: authored decoder tests for a sample longer and shorter than its
 sequence and for a missing wave; the PCM control timelines whose expected end

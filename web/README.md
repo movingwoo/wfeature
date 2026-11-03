@@ -267,7 +267,8 @@ picker.
   the screen during a run and the report afterwards cannot disagree. Wide
   windows and debug builds only.
 - **Settings (`설정`)** — `🎵 배경음` and `🔊 효과음` (MIDI and sampled-sound
-  volume), `🔍 화질` (원본, hq2x, hq3x or hq4x magnification), `📱 화면`,
+  volume), `🎬 화면·소리 맞춤` (−500 to +1000 ms: holds the picture or the sound
+  back, `av-sync.js`), `🔍 화질` (원본, hq2x, hq3x or hq4x magnification), `📱 화면`,
   `📳 진동`, `⏩ 속도` (0.25배 to 4배, per game), `🎮 키패드 타입` and
   `🎮 키패드 세부 조정`, `⛶ 전체화면`, `⌨️ 키보드 매핑 변경`, `🕹️ 게임패드 매핑 변경`,
   `🎯 치트`, `🐞 디버그 로그 저장`, `🔤 문자 입력` and `🔄 재시작`. Both type lists
@@ -330,6 +331,7 @@ picker.
   | `wfeature:screen:<game>` | the screen an earlier page kept, read for a game with no `screen-choice` entry; that page wrote it only when a player changed the menu, so every size it holds, 240x320 included, stays a choice |
   | `wfeature:frameScale` | `🔍 화질` |
   | `wfeature:volume:midi`, `wfeature:volume:pcm` | the two volumes |
+  | `wfeature:avSync` | `🎬 화면·소리 맞춤`, in milliseconds: positive holds the picture back, negative the sound |
   | `wfeature:vibrate` | `📳 진동` |
   | `wfeature:keypadLayout`, `wfeature:keypadGridV2` (and the older grid keys) | keypad type and grid arrangements ([Grid keypad](#grid-keypad)) |
   | `wfeature:fullscreen` | `전체화면` |
@@ -350,7 +352,9 @@ picture for a scrolling field — decodes them with `createImageBitmap`, and
 composes them in order on a retained canvas (`frame-stream.js`). The newest
 picture is drawn on the next animation frame, magnified here with hqx at the
 scale the server names (`magnify.js`, `hqx.js`, and `hqx-patterns.js`, which is
-generated from the Go tables). Keys go up as JSON; sound arrives as compact
+generated from the Go tables). With a positive `🎬 화면·소리 맞춤` each picture
+is instead copied as it arrives and drawn on the first animation frame after it
+falls due, joined with what every picture it skipped changed (`av-sync.js`). Keys go up as JSON; sound arrives as compact
 binary MIDI and PCM events, each sample carried once (`audio-stream.js`), and
 is played here: samples as Web Audio buffers, notes by the FM synthesizer
 (`fm-synth.js`), which runs in an AudioWorklet or, on a plain-HTTP page, a

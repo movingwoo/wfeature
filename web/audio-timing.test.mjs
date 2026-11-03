@@ -487,3 +487,14 @@ test("a changed sound delay rebuilds the timeline instead of moving it", t => {
   audio.context.currentTime += 0.05;
   assert.equal(playAudioEvents(audio, [{ kind: "clock", at: 0.1 }]), true);
 });
+
+// A server that sends untimed sounds keeps them on the page clock; a longer
+// sound delay applies at once there, because a later anchor cannot put a
+// release in front of its attack.
+test("a longer sound delay reaches untimed sounds at once", t => {
+  const { audio } = setup(t);
+  const first = audio.eventTime();
+  close(first, 1 + 0.09);
+  audio.setExtraDelay(0.3);
+  close(audio.eventTime(), 1 + 0.09 + 0.3);
+});

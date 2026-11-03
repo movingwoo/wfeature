@@ -729,3 +729,74 @@ func TestAudioNextCompletionRefusesOverflowAfterLastRepresentablePass(t *testing
 		t.Fatal("overflow query changed playback or output")
 	}
 }
+
+// A sound made only of PCM tracks ends with an EventEnd marked where its
+// samples finish (smaf.EndOfSamples). The events before it end where its
+// sequences do, at 400 ms here, and its sample plays to 900 ms.
+func pcmOnlyPlaybackEvents() []smaf.Event {
+	return []smaf.Event{
+		{Type: smaf.EventWave, PCMChannel: 1, WaveChannels: 1, SamplingRate: 1000, Wave: make([]int16, 900)},
+		{Time: 400, Type: smaf.EventEnd},
+		{Time: 900, Type: smaf.EventEnd, Value: smaf.EndOfSamples},
+	}
+}
+
+// A repeat starts again where the sequences end, so a looping effect keeps
+// the cadence its sequences give it; only the last pass waits for the
+// samples, and that is when its completion is reported.
+func TestAudioPCMOnlySoundRepeatsAtItsSequenceEnd(t *testing.T) {
+	audio := NewAudioWithClock(&ownedAudioProbe{}, func() time.Time { return time.Unix(1000, 0) })
+	handle, err := audio.LoadEvents(pcmOnlyPlaybackEvents())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if length, _ := audio.Length(handle); length != 900*time.Millisecond {
+		t.Fatalf("length = %v, want the sample's end", length)
+	}
+	if err := audio.PlayCount(handle, 0, 3); err != nil {
+		t.Fatal(err)
+	}
+	completion := func(want time.Duration) {
+		t.Helper()
+		if got, ok := audio.NextCompletion(handle); !ok || got != want {
+			t.Fatalf("next completion = %v, %v; want %v", got, ok, want)
+		}
+	}
+	completion(400 * time.Millisecond)
+	requireAudioPlayback(t, audio, handle, 799*time.Millisecond, AudioPlayback{Playing: true, Position: 399 * time.Millisecond, Length: 900 * time.Millisecond, Completed: 1})
+	completion(800 * time.Millisecond)
+	// The third pass is the last: it plays to the sample's end.
+	requireAudioPlayback(t, audio, handle, 1200*time.Millisecond, AudioPlayback{Playing: true, Position: 400 * time.Millisecond, Length: 900 * time.Millisecond, Completed: 2})
+	completion(1700 * time.Millisecond)
+	requireAudioPlayback(t, audio, handle, 1699*time.Millisecond, AudioPlayback{Playing: true, Position: 899 * time.Millisecond, Length: 900 * time.Millisecond, Completed: 2})
+	requireAudioPlayback(t, audio, handle, 1700*time.Millisecond, AudioPlayback{Position: 900 * time.Millisecond, Length: 900 * time.Millisecond, Completed: 3})
+
+	// A loop asked for while the last pass is already past its sequences
+	// starts again after the samples rather than stalling there.
+	if err := audio.PlayCount(handle, 2000*time.Millisecond, 1); err != nil {
+		t.Fatal(err)
+	}
+	audio.Advance(2500 * time.Millisecond)
+	if err := audio.SetRepeat(handle, true); err != nil {
+		t.Fatal(err)
+	}
+	requireAudioPlayback(t, audio, handle, 2950*time.Millisecond, AudioPlayback{Playing: true, Position: 50 * time.Millisecond, Length: 900 * time.Millisecond, Completed: 1})
+
+	// The mark survives a checkpoint, so a restored loop keeps its cadence.
+	saved := captureOwnedAudio(t, audio)
+	encoded, err := EncodeCheckpointRecord(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded AudioState
+	if err := DecodeCheckpointRecord(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := NewAudioFromStateWithClock(decoded, &ownedAudioProbe{}, func() time.Time { return time.Unix(2000, 0) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := restored.NextCompletion(handle); !ok || got != 3300*time.Millisecond {
+		t.Fatalf("restored next completion = %v, %v; want the repeat at 3300ms", got, ok)
+	}
+}

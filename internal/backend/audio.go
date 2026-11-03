@@ -73,6 +73,11 @@ type sound struct {
 	// length is the timestamp of the last event, which is where a repeat
 	// restarts — not the last note, so trailing silence is preserved.
 	length time.Duration
+	// loop is where a pass another pass follows ends. It is length, except
+	// for a sound made only of PCM tracks whose last event marks where its
+	// samples end (smaf.EndOfSamples): a repeat starts again where its
+	// sequences end, and only the last pass waits for the samples.
+	loop time.Duration
 
 	playing   bool
 	repeat    bool
@@ -220,14 +225,44 @@ func (audio *Audio) loadEvents(events []smaf.Event, copyEvents bool) (AudioHandl
 	}
 	audio.next++
 	handle := audio.next
+	length := time.Duration(events[len(events)-1].Time) * time.Millisecond
 	audio.sounds[handle] = &sound{
 		handle:    handle,
 		volume:    maxAudioVolume,
 		events:    events,
 		resources: resources,
-		length:    time.Duration(events[len(events)-1].Time) * time.Millisecond,
+		length:    length,
+		loop:      soundLoop(events, length),
 	}
 	return handle, nil
+}
+
+// soundLoop answers where a pass that another follows ends: before the
+// marked end of a PCM-only sound's samples, otherwise at the sound's length.
+func soundLoop(events []smaf.Event, length time.Duration) time.Duration {
+	if count := len(events); count >= 2 && events[count-1].Type == smaf.EventEnd && events[count-1].Value == smaf.EndOfSamples {
+		return min(length, time.Duration(events[count-2].Time)*time.Millisecond)
+	}
+	return length
+}
+
+// passEvents is how many events the current pass plays, and passLength how
+// long it lasts: a pass another one follows stops before a PCM-only sound's
+// marked sample end.
+func (current *sound) repeating() bool { return current.repeat || current.remaining > 0 }
+
+func (current *sound) passEvents() int {
+	if current.loop < current.length && current.repeating() {
+		return len(current.events) - 1
+	}
+	return len(current.events)
+}
+
+func (current *sound) passLength() time.Duration {
+	if current.loop < current.length && current.repeating() {
+		return current.loop
+	}
+	return current.length
 }
 
 // Length reports how long a loaded sound runs, which is what a media API has

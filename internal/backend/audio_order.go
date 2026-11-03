@@ -52,10 +52,16 @@ func (audio *Audio) advanceSounds(now time.Duration) {
 		audio.outputDeadline(current.startedAt+time.Duration(event.Time)*time.Millisecond, now, host)
 		current.cursor++
 		audio.emit(current, event)
-		if current.cursor == len(current.events) {
+		if current.cursor >= current.passEvents() {
+			// A pass that played a PCM-only sound's sample end lasted its
+			// whole length, even when a repeat was asked for during it.
+			pass := current.length
+			if current.cursor < len(current.events) {
+				pass = current.loop
+			}
 			current.completed++
 			current.position = current.length
-			if !current.repeat && current.remaining == 0 || current.length <= 0 {
+			if !current.repeat && current.remaining == 0 || pass <= 0 {
 				audio.silence(current)
 				if current.transient {
 					audio.sink.stopSound(current.handle)
@@ -66,7 +72,7 @@ func (audio *Audio) advanceSounds(now time.Duration) {
 					current.remaining--
 				}
 				// This pass ended no later than now, so the addition is safe.
-				current.startedAt += current.length
+				current.startedAt += pass
 				current.cursor, current.position = 0, 0
 			}
 		}

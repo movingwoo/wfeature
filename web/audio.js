@@ -637,9 +637,12 @@ export class PageAudio {
   }
 
   // setExtraDelay holds every sound back this many seconds more, up to one.
+  // Untimed sounds take a longer delay at once, since a later anchor cannot
+  // reorder them; a shorter one waits for the anchor to be set again.
   setExtraDelay(seconds) {
     const delay = Number.isFinite(seconds) ? Math.min(1, Math.max(0, seconds)) : 0;
     if (delay === this.extraDelay) return;
+    if (delay > this.extraDelay) this.scheduleAnchor = null;
     this.extraDelay = delay;
     this.extraDelayChanged = true;
   }

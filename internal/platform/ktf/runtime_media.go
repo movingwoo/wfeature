@@ -304,6 +304,18 @@ func runtimeClipClearData(runtime *initializationRuntime, _ *jvm.VM, arguments [
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	// **A listener answering a STOP its clip has outlived clears nothing.** A
+	// title that keeps one Clip for every sound changes music with stop,
+	// putData and play, and answers STOP with clearData. Listener events wait
+	// for the next round, so that STOP arrives after the new sound has
+	// started, and clearing the clip then closed the new title music the
+	// moment it began. The sound the STOP reports is already gone, and so is
+	// the data it played, so the call has nothing left to clear: the clip
+	// keeps its new data and the new sound plays on. Anywhere else clearData
+	// still empties the clip and stops its sound.
+	if receiver == runtime.replacedStop {
+		return jvm.VoidValue(), nil
+	}
 	state := runtime.clip(receiver)
 	if state.Loaded {
 		if err := runtime.SyncClipCompletions(runtime.GuestElapsed()); err != nil {
@@ -311,19 +323,6 @@ func runtimeClipClearData(runtime *initializationRuntime, _ *jvm.VM, arguments [
 		}
 	}
 	state.Data = nil
-	// **Clearing a clip does not stop what the player took from it.** The
-	// specification has clearData discard the data still available in the
-	// clip, and once Player.play has taken the clip's bytes there is none —
-	// the same model runtimeClipPutData follows. A title that changes music
-	// with stop, putData and play answers the STOP of the old sound with
-	// clearData, and that STOP arrives after the new sound has started, so
-	// closing the sound here silenced its title music the moment it began.
-	// The sound keeps playing until it is stopped or the clip is refilled,
-	// which starts a new one; an idle clip still drops its decoded sound.
-	if state.Played && runtime.client.Audio != nil &&
-		(runtime.client.Audio.Playing(state.Handle) || runtime.client.Audio.Paused(state.Handle)) {
-		return jvm.VoidValue(), nil
-	}
 	runtime.invalidateJavaClip(state)
 	return jvm.VoidValue(), nil
 }

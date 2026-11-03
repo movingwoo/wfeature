@@ -115,7 +115,7 @@ func TestDecodePCMControlsKeepTimelineAndRawWave(t *testing.T) {
 		{Time: 80, Type: EventEnd},
 		// The sequence ends at 80 ms; a sound of PCM tracks alone lasts until
 		// its sample has played.
-		{Time: 100, Type: EventEnd},
+		{Time: 100, Type: EventEnd, Value: EndOfSamples},
 	}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("PCM control timeline or raw wave differs: got %d events, want %d", len(events), len(want))
@@ -152,7 +152,7 @@ func TestDecodePCMControlsKeepUnsupportedTracksSilent(t *testing.T) {
 				{Type: EventWave, PCMChannel: 5, WaveChannels: 1, SamplingRate: 8000, Wave: DecodeADPCM([]byte{0x12})},
 				{Type: EventEnd},
 				// Two samples at 8 kHz end within the first millisecond.
-				{Time: 1, Type: EventEnd},
+				{Time: 1, Type: EventEnd, Value: EndOfSamples},
 			}
 			if !reflect.DeepEqual(events, want) {
 				t.Fatalf("unsupported track emitted output or changed later group numbering: %v", events)

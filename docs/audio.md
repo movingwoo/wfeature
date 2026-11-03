@@ -325,6 +325,14 @@ end is sound, not padding: its power is half the rest's at the median, and only
 cut about half a second early, and that title's sounds are among them
 ([census](history/audio.md#pcm-tracks-that-end-before-their-samples)).
 
+The sound's last event marks that end (an `EventEnd` whose `Value` is
+`smaf.EndOfSamples`), and a pass that another one follows stops before it: a
+repeat starts again where the sequences end, so a looping effect keeps the
+cadence its sequences give it, and only the last pass waits for its samples
+and reports its completion there. A loop asked for during that wait starts
+again after the samples. The mark is part of the event list a checkpoint
+keeps; a list without one loops over its whole length, as before.
+
 A sound with a score track keeps the score's timeline, which is where a
 looping piece starts again; its PCM samples and stream waves sound past it as
 they always have. Twelve such sounds have a PCM sample past the score's end.
@@ -646,6 +654,9 @@ waiting one is dropped. A negative value joins the sound's lead, and the
 horizon moves with it. Moving sounds already scheduled could put a release in
 front of its attack, so a changed sound delay refuses the next batch, which
 asks for the current output, and the rebuilt timeline takes the new lead.
+Pictures due within 8 ms of each other share one copy, a copy is resized
+rather than replaced when the screen changes size, and the held pictures are
+dropped when the game stops or the session resets.
 
 A batch later than 200 ms still asks, because the output it would continue is
 by then further from the truth than a rebuild. The request is negotiated and
@@ -1042,7 +1053,7 @@ same binary twice gave 4,325 and 4,320 messages on one archive, and 1,075 and
 1,039 on another), so only a count that falls to zero, or one that moves as far
 as this title's did, is evidence.
 
-### Clearing a clip does not stop what the player took
+### A listener answering an outlived STOP clears nothing
 
 The same title's `PlayListener` answers STOP with `clearData()`. When it moves
 from its logo sting to its title music it calls `Player.stop`, `putData` and
@@ -1053,14 +1064,21 @@ decoded sound, so the music was cut in the millisecond it began and the title
 screen stayed silent: 1,200 paced ticks recorded 16 note-ons, all within the
 first 1.6 seconds (2026-11-03).
 
-The specification has `clearData` discard the data still available in the
-clip, and by the rule above a play has taken what the clip held. So on KTF,
-`clearData` on a clip whose sound is playing or paused empties the clip and
-leaves the sound alone. A later `putData` still starts a new sound and ends the
-old one, `Player.play` on the emptied clip refuses as on any empty clip, and an
-idle clip still drops its decoded sound. The same run then played the music
-throughout: 999 note-ons, about 114 every two seconds. LGT keeps its own clip
-model, in which every fill releases the clip's sound, and is unchanged.
+A STOP whose clip is playing, or paused, again by the time it is delivered
+reports a sound the clip has since replaced. On KTF, while a listener answers
+such a STOP, `clearData` on that clip does nothing: the sound the STOP reports
+is gone, and so is the data it played, so the clip keeps its new data and the
+new sound plays on. Anywhere else `clearData` empties the clip and stops its
+sound, as before. A handset that delivered the STOP before `putData` would
+behave the same way. The same run then played the music throughout: 3,250
+MIDI messages and 1,019 note-ons instead of 200 and 16.
+
+Dropping the outlived STOP instead would hide a transition the title asked
+for, and a title can count on seeing it. A first version stopped no playing
+sound on any `clearData`, which would have left music running for a title that
+silences a clip by clearing it. LGT keeps its own clip model, in which every
+fill releases the clip's sound; no LGT title is known to answer STOP this way,
+and the LGT versions of the same series made no sound in 1,200 ticks.
 
 ## A play that returns at once is a busy loop in the game
 

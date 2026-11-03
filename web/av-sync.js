@@ -30,8 +30,12 @@ export const AV_SYNC_STEP = 10;
 // second. A larger screen holds fewer; past the bound the oldest waiting copy
 // is dropped, so the picture skips a frame and the delay stays what was set.
 const MAX_HELD_BYTES = 64 * 1024 * 1024;
-// Copies kept for reuse once shown, so a steady delay allocates nothing.
+// Copies kept for reuse once shown, so a steady delay allocates nothing. A
+// copy of another size is resized rather than kept beside the new size.
 const MAX_SPARE = 4;
+// Pictures due this close together would be shown on one animation frame
+// anyway, so the later one is drawn into the earlier one's copy.
+const SAME_FRAME_MS = 8;
 
 // clampAVSync answers a stored or typed value as a whole step within range,
 // and 0 for anything that is not a number.
@@ -63,9 +67,6 @@ export const rememberAVSync = (value, storage = local) => {
 // and seconds: only one of them is ever nonzero.
 export const pictureDelay = value => Math.max(0, clampAVSync(value));
 export const soundDelay = value => Math.max(0, -clampAVSync(value)) / 1000;
-
-// A dirty area of null is the whole picture, which absorbs any other.
-const joinDirty = (first, second) => (first === null || second === null ? null : unionRect(first, second));
 
 const defaultCanvas = (width, height) => {
   const canvas = globalThis.document.createElement("canvas");
@@ -108,16 +109,25 @@ export class DelayedPictures {
     this.flush();
   }
 
-  // push copies the borrowed picture and holds it for the delay.
+  // push copies the borrowed picture and holds it for the delay. A dirty
+  // area of null is the whole picture, which unionRect lets absorb any other.
   push(picture, { scale = 1, dirty = null } = {}) {
     const width = picture?.width ?? 0, height = picture?.height ?? 0;
     if (!width || !height) return;
+    const due = this.now() + this.delay;
+    const last = this.held.at(-1);
+    if (last && due - last.due < SAME_FRAME_MS && last.canvas.width === width && last.canvas.height === height) {
+      this.draw(last.canvas, picture);
+      last.scale = scale;
+      last.dirty = unionRect(last.dirty, dirty);
+      return;
+    }
     const canvas = this.copy(picture, width, height);
-    this.held.push({ canvas, scale, dirty, due: this.now() + this.delay });
+    this.held.push({ canvas, scale, dirty, due });
     this.bytes += width * height * 4;
     while (this.held.length > 1 && this.bytes > this.maxBytes) {
       const dropped = this.held.shift();
-      this.held[0].dirty = joinDirty(dropped.dirty, this.held[0].dirty);
+      this.held[0].dirty = unionRect(dropped.dirty, this.held[0].dirty);
       this.release(dropped);
     }
     this.wake();
@@ -125,17 +135,29 @@ export class DelayedPictures {
 
   copy(picture, width, height) {
     const index = this.spare.findIndex(canvas => canvas.width === width && canvas.height === height);
-    const canvas = index >= 0 ? this.spare.splice(index, 1)[0] : this.createCanvas(width, height);
-    const context = canvas.getContext("2d");
-    // A copy replaces every pixel, transparent ones included.
+    let canvas = index >= 0 ? this.spare.splice(index, 1)[0] : this.spare.pop();
+    if (!canvas) canvas = this.createCanvas(width, height);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    this.draw(canvas, picture);
+    return canvas;
+  }
+
+  // draw replaces every pixel of a copy, transparent ones included. The
+  // magnifier reads the copy back each time it is shown, which is what the
+  // hint is for; it has to be given when the context is first made.
+  draw(canvas, picture) {
+    const context = canvas.getContext("2d", { willReadFrequently: true });
     context.globalCompositeOperation = "copy";
     context.drawImage(picture, 0, 0);
-    return canvas;
   }
 
   release(entry) {
     this.bytes -= entry.canvas.width * entry.canvas.height * 4;
-    if (this.spare.length < MAX_SPARE) this.spare.push(entry.canvas);
+    if (this.spare.length >= MAX_SPARE) this.spare.shift();
+    this.spare.push(entry.canvas);
   }
 
   wake() {
@@ -160,7 +182,7 @@ export class DelayedPictures {
 
   present(entries) {
     let dirty = entries[0].dirty;
-    for (const entry of entries.slice(1)) dirty = joinDirty(dirty, entry.dirty);
+    for (const entry of entries.slice(1)) dirty = unionRect(dirty, entry.dirty);
     const shown = entries.at(-1);
     this.show(shown.canvas, { scale: shown.scale, dirty });
     for (const entry of entries) this.release(entry);

@@ -840,6 +840,7 @@ const sessionStateChanged = state => {
     vibration.stop();
     pageAudio?.stopAll();
     pendingPicture = null;
+    heldPictures.reset();
     pendingDirty = null;
     magnifier.reset();
     refreshScreenSetting();
