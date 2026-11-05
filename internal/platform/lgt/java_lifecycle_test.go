@@ -23,6 +23,14 @@ const (
 	lifecycleOverload = 6 // calls of an overload declared under a lifecycle name
 )
 
+// The words the serial-call tests record in. They are lifecycleAlive's and
+// lifecycleOverload's, which those tests do not read, and the fixture's last.
+const (
+	serialPaused = 4 // the title's own flag: pauseApp sets it, resumeApp clears it
+	serialRuns   = 6 // runs of the Runnable the title handed callSerially
+	serialSaw    = 7 // the flag that Runnable found on its last run
+)
+
 // newJletFixture is the Java checkpoint fixture as a Java title is: no Clet
 // entry points, because a Java title registers none, and the stubs the
 // lifecycle methods below reach for.
@@ -414,4 +422,98 @@ func TestAJavaTitleParkedAtAQuickSaveResumesAfterTheLoad(t *testing.T) {
 		t.Fatalf("the loaded session's resumeApp ran %d times, want once", got)
 	}
 	tickSession(t, restored, 2)
+}
+
+// serialFrame makes the Runnable a title's frame chain hands callSerially: it
+// counts its run and records the flag it found, which is what a title's run
+// reads to decide whether to ask to be called again.
+func (fixture *javaThreadFixture) serialFrame() uint32 {
+	fixture.t.Helper()
+	run := fixture.install(func(a *assembler) {
+		a.emit(armPushLR)
+		a.literal(4, fixture.counter(serialPaused))
+		a.emit(armLdr(1, 4, 0))
+		a.literal(4, fixture.counter(serialSaw))
+		a.emit(armStr(1, 4, 0))
+		fixture.increment(a, serialRuns)
+		a.emit(armPopPC)
+	})
+	_, runnable := fixture.newClass("Frame", run)
+	return runnable
+}
+
+// setSerialFlag is a lifecycle body that writes the title's flag.
+func (fixture *javaThreadFixture) setSerialFlag(value uint32) func(a *assembler) {
+	return func(a *assembler) {
+		a.literal(4, fixture.counter(serialPaused))
+		a.literal(0, value)
+		a.emit(armStr(0, 4, 0))
+	}
+}
+
+// A Runnable a title handed callSerially before it was parked runs during the
+// park, after pauseApp: a handset serves the queue while the application is
+// paused, and that run is the one that finds the flag pauseApp set and stops
+// asking to be called. A park runs no tick until the resume, so without this
+// the run was still queued when resumeApp queued one of its own, and the title
+// ran its frame twice a tick from then on.
+func TestParkingAJavaTitleServesTheSerialCallsItQueuedBeforePauseApp(t *testing.T) {
+	ctx := context.Background()
+	store, _ := backend.NewMemorySaveStore(nil)
+	fixture := newJletFixture(t, store)
+	fixture.jlet(
+		javaMember{Name: javaJletPauseApp, Descriptor: "()V", Body: fixture.lifecycleMethod(lifecyclePauses, fixture.setSerialFlag(1))},
+		javaMember{Name: javaJletResumeApp, Descriptor: "()V", Body: fixture.lifecycleMethod(lifecycleResumes, fixture.setSerialFlag(0))},
+	)
+	frame := fixture.serialFrame()
+	fixture.settle()
+	runtime := fixture.client.javaRuntimeState()
+	runtime.serial = append(runtime.serial, frame)
+
+	if err := fixture.session.Pause(ctx); err != nil {
+		t.Fatalf("Pause() = %v", err)
+	}
+	if runs, saw := fixture.lifecycleWord(serialRuns), fixture.lifecycleWord(serialSaw); runs != 1 || saw != 1 {
+		t.Fatalf("during the park the queued run ran %d times and found the flag %d, want once and set", runs, saw)
+	}
+	if len(runtime.serial) != 0 {
+		t.Fatalf("after the park %d serial calls are still queued", len(runtime.serial))
+	}
+	if err := fixture.session.Resume(ctx); err != nil {
+		t.Fatalf("Resume() = %v", err)
+	}
+	tickSession(t, fixture.session, 2)
+	if runs := fixture.lifecycleWord(serialRuns); runs != 1 {
+		t.Fatalf("the run ran %d times, want only the once during the park", runs)
+	}
+}
+
+// A title that declares no pauseApp was told nothing, so the run it queued has
+// no pause to find: the park leaves it for the first tick after the resume, as
+// a park always did.
+func TestParkingATitleWithoutPauseAppLeavesItsSerialCallsForTheTicks(t *testing.T) {
+	ctx := context.Background()
+	store, _ := backend.NewMemorySaveStore(nil)
+	fixture := newJletFixture(t, store)
+	fixture.jlet(
+		javaMember{Name: javaJletResumeApp, Descriptor: "()V", Body: fixture.lifecycleMethod(lifecycleResumes, nil)},
+	)
+	frame := fixture.serialFrame()
+	fixture.settle()
+	runtime := fixture.client.javaRuntimeState()
+	runtime.serial = append(runtime.serial, frame)
+
+	if err := fixture.session.Pause(ctx); err != nil {
+		t.Fatalf("Pause() = %v", err)
+	}
+	if runs := fixture.lifecycleWord(serialRuns); runs != 0 || len(runtime.serial) != 1 {
+		t.Fatalf("the park ran the queued call %d times and left %d queued, want none run and one queued", runs, len(runtime.serial))
+	}
+	if err := fixture.session.Resume(ctx); err != nil {
+		t.Fatalf("Resume() = %v", err)
+	}
+	tickSession(t, fixture.session, 1)
+	if runs := fixture.lifecycleWord(serialRuns); runs != 1 {
+		t.Fatalf("the first tick after the resume ran the queued call %d times, want once", runs)
+	}
 }

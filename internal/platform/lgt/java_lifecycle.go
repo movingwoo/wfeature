@@ -45,6 +45,16 @@ import (
 // A title that declares none of them is not an error either: the
 // specification's Jlet declares all three, and a class that inherits them
 // from the platform has nothing of its own to run.
+//
+// **What the title queued with `callSerially` before its pauseApp is run
+// before the park**, right after pauseApp. A handset keeps serving the
+// application's event queue while the application is paused, so the run a
+// title's frame chain had queued finds the flag pauseApp set and does not ask
+// to be called again; a Host's park runs no tick until the resume, and
+// without this the run was still waiting when resumeApp queued a chain of its
+// own, and the title ran its frame twice a tick from then on. One local title
+// stood still that way after every park, its keys ignored. A title with no
+// pauseApp was told nothing, so its queue is left for the ticks as before.
 
 // The lifecycle methods the platform enters, by their specification names, and
 // the descriptors the local titles declare them with.
@@ -63,16 +73,45 @@ const (
 // title to a shorter one.
 var jletEndingBound = backend.EndingBound
 
-// PauseJlet runs the application's pauseApp. It answers an error only for the
-// title's own ending.
+// PauseJlet runs the application's pauseApp and then, when there was one, the
+// serial calls the title had queued before it (servePausedSerialCalls). It
+// answers an error only for the title's own ending.
 func (client *Client) PauseJlet(ctx context.Context) error {
-	return client.runJletLifecycle(ctx, javaJletPauseApp, javaJletLifecycleVoid)
+	entered, err := client.runJletLifecycle(ctx, javaJletPauseApp, javaJletLifecycleVoid)
+	if err != nil || !entered {
+		return err
+	}
+	return client.servePausedSerialCalls(ctx)
 }
 
 // ResumeJlet runs the application's resumeApp. It answers an error only for
 // the title's own ending.
 func (client *Client) ResumeJlet(ctx context.Context) error {
-	return client.runJletLifecycle(ctx, javaJletResumeApp, javaJletLifecycleVoid)
+	_, err := client.runJletLifecycle(ctx, javaJletResumeApp, javaJletLifecycleVoid)
+	return err
+}
+
+// servePausedSerialCalls runs, once, what `callSerially` had been handed when
+// the application was paused, in the order it was handed over, as the tick
+// does (ServiceJavaSerialCalls): a run that queues another leaves it for the
+// first tick after the resume. **A run that fails is a callback that failed**
+// (jletLifecycleFailed): the park and the runs after it go on, and only the
+// title ending itself is answered.
+func (client *Client) servePausedSerialCalls(ctx context.Context) error {
+	runtime := client.javaRun
+	if runtime == nil || len(runtime.serial) == 0 || !client.jletEnterable() {
+		return nil
+	}
+	due := runtime.serial
+	runtime.serial = nil
+	for _, runnable := range due {
+		if err := client.callJavaRunnable(ctx, client.thread, runnable); err != nil {
+			if err := client.jletLifecycleFailed("callSerially", err); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // DestroyJlet runs the application's destroyApp(true), once. It answers an
@@ -103,7 +142,8 @@ func (client *Client) DestroyJlet(ctx context.Context) (err error) {
 			err = nil
 		}
 	}()
-	return client.runJletLifecycle(ctx, javaJletDestroyApp, javaJletDestroyDescriptor, javaTrue)
+	_, err = client.runJletLifecycle(ctx, javaJletDestroyApp, javaJletDestroyDescriptor, javaTrue)
+	return err
 }
 
 // jletEnterable reports whether guest code can still be entered for the
@@ -114,31 +154,31 @@ func (client *Client) jletEnterable() bool {
 }
 
 // runJletLifecycle enters one lifecycle method of the application object, if
-// its class declares one, and answers what the session has to know about how
-// it ended.
-func (client *Client) runJletLifecycle(ctx context.Context, name, descriptor string, arguments ...uint32) error {
+// its class declares one, and answers whether it was entered and what the
+// session has to know about how it ended.
+func (client *Client) runJletLifecycle(ctx context.Context, name, descriptor string, arguments ...uint32) (bool, error) {
 	runtime := client.javaRun
 	if runtime == nil || runtime.jlet == 0 || !client.jletEnterable() {
-		return nil
+		return false, nil
 	}
 	class, known := client.javaClassOfObject(runtime.jlet)
 	if !known {
-		return client.jletLifecycleFailed(name,
+		return false, client.jletLifecycleFailed(name,
 			fmt.Errorf("the application object at %#x is not one this platform issued", runtime.jlet))
 	}
 	method, owner, found := client.findJavaMethodDescribed(class.Record, name, descriptor)
 	if !found || method.Body == 0 {
-		return nil
+		return false, nil
 	}
 	if client.logger != nil {
 		client.logger.Debug("LGT jlet lifecycle", "callback", name, "class", owner, "body", method.Body)
 	}
 	call := append([]uint32{runtime.jlet}, arguments...)
 	if _, err := client.callOn(ctx, client.thread, method.Body, call); err != nil {
-		return client.jletLifecycleFailed(name,
+		return true, client.jletLifecycleFailed(name,
 			fmt.Errorf("run %s.%s%s at %#x: %w", owner, name, descriptor, method.Body, err))
 	}
-	return nil
+	return true, nil
 }
 
 // jletLifecycleFailed sorts how a lifecycle callback failed: the title ending

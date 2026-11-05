@@ -8569,6 +8569,27 @@ ending, any other failure is logged and the game goes on, and a title that
 called `notifyDestroyed` gets no `destroyApp`. Clets are unchanged. A quick
 save still runs no pause callback; a paused slot resumes through `resumeApp`.
 
+**A park in the middle of play left one title standing still** (2026-11-06
+review), which the park at tick 300, on title screens, did not reach. Its frame
+is a Runnable that re-arms itself through `callSerially` and stops once the
+title's own pause flag is set. `pauseApp` set the flag, but a park runs no tick
+until the resume, so the run already queued never came to read it, and
+`resumeApp`'s own `callSerially` started a second chain beside it. With two
+frames a tick the game drew the same scene from then on, its keys and its own
+"continue" entry ignored. Not calling `pauseApp`, refusing a second queueing of
+the same Runnable, or serving the queue once after `pauseApp` each gave the
+frames of a run that was never parked. The last is what a handset does — it
+goes on serving the application's event queue while the application is paused
+— so `PauseJlet` now runs what was queued, once, after an entered `pauseApp`
+(`servePausedSerialCalls`, `TestParkingAJavaTitleServesTheSerialCallsItQueuedBeforePauseApp`);
+a title with no `pauseApp` was told nothing and keeps its queue for the ticks.
+With it each of the 24 local Java archives parked after about 1,400 ticks of
+play goes on: 19 match a run that was never parked frame for frame, four differ
+for a few frames in an animation's phase, and the close after it takes at most
+0.05 s. The 148 LGT archives parked at tick 300 still end on the build before's
+digests. KTF queues `callSerially` the same way and was not changed; no local
+KTF title has been seen to need it.
+
 **A card can have a position.** The `Card(x, y, w, h)` and `Display` forms
 keep their box as given (KTF throws nothing for an empty one, so neither does
 this), and within LGT's one shown card such a card paints through the same

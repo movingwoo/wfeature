@@ -205,8 +205,12 @@ Clet table, so their `pauseClet`, `resumeClet` and `destroyClet` reach no Java
 code; the methods are found by name and descriptor on the title's own Jlet
 class, the most-derived override first. An uncaught exception in one is
 counted and the game goes on; the title ending itself in one is an ending; a
-title that already called `notifyDestroyed` gets no `destroyApp`. A quick save
-runs none of them ([history](history/lgt.md#lgt-parity-fill-2026-11-05)).
+title that already called `notifyDestroyed` gets no `destroyApp`. What the
+title had queued with `callSerially` runs once right after an entered
+`pauseApp`, as a handset keeps serving that queue while the application is
+paused: a frame chain that re-arms itself reads the pause there, rather than
+running beside the chain `resumeApp` queues. A quick save runs none of them
+([history](history/lgt.md#lgt-parity-fill-2026-11-05)).
 
 ## Display and input
 
