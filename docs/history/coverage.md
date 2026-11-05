@@ -419,15 +419,40 @@ and three compared by their last frame show the same scene at a different
 moment of its animation. A quick save taken at 300 ticks under the build
 before loads under this one for each of the 587 archives that made one, and
 100 ticks later reaches the digest the build before reaches from it, except
-six SKT archives from that same wall-clock list. No local run reaches a member
-this pass added, which is what filling ahead of the titles looks like. After
-the LGT timer, card and lifecycle changes the gates passed again, and the 148
-LGT archives were run once more under both builds: the 500-tick digests, a
-quick save the build before took at 300 ticks loaded here, and a two-second
-park at tick 300 through `run -serve` followed by 300 ticks all end on the same
-digest, with no warning or error the build before did not log. The parks run
-the Java titles' `pauseApp` and `resumeApp` now, and none of them is left
-anywhere it was not.
+six SKT archives from that same wall-clock list. After the LGT timer, card and
+lifecycle changes the gates passed again, and the 148 LGT archives were run once
+more under both builds: the 500-tick digests, a quick save the build before
+took at 300 ticks loaded here, and a two-second park at tick 300 through
+`run -serve` followed by 300 ticks all end on the same digest, with no warning
+or error the build before did not log.
+
+**A review on 2026-11-06 played deeper** and found what those runs, which end
+on title screens, could not reach. The 481 KTF and LGT archives were played
+about 1,900 ticks through `run -serve`, a key every 42 ticks and a quick save
+halfway, under both builds:
+
+- 472 match at every step. Six of the rest are a quick save refused as busy
+  while eight runs shared the machine — three under each build — which shifts
+  the replies after it, and two are titles whose runs differ under one build.
+- **One KTF title reaches a member this pass changed**: it splits the
+  `toString()` of a byte array stream it read a text resource into. With
+  Object's identity text its dialog box stayed empty and its paint threw
+  ArrayIndexOutOfBoundsException every frame; it now shows its lines
+  ([KTF](ktf.md#ktf-parity-fill-2026-11-05)).
+- A quick save the build before took halfway loads here and plays on to the
+  same digests for every archive. One taken here loads under the build before
+  for every LGT archive and is refused there for 180 KTF archives, whose heap
+  holds `buffer-v2` buffers; that is a step back to an earlier build only.
+- **The 24 LGT Java archives parked in the middle of play** showed what a park
+  on a title screen does not: one title stood still after every park, its
+  frame chain running twice a tick, until the serial calls it had queued were
+  served after `pauseApp` ([LGT](lgt.md#lgt-parity-fill-2026-11-05)).
+- SKT: 595 WIPI Graphics calls made through the VM on an off-screen image —
+  every fill, line, curve, text and picture form under clips, translations,
+  alpha, every anchor and bad arguments — leave the same pixels and throw the
+  same exception classes under both builds. Forwarding to MIDP costs 0.03 to
+  0.26 µs a call, and CPU time moved by no more than 1% on three titles of each
+  platform.
 
 <a id="cross-platform-parity-2026-11-05-skt-graphics"></a>
 

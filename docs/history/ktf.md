@@ -10288,8 +10288,12 @@ Date forms, which SKT's MIDP library already had.
 - **A container answers the class library's text**: `[a, b]` and `{k=v, …}`
   from each element's own `toString` (a title's class answers through the
   compiled bridge), and a byte array stream the bytes as text; all answered
-  Object's identity text before, which is what an A/B of a title that prints one
-  shows. Two library tests that used Vector as a class without its own
+  Object's identity text before. One local title splits a text resource it
+  reads through a byte array stream: with the identity text its dialog box
+  stayed empty and its paint threw ArrayIndexOutOfBoundsException every frame,
+  and it now shows its lines (found by the deeper play of the
+  [2026-11-06 review](coverage.md#cross-platform-parity-2026-11-05)). Two
+  library tests that used Vector as a class without its own
   `toString` use Random now.
 - **Checkpoints**: a `StringBuffer` is saved as `buffer-v2`, its capacity before
   its units; a `buffer` an earlier build wrote restores with the capacity the
