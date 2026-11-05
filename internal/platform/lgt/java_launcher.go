@@ -29,9 +29,11 @@ const javaLauncherChainLimit = 16
 // running — the launcher call itself is a platform call, and its caller's frame
 // is live above it.
 //
-// What this does not do is a Jlet's lifecycle. `startApp` is entered; nothing
-// yet pauses, resumes or destroys the application, and nothing drives the
-// event queue it is expected to run on.
+// `startApp` is the one lifecycle method entered here. The other three —
+// `pauseApp`, `resumeApp` and `destroyApp` — are the session's to enter, on
+// the object this builds, when it is parked, resumed and closed; see
+// java_lifecycle.go. Nothing drives the event queue the application is
+// expected to run on.
 func (client *Client) runJavaLauncher(
 	ctx context.Context, thread *armcore.Thread, count, argv uint32,
 ) error {
@@ -162,9 +164,17 @@ func (client *Client) javaSuperChain(record javaClass) []string {
 // address the image already holds — and the lifecycle methods are as often the
 // superclass's as the launcher class's own.
 func (client *Client) findJavaMethod(record javaClass, name string) (javaMember, string, bool) {
+	return client.findJavaMethodDescribed(record, name, "")
+}
+
+// findJavaMethodDescribed is findJavaMethod held to a descriptor as well, when
+// it is given one: an overload a title declares under the same name is not the
+// method the specification means. An empty descriptor matches any, which is
+// findJavaMethod.
+func (client *Client) findJavaMethodDescribed(record javaClass, name, descriptor string) (javaMember, string, bool) {
 	for step := 0; step < javaLauncherChainLimit; step++ {
 		for _, method := range record.Methods {
-			if method.Name == name {
+			if method.Name == name && (descriptor == "" || method.Descriptor == descriptor) {
 				return method, record.Name, true
 			}
 		}
@@ -192,4 +202,27 @@ func javaCurrentJlet(
 	client *Client, _ context.Context, _ *armcore.Thread, _ []uint32,
 ) (uint32, error) {
 	return client.javaRuntimeState().jlet, nil
+}
+
+// javaJletAppProperty is `Jlet.getAppProperty(key)`: a property of the
+// application, which the specification calls the ones each application is
+// given. An LGT archive gives them in app_info, the descriptor beside the JAR
+// that names the AID, PID and main class and keeps every other key it carries
+// (ParseDescriptor) — the counterpart of the descriptor KTF answers this call
+// from. A key the descriptor does not carry answers null, as KTF and SKT
+// answer it, and so does a key that is no string, which is KTF's answer for
+// one. A manifest inside the JAR, if there is one, is not read: KTF reads only
+// its descriptor.
+func javaJletAppProperty(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	key, ok := client.javaText(arguments[1])
+	if !ok || client.archive == nil {
+		return 0, nil
+	}
+	value, found := client.archive.Descriptor.Property(key)
+	if !found {
+		return 0, nil
+	}
+	return client.newJavaString(value)
 }

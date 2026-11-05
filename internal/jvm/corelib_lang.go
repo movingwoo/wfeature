@@ -343,6 +343,9 @@ func runtimeDefinition() ClassDefinition {
 			{Name: "gc", Descriptor: "()V", Access: native},
 			{Name: "totalMemory", Descriptor: "()J", Access: native},
 			{Name: "freeMemory", Descriptor: "()J", Access: native},
+			// The instance form of System.exit, and the one the class library's
+			// System.exit calls; see builtins_lang.go.
+			{Name: "exit", Descriptor: "(I)V", Access: native},
 		},
 	}
 }

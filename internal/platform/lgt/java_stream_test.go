@@ -362,3 +362,178 @@ func TestJavaByteSinkStopsAtTheLargestArrayItCouldBecome(t *testing.T) {
 		t.Error("a byte past a full sink was taken")
 	}
 }
+
+// A ByteArrayInputStream over a window of an array reads the window, from its
+// offset to the end it was given or the array's own, whichever comes first;
+// a reset goes back to the offset. What the window refuses is what the KTF and
+// SKT runtimes' constructor refuses.
+func TestJavaByteArrayInputStreamOverAWindow(t *testing.T) {
+	client := fixtureClient(t)
+	key := "java/io/ByteArrayInputStream.<init>([BII)V"
+	array, err := client.newJavaByteArray([]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reads := func(stream uint32, count int) []int32 {
+		t.Helper()
+		values := make([]int32, count)
+		for index := range values {
+			values[index] = int32(mustSlot(t, client, javaInputStreamClass, 10, stream))
+		}
+		return values
+	}
+	newStream := func(offset, length int32) uint32 {
+		t.Helper()
+		stream, err := newTestObject(t, client, "java/io/ByteArrayInputStream")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustJavaCall(t, client, key, stream, array, uint32(offset), uint32(length))
+		return stream
+	}
+	window := newStream(2, 3)
+	if got := mustSlot(t, client, javaInputStreamClass, 14, window); got != 3 {
+		t.Errorf("available() of a window of three = %d", got)
+	}
+	if got := reads(window, 4); got[0] != 2 || got[1] != 3 || got[2] != 4 || got[3] != -1 {
+		t.Errorf("a window of 2..4 read %v", got)
+	}
+	mustSlot(t, client, javaInputStreamClass, 17, window)
+	if got := reads(window, 1); got[0] != 2 {
+		t.Errorf("after reset() the window reads %d, want its offset's 2", got[0])
+	}
+	if got := reads(newStream(8, 5), 3); got[0] != 8 || got[1] != 9 || got[2] != -1 {
+		t.Errorf("a window past the array's end read %v, want it cut at the end", got)
+	}
+	if got := reads(newStream(10, 0), 1); got[0] != -1 {
+		t.Errorf("a window at the array's end read %v", got)
+	}
+	if got := reads(newStream(9, 0x7fffffff), 2); got[0] != 9 || got[1] != -1 {
+		t.Errorf("a window whose end overflows read %v", got)
+	}
+	for _, probe := range []struct {
+		name           string
+		offset, length int32
+	}{{"an offset past the array", 11, 0}, {"a negative offset", -1, 2}, {"a negative length", 0, -1}} {
+		stream, err := newTestObject(t, client, "java/io/ByteArrayInputStream")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := javaCall(t, client, key, stream, array, uint32(probe.offset), uint32(probe.length)); thrownClass(err) != javaIndexClass {
+			t.Errorf("%s = %v, want IndexOutOfBoundsException", probe.name, err)
+		}
+	}
+	stream, err := newTestObject(t, client, "java/io/ByteArrayInputStream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaCall(t, client, key, stream, 0, 0, 0); thrownClass(err) != javaThrowNullClass {
+		t.Errorf("a null array = %v, want NullPointerException", err)
+	}
+}
+
+// ByteArrayOutputStream's toString is what has been written, decoded the way
+// String(byte[]) decodes it, and a new String each time.
+func TestJavaByteArrayOutputStreamToString(t *testing.T) {
+	client := fixtureClient(t)
+	ctx := context.Background()
+	sink := newTestSink(t, client)
+	client.javaRuntimeState().sinks[sink] = []byte{0xb0, 0xa1, 'A'}
+	first := mustSlot(t, client, javaByteSinkClass, javaToStringSlot, sink)
+	if got := mustText(t, client, first); got != "가A" {
+		t.Errorf("toString() = %q, want \"가A\"", got)
+	}
+	if again := mustSlot(t, client, javaByteSinkClass, javaToStringSlot, sink); again == first {
+		t.Error("two toStrings answered the same object")
+	}
+	if text, err := client.javaToStringOf(ctx, client.thread, sink); err != nil || text != "가A" {
+		t.Errorf("String.valueOf(the sink) = %q, %v", text, err)
+	}
+}
+
+// writeChars writes each code unit as two bytes, high first, with no length.
+func TestJavaDataOutputStreamWriteChars(t *testing.T) {
+	client := fixtureClient(t)
+	sink := newTestSink(t, client)
+	stream, err := newTestObject(t, client, javaDataOutputStreamClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustJavaCall(t, client, "java/io/DataOutputStream.<init>(Ljava/io/OutputStream;)V", stream, sink)
+	mustSlot(t, client, javaDataOutputStreamClass, 23, stream, newTestString(t, client, "A가"))
+	mustSlot(t, client, javaDataOutputStreamClass, 23, stream, newTestString(t, client, ""))
+	if got, want := client.javaRuntimeState().sinks[sink], []byte{0x00, 0x41, 0xac, 0x00}; string(got) != string(want) {
+		t.Errorf("writeChars wrote % x, want % x", got, want)
+	}
+	if _, err := slotCall(t, client, javaDataOutputStreamClass, 23, stream, 0); thrownClass(err) != javaThrowNullClass {
+		t.Errorf("writeChars(null) = %v, want NullPointerException", err)
+	}
+}
+
+// Every DataInputStream read that needs more than is left throws EOFException
+// at the end of its stream, as the class library's and the KTF and SKT
+// runtimes' do, so a title reading records until its file runs out reaches its
+// own handler. The bytes before the end are taken — readFully leaves them in
+// the array — and the stream answers -1 after.
+func TestJavaDataInputStreamReadsThrowEOFExceptionAtTheEnd(t *testing.T) {
+	client := fixtureClient(t)
+	for _, probe := range []struct {
+		name      string
+		data      []byte
+		slot      uint32
+		arguments func() []uint32
+	}{
+		{"readBoolean", nil, 22, nil},
+		{"readByte", nil, 23, nil},
+		{"readUnsignedByte", nil, 24, nil},
+		{"readShort", []byte{1}, 25, nil},
+		{"readUnsignedShort", []byte{1}, 26, nil},
+		{"readChar", []byte{1}, 27, nil},
+		{"readInt", []byte{1, 2, 3}, 28, nil},
+		{"readLong", []byte{1, 2, 3, 4, 5}, 29, nil},
+		{"readUTF inside its length", []byte{0}, 32, nil},
+		{"readUTF inside its text", []byte{0, 3, 'a'}, 32, nil},
+		{"readFully(byte[])", []byte{'x'}, 19, func() []uint32 { return []uint32{newTestBytes(t, client, 2)} }},
+		{"readFully(byte[], int, int)", []byte{'x'}, 20, func() []uint32 { return []uint32{newTestBytes(t, client, 4), 1, 3} }},
+	} {
+		stream := newTestDataStream(t, client, probe.data)
+		arguments := []uint32{stream}
+		if probe.arguments != nil {
+			arguments = append(arguments, probe.arguments()...)
+		}
+		if _, err := slotCall(t, client, javaDataInputStreamClass, probe.slot, arguments...); thrownClass(err) != javaEOFClass {
+			t.Errorf("%s at the end = %v, want EOFException", probe.name, err)
+			continue
+		}
+		if got := mustSlot(t, client, javaInputStreamClass, 10, stream); int32(got) != -1 {
+			t.Errorf("after %s at the end, read() = %d, want -1: what was left is taken", probe.name, int32(got))
+		}
+		if probe.slot == 19 || probe.slot == 20 {
+			want := []byte{'x', 0}
+			if probe.slot == 20 {
+				want = []byte{0, 'x', 0, 0}
+			}
+			if got, _ := client.readJavaArrayBytes(arguments[1]); string(got) != string(want) {
+				t.Errorf("%s at the end left % x in the array, want % x", probe.name, got, want)
+			}
+		}
+	}
+	// skipBytes is no read that needs a count: it answers how far it got.
+	stream := newTestDataStream(t, client, []byte{1})
+	if got := mustSlot(t, client, javaDataInputStreamClass, 21, stream, 5); got != 1 {
+		t.Errorf("skipBytes(5) over one byte = %d, want 1", got)
+	}
+	if got := mustSlot(t, client, javaDataInputStreamClass, 21, stream, 5); got != 0 {
+		t.Errorf("skipBytes(5) at the end = %d, want 0", got)
+	}
+}
+
+// newTestBytes is a zeroed byte array of a length.
+func newTestBytes(t *testing.T, client *Client, length int) uint32 {
+	t.Helper()
+	array, err := client.newJavaByteArray(make([]byte, length))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return array
+}

@@ -186,6 +186,16 @@ type javaRuntime struct {
 	card             uint32
 	cardDirty        bool
 	screenGraphics   uint32
+	// cardBounds is the box of every card built with a position, or moved or
+	// resized since, in screen coordinates; a card with no entry is the whole
+	// screen. cardSurface is the surface the shown card paints into while it
+	// has a box, zero while it is the whole screen, and cardSurfaceOwner the
+	// card that surface was made for. See java_card.go.
+	cardBounds       map[uint32]javaCardBox
+	cardSurface      uint32
+	cardSurfaceOwner uint32
+	// fontRequest is what the last Font.getFont asked for; see java_font.go.
+	fontRequest javaFontRequest
 	// named is every distinct string constant the title has built. A constant
 	// is built by the code that holds it, so the set answers "has the title
 	// reached the code that names this" — and the set, rather than a line per
@@ -199,6 +209,11 @@ type javaRuntime struct {
 	// the title's own Jlet subclass, which is what `getCurrentJlet` answers.
 	// See java_launcher.go.
 	jlet uint32
+	// jletDestroyed says the application's destroyApp has been entered. The
+	// ending is one-way, so it is marked before the call and a second close
+	// does not run it again, however the first one ended. See
+	// java_lifecycle.go.
+	jletDestroyed bool
 	// objects is every instance and array this platform has handed the title,
 	// and what the collector reclaims them from. pins are the ones a platform
 	// call is part way through building, and collectAt the arena size the next
@@ -216,6 +231,19 @@ type javaRuntime struct {
 	// sum, because a running total of a population is not one.
 	collected   CollectionStats
 	collections int
+
+	// timers is the state behind each java/util/Timer a title has used, and
+	// timerTasks behind each TimerTask it has scheduled; timerRoots is the
+	// platform block that holds what they keep alive, and timerOrder numbers
+	// the schedules so two runs due at once go in the order they were asked
+	// for. See java_timer.go.
+	timers     map[uint32]*javaTimer
+	timerTasks map[uint32]*javaTimerTask
+	timerRoots uint32
+	timerOrder uint64
+	// timerRootWords is what was last written into timerRoots, so a round
+	// that changed nothing writes nothing.
+	timerRootWords []uint32
 }
 
 func newJavaRuntime() *javaRuntime {
@@ -231,6 +259,7 @@ func newJavaRuntime() *javaRuntime {
 		images:      map[uint32]uint32{},
 		files:       map[uint32]uint32{},
 		graphics:    map[uint32]*javaGraphics{},
+		cardBounds:  map[uint32]javaCardBox{},
 		threads:     map[uint32]*javaThread{},
 		monitors:    map[uint32]*javaMonitor{},
 		vectors:     map[uint32][]uint32{},
@@ -242,6 +271,8 @@ func newJavaRuntime() *javaRuntime {
 		dates:       map[uint32]int64{},
 		databases:   map[uint32]*javaDatabase{},
 		objects:     map[uint32]javaObjectRecord{},
+		timers:      map[uint32]*javaTimer{},
+		timerTasks:  map[uint32]*javaTimerTask{},
 
 		vectorShapes:     map[uint32]javaVectorShape{},
 		bufferCapacities: map[uint32]int32{},
@@ -465,6 +496,9 @@ var javaPlatformStatics = map[string]map[string]string{
 func (client *Client) initializePlatformStatics(class *javaRuntimeClass) error {
 	if class.Name == javaPlayListenerClass {
 		return client.initializeJavaPlayListenerStatics(class)
+	}
+	if fill, special := javaPlatformStaticFillers[class.Name]; special {
+		return fill(client, class)
 	}
 	held, known := javaPlatformStatics[class.Name]
 	if !known || client.javaLink == nil || client.javaLink.layout == nil {

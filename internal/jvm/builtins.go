@@ -5,7 +5,6 @@ import (
 	"math"
 	"runtime"
 	"runtime/debug"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,6 +96,7 @@ func (vm *VM) registerBuiltins() {
 	vm.registerStringBuiltins()
 	vm.registerStringBuilderBuiltins(StringBufferClass)
 	vm.registerStringBuilderBuiltins(StringBuilderClass)
+	vm.registerBufferBuiltins()
 	vm.registerMonitorBuiltins()
 	vm.registerThreadBuiltins()
 	vm.registerDataInputBuiltins()
@@ -1473,6 +1473,17 @@ func (vm *VM) registerStringBuiltins() {
 type stringBufferData struct {
 	mu    sync.Mutex
 	units []uint16
+	// capacity is what StringBuffer.capacity() answers. The units grow on
+	// demand and are no array a title can see, so this is a number kept by
+	// the class library's rules rather than storage: see bufferGrown. Every
+	// change to units that can lengthen them goes through grow.
+	capacity int32
+}
+
+// grow raises the capacity the way the class library's array would have grown
+// to hold what the buffer holds now. The caller holds mu.
+func (data *stringBufferData) grow() {
+	data.capacity = bufferGrown(data.capacity, len(data.units))
 }
 
 // registerStringBuilderBuiltins implements one mutable character buffer for
@@ -1488,9 +1499,10 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 			if err != nil {
 				return VoidValue(), err
 			}
-			data := &stringBufferData{}
-			// The (I)V form is a capacity hint; the backing slice grows on
-			// demand, so the value only needs validation.
+			data := &stringBufferData{capacity: bufferDefaultCapacity}
+			// The (I)V form names the capacity. The backing slice grows on
+			// demand, so the value is validated and kept as the number
+			// capacity() answers.
 			if descriptor == "(I)V" {
 				capacity, capacityErr := nativeInt(arguments, 1)
 				if capacityErr != nil {
@@ -1499,6 +1511,7 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 				if capacity < 0 {
 					return VoidValue(), guestException("java/lang/NegativeArraySizeException", "StringBuffer capacity")
 				}
+				data.capacity = capacity
 			} else if descriptor != "()V" {
 				value, valueErr := nativeString(arguments, 1)
 				if valueErr != nil {
@@ -1507,6 +1520,9 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 				if data.units, err = vm.appendUnits(nil, value); err != nil {
 					return VoidValue(), err
 				}
+				// The text's length and sixteen more, as the class library
+				// sizes a buffer it copies a String into.
+				data.capacity = int32(min(int64(len(data.units))+bufferDefaultCapacity, math.MaxInt32))
 			}
 			object.Native = data
 			return VoidValue(), nil
@@ -1694,30 +1710,17 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 	} {
 		text := form.text
 		vm.builtin(class, "insert", "(I"+form.descriptor+")"+self, func(_ *VM, arguments []Value) (Value, error) {
-			object, data, err := stringBufferArgument(arguments)
-			if err != nil {
+			if _, _, err := stringBufferArgument(arguments); err != nil {
 				return VoidValue(), err
 			}
-			offset, err := nativeInt(arguments, 1)
-			if err != nil {
+			if _, err := nativeInt(arguments, 1); err != nil {
 				return VoidValue(), err
 			}
 			value, err := text(arguments)
 			if err != nil {
 				return VoidValue(), err
 			}
-			data.mu.Lock()
-			defer data.mu.Unlock()
-			if offset < 0 || int(offset) > len(data.units) {
-				return VoidValue(), guestException("java/lang/StringIndexOutOfBoundsException", "StringBuffer.insert offset")
-			}
-			inserted := utf16.Encode([]rune(value))
-			units, err := vm.unitsWithRoom(data.units, len(inserted))
-			if err != nil {
-				return VoidValue(), err
-			}
-			data.units = slices.Insert(units, int(offset), inserted...)
-			return ReferenceValue(object), nil
+			return vm.insertBufferUnits(arguments, utf16.Encode([]rune(value)))
 		})
 	}
 	vm.builtin(class, "setLength", "(I)V", func(vm *VM, arguments []Value) (Value, error) {
@@ -1754,6 +1757,7 @@ func (vm *VM) registerStringBuilderBuiltins(class string) {
 		grown = grown[:length]
 		clear(grown[len(data.units):])
 		data.units = grown
+		data.grow()
 		return VoidValue(), nil
 	})
 	vm.builtin(class, "length", "()I", func(_ *VM, arguments []Value) (Value, error) {
@@ -1795,6 +1799,7 @@ func appendStringBuffer(value func([]Value) (string, error)) NativeMethod {
 			return VoidValue(), err
 		}
 		data.units = units
+		data.grow()
 		return ReferenceValue(object), nil
 	}
 }

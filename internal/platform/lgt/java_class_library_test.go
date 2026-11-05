@@ -86,6 +86,30 @@ var javaDeclarationOrder = map[string]struct {
 	"java/lang/Runtime": {"java/lang/Object", []string{"exit(I)V", "freeMemory()J", "totalMemory()J", "gc()V"}},
 	"java/util/Random": {"java/lang/Object", []string{"setSeed(J)V", "next(I)I", "nextInt()I", "nextInt(I)I",
 		"nextLong()J", "nextFloat()F", "nextDouble()D"}},
+	"java/util/Date": {"java/lang/Object", []string{"getTime()J", "setTime(J)V", "equals(Ljava/lang/Object;)Z",
+		"hashCode()I", "toString()Ljava/lang/String;"}},
+	"java/lang/Boolean": {"java/lang/Object", []string{"booleanValue()Z", "toString()Ljava/lang/String;",
+		"hashCode()I", "equals(Ljava/lang/Object;)Z"}},
+	"java/lang/Character": {"java/lang/Object", []string{"charValue()C", "hashCode()I",
+		"equals(Ljava/lang/Object;)Z", "toString()Ljava/lang/String;"}},
+	"java/io/OutputStream": {"java/lang/Object", []string{"write(I)V", "write([B)V", "write([BII)V", "flush()V",
+		"close()V"}},
+	"java/io/ByteArrayOutputStream": {"java/io/OutputStream", []string{"write(I)V", "write([BII)V", "reset()V",
+		"toByteArray()[B", "size()I", "toString()Ljava/lang/String;", "close()V"}},
+	"java/io/DataOutputStream": {"java/io/OutputStream", []string{"write(I)V", "write([BII)V", "flush()V",
+		"close()V", "writeBoolean(Z)V", "writeByte(I)V", "writeShort(I)V", "writeChar(I)V", "writeInt(I)V",
+		"writeLong(J)V", "writeFloat(F)V", "writeDouble(D)V", "writeChars(Ljava/lang/String;)V",
+		"writeUTF(Ljava/lang/String;)V"}},
+	"java/io/Writer": {"java/lang/Object", []string{"write(I)V", "write([C)V", "write([CII)V",
+		"write(Ljava/lang/String;)V", "write(Ljava/lang/String;II)V", "flush()V", "close()V"}},
+	"java/io/OutputStreamWriter": {"java/io/Writer", []string{"write(I)V", "write([CII)V",
+		"write(Ljava/lang/String;II)V", "flush()V", "close()V"}},
+	// No call site anchors either: these are the class pages' order alone.
+	"java/util/Timer": {"java/lang/Object", []string{"schedule(Ljava/util/TimerTask;J)V",
+		"schedule(Ljava/util/TimerTask;Ljava/util/Date;)V", "schedule(Ljava/util/TimerTask;JJ)V",
+		"schedule(Ljava/util/TimerTask;Ljava/util/Date;J)V", "scheduleAtFixedRate(Ljava/util/TimerTask;JJ)V",
+		"scheduleAtFixedRate(Ljava/util/TimerTask;Ljava/util/Date;J)V", "cancel()V"}},
+	"java/util/TimerTask": {"java/lang/Object", []string{"run()V", "cancel()Z", "scheduledExecutionTime()J"}},
 }
 
 // javaDeclaredSlots numbers a class's methods by the rule.
@@ -143,6 +167,14 @@ func TestJavaBakedSlotsFollowTheDeclarationOrder(t *testing.T) {
 	}
 	if checked < 150 {
 		t.Fatalf("checked %d slots; the table is smaller than it should be", checked)
+	}
+	// The order is counted along a class's superclass, and dispatch walks the
+	// same chain to find an inherited slot — an OutputStreamWriter's
+	// write(char[]) is Writer's — so the two have to name the same parent.
+	for class, declared := range javaDeclarationOrder {
+		if declared.super != "" && javaPlatformSuper(class) != declared.super {
+			t.Errorf("%s is counted from %s but dispatch walks up to %s", class, declared.super, javaPlatformSuper(class))
+		}
 	}
 }
 
@@ -209,6 +241,79 @@ func installGuestClass(t *testing.T, client *Client, name string, bodies map[uin
 		t.Fatal(err)
 	}
 	return instance
+}
+
+// guestRoutine is one slot a title's own class fills with Thumb code of its
+// own.
+type guestRoutine struct {
+	slot uint32
+	code []uint16
+}
+
+// installGuestSubclass builds a class the title wrote that extends a platform
+// class — its dispatch table the platform class's, with the routines' slots
+// overridden by code placed one after another from an offset into the module's
+// spare space — and answers an instance of it whose block has room for the
+// given number of words.
+func installGuestSubclass(
+	t *testing.T, client *Client, name, base string, words, offset uint32, routines ...guestRoutine,
+) uint32 {
+	t.Helper()
+	platform, err := client.preparePlatformJavaClass(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	class := &javaRuntimeClass{Name: name, Handle: 1, Slots: platform.Slots, Instance: words, Super: platform,
+		Record: javaClass{Name: name}}
+	if class.Object, err = client.allocateJavaClassObject(class); err != nil {
+		t.Fatal(err)
+	}
+	class.dataBlock, _ = client.readWord(class.Object + 8)
+	runtime := client.javaRuntimeState()
+	runtime.byObject[class.Object] = class
+	runtime.byName[name] = class
+	if err := client.buildJavaVTable(class); err != nil {
+		t.Fatal(err)
+	}
+	for _, routine := range routines {
+		if err := client.writeWord(class.VTable+4+routine.slot*4, installThumbAt(t, client, offset, routine.code...)); err != nil {
+			t.Fatal(err)
+		}
+		offset = (offset + uint32(len(routine.code))*2 + 3) &^ 3
+	}
+	instance, err := client.allocateJavaObject(class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return instance
+}
+
+// recordingWrite is a title's `write(int)` that keeps what it is handed in its
+// own object: word 0 of the block counts the calls and word n is the n-th
+// value. ldr r2, [r0, #8]; ldr r3, [r2]; adds r3, #1; str r3, [r2];
+// lsls r3, r3, #2; str r1, [r2, r3]; bx lr.
+var recordingWrite = []uint16{0x6882, 0x6813, 0x3301, 0x6013, 0x009b, 0x50d1, 0x4770}
+
+// recorded reads back what recordingWrite kept in an object.
+func recorded(t *testing.T, client *Client, object uint32) []int32 {
+	t.Helper()
+	block, err := client.readWord(object + 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := client.readWord(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make([]int32, count)
+	for index := range values {
+		word, err := client.readWord(block + 4 + uint32(index)*4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		values[index] = int32(word)
+	}
+	return values
 }
 
 // Object's own forms answer for a class that overrides nothing: its identity,
@@ -592,5 +697,110 @@ func TestJavaClassLibraryRecordLeavesEarlierRecordsReadable(t *testing.T) {
 	}
 	if record, _ := encodeLGTSessionRecord(session, nil, nil); string(record) != string(legacy) {
 		t.Error("a session with no class library tables is not written in the version-2 shape")
+	}
+}
+
+// checkpointJavaRuntime takes the Java record and the class library's record
+// the way a quick save takes them, sends them through the session record's
+// codec, and restores them, as a load does.
+func checkpointJavaRuntime(t *testing.T, client *Client) {
+	t.Helper()
+	saved, err := client.captureJavaState(&stateBudget{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	library, err := client.captureJavaLibraryState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := encodeLGTSessionRecord(sessionCheckpointState{Version: sessionCheckpointVersion, Client: clientState{Java: saved}}, nil, library)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, decoded, err := decodeLGTSessionRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.restoreJavaState(session.Client.Java); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.restoreJavaLibraryState(decoded); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// What the members added beside the class library's core hold travels in the
+// tables a checkpoint already carries — a Boolean's flag and a Character's
+// unit and a writer's encoding among the numbers, a writer's stream among the
+// wrappers, a Date's instant among the dates, the intern pool among the
+// singletons — so a load gives them back with no record shape of their own,
+// and each answers after the load as it did before.
+func TestJavaClassLibraryAdditionsSurviveACheckpoint(t *testing.T) {
+	client := fixtureClient(t)
+	ctx := context.Background()
+	flag := newTestBoolean(t, client, true)
+	letter := newTestCharacter(t, client, 0xac00)
+	date := newTestDate(t, client, 1)
+	mustSlot(t, client, javaDateClass, 11, date, 9, 7)
+	sink := newTestSink(t, client)
+	writer := newTestWriter(t, client, sink, "UTF-8")
+	pooled := newTestString(t, client, "pooled")
+	mustSlot(t, client, javaStringClass, 35, pooled)
+
+	before := client.javaRuntimeState()
+	checkpointJavaRuntime(t, client)
+	if client.javaRuntimeState() == before {
+		t.Fatal("the restore did not build a runtime of its own")
+	}
+	if got := mustSlot(t, client, javaBooleanClass, 10, flag); got != javaTrue {
+		t.Errorf("the restored Boolean holds %d", got)
+	}
+	if got := mustSlot(t, client, javaCharacterClass, 10, letter); got != 0xac00 {
+		t.Errorf("the restored Character holds %#x", got)
+	}
+	low := mustSlot(t, client, javaDateClass, 10, date)
+	if high, _ := client.thread.Register(1); low != 9 || high != 7 {
+		t.Errorf("the restored Date stands for %#x:%#x, want 7:9", high, low)
+	}
+	if _, err := client.javaCallVirtual(ctx, client.thread, writer, 13, newTestString(t, client, "가")); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.javaRuntimeState().sinks[sink]; string(got) != "\xea\xb0\x80" {
+		t.Errorf("the restored writer wrote % x, want its UTF-8 into its stream", got)
+	}
+	if got := mustSlot(t, client, javaStringClass, 35, newTestString(t, client, "pooled")); got != pooled {
+		t.Errorf("the restored pool answered %#x, want %#x", got, pooled)
+	}
+}
+
+// A quick save an earlier build took holds none of that, in a record the
+// earlier build wrote, and it loads into a runtime whose new members serve.
+func TestJavaClassLibraryAdditionsServeAfterAnEarlierCheckpoint(t *testing.T) {
+	client := fixtureClient(t)
+	text := newTestString(t, client, "kept")
+	saved, err := client.captureJavaState(&stateBudget{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := sessionCheckpointState{Version: sessionCheckpointVersion, Client: clientState{Java: saved}}
+	record, err := backend.EncodeCheckpointRecord(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, _, library, err := decodeLGTSessionRecord(record)
+	if err != nil || library != nil {
+		t.Fatalf("decodeLGTSessionRecord() = %v, %v", library, err)
+	}
+	if err := client.restoreJavaState(decoded.Client.Java); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.restoreJavaLibraryState(library); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustSlot(t, client, javaStringClass, 35, text); got != text {
+		t.Errorf("intern on a restored String answered %#x, want itself", got)
+	}
+	if got := mustSlot(t, client, javaBooleanClass, 10, newTestBoolean(t, client, false)); got != javaFalse {
+		t.Errorf("a Boolean built after the load holds %d", got)
 	}
 }

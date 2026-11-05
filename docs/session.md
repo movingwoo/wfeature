@@ -132,7 +132,7 @@ place, so that each wait below moves with them:
 | Bound | Value | What it is |
 |---|---|---|
 | `backend.WaitBound` | 15 s | one call a title makes waiting on the clock (a KTF service call; the longest legitimate one is 5.2 s), and so the longest a round of an attached game can still be running when the stop comes |
-| `backend.EndingBound` | 15 s | a title's own ending: SKT `destroyApp` (`destroyWait`), LGT `destroyClet` (`closeWait`), a KTF Jlet's `destroyApp` |
+| `backend.EndingBound` | 15 s | a title's own ending: SKT `destroyApp` (`destroyWait`), LGT `destroyClet` (`closeWait`) and an LGT Jlet's `destroyApp`, a KTF Jlet's `destroyApp` |
 | `webhost.StopDeadline` | `WaitBound` + `EndingBound` + 5 s = 35 s | the drain: the games, attached and parked side by side, and the server's own requests; a close still running then is named in the log and left behind |
 | launcher `drainWait` | `StopDeadline` + 5 s = 40 s | how long `stop` waits for the drain before it signals, at each of its three steps |
 | Android `ENDING_WAIT_SECONDS` | 40 s | how long a reopened app waits for the server a finished activity ended; a test holds it past `StopDeadline` |

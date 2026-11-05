@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+// heapBufferKind names a StringBuffer's payload: its capacity, then its units.
+// Version 1, "buffer", carried the units alone.
+const heapBufferKind = "buffer-v2"
+
 type heapListKey struct {
 	pointer          uintptr
 	length, capacity int
@@ -87,15 +91,18 @@ func (capture *heapCapture) native(native any) (uint32, error) {
 			capture.lists = append(capture.lists, heapListRange{start: k.pointer, end: k.pointer + uintptr(k.capacity)*reflect.TypeOf((*Object)(nil)).Size()})
 		}
 	case *stringBufferData:
-		record.Kind = "buffer"
+		// The capacity leads the units. A "buffer" record from before
+		// capacities were kept holds the units alone; see restoreHeapPayload.
+		record.Kind = heapBufferKind
 		data.mu.Lock()
 		defer data.mu.Unlock()
 		if err := capture.budget.add(len(data.units), 2); err != nil {
 			return 0, err
 		}
-		record.Data = make([]byte, len(data.units)*2)
+		record.Data = make([]byte, 4+len(data.units)*2)
+		binary.LittleEndian.PutUint32(record.Data, uint32(data.capacity))
 		for i, unit := range data.units {
-			binary.LittleEndian.PutUint16(record.Data[2*i:], unit)
+			binary.LittleEndian.PutUint16(record.Data[4+2*i:], unit)
 		}
 	case *timeZoneData:
 		record.Kind = "timezone"
@@ -192,9 +199,22 @@ func restoreHeapPayload(record HeapPayloadState, objects []*Object, codec HeapCo
 	case "objects":
 		return refs[:int(binary.LittleEndian.Uint32(record.Data))], nil
 	case "buffer":
+		// A buffer captured before capacities were kept. It is given the
+		// capacity its text would have grown an empty buffer to, which holds
+		// what it holds; growth goes on from there by the same rule.
 		data := &stringBufferData{units: make([]uint16, len(record.Data)/2)}
 		for i := range data.units {
 			data.units[i] = binary.LittleEndian.Uint16(record.Data[2*i:])
+		}
+		data.capacity = restoredBufferCapacity(len(data.units))
+		return data, nil
+	case heapBufferKind:
+		data := &stringBufferData{
+			capacity: int32(binary.LittleEndian.Uint32(record.Data)),
+			units:    make([]uint16, (len(record.Data)-4)/2),
+		}
+		for i := range data.units {
+			data.units[i] = binary.LittleEndian.Uint16(record.Data[4+2*i:])
 		}
 		return data, nil
 	case "timezone":

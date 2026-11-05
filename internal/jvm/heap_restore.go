@@ -146,6 +146,14 @@ func (saved HeapState) validateThreads(options Options, threads bool) error {
 			valid = len(payload.Data) == 4 && uint64(binary.LittleEndian.Uint32(payload.Data)) <= uint64(len(payload.References))
 		case "buffer":
 			valid = len(payload.Data)%2 == 0 && len(payload.Data)/2 <= options.MaxArrayLength
+		case heapBufferKind:
+			// A capacity is never negative and always holds the units, which
+			// is what every change to a buffer keeps it at.
+			valid = len(payload.Data) >= 4 && len(payload.Data)%2 == 0 && (len(payload.Data)-4)/2 <= options.MaxArrayLength
+			if valid {
+				capacity := int32(binary.LittleEndian.Uint32(payload.Data))
+				valid = capacity >= 0 && int64(capacity) >= int64(len(payload.Data)-4)/2
+			}
 		case "timezone":
 			valid = len(payload.Data) >= 4 && len(payload.Data) <= 65539
 			if valid {

@@ -56,7 +56,7 @@ the page screenshots the root `README.md` shows.
 | [ARM](history/armcore.md) | Interpreter optimizations, benchmarks, and profile evidence. |
 | [Sessions](history/session.md) | Protocol and retention decisions, previous measurements, and the 2026-09-23 CPU saturation investigation. |
 | [Testing](history/testing.md) | Detailed probe instructions, dated acceptance, runtime regressions, settling, WebKit observations, and the 2026-09-23 text input audit. |
-| [Coverage](history/coverage.md) | The 2026-09-12 API audits; not a current missing-feature queue. |
+| [Coverage](history/coverage.md) | The 2026-09-12 API audits and the 2026-11-05 cross-platform parity fill; not a current missing-feature queue. |
 | [Authentication](history/authentication.md) | Scheme recognition, controlled routes, and acceptance evidence. |
 | [Maintenance](history/maintenance.md) | Superseded plans, performance watches, paused snapshot research, and the 2026-10-07 quick-save review. |
 | [Audio](history/audio.md) | The cross-platform playback audit, corpus evidence, unverified vendor mappings, and the app timing investigation. |

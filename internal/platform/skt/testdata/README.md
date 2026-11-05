@@ -257,3 +257,126 @@ JAR's `META-INF/MANIFEST.MF`.
 | `ui.jar` | `src/UIMIDlet.java` | `UI.MF` | `lcdui_test.go`; recipe in [`lcdui.md`](../../../../docs/lcdui.md) |
 | `skvm.jar` | `src/SKVMMIDlet.java` | `SKVM.MF` | `skt_test.go`; recipe in [SKT history](../../../../docs/history/skt.md#implementation-validation) |
 | `jvm-contracts.jar` | `src/JVMContractsMIDlet.java` | `JVM_CONTRACTS.MF` | `jvm_contracts_test.go` (interpreter and core-library contracts through a MIDlet JAR) |
+
+## Shared class library members
+
+`src/LibraryMembersMIDlet.java`, `library-members.jar` and
+`LIBRARY_MEMBERS.MF` run the authored `LibraryMembers` fixture from
+`internal/jvm/testdata` — the CLDC members this platform's class library
+shares with KTF — from the MIDlet's own `startApp`, under this platform's
+EUC-KR, and leave through `Runtime.exit` (`library_members_test.go`). Compile
+the MIDlet against the generated MIDP signatures and the committed
+`LibraryMembers` classes, and package it with those classes:
+
+```sh
+fixture_dir="$(mktemp -d /tmp/wfeature-library-members.XXXXXX)"
+javac -encoding UTF-8 -source 1.8 -target 1.8 -nowarn -g:none \
+  -classpath "$stub_dir/classes:internal/jvm/testdata" -d "$fixture_dir" \
+  internal/platform/skt/testdata/src/LibraryMembersMIDlet.java
+cp internal/jvm/testdata/LibraryMembers*.class "$fixture_dir"
+jar cfm internal/platform/skt/testdata/library-members.jar \
+  internal/platform/skt/testdata/LIBRARY_MEMBERS.MF -C "$fixture_dir" .
+```
+
+Rebuild the JAR whenever `LibraryMembers.java` is recompiled.
+
+## WIPI Graphics members
+
+`src/WIPIGraphicsMembersJlet.java`, `wipi-graphics-members.jar` and
+`WIPI_GRAPHICS_MEMBERS.MF` are a Jlet whose card draws one 48x32 frame with the
+WIPI Graphics members MIDP does not have — XOR fills, copies, characters and
+pictures (a whole one and a rectangle of one), the colour components, the
+stroke style, pixel reads and writes plain and translated, a polygon,
+`Image.createImage(Image)` of a mutable image and of an authored 2x1 palette
+PNG with one transparent pixel, held in the source as a byte array, and a
+`reset` that puts back XOR mode and the stroke style — and records in
+`RESULTS` what the getters and the refused calls answered.
+`wipi_graphics_members_test.go` checks the frame and the array, drives the same
+members on the platform's surface, and loads a quick save with and without the
+two Graphics states.
+
+It needs no generated signatures. Compile it against these compile-only WIPI
+ones, each saved as `org/kwis/msp/lcdui/<Class>.java` under a directory of its
+own; the runtime's classes, not these, are what it runs on:
+
+```java
+package org.kwis.msp.lcdui;
+public abstract class Jlet {
+    protected abstract void startApp(String[] args);
+    protected abstract void destroyApp(boolean unconditional);
+}
+```
+
+```java
+package org.kwis.msp.lcdui;
+public abstract class Card {
+    public Card() {}
+    protected abstract void paint(Graphics g);
+}
+```
+
+```java
+package org.kwis.msp.lcdui;
+public class Display {
+    public static native Display getDefaultDisplay();
+    public native void pushCard(Card card);
+}
+```
+
+```java
+package org.kwis.msp.lcdui;
+public class Image {
+    public static native Image createImage(int width, int height);
+    public static native Image createImage(byte[] data, int offset, int length);
+    public static native Image createImage(Image source);
+    public native Graphics getGraphics();
+    public native boolean isMutable();
+    public native int getWidth();
+    public native int getHeight();
+}
+```
+
+```java
+package org.kwis.msp.lcdui;
+public class Graphics {
+    public static final int LEFT = 4, TOP = 16, SOLID = 0, DOTTED = 1;
+    public native void setColor(int rgb);
+    public native void setColor(int red, int green, int blue);
+    public native int getColor();
+    public native int getRedComponent();
+    public native int getGreenComponent();
+    public native int getBlueComponent();
+    public native void fillRect(int x, int y, int width, int height);
+    public native void drawRect(int x, int y, int width, int height);
+    public native void drawLine(int x1, int y1, int x2, int y2);
+    public native void drawChar(char character, int x, int y, int anchor);
+    public native void drawImage(Image image, int x, int y, int anchor);
+    public native void drawImage(Image image, int dx, int dy, int sx, int sy, int width, int height, int anchor);
+    public native void translate(int x, int y);
+    public native int getTranslateX();
+    public native void reset();
+    public native void copyArea(int dx, int dy, int sx, int sy, int width, int height);
+    public native void drawPolygon(int[] xs, int[] ys);
+    public native int getPixel(int x, int y);
+    public native void setPixel(int x, int y);
+    public native int getStrokeStyle();
+    public native void setStrokeStyle(int style);
+    public native boolean isXORMode();
+    public native void setXORMode(boolean on);
+}
+```
+
+Write the five files under `$stub_dir/src/org/kwis/msp/lcdui` once the
+directory is made, then compile and package only the fixture's two classes:
+
+```sh
+stub_dir="$(mktemp -d /tmp/wfeature-wipi-stubs.XXXXXX)"
+mkdir -p "$stub_dir/src/org/kwis/msp/lcdui" "$stub_dir/classes" "$stub_dir/fixture"
+# ... write the five signature files into "$stub_dir/src/org/kwis/msp/lcdui" ...
+javac -source 1.8 -target 1.8 -nowarn -d "$stub_dir/classes" \
+  "$stub_dir"/src/org/kwis/msp/lcdui/*.java
+javac -source 1.8 -target 1.8 -nowarn -g:none -classpath "$stub_dir/classes" \
+  -d "$stub_dir/fixture" internal/platform/skt/testdata/src/WIPIGraphicsMembersJlet.java
+jar cfm internal/platform/skt/testdata/wipi-graphics-members.jar \
+  internal/platform/skt/testdata/WIPI_GRAPHICS_MEMBERS.MF -C "$stub_dir/fixture" .
+```

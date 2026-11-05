@@ -72,14 +72,20 @@ func TestCreateImageWritesTheHandleThroughItsOutParameter(t *testing.T) {
 	}
 }
 
+// specificationBadFormat is M_E_BADFORMAT as the specification's error table
+// numbers it. The tests below compare against the number rather than against
+// imageBadFormat, because the constant held -20 — M_E_TIMEOUT in that table —
+// and a test against the constant passed with either value.
+const specificationBadFormat int32 = -6
+
 // TestCreateImageRefusesWhatItCannotDecode pins the failure: a null image and
 // the bad-format status, rather than a blank the game would draw as an
 // invisible sprite.
 func TestCreateImageRefusesWhatItCannotDecode(t *testing.T) {
 	client := fixtureClient(t)
 	handle, status := createTestImage(t, client, []byte("this is not an image"))
-	if status != imageBadFormat {
-		t.Fatalf("createImage of junk = %d, want the bad-format status", status)
+	if status != specificationBadFormat {
+		t.Fatalf("createImage of junk = %d, want M_E_BADFORMAT (%d)", status, specificationBadFormat)
 	}
 	if handle != 0 {
 		t.Fatalf("a failed create left handle %#x behind", handle)
@@ -138,8 +144,8 @@ func TestDecodeNextImageReportsNoFurtherFrames(t *testing.T) {
 	if got := int32(callSlot(t, client, slotDecodeNextImage, handle)); got != imageDone {
 		t.Fatalf("decodeNextImage = %d, want the done status", got)
 	}
-	if got := int32(callSlot(t, client, slotDecodeNextImage, handle+0x1000)); got != imageBadFormat {
-		t.Fatalf("decodeNextImage on an unknown image = %d, want the bad-format status", got)
+	if got := int32(callSlot(t, client, slotDecodeNextImage, handle+0x1000)); got != specificationBadFormat {
+		t.Fatalf("decodeNextImage on an unknown image = %d, want M_E_BADFORMAT (%d)", got, specificationBadFormat)
 	}
 }
 

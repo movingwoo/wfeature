@@ -1,6 +1,8 @@
 package jvm
 
 import (
+	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -214,5 +216,290 @@ func TestStringBufferSetLengthZeroesReusedStorage(t *testing.T) {
 	vm := New(heapBudgetSource(), Options{})
 	if got := heapBudgetString(t, vm, "refill"); got != "axy\x00\x00" {
 		t.Fatalf("refill() = %q, want %q", got, "axy\x00\x00")
+	}
+}
+
+// regionMatches and startsWith(prefix, toffset) answer every run that does not
+// fit with false — offsets and lengths at the ends of an int included, which
+// the class library compares as longs — and a length of zero or less with
+// true. A null receiver or argument is the NullPointerException the call
+// dereferences it into.
+func TestStringRegionTestsAnswerAtTheEndsOfAnInt(t *testing.T) {
+	vm := New(nil, Options{})
+	text := vm.NewString("abcdef")
+	other := ReferenceValue(vm.NewString("xCDx"))
+	region := func(ignoreCase bool, from int32, against Value, otherFrom, length int32) (bool, error) {
+		flag := IntValue(0)
+		if ignoreCase {
+			flag = IntValue(1)
+		}
+		result, err := vm.InvokeVirtual(text, "regionMatches", "(ZILjava/lang/String;II)Z", flag, IntValue(from), against, IntValue(otherFrom), IntValue(length))
+		if err != nil {
+			return false, err
+		}
+		value, _ := result.Int32()
+		return value != 0, nil
+	}
+	for _, probe := range []struct {
+		ignoreCase              bool
+		from, otherFrom, length int32
+		want                    bool
+	}{
+		{true, 2, 1, 2, true},
+		{false, 2, 1, 2, false},
+		{true, 2, 1, 3, false},
+		{true, math.MaxInt32, 0, 1, false},
+		{true, 0, math.MaxInt32, 1, false},
+		{false, 3, 1, math.MinInt32, true},
+		{false, 6, 4, 0, true},
+		{false, 7, 0, 0, false},
+		{false, 0, -1, 0, false},
+	} {
+		got, err := region(probe.ignoreCase, probe.from, other, probe.otherFrom, probe.length)
+		if err != nil || got != probe.want {
+			t.Errorf("regionMatches(%t, %d, \"xCDx\", %d, %d) = %t, %v, want %t", probe.ignoreCase, probe.from, probe.otherFrom, probe.length, got, err, probe.want)
+		}
+	}
+	if _, err := region(false, 0, ReferenceValue(nil), 0, 0); !vm.IsGuestException(err, "java/lang/NullPointerException") {
+		t.Errorf("regionMatches with a null other = %v, want NullPointerException", err)
+	}
+	// Ignoring case is Latin-1's mapping, both ways, and nothing outside it.
+	latin := vm.NewString("ÿßà")
+	if result, err := vm.InvokeVirtual(latin, "regionMatches", "(ZILjava/lang/String;II)Z", IntValue(1), IntValue(0),
+		ReferenceValue(vm.NewString("ÿßÀ")), IntValue(0), IntValue(3)); err != nil || result != IntValue(1) {
+		t.Errorf("Latin-1 regionMatches ignoring case = %v, %v", result, err)
+	}
+	if result, err := vm.InvokeVirtual(latin, "regionMatches", "(ZILjava/lang/String;II)Z", IntValue(1), IntValue(0),
+		ReferenceValue(vm.NewString("Ÿ")), IntValue(0), IntValue(1)); err != nil || result != IntValue(0) {
+		t.Errorf("ÿ against its capital outside Latin-1 = %v, %v, want false", result, err)
+	}
+
+	for _, probe := range []struct {
+		prefix string
+		at     int32
+		want   int32
+	}{
+		{"cd", 2, 1},
+		{"cd", 3, 0},
+		{"", 6, 1},
+		{"", 7, 0},
+		{"abcdefg", 0, 0},
+		{"a", math.MaxInt32, 0},
+		{"a", math.MinInt32, 0},
+	} {
+		result, err := vm.InvokeVirtual(text, "startsWith", "(Ljava/lang/String;I)Z", ReferenceValue(vm.NewString(probe.prefix)), IntValue(probe.at))
+		if err != nil || result != IntValue(probe.want) {
+			t.Errorf("startsWith(%q, %d) = %v, %v, want %d", probe.prefix, probe.at, result, err, probe.want)
+		}
+	}
+	if _, err := vm.InvokeVirtual(text, "startsWith", "(Ljava/lang/String;I)Z", ReferenceValue(nil), IntValue(0)); !vm.IsGuestException(err, "java/lang/NullPointerException") {
+		t.Errorf("startsWith(null, 0) = %v, want NullPointerException", err)
+	}
+	for flag, want := range map[int32]string{0: "false", 1: "true", 7: "true"} {
+		result, err := vm.InvokeStatic(StringClass, "valueOf", "(Z)Ljava/lang/String;", IntValue(flag))
+		if err != nil {
+			t.Fatal(err)
+		}
+		object, _ := result.Reference()
+		if got, _ := StringText(object); got != want {
+			t.Errorf("String.valueOf(%d as a boolean) = %q, want %q", flag, got, want)
+		}
+	}
+}
+
+// Class.newInstance makes an object through the class's own no-argument
+// constructor, and refuses what CLDC 1.1 refuses: an array class, an interface
+// or abstract class, and a class with no such constructor of its own with
+// InstantiationException; a constructor the caller may not reach with
+// IllegalAccessException. A call that does not come from interpreted code has
+// no caller class to compare, and is taken to be the class's package's own.
+func TestClassNewInstanceRefusesWhatCLDCRefuses(t *testing.T) {
+	vm := New(libraryMembersSource(t), Options{})
+	made := 0
+	counting := func(call *Invocation, arguments []Value) (Value, error) {
+		made++
+		return emptyConstructor(call, arguments)
+	}
+	refusing := func(*Invocation, []Value) (Value, error) {
+		return VoidValue(), guestException("java/lang/IllegalStateException", "refused")
+	}
+	for _, definition := range []ClassDefinition{
+		{Name: "pkg/Plain", SuperName: ObjectClass, Access: AccessPublic, Methods: []MethodDefinition{{Name: "<init>", Descriptor: "()V", Access: AccessPublic, Body: counting}}},
+		{Name: "pkg/Quiet", SuperName: ObjectClass, Methods: []MethodDefinition{{Name: "<init>", Descriptor: "()V", Body: counting}}},
+		{Name: "pkg/Package", SuperName: ObjectClass, Access: AccessPublic, Methods: []MethodDefinition{{Name: "<init>", Descriptor: "()V", Body: counting}}},
+		{Name: "pkg/Guarded", SuperName: ObjectClass, Access: AccessPublic, Methods: []MethodDefinition{{Name: "<init>", Descriptor: "()V", Access: AccessProtected, Body: counting}}},
+		{Name: "pkg/Private", SuperName: ObjectClass, Access: AccessPublic, Methods: []MethodDefinition{{Name: "<init>", Descriptor: "()V", Access: AccessPrivate, Body: counting}}},
+		{Name: "pkg/Abstract", SuperName: ObjectClass, Access: AccessPublic | AccessAbstract, Methods: []MethodDefinition{{Name: "<init>", Descriptor: "()V", Access: AccessPublic, Body: counting}}},
+		{Name: "pkg/Shape", SuperName: ObjectClass, Access: AccessPublic | AccessInterface | AccessAbstract},
+		{Name: "pkg/Arguments", SuperName: ObjectClass, Access: AccessPublic, Methods: []MethodDefinition{{Name: "<init>", Descriptor: "(I)V", Access: AccessPublic, Body: counting}}},
+		{Name: "pkg/Inherits", SuperName: "pkg/Plain", Access: AccessPublic},
+		{Name: "pkg/Failing", SuperName: ObjectClass, Access: AccessPublic, Methods: []MethodDefinition{{Name: "<init>", Descriptor: "()V", Access: AccessPublic, Body: refusing}}},
+	} {
+		if err := vm.DefineClass(definition); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newInstance := func(name string) (*Object, error) {
+		result, err := vm.InvokeVirtual(vm.classObject(name), "newInstance", "()Ljava/lang/Object;")
+		if err != nil {
+			return nil, err
+		}
+		return result.Reference()
+	}
+
+	// From the Host: no caller, so only a private constructor is out of reach.
+	for _, name := range []string{"pkg/Plain", "pkg/Quiet", "pkg/Package", "pkg/Guarded"} {
+		object, err := newInstance(name)
+		if err != nil || object == nil || object.ClassName != name {
+			t.Errorf("newInstance of %s = %v, %v", name, object, err)
+		}
+	}
+	if made != 4 {
+		t.Fatalf("the constructors ran %d times, want 4", made)
+	}
+	for name, want := range map[string]string{
+		"[I":            instantiationExceptionClass,
+		"[Lpkg/Plain;":  instantiationExceptionClass,
+		"pkg/Abstract":  instantiationExceptionClass,
+		"pkg/Shape":     instantiationExceptionClass,
+		"pkg/Arguments": instantiationExceptionClass,
+		"pkg/Inherits":  instantiationExceptionClass,
+		"pkg/Private":   illegalAccessExceptionClass,
+		"pkg/Failing":   "java/lang/IllegalStateException",
+	} {
+		if _, err := newInstance(name); !vm.IsGuestException(err, want) {
+			t.Errorf("newInstance of %s = %v, want %s", name, err, want)
+		}
+	}
+	if made != 4 {
+		t.Fatalf("a refused class ran a constructor: %d", made)
+	}
+	if object, err := newInstance(ObjectClass); err != nil || object == nil || object.ClassName != ObjectClass {
+		t.Fatalf("newInstance of Object = %v, %v", object, err)
+	}
+
+	// From bytecode in another package: the class and its constructor have to
+	// be visible to that package, a protected constructor as a package one.
+	for name, want := range map[string]string{
+		"pkg.Plain":   "pkg.Plain",
+		"pkg.Quiet":   "IllegalAccessException",
+		"pkg.Package": "IllegalAccessException",
+		"pkg.Guarded": "IllegalAccessException",
+		"pkg.Private": "IllegalAccessException",
+	} {
+		result, err := vm.InvokeStatic("LibraryMembers", "made", "(Ljava/lang/String;)Ljava/lang/String;", ReferenceValue(vm.NewString(name)))
+		if err != nil {
+			t.Fatalf("made(%q) error = %v", name, err)
+		}
+		object, _ := result.Reference()
+		if got, _ := StringText(object); got != want {
+			t.Errorf("made(%q) from the default package = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// A class that exists only as AOT metadata is a platform's compiled class. It
+// is checked against that metadata and made by the platform's constructor when
+// one is installed, or by running its <init>()V through the AOT invoker.
+func TestClassNewInstanceMakesACompiledClassThroughThePlatform(t *testing.T) {
+	register := func(vm *VM, address uint32, name string, flags uint16, methods ...AOTMethodMetadata) {
+		t.Helper()
+		if err := vm.RegisterAOTClass(AOTClassMetadata{Address: address, Name: name, SuperName: ObjectClass, AccessFlags: flags, Methods: methods}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	constructor := func(address uint32, flags uint16) AOTMethodMetadata {
+		return AOTMethodMetadata{Address: address, Name: "<init>", Descriptor: "()V", AccessFlags: flags, Body: address + 8}
+	}
+	vm := New(nil, Options{})
+	register(vm, 0x101000, "aot/Made", 0x0021, constructor(0x101010, 0x0001))
+	register(vm, 0x102000, "aot/Abstract", 0x0421, constructor(0x102010, 0x0001))
+	register(vm, 0x103000, "aot/Arguments", 0x0021, AOTMethodMetadata{Address: 0x103010, Name: "<init>", Descriptor: "(I)V", AccessFlags: 1, Body: 0x103018})
+	register(vm, 0x104000, "aot/Hidden", 0x0021, constructor(0x104010, 0x0002))
+	var invoked []string
+	vm.SetContextAOTInvoker(func(_ *Invocation, className, name, descriptor string, arguments []Value) (Value, error) {
+		receiver, _ := arguments[0].Reference()
+		invoked = append(invoked, className+"."+name+descriptor+" on "+receiver.ClassName)
+		return VoidValue(), nil
+	})
+	result, err := vm.InvokeVirtual(vm.classObject("aot/Made"), "newInstance", "()Ljava/lang/Object;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if object, _ := result.Reference(); object == nil || object.ClassName != "aot/Made" {
+		t.Fatalf("newInstance of aot/Made = %v", object)
+	}
+	if len(invoked) != 1 || invoked[0] != "aot/Made.<init>()V on aot/Made" {
+		t.Fatalf("the invoker was asked %v", invoked)
+	}
+
+	var built []AOTClassMetadata
+	made := &Object{ClassName: "aot/Made"}
+	vm.SetAOTConstructor(func(call *Invocation, class AOTClassMetadata) (*Object, error) {
+		if call == nil || call.state == nil {
+			t.Error("the constructor was not handed the caller's execution")
+		}
+		built = append(built, class)
+		return made, nil
+	})
+	result, err = vm.InvokeVirtual(vm.classObject("aot/Made"), "newInstance", "()Ljava/lang/Object;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if object, _ := result.Reference(); object != made || len(built) != 1 || built[0].Address != 0x101000 || len(invoked) != 1 {
+		t.Fatalf("newInstance with a platform constructor = %v; built %v; invoked %v", object, built, invoked)
+	}
+	for name, want := range map[string]string{
+		"aot/Abstract":  instantiationExceptionClass,
+		"aot/Arguments": instantiationExceptionClass,
+		"aot/Hidden":    illegalAccessExceptionClass,
+	} {
+		if _, err := vm.InvokeVirtual(vm.classObject(name), "newInstance", "()Ljava/lang/Object;"); !vm.IsGuestException(err, want) {
+			t.Errorf("newInstance of %s = %v, want %s", name, err, want)
+		}
+	}
+	if len(built) != 1 {
+		t.Fatalf("a refused class reached the platform's constructor: %v", built)
+	}
+}
+
+// Runtime.exit is the instance form of System.exit and ends a session the same
+// way: through the platform's Exit, or with the same refusal where a platform
+// installed none.
+func TestRuntimeExitEndsAsSystemExitDoes(t *testing.T) {
+	var statuses []int32
+	stopped := errors.New("stopped")
+	vm := New(nil, Options{Exit: func(status int32) error {
+		statuses = append(statuses, status)
+		return stopped
+	}})
+	handle, err := vm.InvokeStatic(RuntimeClass, "getRuntime", "()Ljava/lang/Runtime;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeObject, _ := handle.Reference()
+	if _, err := vm.InvokeVirtual(runtimeObject, "exit", "(I)V", IntValue(7)); !errors.Is(err, stopped) {
+		t.Fatalf("Runtime.exit(7) = %v, want the platform's own ending", err)
+	}
+	if _, err := vm.InvokeStatic(SystemClass, "exit", "(I)V", IntValue(8)); !errors.Is(err, stopped) {
+		t.Fatalf("System.exit(8) = %v, want the platform's own ending", err)
+	}
+	if len(statuses) != 2 || statuses[0] != 7 || statuses[1] != 8 {
+		t.Fatalf("Exit was called with %v", statuses)
+	}
+
+	bare := New(nil, Options{})
+	handle, err = bare.InvokeStatic(RuntimeClass, "getRuntime", "()Ljava/lang/Runtime;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeObject, _ = handle.Reference()
+	_, runtimeErr := bare.InvokeVirtual(runtimeObject, "exit", "(I)V", IntValue(3))
+	_, systemErr := bare.InvokeStatic(SystemClass, "exit", "(I)V", IntValue(3))
+	var guest *GuestException
+	for name, err := range map[string]error{"Runtime.exit": runtimeErr, "System.exit": systemErr} {
+		if err == nil || errors.As(err, &guest) || !strings.Contains(err.Error(), name+"(3) with no platform shutdown installed") {
+			t.Errorf("%s(3) with no Exit = %v, want the refusal naming it", name, err)
+		}
 	}
 }

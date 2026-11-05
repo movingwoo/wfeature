@@ -52,6 +52,8 @@ func coreLibraryDefinitions() []ClassDefinition {
 		printStreamDefinition(),
 		readerDefinition(),
 		inputStreamReaderDefinition(),
+		writerDefinition(),
+		outputStreamWriterDefinition(),
 		vectorDefinition(),
 		hashtableDefinition(),
 		randomDefinition(),
@@ -99,6 +101,10 @@ func classDefinition() ClassDefinition {
 			{Name: "getResourceAsStream", Descriptor: "(Ljava/lang/String;)Ljava/io/InputStream;", Access: AccessPublic | AccessNative},
 			{Name: "getName", Descriptor: "()Ljava/lang/String;", Access: AccessPublic | AccessNative},
 			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: AccessPublic | AccessNative},
+			// The one way CLDC has to make an object of a class named at run
+			// time: a title that keeps its screens or its stages as classes
+			// builds the next one from the name it read.
+			{Name: "newInstance", Descriptor: "()Ljava/lang/Object;", Access: AccessPublic | AccessNative, Throws: []string{"java/lang/InstantiationException", "java/lang/IllegalAccessException"}},
 		},
 	}
 }
@@ -146,6 +152,11 @@ func stringDefinition() ClassDefinition {
 			{Name: "lastIndexOf", Descriptor: "(I)I", Access: native},
 			{Name: "lastIndexOf", Descriptor: "(II)I", Access: native},
 			{Name: "startsWith", Descriptor: "(Ljava/lang/String;)Z", Access: native},
+			// The two comparisons of one stretch of a string against another
+			// at an index, rather than from the start: how a title matches a
+			// command or a tag inside a line it does not cut up first.
+			{Name: "startsWith", Descriptor: "(Ljava/lang/String;I)Z", Access: native},
+			{Name: "regionMatches", Descriptor: "(ZILjava/lang/String;II)Z", Access: native},
 			{Name: "substring", Descriptor: "(I)Ljava/lang/String;", Access: native},
 			{Name: "substring", Descriptor: "(II)Ljava/lang/String;", Access: native},
 			{Name: "compareTo", Descriptor: "(Ljava/lang/String;)I", Access: native},
@@ -164,6 +175,7 @@ func stringDefinition() ClassDefinition {
 			// pool and every one of them would have stopped at the call.
 			{Name: "valueOf", Descriptor: "(J)Ljava/lang/String;", Access: staticNative},
 			{Name: "valueOf", Descriptor: "(Ljava/lang/Object;)Ljava/lang/String;", Access: staticNative},
+			{Name: "valueOf", Descriptor: "(Z)Ljava/lang/String;", Access: staticNative},
 		},
 	}
 }
@@ -195,6 +207,15 @@ func stringBufferDefinition() ClassDefinition {
 			{Name: "insert", Descriptor: "(IC)Ljava/lang/StringBuffer;", Access: native},
 			{Name: "insert", Descriptor: "(II)Ljava/lang/StringBuffer;", Access: native},
 			{Name: "insert", Descriptor: "(ILjava/lang/String;)Ljava/lang/StringBuffer;", Access: native},
+			// The other four insert forms CLDC has, each the text the matching
+			// append adds; see corelib_buffer.go.
+			{Name: "insert", Descriptor: "(IZ)Ljava/lang/StringBuffer;", Access: native},
+			{Name: "insert", Descriptor: "(I[C)Ljava/lang/StringBuffer;", Access: native},
+			{Name: "insert", Descriptor: "(IJ)Ljava/lang/StringBuffer;", Access: native},
+			{Name: "insert", Descriptor: "(ILjava/lang/Object;)Ljava/lang/StringBuffer;", Access: native},
+			{Name: "reverse", Descriptor: "()Ljava/lang/StringBuffer;", Access: native},
+			{Name: "capacity", Descriptor: "()I", Access: native},
+			{Name: "ensureCapacity", Descriptor: "(I)V", Access: native},
 			// A title that builds a fixed-width line — a score padded with
 			// spaces, a name overwritten in place — edits the buffer by index
 			// rather than rebuilding it, so these two are how it reads and

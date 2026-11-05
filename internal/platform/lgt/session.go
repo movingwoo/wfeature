@@ -659,17 +659,24 @@ func (session *Session) SendKey(pressed bool, keyCode uint32) {
 	}
 }
 
-// Pause and Resume tell the Clet its player has gone away and come back. A
+// Pause and Resume tell the title its player has gone away and come back. A
 // Host parks a game whose page has left rather than closing it, and a handset
 // did the same thing when a call arrived — so this is the lifecycle a title
 // was written against, and the one that lets it stop its own animation and
 // re-read the clock on the way back.
 //
-// A title that declares neither entry point is not an error: the module's
-// table simply has a zero there, and Client.PauseClet answers nil.
+// A Clet is told through the entry points it registered, and a Java title,
+// which registers none, through its Jlet's pauseApp and resumeApp (see
+// java_lifecycle.go). A title that declares neither is not an error: the
+// module's table simply has a zero there, and Client.PauseClet answers nil.
+// A Jlet's callback that fails is reported and the game carries on; one that
+// ends the title answers the ending, which the Host takes as the game's own.
 func (session *Session) Pause(ctx context.Context) error {
 	if session == nil || session.client == nil {
 		return nil
+	}
+	if err := session.client.PauseJlet(ctx); err != nil {
+		return err
 	}
 	if err := session.client.PauseClet(ctx); err != nil && !errors.Is(err, ErrGuestExited) {
 		return err
@@ -680,6 +687,9 @@ func (session *Session) Pause(ctx context.Context) error {
 func (session *Session) Resume(ctx context.Context) error {
 	if session == nil || session.client == nil {
 		return nil
+	}
+	if err := session.client.ResumeJlet(ctx); err != nil {
+		return err
 	}
 	if err := session.client.ResumeClet(ctx); err != nil && !errors.Is(err, ErrGuestExited) {
 		return err
@@ -692,6 +702,13 @@ func (session *Session) Close(ctx context.Context) error {
 	if session == nil || session.client == nil {
 		return nil
 	}
+	// A Java title is told first, with its threads where they are and its
+	// files still open: destroyApp is where it writes its last state, and may
+	// wait for a thread of its own to finish, so it runs before either is
+	// taken from it. A failure there is reported and the close goes on, and
+	// an ending there is the ending the close already is. See
+	// java_lifecycle.go.
+	_ = session.client.DestroyJlet(ctx)
 	// A Java title's threads are goroutines parked inside guest code, and
 	// nothing else will ever wake them: they have to be told the session is
 	// over or they stay parked for the life of the process.

@@ -1,4 +1,11 @@
-// Compare live MIDI controllers with an independent native Web Audio graph.
+// Compare live MIDI controllers with an independent synthesizer reference.
+//
+// The page renders each scenario through its real FM synthesizer host. The
+// reference reads the authored events itself: it renders the synthesizer with
+// one lane per channel and routes each lane through native gain and panner
+// nodes moved the way the controllers say, (volume / 127) * (expression / 127)
+// and (pan - 64) / 64 over 5 ms. WFEATURE_AUDIO_NO_WORKLET=1 renders the page's
+// ScriptProcessor fallback.
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -7,16 +14,28 @@ const [origin, engineName = "chromium"] = process.argv.slice(2);
 if (!origin || !process.env.PLAYWRIGHT_MODULE) {
   throw new Error("Usage: PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node web/acceptance/audio-controls.mjs URL [chromium|webkit]");
 }
+const worklet = process.env.WFEATURE_AUDIO_NO_WORKLET !== "1";
 const { [engineName]: engine } = await import(pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE)));
 assert.ok(engine && ["chromium", "webkit"].includes(engineName), "unsupported browser engine");
 const browser = await engine.launch({ headless: true });
 try {
+  // A blank page of the server's origin: the harness imports the page's audio
+  // modules itself and needs none of the app around them, whose own forty-odd
+  // module loads and server calls only add requests that can fail.
   const page = await browser.newPage();
+  await page.route(url => url.href === new URL(origin).href,
+    route => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Audio acceptance</title>" }));
   await page.goto(origin);
-  const results = await page.evaluate(async () => {
-    const { PageAudio } = await import("./audio.js");
+  const results = await page.evaluate(async worklet => {
     const { playAudioEvents } = await import("./session.js");
-    const rate = 48000, fade = 0.005;
+    const { RATE, modeTiming, pageAudio, renderSteps, channelsOf, wallClock, referenceLanes, referenceMixer, transition, steady,
+      maximumError, describeMismatch, energy } = await import("./acceptance/audio-offline.js");
+    // Every step here schedules its events, so the fallback's longer lead moves
+    // only the measured windows and the render's length.
+    const { baseLatency, lead, shift } = modeTiming(worklet);
+    // Percussion plays the stand-in kick: the noise drums draw Math.random,
+    // which no independent render can repeat.
+    const drumKey = 36;
     const cc = (control, value, sound = 11, channel = 0) => ({ kind: "controlChange", sound, channel, control, value });
     const on = (note = 69, velocity = 100, sound = 11, channel = 0) => ({ kind: "noteOn", sound, channel, note, velocity });
     const off = (note = 69, sound = 11, channel = 0) => ({ kind: "noteOff", sound, channel, note, velocity: 0 });
@@ -26,14 +45,14 @@ try {
     ];
     const step = (time, ...events) => ({ time, events: events.flat() });
     const pcm = side => {
-      const samples = new Float32Array(rate * 3);
+      const samples = new Float32Array(RATE * 3);
       for (let frame = 0; frame < samples.length / 2; frame++) {
-        const at = frame / rate;
+        const at = frame / RATE;
         samples[frame * 2 + side] = 0.026 * Math.sin(2 * Math.PI * (227 * at + 73 * at * at)) + 0.008 * Math.sin(2 * Math.PI * 619 * at);
       }
       return samples;
     };
-    const wave = sound => ({ kind: "playWave", sound, channels: 2, rate, samples: pcm(sound === 11 ? 0 : 1) });
+    const wave = sound => ({ kind: "playWave", sound, channels: 2, rate: RATE, samples: pcm(sound === 11 ? 0 : 1) });
     const cases = [
       { name: "held", duration: 1.55, steps: [
         step(0, setupChannel(), on()),
@@ -50,9 +69,9 @@ try {
           setupChannel(11, 9, 0), setupChannel(22, 9, 127),
           on(69, 110), on(69, 85, 22), on(76, 60, 11, 1), wave(11), wave(22)),
         step(0.06, on(72, 55)),
-        step(0.08, on(40, 90, 11, 9), on(40, 100, 22, 9)),
+        step(0.08, on(drumKey, 90, 11, 9), on(drumKey, 100, 22, 9)),
         step(0.12, cc(7, 32, 11, 9), cc(10, 127, 11, 9)),
-        step(0.14, off(40, 11, 9)),
+        step(0.14, off(drumKey, 11, 9)),
         step(0.16, cc(11, 0, 11, 9)), step(0.2, cc(11, 127, 11, 9)),
         step(0.25, cc(7, 0), cc(10, 127)), step(0.253, off()),
         step(0.3, cc(7, 64), cc(11, 64)), step(0.33, cc(11, 0)), step(0.45, cc(11, 127)),
@@ -65,7 +84,7 @@ try {
       ], windows: [["beforeZero", 0.05, 0.1], ["restored", 0.2, 0.25], ["expressionZero", 0.35, 0.4]] },
     ];
     for (const [name, age, channel] of [["attack", 5, 0], ["decay", 65, 0], ["sustain", 1500, 0], ["percussion", 90, 9]]) {
-      const note = channel === 9 ? 40 : 69;
+      const note = channel === 9 ? drumKey : 69;
       cases.push({ name: `resume-${name}`, duration: 0.3, steps: [
         step(0, setupChannel(11, channel, 0, 32), cc(11, 100, 11, channel),
           { kind: "noteResume", sound: 11, channel, note, velocity: 100, age }),
@@ -74,230 +93,136 @@ try {
       ], windows: [["audible", 0.035, 0.065]] });
     }
 
-    const makeBuffer = (context, samples, channels, samplingRate = rate) => {
-      const buffer = context.createBuffer(channels, samples.length / channels, samplingRate);
-      for (let channel = 0; channel < channels; channel++) {
-        const target = buffer.getChannelData(channel);
-        for (let frame = 0; frame < target.length; frame++) target[frame] = samples[frame * channels + channel];
-      }
-      return buffer;
-    };
-    const noise = context => {
-      const samples = new Float32Array(rate / 4);
-      let seed = 7;
-      for (let i = 0; i < samples.length; i++) {
-        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-        samples[i] = seed / 2147483648 - 1;
-      }
-      return makeBuffer(context, samples, 1);
-    };
-    const samplesOf = buffer => [buffer.getChannelData(0), buffer.getChannelData(1)];
     const renderPage = async scenario => {
-      const context = new OfflineAudioContext(2, Math.ceil(rate * scenario.duration), rate);
-      const audio = new PageAudio();
-      const clock = { state: "running", get currentTime() { return context.currentTime; }, baseLatency: 0, sampleRate: rate };
-      let sources = 0;
-      for (const method of ["createGain", "createOscillator", "createStereoPanner", "createBuffer", "createBufferSource", "createBiquadFilter"]) {
-        clock[method] = (...args) => {
-          if (method === "createOscillator" || method === "createBufferSource") sources++;
-          return context[method](...args);
-        };
-      }
-      audio.context = clock;
-      audio.midiGain = context.createGain();
-      audio.waveGain = context.createGain();
-      audio.midiGain.connect(context.destination);
-      audio.waveGain.connect(context.destination);
-      audio._noise = noise(context);
-      let wall = 0;
-      const previous = Object.getOwnPropertyDescriptor(performance, "now");
-      Object.defineProperty(performance, "now", { configurable: true, value: () => wall * 1000 });
+      const frames = Math.ceil(RATE * (scenario.duration + shift));
+      const context = new OfflineAudioContext(2, frames, RATE);
+      const page = await pageAudio(context, { worklet, baseLatency });
+      const wall = wallClock();
       const timeline = [];
-      const apply = entry => {
-        timeline.push({ at: audio.eventTime(), events: entry.events });
-        playAudioEvents(audio, entry.events);
-      };
       try {
-        apply(scenario.steps[0]);
-        const pauses = scenario.steps.slice(1).map(entry => context.suspend(entry.time));
-        const rendering = context.startRendering();
-        for (let i = 1; i < scenario.steps.length; i++) {
-          await pauses[i - 1];
-          wall = context.currentTime;
-          apply(scenario.steps[i]);
-          await context.resume();
-        }
-        return { samples: samplesOf(await rendering), timeline, sources };
+        const rendered = await renderSteps(context, page, scenario.steps, entry => {
+          wall.set(context.currentTime);
+          timeline.push({ at: page.audio.eventTime(), events: entry.events });
+          playAudioEvents(page.audio, entry.events);
+        });
+        return { samples: channelsOf(rendered.buffer), timeline, rendered, page };
       } finally {
-        if (previous) Object.defineProperty(performance, "now", previous);
-        else delete performance.now;
+        wall.restore();
       }
     };
 
-    const renderReference = async (scenario, timeline) => {
-      const context = new OfflineAudioContext(2, Math.ceil(rate * scenario.duration), rate);
-      const owners = new Map(), channels = new Map(), voices = new Map();
-      const drumNoise = noise(context);
-      const ownerOutput = (sound, kind) => {
-        const key = `${sound}:${kind}`;
-        if (!owners.has(key)) {
-          const gain = context.createGain();
-          gain.connect(context.destination);
-          owners.set(key, gain);
-        }
-        return owners.get(key);
-      };
+    // The reference never reads the page's channel state: it follows the
+    // authored events, with each step's commands reaching the synthesizer at
+    // the quantum the page's did and timed by the page's scheduling clock.
+    const renderReference = async (scenario, actual) => {
+      const frames = Math.ceil(RATE * (scenario.duration + shift));
+      const channels = new Map(), held = new Map(), waves = [], entries = [];
+      let lanes = 0, ids = 0;
       const channelState = (sound, channel) => {
         const key = `${sound}:${channel}`;
-        if (!channels.has(key)) channels.set(key, { volume: 100, expression: 127, pan: 64 });
+        if (!channels.has(key)) channels.set(key, { sound, program: 0, volume: 100, expression: 127, pan: 64, lane: null, changes: [] });
         return channels.get(key);
       };
-      const channelOutput = (sound, channel) => {
-        const state = channelState(sound, channel);
-        if (!state.gain) {
-          state.gain = context.createGain();
-          state.panner = context.createStereoPanner();
-          const level = state.volume * state.expression / (127 * 127), pan = (state.pan - 64) / 64;
-          state.gain.gain.value = level;
-          state.panner.pan.value = pan;
-          state.levelRamp = { from: level, to: level, start: 0, end: 0 };
-          state.panRamp = { from: pan, to: pan, start: 0, end: 0 };
-          state.gain.connect(state.panner);
-          state.panner.connect(ownerOutput(sound, "midi"));
-        }
-        return state.gain;
-      };
-      const ramp = (parameter, previous, value, at) => {
-        const from = at >= previous.end ? previous.to : at <= previous.start ? previous.from
-          : previous.from + (previous.to - previous.from) * (at - previous.start) / (previous.end - previous.start);
-        parameter.cancelScheduledValues(at);
-        parameter.setValueAtTime(from, at);
-        parameter.linearRampToValueAtTime(value, at + fade);
-        return { from, to: value, start: at, end: at + fade };
-      };
-      const envelopeLevel = (peak, age) => {
-        if (age < 0.01) return 0.0001 * (peak / 0.0001) ** (age / 0.01);
-        if (age < 0.12) return peak * 0.7 ** ((age - 0.01) / 0.11);
-        return peak * 0.7;
-      };
-      const release = (key, at) => {
-        const voice = voices.get(key);
-        if (!voice) return;
-        voices.delete(key);
-        if (voice.drum) return;
-        const elapsed = at - voice.at + voice.age;
-        voice.envelope.gain.cancelScheduledValues(at);
-        voice.envelope.gain.exponentialRampToValueAtTime(envelopeLevel(voice.peak, elapsed), at);
-        voice.envelope.gain.exponentialRampToValueAtTime(0.0001, at + 0.06);
-        voice.source.stop(at + 0.07);
-      };
-      for (const { at, events } of timeline) {
+      const level = state => state.volume * state.expression / (127 * 127);
+      const position = state => (state.pan - 64) / 64;
+      for (const [index, { at, events }] of actual.timeline.entries()) {
+        const commands = [];
         for (const event of events) {
           const { sound, channel, note } = event;
-          const key = `${sound}:${channel}:${note}`;
-          if (event.kind === "controlChange") {
-            const state = channelState(sound, channel);
-            if (event.control === 7) state.volume = event.value;
-            if (event.control === 11) state.expression = event.value;
-            if (event.control === 10) state.pan = event.value;
-            if (state.gain && (event.control === 7 || event.control === 11)) {
-              state.levelRamp = ramp(state.gain.gain, state.levelRamp, state.volume * state.expression / (127 * 127), at);
+          const state = channelState(sound, channel), key = `${sound}:${channel}:${note}`;
+          if (event.kind === "programChange") {
+            state.program = event.program;
+          } else if (event.kind === "controlChange") {
+            const name = { 7: "volume", 11: "expression", 10: "pan" }[event.control];
+            state[name] = event.value;
+            if (state.lane !== null) {
+              state.changes.push(event.control === 10 ? { at, pan: position(state) } : { at, level: level(state) });
             }
-            if (state.panner && event.control === 10) state.panRamp = ramp(state.panner.pan, state.panRamp, (state.pan - 64) / 64, at);
-          } else if (event.kind === "noteOff") {
-            release(key, at);
           } else if (event.kind === "noteOn" || event.kind === "noteResume") {
-            const age = event.kind === "noteResume" ? event.age / 1000 : 0;
-            const peak = event.velocity / 127 * 0.25, drum = channel === 9;
-            const envelope = context.createGain();
-            envelope.connect(channelOutput(sound, channel));
-            let source;
-            if (drum) {
-              source = context.createBufferSource();
-              source.buffer = drumNoise;
-              const filter = context.createBiquadFilter();
-              filter.type = "bandpass";
-              filter.frequency.value = 200 + (note % 24) * 180;
-              source.connect(filter);
-              filter.connect(envelope);
-              envelope.gain.setValueAtTime(age < 0.18 ? peak * (0.0001 / peak) ** (age / 0.18) : 0.0001, at);
-              if (age < 0.18) envelope.gain.exponentialRampToValueAtTime(0.0001, at + 0.18 - age);
-              source.start(at, age);
-              source.stop(at + 0.2 - age);
-            } else {
-              source = context.createOscillator();
-              source.type = "sine";
-              source.frequency.value = 440 * 2 ** ((note - 69) / 12);
-              source.connect(envelope);
-              envelope.gain.setValueAtTime(envelopeLevel(peak, age), at);
-              if (age < 0.01) envelope.gain.exponentialRampToValueAtTime(peak, at + 0.01 - age);
-              if (age < 0.12) envelope.gain.exponentialRampToValueAtTime(peak * 0.7, at + 0.12 - age);
-              source.start(at);
-            }
-            voices.set(key, { source, envelope, peak, age, at, drum });
+            if (state.lane === null) Object.assign(state, { lane: lanes++, level: level(state), position: position(state) });
+            const id = ++ids, drum = channel === 9;
+            commands.push({ op: "on", id, at, lane: state.lane, pitch: note, velocity: event.velocity, program: state.program,
+              drumKey: drum ? note : undefined, age: event.kind === "noteResume" ? event.age / 1000 : 0 });
+            if (!drum) held.set(key, id);
+          } else if (event.kind === "noteOff") {
+            // A stand-in drum is a one-shot; a melodic note follows its release.
+            if (held.has(key)) commands.push({ op: "off", id: held.get(key), at });
+            held.delete(key);
           } else if (event.kind === "playWave") {
-            const source = context.createBufferSource(), gain = context.createGain();
-            source.buffer = makeBuffer(context, event.samples, event.channels, event.rate);
-            gain.gain.value = 0.8;
-            source.connect(gain);
-            gain.connect(ownerOutput(sound, "wave"));
-            source.start(at);
+            waves.push({ at, event });
           }
         }
+        entries.push({ mark: actual.rendered.marks[index], commands });
       }
-      return samplesOf(await context.startRendering());
+      const mix = referenceMixer(frames, 2);
+      const rendered = referenceLanes(actual.page, frames, entries);
+      for (const state of channels.values()) {
+        if (state.lane === null) continue;
+        const lane = mix.lane(rendered[state.lane], state.sound, state.level, state.position);
+        let gain = steady(state.level), pan = steady(state.position);
+        for (const change of state.changes) {
+          if (change.level !== undefined) gain = transition(lane.gain.gain, gain, change.level, change.at);
+          else pan = transition(lane.panner.pan, pan, change.pan, change.at);
+        }
+      }
+      for (const { at, event } of waves) mix.sample(event.samples, event.channels, event.sound, at);
+      return { samples: await mix.render(), lanes: rendered, channels };
     };
 
     const results = [];
     for (const scenario of cases) {
       const actual = await renderPage(scenario);
-      const expected = await renderReference(scenario, actual.timeline);
-      let maximumError = 0;
-      for (let channel = 0; channel < 2; channel++) {
-        for (let frame = 0; frame < expected[channel].length; frame++) {
-          maximumError = Math.max(maximumError, Math.abs(actual.samples[channel][frame] - expected[channel][frame]));
-        }
-      }
+      const expected = await renderReference(scenario, actual);
       const windows = {};
-      for (const [name, start, end] of scenario.windows) {
-        const begin = Math.round(start * rate), finish = Math.round(end * rate);
-        let leftEnergy = 0, rightEnergy = 0;
-        for (let frame = begin; frame < finish; frame++) {
-          leftEnergy += actual.samples[0][frame] ** 2;
-          rightEnergy += actual.samples[1][frame] ** 2;
-        }
-        leftEnergy /= finish - begin;
-        rightEnergy /= finish - begin;
-        windows[name] = { rms: Math.sqrt(leftEnergy + rightEnergy), leftEnergy, rightEnergy };
+      for (const [name, from, to] of scenario.windows) {
+        const start = from + shift, end = to + shift;
+        const leftEnergy = energy(actual.samples[0], start, end), rightEnergy = energy(actual.samples[1], start, end);
+        // What the synthesizer rendered for the scenario's first channel,
+        // before any routing: a held envelope's own level in this window.
+        const laneEnergy = energy(expected.lanes[0], start, end);
+        windows[name] = { rms: Math.sqrt(leftEnergy + rightEnergy), leftEnergy, rightEnergy, laneRMS: Math.sqrt(laneEnergy) };
       }
-      const expectedSources = scenario.steps.flatMap(entry => entry.events)
-        .filter(event => ["noteOn", "noteResume", "playWave"].includes(event.kind)).length;
-      results.push({ scenario: scenario.name, maximumError, sources: actual.sources, expectedSources, windows });
+      const notes = scenario.steps.flatMap(entry => entry.events).filter(event => ["noteOn", "noteResume"].includes(event.kind)).length;
+      const waves = scenario.steps.flatMap(entry => entry.events).filter(event => event.kind === "playWave").length;
+      const clockError = Math.max(...actual.timeline.map(({ at }, index) => Math.abs(at - (actual.rendered.marks[index].frame / RATE + lead))));
+      const diagnosis = describeMismatch(actual.samples, expected.samples, { steps: actual.rendered.marks.map((mark, index) =>
+        ({ label: `requested ${scenario.steps[index].time} s`, mark, at: actual.timeline[index].at })) });
+      results.push({ scenario: scenario.name, mode: actual.page.mode, late: actual.page.late.length, clockError,
+        maximumError: maximumError(actual.samples, expected.samples),
+        notes, starts: actual.page.commands.filter(command => command.op === "on").length,
+        waves, bufferSources: actual.page.bufferSources(),
+        cuts: actual.page.commands.filter(command => command.op === "cut").length, windows, ...diagnosis && { diagnosis } });
     }
     return results;
-  });
+  }, worklet);
   for (const result of results) {
-    assert.ok(result.maximumError < 0.000001, `${result.scenario}: native reference sample error ${result.maximumError}`);
-    assert.equal(result.sources, result.expectedSources, `${result.scenario}: a controller restarted a source`);
+    assert.equal(result.mode, worklet ? "worklet" : "script");
+    assert.equal(result.late, 0, `${result.scenario}: a command reached the synthesizer after the time it was for`);
+    assert.ok(result.clockError < 1e-9, `${result.scenario}: a step was not scheduled one lead after the render clock: ${result.clockError}`);
+    assert.ok(result.maximumError < 0.000001, `${result.scenario}: synthesizer reference sample error ${result.maximumError}${result.diagnosis ?? ""}`);
+    assert.equal(result.starts, result.notes, `${result.scenario}: a controller restarted a note`);
+    assert.equal(result.bufferSources, result.waves, `${result.scenario}: a controller restarted a sample`);
+    assert.equal(result.cuts, 0, `${result.scenario}: a controller cut a note`);
     assert.ok(Object.values(result.windows).some(window => window.rms > 0.0001), `${result.scenario}: all measured output was silent`);
     if (result.scenario === "held") {
       const window = result.windows;
-      assert.ok(window.before.rms > 0.01, "held reference was silent");
+      assert.ok(window.before.rms > 0.01, "held note was silent");
       assert.ok(window.volumeZero.rms < 1e-8 && window.expressionZero.rms < 1e-8, "zero volume or expression was not silent");
-      for (const name of ["volumeQuarter", "expressionQuarter"]) {
-        assert.ok(Math.abs(window[name].rms / window.before.rms - 32 / 127) < 0.00001, `${name}: incorrect controller multiplication`);
-      }
-      for (const name of ["volumeRestored", "expressionRestored"]) {
-        assert.ok(Math.abs(window[name].rms / window.before.rms - 1) < 0.00001, `${name}: recovery changed the held envelope`);
+      // A centred pan keeps the sum of both sides' energy, so the output's
+      // level over the synthesizer's own is the channel gain.
+      for (const [name, gain] of [["before", 1], ["volumeQuarter", 32 / 127], ["volumeRestored", 1],
+        ["expressionQuarter", 32 / 127], ["expressionRestored", 1]]) {
+        const ratio = window[name].rms / window[name].laneRMS;
+        assert.ok(Math.abs(ratio - gain) < 0.00001, `${name}: channel gain ${ratio} differs from ${gain}`);
       }
       assert.ok(window.panLeft.leftEnergy > 0.001 && window.panLeft.rightEnergy < 1e-12, "live pan did not reach the left channel");
       assert.ok(window.panRight.rightEnergy > 0.001 && window.panRight.leftEnergy < window.panRight.rightEnergy * 0.001, "live pan did not reach the right side");
     }
     if (result.scenario === "initial-zero") {
       assert.ok(result.windows.beforeZero.rms < 1e-8 && result.windows.expressionZero.rms < 1e-8, "initial or later zero was not silent");
-      assert.ok(result.windows.restored.rms > 0.01, "a source started at zero did not recover");
+      assert.ok(result.windows.restored.rms > 0.01, "a note started at zero did not recover");
     }
-    console.log(`PASS ${engineName} ${result.scenario}: ${JSON.stringify(result)}`);
+    console.log(`PASS ${engineName} ${result.mode} ${result.scenario}: ${JSON.stringify(result)}`);
   }
 } finally {
   await browser.close();

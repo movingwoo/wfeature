@@ -28,7 +28,9 @@ titles run.
 
 Everything that touches the Host (the card stack, the pixels, the save
 directory, the sound) is declared native here and registered by
-`internal/platform/skt`, in `wipi.go` and the `wipi_*.go` files beside it.
+`internal/platform/skt`, in `wipi.go` and the `wipi_*.go` files beside it. The
+Graphics members WIPI has and MIDP does not are the exception: they are
+composed in `graphics.go` out of those natives (see [Graphics](#graphics)).
 `Vibrator.on` and `off` record the request on the `backend.Vibrator` passed to
 `Define`; a nil one makes them no-ops. The `org.kwis.msf.io` classes connect
 nothing: `Network.connect` answers -1, and `Socket` streams and `URL.find` throw
@@ -75,3 +77,39 @@ records how it came to be.
 - `XFile` keeps its own answers: names longer than 255 bytes, a backslash
   refused rather than read as a separator, a 16 MiB bound with -1, and
   `fsavail`'s 512 KiB.
+
+## Graphics
+
+`Graphics.copyArea`, `drawPolygon`, `getPixel`, `setPixel`, the colour
+components, the stroke style and the XOR mode, and `Image.createImage(Image)`,
+are written in `graphics.go` in terms of calls the platform already registers:
+MIDP's fills, lines, text, clip, blit and reset, `Image.getRGB`, and the WIPI
+`getRGBPixels`/`setRGBPixels` pair. What they answer is what the KTF platform
+answers for the same calls, lenient where KTF is lenient — a stroke style other
+than the two, polygon arrays of different lengths, an empty size; the comments
+in `graphics.go` give each place this layer differs and why.
+
+Not served, because what a title expects from them is not settled:
+`getGrayScale` (KTF answers the packed colour, the specification a grey level)
+and `getPixels`/`setPixels` (their byte form is the handset's, the
+specification ties it to the LCD, KTF's two-byte RGB565 is its 16-bit panel's,
+and this platform's Display answers 24 bits a pixel).
+
+- **XOR mode and the stroke style are fields of the Graphics object** under
+  names no class declares, so a quick save keeps them, and a Graphics restored
+  from one written before they existed answers XOR off and `SOLID`. `reset`
+  puts both back, as KTF's does, with the clip, translation and font the
+  platform's reset puts back.
+- **XOR applies to every drawing call**, which is why the ones MIDP also has —
+  `drawChar` and the `drawImage` with a source rectangle among them — are
+  answered on the WIPI class rather than by the platform: outside XOR mode they
+  are MIDP's calls as they are, and in it the platform's own call is drawn on a
+  scratch image and every pixel it covered is inverted once, a blended
+  picture's edge by how much of it was drawn. `copyArea` draws the difference;
+  `setRGBPixels` writes the caller's pixels as they are.
+- **`Image.createImage(Image)` makes a mutable copy whose mask is white**, as
+  the specification says in so many words.
+- The stroke style is kept and not drawn with, as on KTF.
+- The screen Graphics is one object for the session and a paint does not
+  reset it, so XOR mode and the stroke style a title leaves set carry into its
+  next paint; a paint on KTF starts from a new Graphics.

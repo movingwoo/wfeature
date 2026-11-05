@@ -1,10 +1,69 @@
 package jvm
 
 import (
-	_ "embed"
+	"embed"
+	"io/fs"
+	"path"
+	"strings"
 	"testing"
 	"time"
 )
+
+//go:embed testdata/LibraryMembers*.class
+var libraryMembersClasses embed.FS
+
+// libraryMembersSource is LibraryMembers.java's classes, by the names the
+// loader asks for.
+func libraryMembersSource(t *testing.T) mapClassSource {
+	t.Helper()
+	names, err := fs.Glob(libraryMembersClasses, "testdata/LibraryMembers*.class")
+	if err != nil || len(names) == 0 {
+		t.Fatalf("LibraryMembers classes: %v, %v", names, err)
+	}
+	source := mapClassSource{}
+	for _, name := range names {
+		data, err := libraryMembersClasses.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source[strings.TrimSuffix(path.Base(name), ".class")] = data
+	}
+	return source
+}
+
+// The CLDC 1.1 members KTF and SKT share and a title links through its
+// constant pool: each line is one method of LibraryMembers.java, which
+// compares the runtime with itself wherever the charset decides the bytes.
+// Every member on these lines resolved to nothing before it was declared, so
+// each line also fails, naming its method, when a declaration goes missing.
+//
+// The Hashtable lines pin this runtime's enumeration order, which is the
+// order of insertion: see hashtableDefinition.
+func TestCompiledCodeReachesTheRestOfTheSharedCLDCLibrary(t *testing.T) {
+	vm := New(libraryMembersSource(t), Options{})
+	for _, line := range []struct{ method, want string }{
+		{"text", "true,false,true,false,true,false,false,true,true,true,false,NPE|true,false,true,false,false,NPE|true/false"},
+		{"buffer", "16,34,19,5,12,100,100,202,NASE|null#7true-+ce12345678901,10987654321ec+-eurt7#llun,SIOOBE,SIOOBE,NPE,true"},
+		{"collections", "3,1,-1,-1,0,1,-1,AIOOBE,IOOBE|[#1, null, #2, #1, [x]]|[]|true,true,false,NPE,{one=#1, two=2},{a=1, b=2, c=3},abc,2,{}"},
+		{"readers", "true,true,NPE,false,IOE,IOE|true,ab가b가c,false,IOE,IOE,false,IOE"},
+		{"writers", "h/i!/abc/cde/,true,SIOOBE,NPE,NPE|true,true,true,c3a9f09f9880,IOE,UEE,NPE,NPE"},
+		{"utf", "hié가,hié가,hié가,20,1,UTFDFE,UTFDFE,EOF,NPE"},
+		{"classes", "LibraryMembers$Made,1,InstantiationException,InstantiationException,IllegalAccessException,IllegalStateException:refused,InstantiationException,InstantiationException,java.util.Vector"},
+	} {
+		result, err := vm.InvokeStatic("LibraryMembers", line.method, "()Ljava/lang/String;")
+		if err != nil {
+			t.Errorf("%s() error = %v", line.method, err)
+			continue
+		}
+		object, err := result.Reference()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := StringText(object); got != line.want {
+			t.Errorf("%s() =\n  %q\nwant\n  %q", line.method, got, line.want)
+		}
+	}
+}
 
 //go:embed testdata/CoreMembers.class
 var coreMembersClass []byte

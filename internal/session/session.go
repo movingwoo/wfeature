@@ -1182,8 +1182,9 @@ func (s *Session) resume(ctx context.Context) error {
 	return s.endedOrFailed(s.engine.resume(ctx))
 }
 
-// closeWait is how long closing a session gives an LGT title's destroyClet:
-// a close ends in bounded time on every platform (backend.EndingBound).
+// closeWait is how long closing a session gives an LGT title's ending, a Java
+// title's destroyApp and then its destroyClet: a close ends in bounded time on
+// every platform (backend.EndingBound).
 var closeWait = backend.EndingBound
 
 // Close ends the session. It is safe to call more than once, and safe to call

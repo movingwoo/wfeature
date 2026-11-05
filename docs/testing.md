@@ -389,8 +389,9 @@ engines, and pass a debug server where a route asks for the other profile.
 | `frame-delivery.mjs` | `SERVER`; `WFEATURE_FRAME_ARCHIVE` | [Frame delivery](#frame-delivery) |
 | `checkpoint-skt.mjs` | `SERVER` | [SKT execution checkpoints](#skt-execution-checkpoints) |
 | `audio-live.mjs` | `DEBUG_SERVER`; `WFEATURE_AUDIO_ARCHIVE` | [Live audio session acceptance](#live-audio-session-acceptance) |
-| `audio-presentation.mjs`, `audio-pcm.mjs`, `audio-load.mjs` | none (request interception) | [Native audio rendering](#native-audio-rendering-acceptance), [native cost](#native-cost-of-the-largest-sound-loads) |
-| `audio-controls.mjs`, `audio-gain.mjs`, `audio-midi-state.mjs`, `audio-ownership.mjs`, `audio-resume.mjs`, `audio-timing.mjs` | `URL` of a static server for `web/` | [Native audio rendering](#native-audio-rendering-acceptance) |
+| `audio-pcm.mjs`, `audio-load.mjs` | none (request interception) | [Native audio rendering](#native-audio-rendering-acceptance), [native cost](#native-cost-of-the-largest-sound-loads) |
+| `audio-presentation.mjs` | none (its own loopback server); `WFEATURE_AUDIO_NO_WORKLET` | [Native audio rendering](#native-audio-rendering-acceptance) |
+| `audio-controls.mjs`, `audio-gain.mjs`, `audio-midi-state.mjs`, `audio-ownership.mjs`, `audio-resume.mjs`, `audio-timing.mjs` | `URL` of a static server for `web/`; `WFEATURE_AUDIO_NO_WORKLET` | [Native audio rendering](#native-audio-rendering-acceptance) |
 
 The runners use authored fixtures, or a local archive copied into a scratch
 library where a variable names one, with isolated save directories; they never
@@ -2900,39 +2901,112 @@ open.
 
 ### Native audio rendering acceptance
 
-On 2026-10-09 every audio harness under `web/acceptance/` ran in headless
-Chromium 153 and WebKit 26.6 through Playwright 1.63; the earlier sound
-sections could not launch a browser. `audio-presentation.mjs` and
-`audio-pcm.mjs` serve the shell through request interception; the others take
-an origin, here a loopback static server for `web/`. All sixteen runs passed:
+These harnesses render authored events offline in headless Chromium and WebKit
+through Playwright and compare the page's output with an independent
+reference. They settle native graph behavior, not a live game session, device
+latency or listening. `audio-pcm.mjs` serves the shell through request
+interception; `audio-presentation.mjs` serves an allow-list of `web/` from an
+in-process loopback server, because Chromium does not pass an AudioWorklet's
+module fetch to Playwright's routes; the other six take the origin of a
+static server for `web/`, which as a loopback origin is a secure context.
+
+**Since 2026-11-05 the page's notes come from the FM synthesizer itself.**
+Until then six of the harnesses built their references from the per-note
+oscillator envelopes the page used before 2026-11-01, and
+`audio-presentation.mjs` dropped every note without failing, because its fake
+clock had no channel splitter and the page reported the synthesizer
+unavailable. Now each harness:
+
+- renders the page: `PageAudio` keeps its fake clock, but its `createFM` builds
+  the real `FMHost` on the `OfflineAudioContext`. On the AudioWorklet path
+  `web/acceptance/audio-worklet-ack.js` is added to the worklet scope first,
+  so the processor answers each command batch, and every suspended step
+  waits for those answers before rendering resumes; an offline render
+  otherwise outruns the message port and lands a batch a few quanta late.
+  `WFEATURE_AUDIO_NO_WORKLET=1` hides the worklet, so the ScriptProcessor
+  fallback renders instead;
+- builds the reference without the page's graph code
+  (`web/acceptance/audio-offline.js`): `FMSynth` from `fm-synth.js` is driven
+  with the commands the scenario should produce and rendered one 128-frame
+  quantum at a time, as the worklet renders, or in the render calls recorded
+  from the fallback; a second offline context then applies the routing the
+  scenario checks — channel level (volume/127)·(expression/127), pan
+  (pan − 64)/64, 5 ms moves, clip gain, the sliders, and stops at their
+  instant;
+- fails if a timed command reaches the synthesizer after its time, if a step
+  was not scheduled exactly one lead after the render clock (< 1e-9), or if
+  notes are missing.
+
+On 2026-11-05 every harness passed in both engines on both paths:
 
 | Harness | What it renders | Chromium | WebKit |
 | --- | --- | --- | --- |
-| `audio-presentation.mjs` | 5 ms and 70 ms packets, cached PCM, 90 ms render clock | error 0 | error 0 |
+| `audio-presentation.mjs` | one score in 5 ms and 70 ms packets, cached PCM, 90 ms render clock, 14 notes at their presentation time plus the lead | error 0 | error 0 |
 | `audio-pcm.mjs` | gain/pan laws, overlap, future stop/restart, trimmed and fractional restored PCM | ≤ 1.5e-8 | ≤ 1.5e-8 |
-| `audio-controls.mjs` | seven live CC7/CC11/CC10 scenarios | ≤ 6.0e-8 | ≤ 6.0e-8 |
-| `audio-midi-state.mjs` | nine sustain, RPN and reset scenarios | ≤ 3.0e-8 | ≤ 3.0e-8 |
-| `audio-resume.mjs` | MIDI, PCM and percussion pause/resume with a peer | error 0 | error 0 |
-| `audio-gain.mjs` | MIDI and PCM live mute, quarter gain, unmute | pass | pass |
-| `audio-ownership.mjs` | one clip cancelled, peer RMS matches reference | pass | pass |
-| `audio-timing.mjs` | twelve short notes on a 90 ms clock | pass | pass |
+| `audio-controls.mjs` | seven live CC7/CC11/CC10 scenarios | ≤ 1.2e-7 | ≤ 1.2e-7 |
+| `audio-midi-state.mjs` | nine sustain, RPN and reset scenarios | ≤ 6.0e-8 | 0 |
+| `audio-resume.mjs` | MIDI, PCM and percussion pause/resume with a peer | 0 | 0 |
+| `audio-gain.mjs` | MIDI and PCM live mute, quarter gain, unmute | 0 | 0 |
+| `audio-ownership.mjs` | one clip cancelled, peer matches its reference | 0 | 0 |
+| `audio-timing.mjs` | twelve short notes on a 90 ms clock | 0 | 0 |
 
-The fractional restored PCM scenario, the one the
-[fractional reconstruction](#fractional-pcm-reconstruction) section left
-pending, matches its independent native graph exactly in both engines.
+Sample tolerances are 1e-6, gain ratios 1e-5, silent windows 1e-8. The
+nonzero maxima are 2^-24 and 2^-23, float32 rounding in the native mixes, and
+vary from run to run; the synthesizer's lanes match bit for bit. Each
+harness was also run against mutated copies of `web/` (expression ignored,
+sustain ignored, a resume at age 0, one clip stop stopping every owner, clip
+gain at half, events on the coarse render clock, a 20 ms lead, notes dropped,
+the synthesizer failing to start) and failed on the mutants of its own
+contract.
 
-Six of these harnesses — `audio-controls.mjs`, `audio-midi-state.mjs`,
-`audio-resume.mjs`, `audio-gain.mjs`, `audio-ownership.mjs` and
-`audio-timing.mjs` — build their reference graphs from the per-note oscillator
-envelopes the page used until 2026-11-01. The page now synthesizes notes with
-its FM synthesizer, so those references no longer describe it and the six are
-not expected to pass until they are rebuilt on the synthesizer's own offline
-render. The node tests cover the same contracts against the synthesizer's
-commands, and [the live session](#live-audio-session-acceptance) runs the
-synthesizer in both engines. The PCM and presentation harnesses are unaffected. These
-are offline renders of authored events: they settle native graph behavior, not
-a live game session, device latency or listening. `build/sound-browser-acceptance/`
-holds `run.sh` and the sixteen logs.
+What the synthesizer changed in the contracts:
+
+- **Percussion is tonal in the exact checks.** The synthesizer's noise voices
+  draw `Math.random`, which no independent render repeats, so the drum keys
+  moved to tonal stand-ins (40 → 36, 42 → 35, 44 → 56). Snare, clap, hats,
+  cymbals and programs 120–127 are outside every exact comparison.
+- **Releases are the voices' own.** The stand-ins release over about 0.36 s
+  (program 72) and 0.72 s (program 40) rather than 60 ms, so the sustain,
+  reset and resume scenarios run longer and each silent window starts after
+  the last tail. A drum rings for its whole envelope: All Notes Off is checked
+  on the melody and on a window where the released drums must be silent, and a
+  resumed drum must end 20–50 ms after its reference lane.
+- **A short note's rest is no longer silence**: on time it is −20.6 dB below
+  the note, a lost key-off 0 dB and one a 90 ms block late −2.3 dB, so
+  `audio-timing.mjs` checks the rest below an eighth of the body, the exact
+  reference, the arrival spacing and the on/off counts.
+- **`audio-gain.mjs` and `audio-ownership.mjs` compared the page with itself**
+  (a clip rendered alone); both now have independent references.
+
+**One failure did not recur.** On 2026-11-05 `audio-gain.mjs` failed once in
+WebKit on the ScriptProcessor path (its PCM comparison, an error of 0.166)
+and then passed 67 runs in a row of the same case, under load and idle, 100
+renders of it in one page, and three further rounds of all eight harnesses in
+both engines on both paths, 90 runs, on the final tree. No single clip can be off by more than about 0.094,
+so the size fits a stretch of output shifted in time rather than a wrong level.
+**Its cause is not known.** Two of the case's three suspensions fall on the
+quanta where the offline ScriptProcessor fires, so the engine was tested
+without the page: 36,470 renders of the same context, processor, suspensions
+and scheduled ramps in WebKit (idle, under CPU load, with a busy page thread,
+in fresh processes and in reused ones) and 6,000 in Chromium found no late
+suspension, no source off its frame and no dropped or repeated quantum; a
+suspension on a callback quantum resolves before that quantum renders.
+`playWave` schedules its source synchronously, so no step can reach the
+context after it resumes. Every suspension in five of the harnesses is now
+checked against the frame its time rounds up to, failing with a message that
+names the engine ("the engine resolved suspend(0.55) at frame 26624 …"), and a
+failed sample comparison in seven of them now says, in its assertion message, the first, worst and last bad frames, the shift
+of the reference that best lines the bad stretch up with the page (within 32
+quanta), and every step's frame, render calls and scheduled time; a reference
+shifted by three quanta reads as "384 frames (3 quanta, 8.00 ms) later". Passing
+runs print as before.
+
+Two things the offline renders show about the fallback, neither changed: in
+both engines an offline ScriptProcessor callback reports a `playbackTime` one
+quantum before the frame its buffer starts at, so offline its notes sound 128
+frames after the worklet's; and `bufferClock` adds buffer lengths in floating
+point, so a stand-in voice's vibrato table can pick a neighbouring entry,
+up to 1.6e-4 from a quantum render, which is inaudible.
 
 ### Live audio session acceptance
 

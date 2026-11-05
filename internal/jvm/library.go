@@ -32,6 +32,8 @@ const (
 	DataOutputStreamClass      = "java/io/DataOutputStream"
 	ReaderClass                = "java/io/Reader"
 	InputStreamReaderClass     = "java/io/InputStreamReader"
+	WriterClass                = "java/io/Writer"
+	OutputStreamWriterClass    = "java/io/OutputStreamWriter"
 	HashtableClass             = "java/util/Hashtable"
 	VectorClass                = "java/util/Vector"
 	RandomClass                = "java/util/Random"

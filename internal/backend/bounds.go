@@ -14,5 +14,6 @@ import "time"
 const WaitBound = 15 * time.Second
 
 // EndingBound is how long a title's own ending may run on every platform: an
-// SKT destroyApp, an LGT destroyClet, a KTF Jlet's destroyApp.
+// SKT destroyApp, an LGT destroyClet or Jlet's destroyApp, a KTF Jlet's
+// destroyApp.
 const EndingBound = 15 * time.Second

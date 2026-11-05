@@ -26,11 +26,13 @@ func TestJavaDataInputStreamReadLongSlot(t *testing.T) {
 			t.Fatal("readLong slot is not served")
 		}
 		if len(data) < 8 {
-			if err == nil {
-				t.Fatal("truncated long accepted")
+			if thrownClass(err) != javaEOFClass {
+				t.Fatalf("truncated long = %v, want EOFException", err)
 			}
-			if stream.Read != 0 {
-				t.Fatal("truncated read moved cursor")
+			// The bytes before the end were read, as the class library's
+			// byte-at-a-time read takes them, and nothing is left.
+			if stream.Read != len(data) {
+				t.Fatalf("a truncated read left the cursor at %d of %d", stream.Read, len(data))
 			}
 			continue
 		}

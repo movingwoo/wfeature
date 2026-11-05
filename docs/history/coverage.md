@@ -21,6 +21,7 @@ This consolidation adds no execution or acceptance evidence.
 - [SKT Java](#ktf-skt-skt-java)
 - [Scanner limits](#ktf-skt-scanner-limits)
 - [Validation and limits](#ktf-skt-validation-and-limits)
+- [Cross-platform parity and what the specification settles (2026-11-05)](#cross-platform-parity-2026-11-05)
 
 <a id="lgt-lgt-coverage-audit-after-pr-143"></a>
 
@@ -304,3 +305,203 @@ remains as recorded in [sgs-completion.md](../sgs-completion.md#paused-at-user-r
 The audit recommended prioritizing save/menu/exit routes and missing class
 resolution over implementing every standard member. The unresolved native KTF
 loading case needed its archive located before it could be remeasured.
+
+<a id="cross-platform-parity-2026-11-05"></a>
+
+## Cross-platform parity and what the specification settles — 2026-11-05
+
+Before 0.6.0 the open specification gaps (the 2026-10-21 comparison kept in the
+local task list) were sorted by one question: which of them can be implemented
+without guessing. A member qualified when three things held:
+
+- its category is not one the 2026-10-22 scope decision left out (exception
+  members, floating point and the `MC_math` family, calendar internals,
+  multi-program management, recording, handset services, LEDs);
+- where a call arrives is settled: KTF and SKT resolve every Java member by
+  class, name and descriptor; LGT resolves every `org/kwis` member by the name
+  the module hands over, and places a `java/*` virtual call by the
+  declaration-order rule its watched slots spell
+  ([the class library's core](lgt.md#lgt-class-library-2026-10-28));
+- what it answers is settled: another platform here already answers it, or
+  CLDC 1.1 gives one answer.
+
+**The comparison was taken from the tables, not from the 2026-10-21 lists.**
+Temporary package tests (not kept) wrote out every member each platform serves
+at `b377335`: KTF's `runtimeJavaClasses` (891 entries); LGT's name tables
+(`javaPlatformMethods`, `javaGraphicsMethods`, `javaWidgetMethods`,
+`javaDatabaseMethods`) and `javaBakedVirtualSlots` (584 lines with the
+superclass map); and SKT's `jvm.CoreLibraryDefinitions` with the MIDP, SKVM and
+WIPI definitions (1,501). A member counted as served when its class or any
+superclass in that platform's own hierarchy declares it: SKT's WIPI `Graphics`,
+`Font`, `Image`, `Card` and `Display` extend the MIDP classes, and LGT walks
+`javaPlatformSuper` for a baked slot.
+
+What the comparison changed in the earlier lists:
+
+- **No LGT `org/kwis` member uses a baked slot.** Every one LGT serves is in a
+  name table, and `javaPlatformVirtualDispatch` resolves a vtable stub through
+  `javaVirtualMember` to the name the module listed for it. The caution the
+  2026-10-28 plan attached to LGT's `org/kwis` virtual methods (a slot needs a
+  watched anchor) applies to `java/*` classes only.
+- **CLDC 1.1 members missing from the WIPI 1.2.1 pages were not counted.** LGT's
+  class library is CLDC 1.1's (`Thread.interrupt` at slot 12 settled that), so
+  `Random.nextInt(int)` was a member it lacked.
+- **Members after `isXORMode` on the truncated `Graphics` page were not
+  counted**: `setPixels`, `setStrokeStyle`, `setXORMode`, `setRGBPixels` and
+  `setGrayScale`, which KTF implements.
+- **`ByteArrayOutputStream.toString()` answered Object's identity string on all
+  three platforms**, not the bytes as text.
+
+Left out because the specification does not settle the answer:
+
+- `DataComparatorInteger`, `DataComparatorString`, `DataFilterInteger`: the
+  pages say "compare as an integer or a string at this offset" and name a
+  minimum and maximum, but not the integer's width or byte order, where a string
+  ends, whether the bounds are inclusive, or what a record shorter than the
+  offset does.
+- `Graphics.encodeImage`: no output format.
+- Animated images (`isAnimated`, `play`, `stop`, `stopImage`, `loadImage`,
+  `ImageObserver`): no notification timing or status codes.
+- Event hooks and key grabs (`addJletEventListener`, `setJletEventListener`,
+  `grabKey`, `ungrabKey`, `setDockedCard`, `Display.where`,
+  `EventQueue.hookEvent`, SKT's and LGT's `EventQueue`): the handset's event
+  flow.
+- The rest of `InputMethodHandler`: the handset's input-method UI; text entry
+  goes through the page's text input instead.
+- SKT `HandsetProperty.getSystemProperty`: the keys and values are a handset's.
+- The remaining media members, and every remaining C gap: a left-out category,
+  or a slot that would be estimated. The KTF kernel's slot 5, which the spec
+  order put at `MC_knlExecute`, turned out to be `MC_knlLoad` in
+  [#260](https://github.com/movingwoo/wfeature/pull/260).
+
+Settled but more than a member fill, and done as changes of their own in the
+same pass: LGT `Timer`/`TimerTask` (its threads and quick-save record), LGT
+cards with a position (`Card(x, y, w, h)`, `move`, `resize`, `getX`, `getY`,
+`isShown`), the LGT Jlet's pause, resume and destroy (its launcher only
+entered `startApp`), and `Thread.interrupt` on LGT (waking a sleeping guest
+thread).
+
+**What was filled**, with the detail in each platform's record (SKT's below):
+
+- KTF and SKT, in the shared class library: the `String`, `StringBuffer`,
+  `Vector`, `Hashtable`, `Reader`, `InputStreamReader`, `Runtime` and `Class`
+  members LGT already answered, `Writer` and `OutputStreamWriter`, the static
+  `DataInputStream.readUTF(DataInput)`, and a `ByteArrayOutputStream`,
+  `Vector`, `Stack` or `Hashtable` that answers its own text; KTF also
+  `Timer`'s Date forms ([KTF](ktf.md#ktf-parity-fill-2026-11-05)).
+- LGT: every `org/kwis` member above that KTF or SKT answers, `Boolean`,
+  `Character`, `Writer`, `OutputStreamWriter`, the `Reader` and `OutputStream`
+  bodies a title's subclass inherits, `Random.nextInt(int)`, the C image
+  error `M_E_BADFORMAT` at -6, and `EOFException` at the end of a data stream
+  ([LGT](lgt.md#lgt-parity-fill-2026-11-05)).
+- SKT's WIPI `Graphics` and `Image`: the members KTF answers, XOR mode over
+  every drawing call ([below](#cross-platform-parity-2026-11-05-skt-graphics)).
+- LGT, as changes of their own: `Timer` and `TimerTask`, `Thread.interrupt`,
+  cards with a position, and the Jlet's `pauseApp`, `resumeApp` and
+  `destroyApp`, which no LGT Java title had ever been sent
+  ([LGT](lgt.md#lgt-parity-fill-2026-11-05)).
+
+Two members were withheld where the platforms or the page disagree on the
+answer itself: `getGrayScale` (KTF answers the packed colour, the page the grey
+level) and SKT's byte pixel transfers (a handset's own LCD format). Where KTF is
+lenient and the page would throw or clip, the new members are lenient too, so
+the three platforms answer alike until a title shows otherwise; where the page
+states a value outright and KTF differs, the page is followed and the
+difference recorded (`createImage(Image)` turns the mask white).
+
+**Validation.** `gofmt`, `go vet` and `go test` with and without the debug
+tag, `go test -race ./internal/...`, the 569 page tests and the eight audio
+harnesses in both engines all pass. The 607 local archives were run 500 ticks
+from an empty save under the build before (`b377335`) and this one: every KTF
+and LGT archive ends on the same digest; 26 SKT archives differ, every one of
+them also between runs of a single build, because SKT runs on the wall clock,
+and three compared by their last frame show the same scene at a different
+moment of its animation. A quick save taken at 300 ticks under the build
+before loads under this one for each of the 587 archives that made one, and
+100 ticks later reaches the digest the build before reaches from it, except
+six SKT archives from that same wall-clock list. After the LGT timer, card and
+lifecycle changes the gates passed again, and the 148 LGT archives were run once
+more under both builds: the 500-tick digests, a quick save the build before
+took at 300 ticks loaded here, and a two-second park at tick 300 through
+`run -serve` followed by 300 ticks all end on the same digest, with no warning
+or error the build before did not log.
+
+**A review on 2026-11-06 played deeper** and found what those runs, which end
+on title screens, could not reach. The 481 KTF and LGT archives were played
+about 1,900 ticks through `run -serve`, a key every 42 ticks and a quick save
+halfway, under both builds:
+
+- 472 match at every step. Six of the rest are a quick save refused as busy
+  while eight runs shared the machine — three under each build — which shifts
+  the replies after it, and two are titles whose runs differ under one build.
+- **One KTF title reaches a member this pass changed**: it splits the
+  `toString()` of a byte array stream it read a text resource into. With
+  Object's identity text its dialog box stayed empty and its paint threw
+  ArrayIndexOutOfBoundsException every frame; it now shows its lines
+  ([KTF](ktf.md#ktf-parity-fill-2026-11-05)).
+- A quick save the build before took halfway loads here and plays on to the
+  same digests for every archive. One taken here loads under the build before
+  for every LGT archive and is refused there for 180 KTF archives, whose heap
+  holds `buffer-v2` buffers; that is a step back to an earlier build only.
+- **The 24 LGT Java archives parked in the middle of play** showed what a park
+  on a title screen does not: one title stood still after every park, its
+  frame chain running twice a tick, until the serial calls it had queued were
+  served after `pauseApp` ([LGT](lgt.md#lgt-parity-fill-2026-11-05)).
+- SKT: 595 WIPI Graphics calls made through the VM on an off-screen image —
+  every fill, line, curve, text and picture form under clips, translations,
+  alpha, every anchor and bad arguments — leave the same pixels and throw the
+  same exception classes under both builds. Forwarding to MIDP costs 0.03 to
+  0.26 µs a call, and CPU time moved by no more than 1% on three titles of each
+  platform.
+
+<a id="cross-platform-parity-2026-11-05-skt-graphics"></a>
+
+### SKT's WIPI Graphics
+
+The comparison found WIPI `Graphics` members KTF serves and SKT did not. SKT
+now answers `copyArea`, `drawPolygon`, `setPixel`, `getPixel`,
+`getRed/Green/BlueComponent`, `setXORMode`/`isXORMode` and
+`setStrokeStyle`/`getStrokeStyle`, and `Image.createImage(Image)`, as KTF does
+for the same calls (`internal/api/wipi/graphics.go`). No local SKT title is
+known to call them.
+
+- **They are built from calls the platform already registers**: MIDP's fills,
+  lines, curves, text and blits, the clip and translation getters, `getRGB`
+  and the WIPI RGB pixel pair. SKT's own drawing state is unexported, so the
+  library composes them rather than reaching into it.
+- **XOR mode reaches every drawing call.** In XOR mode the platform's own call
+  is drawn onto a scratch picture and each pixel it covered is inverted once,
+  by its coverage where a picture's edge is blended, as KTF blends a glyph's
+  edge. KTF inverts on every write instead, so where two strokes of one call
+  meet — a rectangle's corners, a polygon's shared vertex — KTF leaves the
+  pixel and SKT inverts it. A call whose bounds miss the clip is still made on
+  the Graphics, so its arguments are checked as outside XOR mode.
+- **`reset`, `drawChar` and the source-rectangle `drawImage` moved from the
+  platform to the library** (`internal/platform/skt/wipi.go` no longer
+  registers them), because a native the platform registers cannot also have a
+  library body: `drawChar` and the 8-argument `drawImage` now honour XOR mode,
+  and `reset` puts XOR off and the stroke back to SOLID as KTF's does.
+- **A paint starts with XOR off and the solid stroke.** SKT reuses one screen
+  Graphics for the session and puts its clip, translation and font back at the
+  start of each paint; a probe showed XOR mode and a stroke style set in one
+  paint still set at the next, where KTF hands each paint a new Graphics, so
+  the paint start now puts those two back as well.
+- `createImage(Image)` follows the specification's page: an editable copy,
+  the masked part turned white and no mask kept. KTF's copy keeps the
+  transparency.
+- **Not served**: `getGrayScale`, because KTF answers the packed colour where
+  the page says the grey level (and SKT's `setGrayScale` refuses anything over
+  255, so KTF's answer would not even round-trip); and the byte forms
+  `getPixels`/`setPixels`, whose layout is a handset's LCD format — KTF's two
+  RGB565 bytes are its 16-bit panel's, and SKT's display answers 24 bits a
+  pixel.
+- Where KTF is lenient and the specification would throw or clip — a stroke
+  style other than SOLID or DOTTED, polygon arrays of different lengths — SKT is
+  lenient too; the stroke style is kept and answered and lines stay solid.
+- XOR mode and the stroke style are entries in the Graphics object's field map
+  under undeclared `host:` keys, so the heap record keeps them and the class
+  layout the cheat panel reads is unchanged; an earlier quick save restores
+  them off and SOLID.
+
+Found and left: WIPI `Image.createImage(Image, int, int, int, int)` is declared
+native but nothing registers it.
