@@ -304,6 +304,18 @@ func runtimeClipClearData(runtime *initializationRuntime, _ *jvm.VM, arguments [
 	if err != nil {
 		return jvm.VoidValue(), err
 	}
+	// **A listener answering a STOP its clip has outlived clears nothing.** A
+	// title that keeps one Clip for every sound changes music with stop,
+	// putData and play, and answers STOP with clearData. Listener events wait
+	// for the next round, so that STOP arrives after the new sound has
+	// started, and clearing the clip then closed the new title music the
+	// moment it began. The sound the STOP reports is already gone, and so is
+	// the data it played, so the call has nothing left to clear: the clip
+	// keeps its new data and the new sound plays on. Anywhere else clearData
+	// still empties the clip and stops its sound.
+	if receiver == runtime.replacedStop {
+		return jvm.VoidValue(), nil
+	}
 	state := runtime.clip(receiver)
 	if state.Loaded {
 		if err := runtime.SyncClipCompletions(runtime.GuestElapsed()); err != nil {

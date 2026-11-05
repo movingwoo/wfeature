@@ -448,6 +448,59 @@ func TestPCMTrackDurationAppliesBeforeItsEvent(t *testing.T) {
 	}
 }
 
+// A sound made only of PCM tracks lasts until the last sample it triggered
+// has played, not only until its sequence ends. About 2,400 PCM-only sounds
+// across the local KTF, LGT and SKT archives end their sequence about half a
+// second before their sample does, and what runs past the end is sound rather
+// than padding. Ending them with the sequence told a title its effect was over
+// half a second early, and a one-shot effect was stopped there. A sound with a
+// score keeps the score's end, which is where a looping piece starts again.
+func TestPCMOnlySoundLastsUntilItsSampleHasPlayed(t *testing.T) {
+	// 8 kHz ADPCM packs two samples a byte: 401 bytes are 802 samples, which
+	// is 100.25 ms and ends at the next whole millisecond. The sequences use
+	// one-millisecond units and end with the four-zero marker.
+	wave := chunk("Awa\x01", make([]byte, 401))
+	last := func(t *testing.T, chunks ...[]byte) Event {
+		t.Helper()
+		events, err := Decode(buildSMAF(chunks...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return events[len(events)-1]
+	}
+	for _, test := range []struct {
+		name     string
+		sequence []byte
+		want     uint32
+	}{
+		// The sample starts at 10 ms and plays to 111; the sequence ends at 40.
+		{"sample outlasts the sequence", []byte{10, 0x01, 20, 30, 0, 0, 0, 0, 0}, 111},
+		// The sequence runs to 310, past the sample's end.
+		{"sequence outlasts the sample", []byte{10, 0x01, 20, 0x82, 0x2c, 0, 0, 0, 0, 0}, 310},
+		// Wave 2 is not in the track, so nothing plays past the sequence.
+		{"a missing wave plays nothing", []byte{10, 0x02, 20, 30, 0, 0, 0, 0, 0}, 40},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			end := last(t, limitsPCM(chunk("Atsq", test.sequence), wave))
+			if end.Type != EventEnd || end.Time != test.want {
+				t.Fatalf("sound ends with %+v, want EventEnd at %d ms", end, test.want)
+			}
+			// Only an end the samples pushed past the sequences is marked,
+			// because a repeat starts again before it.
+			if marked := end.Value == EndOfSamples; marked != (test.want == 111) {
+				t.Fatalf("end %+v marked %t", end, marked)
+			}
+		})
+	}
+
+	// With a score track the score's timeline stands: one note held for 5 ms,
+	// while the same 101 ms sample still sounds past it.
+	score := limitsScore(MobileStandardNoCompress, chunk("Mtsq", []byte{0, 0x90, 0, 100, 5, 5, 0xff, 0x2f, 0}))
+	if end := last(t, score, limitsPCM(chunk("Atsq", []byte{0, 0x01, 1, 2, 0, 0, 0, 0, 0}), wave)); end.Type != EventEnd || end.Time >= 101 {
+		t.Fatalf("scored sound ends with %+v, want the score's end before the sample's", end)
+	}
+}
+
 func TestHandsetTracksKeepIndependentChannelAllocations(t *testing.T) {
 	tones := newToneMap()
 	tones.initTrack(HandyPhoneStandard, []ChannelStatus{{Kind: ChannelMelody}}, 0)

@@ -31,7 +31,8 @@ const MAX_KEY = 1024;
 // What is a setting. The keypad's type and its arrangement (and the earlier
 // records of both, which the page still reads when the current one is
 // missing), the keyboard's and the game controller's bindings, the two
-// volumes, the picture filter, fullscreen and vibration.
+// volumes, picture against sound, the picture filter, fullscreen and
+// vibration.
 const SETTING_KEYS = new Set([
   "wfeature:keypadLayout",
   "wfeature:keypadGridV2",
@@ -42,6 +43,7 @@ const SETTING_KEYS = new Set([
   "wfeature:padBindingsRaw",
   "wfeature:volume:midi",
   "wfeature:volume:pcm",
+  "wfeature:avSync",
   "wfeature:frameScale",
   "wfeature:fullscreen",
   "wfeature:vibrate",

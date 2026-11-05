@@ -878,6 +878,17 @@ serving tests cover gzip, validators and 304 answers for the shell and the game
 list. `internal/wsproto` checks that each message, and each batch, is one
 transport write.
 
+`web/av-sync.test.mjs` covers the picture delay of the 화면·소리 맞춤 setting
+with a mocked clock and canvases: a held picture is a copy shown when due, the
+pictures due together show the newest with every skipped dirty area, the byte
+bound drops the oldest copy and keeps its change, a changed delay shows what
+waits at once and a reset forgets it. `audio-timing.test.mjs` checks that a
+sound delay joins the lead and that changing it asks for the current output
+instead of moving scheduled sounds. A headless check on 2026-11-03 with the
+canvas fixture measured the first picture's arrival to its first draw at 3 ms
+(Chromium) and 10 ms (WebKit) with no delay and 348 ms and 309 ms with 300 ms,
+and the setting and its label survived a reload in both.
+
 `internal/filter/hqx/javascript_test.go` regenerates `web/hqx-patterns.js` from
 the Go tables and fails when they differ, and holds the digests of an authored
 picture magnified at each scale; `web/hqx.test.mjs` magnifies the same picture

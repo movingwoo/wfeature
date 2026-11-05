@@ -307,8 +307,12 @@ type initializationRuntime struct {
 	databaseSizes        map[string]int32
 	// clips holds each org.kwis.msp.media.Clip's sound bytes and, once played,
 	// its loaded handle. See runtime_media.go for why they are not guest fields.
-	clips              map[weak.Pointer[jvm.Object]]*javaClipState
-	mediaEvents        []clipEvent
+	clips       map[weak.Pointer[jvm.Object]]*javaClipState
+	mediaEvents []clipEvent
+	// replacedStop is the clip whose listener is answering a STOP the clip
+	// has outlived: by the time it is delivered the clip is playing again.
+	// See runtimeClipClearData.
+	replacedStop       *jvm.Object
 	imageSurfaces      map[weak.Pointer[jvm.Object]]uint32
 	runtimeObjects     map[string]*jvm.Object
 	classAliases       map[uint32]uint32

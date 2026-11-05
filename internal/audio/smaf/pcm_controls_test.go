@@ -113,6 +113,9 @@ func TestDecodePCMControlsKeepTimelineAndRawWave(t *testing.T) {
 		{Time: 50, Type: EventPCMControl, PCMChannel: 1, Control: 7, Value: 127},
 		{Time: 60, Type: EventPCMControl, PCMChannel: 1, Control: 10, Value: 127},
 		{Time: 80, Type: EventEnd},
+		// The sequence ends at 80 ms; a sound of PCM tracks alone lasts until
+		// its sample has played.
+		{Time: 100, Type: EventEnd, Value: EndOfSamples},
 	}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("PCM control timeline or raw wave differs: got %d events, want %d", len(events), len(want))
@@ -148,6 +151,8 @@ func TestDecodePCMControlsKeepUnsupportedTracksSilent(t *testing.T) {
 				{Type: EventPCMControl, PCMChannel: 5, Control: 7, Value: 127},
 				{Type: EventWave, PCMChannel: 5, WaveChannels: 1, SamplingRate: 8000, Wave: DecodeADPCM([]byte{0x12})},
 				{Type: EventEnd},
+				// Two samples at 8 kHz end within the first millisecond.
+				{Time: 1, Type: EventEnd, Value: EndOfSamples},
 			}
 			if !reflect.DeepEqual(events, want) {
 				t.Fatalf("unsupported track emitted output or changed later group numbering: %v", events)
@@ -182,7 +187,9 @@ func TestDecodePCMControlsRefuseGroupCounterOverflow(t *testing.T) {
 				}
 				return
 			}
-			if budget.err != nil || len(events) != count+2 || events[0].Type != EventPCMControl || events[0].PCMChannel != 65532 || events[1].Type != EventWave || events[1].PCMChannel != 65532 {
+			// One end per track, the last track's control and wave, and the
+			// sound's own end where its sample stops.
+			if budget.err != nil || len(events) != count+3 || events[0].Type != EventPCMControl || events[0].PCMChannel != 65532 || events[1].Type != EventWave || events[1].PCMChannel != 65532 {
 				t.Fatalf("last complete channel group was not preserved: events=%d error=%v", len(events), budget.err)
 			}
 		})

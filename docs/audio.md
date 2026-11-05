@@ -305,6 +305,42 @@ Native browser rendering of the PCM controls
 outstanding. Bend, gate, looping and retrigger rules are open
 (see [Deliberately incomplete](#deliberately-incomplete)).
 
+### A sound of PCM tracks alone lasts as long as its samples
+
+A sound made only of PCM audio tracks ends when the last sample it triggered
+has played, or at the end of its sequences when that is later. A wave plays to
+the end of its sample whatever its gate says
+([deliberately incomplete](#deliberately-incomplete)), and a sound's end is its
+length: what a media API answers for its duration, when a title is told the
+sound is over, when a one-shot sound is stopped and where a repeat starts
+again. Until 2026-11-03 such a sound ended with its sequence, so one whose
+sample outlasted the sequence was reported finished early, and a one-shot one
+was cut there.
+
+That was most of the sampled effects. Of the PCM-only sounds in the local KTF,
+LGT and SKT archives, 2,418 have a sample that runs past the end of their
+sequence by 201–600 ms, almost all of them by 505–509 ms, and the part past the
+end is sound, not padding: its power is half the rest's at the median, and only
+20 of them are near silence. Internal testing found one KTF title's effects
+cut about half a second early, and that title's sounds are among them
+([census](history/audio.md#pcm-tracks-that-end-before-their-samples)).
+
+The sound's last event marks that end (an `EventEnd` whose `Value` is
+`smaf.EndOfSamples`), and a pass that another one follows stops before it: a
+repeat starts again where the sequences end, so a looping effect keeps the
+cadence its sequences give it, and only the last pass waits for its samples
+and reports its completion there. A loop asked for during that wait starts
+again after the samples. The mark is part of the event list a checkpoint
+keeps; a list without one loops over its whole length, as before.
+
+A sound with a score track keeps the score's timeline, which is where a
+looping piece starts again; its PCM samples and stream waves sound past it as
+they always have. Twelve such sounds have a PCM sample past the score's end.
+Restored checkpoints keep the event lists they were decoded with; a sound
+loaded after the change uses the new end. Over 500 ticks of every local KTF,
+LGT and SKT archive no KTF or LGT screen changed, and the SKT runs that changed
+change between two runs of the same build too.
+
 ### Decoder resource limits
 
 One decode shares a budget across every track, sequence and nested chunk.
@@ -605,6 +641,22 @@ them. In Chromium and WebKit a 180 ms stall of the page's thread took the lead
 from 0.10 s to 0.23 s and back to about 0.10 s three to four seconds later; an
 ordinary session moves the anchor a few tens of milliseconds as its first
 batches settle ([runs](testing.md#anchor-steering)).
+
+The settings panel's 화면·소리 맞춤 slider moves the picture and the sound
+against each other (`web/av-sync.js`), for an output the browser cannot see
+into: a Bluetooth headset leaves the sound behind the picture by more than the
+lead. Its setting, −500 to +1,000 ms in steps of 10, is held for the browser
+(`wfeature:avSync`) and carried by the settings file. A positive value holds
+each composed picture back that long: the receiver lends one canvas, so a held
+picture is a copy, shown on the animation frame it falls due with the dirty
+area of every picture it skipped, at most 64 MiB of copies before the oldest
+waiting one is dropped. A negative value joins the sound's lead, and the
+horizon moves with it. Moving sounds already scheduled could put a release in
+front of its attack, so a changed sound delay refuses the next batch, which
+asks for the current output, and the rebuilt timeline takes the new lead.
+Pictures due within 8 ms of each other share one copy, a copy is resized
+rather than replaced when the screen changes size, and the held pictures are
+dropped when the game stops or the session resets.
 
 A batch later than 200 ms still asks, because the output it would continue is
 by then further from the truth than a rebuild. The request is negotiated and
@@ -1000,6 +1052,33 @@ audio kept the same sample count. Counts move by a few percent run to run (the
 same binary twice gave 4,325 and 4,320 messages on one archive, and 1,075 and
 1,039 on another), so only a count that falls to zero, or one that moves as far
 as this title's did, is evidence.
+
+### A listener answering an outlived STOP clears nothing
+
+The same title's `PlayListener` answers STOP with `clearData()`. When it moves
+from its logo sting to its title music it calls `Player.stop`, `putData` and
+`Player.play`, and the STOP of the sting is delivered after the music has
+started, because listener events wait for the next round
+([KTF delivery](#ktf-delivery-and-ownership)). `clearData` closed the clip's
+decoded sound, so the music was cut in the millisecond it began and the title
+screen stayed silent: 1,200 paced ticks recorded 16 note-ons, all within the
+first 1.6 seconds (2026-11-03).
+
+A STOP whose clip is playing, or paused, again by the time it is delivered
+reports a sound the clip has since replaced. On KTF, while a listener answers
+such a STOP, `clearData` on that clip does nothing: the sound the STOP reports
+is gone, and so is the data it played, so the clip keeps its new data and the
+new sound plays on. Anywhere else `clearData` empties the clip and stops its
+sound, as before. A handset that delivered the STOP before `putData` would
+behave the same way. The same run then played the music throughout: 3,250
+MIDI messages and 1,019 note-ons instead of 200 and 16.
+
+Dropping the outlived STOP instead would hide a transition the title asked
+for, and a title can count on seeing it. A first version stopped no playing
+sound on any `clearData`, which would have left music running for a title that
+silences a clip by clearing it. LGT keeps its own clip model, in which every
+fill releases the clip's sound; no LGT title is known to answer STOP this way,
+and the LGT versions of the same series made no sound in 1,200 ticks.
 
 ## A play that returns at once is a busy loop in the game
 
@@ -1545,7 +1624,9 @@ empty media is refused rather than yielding an inert player.
   sample out is the handset's choice, as are short-sample looping and
   same-channel retrigger. A hard cutoff would trim more than a tenth from 5,042
   of the 8,752 local wave triggers, so the natural tail stays until a handset is
-  heard. Stream waves follow their note's velocity
+  heard, and a sound of PCM tracks alone lasts until its samples have played
+  ([PCM-only sound length](#a-sound-of-pcm-tracks-alone-lasts-as-long-as-its-samples)).
+  Stream waves follow their note's velocity
   ([stream wave levels](#stream-wave-levels)); PCM track waves have none, and
   profile-specific mapping needs profile evidence. See [PCM controls](#live-pcm-track-controls)
   and [the census](history/audio.md#pcm-contract-evidence).

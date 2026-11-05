@@ -1903,3 +1903,25 @@ by tests that failed before the change
 (`TestAGuestEndingIsAnEndingRatherThanAFailure`,
 `TestAGuestThatEndedDuringItsStartIsAnEnding`,
 `TestTheAuthenticationACletStartedUnderIsReported`).
+
+## Deflated quick saves, measured and left out (2026-11-03)
+
+Deflating a quick save's two sections was built and measured, and left out:
+it adds time to the quick save itself, and the only gain is disk space.
+
+With `compress/flate` an LGT title's 3,828,867-byte quick save became 353,571
+bytes at the default level and 380,968 at the fastest, and a KTF title's
+2,380,635 became 376,721. Through the synced slot write, the LGT one took a
+median 12 ms to store as it is, 34 ms deflated at the default level (18 ms of
+that deflating) and 25 ms at the fastest (9 ms deflating), over twelve runs on
+a desktop. A whole quick save from the CLI (capture, encode and store), nine
+interleaved runs each, took a median 22 ms (LGT) and 17 ms (KTF) as it is and
+27 ms and 35 ms deflated at the fastest level. A load would inflate twice,
+about 10 ms more, and a phone, where the server also runs, has a slower
+processor. A slot is one file per game, so the gain is a few megabytes per game
+played; the user chose no added delay over the smaller file.
+
+Worth reopening if slot size becomes a problem, on a phone's storage for
+example, or if an encoding cheap enough not to show appears. A deflated slot
+would need a new envelope version that still reads version 3, and an earlier
+build refusing it would leave it in place.

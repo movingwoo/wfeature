@@ -198,6 +198,15 @@
                rather than what they are made of. -->
           <label>{{settings.music}} <input type="range" id="volume-midi" min="0" max="100" value="50" /></label>
           <label>{{settings.effects}} <input type="range" id="volume-pcm" min="0" max="100" value="50" /></label>
+          <!-- Picture against sound (av-sync.js). The page draws a picture
+               when it arrives and plays its sound a little later, and an
+               output the browser cannot see into — a Bluetooth headset —
+               adds more. To the right the picture waits that long for the
+               sound; to the left the sound waits for a picture that reaches
+               the eye late. The line under it says which waits and by how
+               much, and how to start when neither does. -->
+          <label>{{settings.av-sync}} <input type="range" id="av-sync" min="-500" max="1000" step="10" value="0" /></label>
+          <p id="av-sync-value" class="av-sync-value"></p>
           <label>{{settings.quality}}
             <!-- The filters run on the same thread as the emulator and cost more
                  per frame than emulating one does, so the menu says which are

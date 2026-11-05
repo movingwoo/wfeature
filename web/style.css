@@ -948,6 +948,13 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
   display: none;
 }
 
+/* What the picture-and-sound slider is set to, right under it. */
+.av-sync-value {
+  margin: -4px 0 6px;
+  color: #aaa;
+  font-size: 0.85em;
+}
+
 .settings-note {
   margin: 2px 0 8px;
   color: #f0c674;

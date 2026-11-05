@@ -15,8 +15,9 @@ type AudioPlayback struct {
 }
 
 // NextCompletion reports the current score pass's end in the guest clock used
-// by Play and Advance. It neither advances playback nor includes PCM tails;
-// an overdue boundary stays unchanged until the caller advances the score.
+// by Play and Advance. It neither advances playback nor includes PCM tails,
+// except the samples a PCM-only sound's last pass waits for; an overdue
+// boundary stays unchanged until the caller advances the score.
 func (audio *Audio) NextCompletion(handle AudioHandle) (time.Duration, bool) {
 	if audio == nil {
 		return 0, false
@@ -28,7 +29,11 @@ func (audio *Audio) NextCompletion(handle AudioHandle) (time.Duration, bool) {
 		current.startedAt > time.Duration(1<<63-1)-current.length {
 		return 0, false
 	}
-	return current.startedAt + current.length, true
+	pass := current.passLength()
+	if current.cursor >= current.passEvents() {
+		pass = current.length
+	}
+	return current.startedAt + pass, true
 }
 
 // PlayCount starts at the beginning with a finite pass count, or -1 for an

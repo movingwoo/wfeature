@@ -971,3 +971,58 @@ cannot resolve a semitone, and the apparent one-semitone misses there vanish
 above it. Whether the timbres sound like a handset is the remaining question,
 and only listening answers it; renders of four songs are under
 `build/fm-listen/`.
+
+## PCM tracks that end before their samples
+
+On 2026-11-03 internal testing found one KTF title's sound effects ending about
+half a second early, which led to measuring, for every local SMAF sound, how far
+its PCM runs past the end of its event list. The pass decoded each distinct SMAF member of
+the zip and JAR archives under the local KTF, LGT and SKT trees with the
+repository's decoder (6,844, 3,012 and 1,016 distinct files) and compared, for
+each sound with a supported PCM audio track, the latest end of a triggered
+sample (its start plus its decoded length) with the sound's last event.
+
+| | KTF | LGT | SKT |
+| --- | ---: | ---: | ---: |
+| Sounds with a PCM track | 3,324 | 845 | 512 |
+| PCM only / with a score track too | 3,150 / 174 | 836 / 9 | 484 / 28 |
+| PCM-only sounds whose sample runs past the end | 1,637 | 535 | 272 |
+| … by 201–600 ms | 1,618 | 534 | 266 |
+| With a score track, sample past the end | 8 | 0 | 4 |
+
+Where a sample runs past the end, it does so by 507 ms at the median and 509 ms
+at the ninetieth percentile, on all three carriers. That title's 38 sounds
+include 11 that end 505–508 ms before their samples do. A constant
+half second across carriers and publishers points to an authoring tool that
+ends the sequence a fixed time before the sample, not to a decoding error: a
+wrong sampling rate would scale with the sample's length rather than add a
+constant. The part past the end is sound. Of the 2,409 sounds whose sample runs
+more than 200 ms past the end, 20 are near silence there (peak below 1,000);
+the median power past the end is 0.50, 0.49 and 0.42 of the power before it on
+KTF, LGT and SKT, and the median peak past the end is about 26,000 of 32,767.
+
+What changed. A sound made only of PCM tracks now ends at its last sample's
+end when that is after its sequences, so its length, completion notification,
+one-shot stop and repeat point follow what it plays. The specification's
+playback guideline recommends muting at the sequence end
+([contract evidence](#pcm-contract-evidence)); a player that did so would cut
+the last half second of thousands of effects on every handset, which is why the
+sample is played out and the length follows it. Whether a handset reports
+completion at the sequence end or after the sample is still unknown. A sound
+with a score keeps the score's end, because that is where a looping piece
+starts again: the twelve in the table's last row have a PCM sample past it,
+and 161 KTF, 243 LGT and 1 SKT sounds a stream wave. A first version extended
+every PCM track's end, and an authored SKT test that loops a 400 ms score over
+a ten-second sample caught the moved repeat point; the rule was narrowed to
+sounds without a score. A review then pointed out that a looping PCM-only
+effect would still restart half a second later each pass, a quarter slower for
+a two-second loop, so its end is now marked and a repeat starts again where the
+sequences end; only the last pass waits for the samples.
+
+Validation: authored decoder tests for a sample longer and shorter than its
+sequence and for a missing wave; the PCM control timelines whose expected end
+moved to their sample's; and 500 ticks of each of the 89 archives in the local
+KTF, LGT and SKT trees with and without the change. Every KTF and LGT screen
+digest and exit state is the same; the six SKT archives that differ also differ
+between three runs of the unchanged build, whose SKT runs are paced by the wall
+clock. The census program is under `build/_atr-length/`.

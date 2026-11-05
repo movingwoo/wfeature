@@ -253,7 +253,7 @@ func NewAudioFromStateWithClock(saved AudioState, sink AudioSink, now func() tim
 		if err != nil {
 			return nil, err
 		}
-		current := &sound{handle: record.Handle, volume: record.Volume, muted: record.Muted, transient: record.Transient, events: cloneAudioEvents(record.Events), resources: resources, length: record.Length, playing: record.Playing,
+		current := &sound{handle: record.Handle, volume: record.Volume, muted: record.Muted, transient: record.Transient, events: cloneAudioEvents(record.Events), resources: resources, length: record.Length, loop: soundLoop(record.Events, record.Length), playing: record.Playing,
 			repeat: record.Repeat, paused: record.Paused, pausedAt: record.PausedAt, remaining: record.Remaining, completed: record.Completed, position: record.Position, startedAt: record.StartedAt, cursor: record.Cursor, usedChannels: record.UsedChannels}
 		for _, note := range record.ActiveNotes {
 			current.activeNotes = append(current.activeNotes, activeNote{channel: note.Channel, note: note.Note})

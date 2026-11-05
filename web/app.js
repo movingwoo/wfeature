@@ -1,6 +1,7 @@
 import { capturing, clearLog, recordEvent, saveReport, stopLogCapture, subscribeLog } from "./debug-log.js";
 import { PageAudio } from "./audio.js";
 import { initAudioSettings } from "./audio-settings.js";
+import { AV_SYNC_MAX, AV_SYNC_MIN, AV_SYNC_STEP, DelayedPictures, pictureDelay, rememberAVSync, soundDelay, storedAVSync } from "./av-sync.js";
 import { createRapidFire, RAPID_FIRE } from "./rapid-fire.js";
 import { createKeyHolds } from "./key-holds.js";
 import { createGameSpeed } from "./game-speed.js";
@@ -773,7 +774,16 @@ let pendingPicture = null;
 let pendingScale = 1;
 let pendingDirty = null;
 let drawScheduled = false;
+// A picture held back to meet late sound is a copy, shown on the animation
+// frame it falls due, so it goes to the magnifier directly (av-sync.js).
+const heldPictures = new DelayedPictures({
+  show: (picture, { scale, dirty }) => magnifier.present(canvasContext, picture, scale, dirty),
+});
 const drawFrame = (picture, { scale = 1, dirty = null } = {}) => {
+  if (heldPictures.delay > 0) {
+    heldPictures.push(picture, { scale, dirty });
+    return;
+  }
   pendingDirty = pendingPicture ? unionRect(pendingDirty, dirty) : dirty;
   pendingPicture = picture;
   pendingScale = scale;
@@ -807,6 +817,7 @@ const openSession = async handlers => {
       textInputDialog.close();
       pendingPicture = null;
       pendingDirty = null;
+      heldPictures.reset();
       magnifier.reset();
       canvasContext.clearRect(0, 0, canvas.width, canvas.height);
       resetCheatPanel();
@@ -829,6 +840,7 @@ const sessionStateChanged = state => {
     vibration.stop();
     pageAudio?.stopAll();
     pendingPicture = null;
+    heldPictures.reset();
     pendingDirty = null;
     magnifier.reset();
     refreshScreenSetting();
@@ -1267,6 +1279,37 @@ const initSettings = () => {
   // The sliders trade the music against the sound effects. Their module
   // restores the browser's values before the lazy audio graph is created.
   initAudioSettings({ document, audio: pageAudio, storage: localStore });
+
+  // Picture against sound: one setting, held for this browser, since what it
+  // makes up for is the browser's output — a headset, a display — rather
+  // than any game. The slider's label says which of the two waits and how
+  // long while it moves; the delay itself changes when it is let go, because
+  // a sound delay rebuilds the sound that is playing.
+  const avSync = document.getElementById("av-sync");
+  const avSyncValue = document.getElementById("av-sync-value");
+  const describeAVSync = value => {
+    if (!avSyncValue) return;
+    if (value > 0) avSyncValue.textContent = phrase("settings.av-sync.picture", { ms: value });
+    else if (value < 0) avSyncValue.textContent = phrase("settings.av-sync.sound", { ms: -value });
+    else avSyncValue.textContent = phrase("settings.av-sync.none");
+  };
+  const applyAVSync = value => {
+    heldPictures.setDelay(pictureDelay(value));
+    pageAudio?.setExtraDelay(soundDelay(value));
+    describeAVSync(value);
+  };
+  if (avSync) {
+    avSync.min = String(AV_SYNC_MIN);
+    avSync.max = String(AV_SYNC_MAX);
+    avSync.step = String(AV_SYNC_STEP);
+    avSync.value = String(storedAVSync(localStore));
+    avSync.addEventListener("input", () => describeAVSync(Number(avSync.value)));
+    avSync.addEventListener("change", () => {
+      rememberAVSync(avSync.value, localStore);
+      applyAVSync(Number(avSync.value));
+    });
+  }
+  applyAVSync(storedAVSync(localStore));
 
   // The magnification filter costs real time per presented frame, so the
   // choice is the user's and it is remembered.
