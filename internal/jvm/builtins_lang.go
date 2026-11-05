@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -37,14 +38,32 @@ func (vm *VM) registerLanguageBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		if vm.config.Logger != nil {
-			vm.config.Logger.Debug("guest requested exit", "status", status)
-		}
-		if vm.config.Exit == nil {
-			return VoidValue(), fmt.Errorf("System.exit(%d) with no platform shutdown installed", status)
-		}
-		return VoidValue(), vm.config.Exit(status)
+		return VoidValue(), vm.guestExit("System.exit", status)
 	})
+	// Runtime.exit is what System.exit calls in the class library, so it ends
+	// a session exactly as System.exit does on each platform: through the
+	// teardown the platform installed, or with the same refusal where none is.
+	vm.builtin(RuntimeClass, "exit", "(I)V", func(vm *VM, arguments []Value) (Value, error) {
+		if _, err := requireObject(arguments, 0); err != nil {
+			return VoidValue(), err
+		}
+		status, err := nativeInt(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return VoidValue(), vm.guestExit("Runtime.exit", status)
+	})
+}
+
+// guestExit is the title ending itself with a status, through Options.Exit.
+func (vm *VM) guestExit(caller string, status int32) error {
+	if vm.config.Logger != nil {
+		vm.config.Logger.Debug("guest requested exit", "call", caller, "status", status)
+	}
+	if vm.config.Exit == nil {
+		return fmt.Errorf("%s(%d) with no platform shutdown installed", caller, status)
+	}
+	return vm.config.Exit(status)
 }
 
 // mainThreadObject is the Thread the execution that is not a guest thread
@@ -660,6 +679,154 @@ func (vm *VM) registerRuntimeBuiltins() {
 		}
 		return ReferenceValue(vm.classObject(internal)), nil
 	})
+	// Class.newInstance is what a title that named a class in a string does
+	// next: it makes the object. It runs on the caller's execution, so the
+	// constructor is the caller's own code underneath it, as every other
+	// library callback here is.
+	vm.contextBuiltin(ClassClass, "newInstance", "()Ljava/lang/Object;", func(vm *VM, state *execution, arguments []Value) (Value, error) {
+		name, err := classObjectName(arguments)
+		if err != nil {
+			return VoidValue(), err
+		}
+		object, err := vm.newInstance(state, name)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return ReferenceValue(object), nil
+	})
+}
+
+const (
+	instantiationExceptionClass = "java/lang/InstantiationException"
+	illegalAccessExceptionClass = "java/lang/IllegalAccessException"
+)
+
+// newInstance makes an object of the class named and runs the class's own
+// no-argument constructor, refusing what CLDC 1.1 refuses: an array class, an
+// interface or an abstract class, and a class with no `<init>()V` of its own,
+// with InstantiationException; a class or constructor the caller may not
+// reach, with IllegalAccessException. An exception the constructor throws
+// reaches the caller as itself.
+//
+// A class the VM loads — the library's own and every class file — is
+// constructed here. A class that exists only as AOT metadata is a title's own
+// on a platform that compiled it, whose constructor is the platform's code; it
+// is checked against that metadata and made by the platform's AOTConstructor,
+// or through the AOT invoker when none is installed.
+func (vm *VM) newInstance(state *execution, name string) (*Object, error) {
+	call := &Invocation{vm: vm, state: state}
+	if strings.HasPrefix(name, "[") {
+		return nil, guestException(instantiationExceptionClass, javaClassName(name)+" is an array class")
+	}
+	caller := callerClassName(state)
+	// Object has no declaration behind it to read, and it is public with a
+	// public constructor.
+	if name == ObjectClass {
+		return call.NewObject(ObjectClass, "()V")
+	}
+	if class, err := vm.loader.Load(name); err == nil {
+		constructor := class.FindMethod("<init>", "()V")
+		var flags uint16
+		if constructor != nil {
+			flags = constructor.AccessFlags
+		}
+		if err := instantiable(name, class.AccessFlags, constructor != nil, flags, caller); err != nil {
+			return nil, err
+		}
+		return call.NewObject(name, "()V")
+	}
+	metadata, ok := vm.AOTClass(name)
+	if !ok {
+		return nil, fmt.Errorf("Class.newInstance of %s, which this VM neither loads nor has as AOT metadata", name)
+	}
+	var constructor *AOTMethodMetadata
+	for index := range metadata.Methods {
+		method := &metadata.Methods[index]
+		if method.Name == "<init>" && method.Descriptor == "()V" && method.AccessFlags&AccessStatic == 0 {
+			constructor = method
+			break
+		}
+	}
+	var flags uint16
+	if constructor != nil {
+		flags = constructor.AccessFlags
+	}
+	if err := instantiable(name, metadata.AccessFlags, constructor != nil, flags, caller); err != nil {
+		return nil, err
+	}
+	vm.mu.RLock()
+	construct := vm.aotConstructor
+	vm.mu.RUnlock()
+	if construct != nil {
+		return construct(call, metadata)
+	}
+	object, err := vm.NewAOTInstance(metadata.Address)
+	if err != nil {
+		return nil, err
+	}
+	_, handled, err := vm.invokeAOTFallback(state, name, "<init>", "()V", []Value{ReferenceValue(object)})
+	if !handled {
+		return nil, fmt.Errorf("Class.newInstance of %s, whose constructor no platform here runs", name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return object, nil
+}
+
+// instantiable is CLDC's two refusals: what cannot be instantiated first, then
+// what may not be reached. Access is the language's: a public class or one in
+// the caller's package, and a constructor that is public, the caller's own
+// class's when private, or in the caller's package otherwise — protected
+// included, since a constructor reached through newInstance is called on no
+// subclass's behalf.
+//
+// The caller is the class whose method is running, and a call from code this
+// VM does not interpret — a platform's compiled title — has none to read. It
+// is taken to be another class of the same package, the shape of a title's own
+// code calling into its own classes: a private constructor is refused and the
+// rest are reachable.
+func instantiable(name string, classFlags uint16, hasConstructor bool, constructorFlags uint16, caller string) error {
+	dotted := javaClassName(name)
+	if classFlags&(AccessInterface|AccessAbstract) != 0 {
+		return guestException(instantiationExceptionClass, dotted+" is an interface or an abstract class")
+	}
+	if !hasConstructor {
+		return guestException(instantiationExceptionClass, dotted+" declares no constructor without arguments")
+	}
+	if classFlags&AccessPublic == 0 && caller != "" && !samePackage(caller, name) {
+		return guestException(illegalAccessExceptionClass, dotted+" is not public")
+	}
+	switch {
+	case constructorFlags&AccessPublic != 0:
+	case constructorFlags&AccessPrivate != 0:
+		if caller != name {
+			return guestException(illegalAccessExceptionClass, dotted+"() is private")
+		}
+	case caller != "" && !samePackage(caller, name):
+		return guestException(illegalAccessExceptionClass, dotted+"() is not visible outside its package")
+	}
+	return nil
+}
+
+// callerClassName is the class of the bytecode method a native was called
+// from, or nothing when the call did not come from interpreted code.
+func callerClassName(state *execution) string {
+	if state == nil || state.topFrame == nil || state.topFrame.class == nil {
+		return ""
+	}
+	return state.topFrame.class.Name
+}
+
+// samePackage reports whether two internal class names are in one package.
+func samePackage(left, right string) bool {
+	packageOf := func(name string) string {
+		if index := strings.LastIndexByte(name, '/'); index >= 0 {
+			return name[:index]
+		}
+		return ""
+	}
+	return packageOf(left) == packageOf(right)
 }
 
 // classForNameExists answers Class.forName's only question. A name reaches it
@@ -719,6 +886,78 @@ const (
 // registerStringExtraBuiltins is the text surface a local title reached and
 // this runtime did not have.
 func (vm *VM) registerStringExtraBuiltins() {
+	// regionMatches compares len units of the receiver from toffset with len
+	// units of other from ooffset. It is the class library's own test: a run
+	// that does not fit inside its string is false rather than a failure, a
+	// length of zero or less matches, and a null other is the
+	// NullPointerException the call dereferences it into. Ignoring case is
+	// Character's mapping — ISO Latin-1, which is all CLDC's Character maps —
+	// asked twice: equal once both are upper case, or once those are lower
+	// case again. LGT answers the same (internal/platform/lgt).
+	vm.builtin(StringClass, "regionMatches", "(ZILjava/lang/String;II)Z", func(_ *VM, arguments []Value) (Value, error) {
+		units, err := stringUnits(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		ignoreCase, err := nativeInt(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		from, err := nativeInt(arguments, 2)
+		if err != nil {
+			return VoidValue(), err
+		}
+		other, err := stringUnits(arguments, 3)
+		if err != nil {
+			return VoidValue(), err
+		}
+		otherFrom, err := nativeInt(arguments, 4)
+		if err != nil {
+			return VoidValue(), err
+		}
+		length, err := nativeInt(arguments, 5)
+		if err != nil {
+			return VoidValue(), err
+		}
+		if otherFrom < 0 || from < 0 || int64(from) > int64(len(units))-int64(length) ||
+			int64(otherFrom) > int64(len(other))-int64(length) {
+			return IntValue(0), nil
+		}
+		for index := int32(0); index < length; index++ {
+			if !unitsMatch(units[from+index], other[otherFrom+index], ignoreCase != 0) {
+				return IntValue(0), nil
+			}
+		}
+		return IntValue(1), nil
+	})
+	// startsWith(prefix, toffset) is the prefix test at an index rather than
+	// at the start. An index outside the string, or one the prefix would run
+	// past the end from, is false; a null prefix is a NullPointerException.
+	vm.builtin(StringClass, "startsWith", "(Ljava/lang/String;I)Z", func(_ *VM, arguments []Value) (Value, error) {
+		units, err := stringUnits(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		prefix, err := stringUnits(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		at, err := nativeInt(arguments, 2)
+		if err != nil {
+			return VoidValue(), err
+		}
+		if at < 0 || int64(at) > int64(len(units))-int64(len(prefix)) {
+			return IntValue(0), nil
+		}
+		return booleanValue(slices.Equal(units[at:int(at)+len(prefix)], prefix)), nil
+	})
+	vm.builtin(StringClass, "valueOf", "(Z)Ljava/lang/String;", func(_ *VM, arguments []Value) (Value, error) {
+		value, err := nativeInt(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return vm.stringResult(strconv.FormatBool(value != 0))
+	})
 	vm.builtin(StringClass, "indexOf", "(II)I", func(_ *VM, arguments []Value) (Value, error) {
 		units, err := stringUnits(arguments, 0)
 		if err != nil {
@@ -968,6 +1207,20 @@ func stringUnits(arguments []Value, index int) ([]uint16, error) {
 		return nil, err
 	}
 	return utf16.Encode([]rune(value)), nil
+}
+
+// unitsMatch is the comparison regionMatches makes of one pair of units: the
+// same unit, or with case ignored the same once both are upper case, or once
+// those are lower case again, as Character maps them.
+func unitsMatch(left, right uint16, ignoreCase bool) bool {
+	if left == right {
+		return true
+	}
+	if !ignoreCase {
+		return false
+	}
+	upperLeft, upperRight := latin1Upper(rune(left)), latin1Upper(rune(right))
+	return upperLeft == upperRight || latin1Lower(upperLeft) == latin1Lower(upperRight)
 }
 
 // charArrayString reads a range of a char array as text.

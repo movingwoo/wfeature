@@ -1,6 +1,10 @@
 package jvm
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+	"strings"
+)
 
 // The java/util half of the core library: the two collections and the
 // generator CLDC has. Vector and Hashtable declare nearly every method
@@ -45,8 +49,115 @@ func vectorDefinition() ClassDefinition {
 			// would use an index — the interface is what CLDC gives it and a
 			// Hashtable already hands out the same view over the same class.
 			{Name: "elements", Descriptor: "()Ljava/util/Enumeration;", Access: sync, Body: vectorElements},
+			// The two searches from an index, and the text a vector makes of
+			// itself, which is what String.valueOf and an append of it answer.
+			{Name: "indexOf", Descriptor: "(Ljava/lang/Object;I)I", Access: sync, Body: vectorIndexOfFrom},
+			{Name: "lastIndexOf", Descriptor: "(Ljava/lang/Object;I)I", Access: sync, Body: vectorLastIndexOfFrom},
+			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: sync, Body: vectorToString},
 		},
 	}
+}
+
+// vectorIndexOfFrom is indexOf(elem, index): where the first element at or
+// after index that elem equals sits, or -1. Equal is the argument's own
+// equals, null finding a null element, as in indexOf(elem). A negative index
+// is the ArrayIndexOutOfBoundsException the class library's loop runs into
+// before it compares anything; one at or past the size finds nothing. LGT
+// answers the same (internal/platform/lgt).
+func vectorIndexOfFrom(call *Invocation, arguments []Value) (Value, error) {
+	vector, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	from, err := nativeInt(arguments, 2)
+	if err != nil {
+		return VoidValue(), err
+	}
+	elements, size, err := vectorState(call.vm, vector)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if from < 0 {
+		return VoidValue(), guestException("java/lang/ArrayIndexOutOfBoundsException",
+			fmt.Sprintf("indexOf from %d", from))
+	}
+	for index := from; index < size; index++ {
+		equal, err := vectorElementEquals(call, elements, index, arguments[1])
+		if err != nil {
+			return VoidValue(), err
+		}
+		if equal {
+			return IntValue(index), nil
+		}
+	}
+	return IntValue(-1), nil
+}
+
+// vectorLastIndexOfFrom is lastIndexOf(elem, index): the same search backwards
+// from index. An index at or past the size is the IndexOutOfBoundsException the
+// class library throws, and a negative one finds nothing.
+func vectorLastIndexOfFrom(call *Invocation, arguments []Value) (Value, error) {
+	vector, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	from, err := nativeInt(arguments, 2)
+	if err != nil {
+		return VoidValue(), err
+	}
+	elements, size, err := vectorState(call.vm, vector)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if from >= size {
+		return VoidValue(), guestException("java/lang/IndexOutOfBoundsException",
+			fmt.Sprintf("%d >= %d", from, size))
+	}
+	for index := from; index >= 0; index-- {
+		equal, err := vectorElementEquals(call, elements, index, arguments[1])
+		if err != nil {
+			return VoidValue(), err
+		}
+		if equal {
+			return IntValue(index), nil
+		}
+	}
+	return IntValue(-1), nil
+}
+
+// vectorToString is `[a, b, c]`: every element's own text, between brackets
+// and after commas, in index order, as the class library writes it. The
+// elements are read before any is asked for its text, so a toString that
+// edits the vector changes what the next call sees and not this one.
+func vectorToString(call *Invocation, arguments []Value) (Value, error) {
+	vector, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	elements, size, err := vectorState(call.vm, vector)
+	if err != nil {
+		return VoidValue(), err
+	}
+	snapshot, err := elements.LoadRange(0, int(size))
+	if err != nil {
+		return VoidValue(), err
+	}
+	text := call.newContainerText(VectorClass)
+	if err := text.open('['); err != nil {
+		return VoidValue(), err
+	}
+	defer text.close()
+	for index, element := range snapshot {
+		if index > 0 {
+			if err := text.write(", "); err != nil {
+				return VoidValue(), err
+			}
+		}
+		if err := text.element(element); err != nil {
+			return VoidValue(), err
+		}
+	}
+	return text.result(']')
 }
 
 // vectorElements is `elements()`: a view over what the vector holds now. It is
@@ -78,6 +189,111 @@ func vectorElements(call *Invocation, arguments []Value) (Value, error) {
 		return VoidValue(), err
 	}
 	return ReferenceValue(view), nil
+}
+
+// maxContainerTextNesting bounds how deeply Vector and Hashtable toStrings nest
+// on one execution. A vector that holds itself, or two tables that hold each
+// other, ask their own toString for ever, and every step of that is Go stack
+// rather than guest stack: the class library would run out of stack, and here
+// the depth is counted and the call refused, which ends the session the way
+// running out of frames does. 256 is far past a structure a title builds — a
+// table of vectors of tables — and is the bound LGT holds the same calls to
+// (internal/platform/lgt).
+const maxContainerTextNesting = 256
+
+// containerText is the text a Vector or Hashtable makes of itself, built
+// while that container is counted on its execution's nesting.
+type containerText struct {
+	call    *Invocation
+	class   string
+	builder strings.Builder
+	units   int
+	entered bool
+}
+
+func (call *Invocation) newContainerText(class string) *containerText {
+	return &containerText{call: call, class: class}
+}
+
+// open counts the container and starts its text, or refuses a nesting past
+// maxContainerTextNesting. A text that opened is closed by its caller.
+func (text *containerText) open(bracket byte) error {
+	state := text.call.state
+	if state.containerTexts >= maxContainerTextNesting {
+		return fmt.Errorf("%s.toString nested %d calls deep, past the stack the class library would have",
+			javaClassName(text.class), state.containerTexts)
+	}
+	state.containerTexts++
+	text.entered = true
+	return text.write(string(bracket))
+}
+
+func (text *containerText) close() {
+	if text.entered {
+		text.call.state.containerTexts--
+		text.entered = false
+	}
+}
+
+// write adds a piece of text. A String is no longer than an array can be, so
+// text past that is the OutOfMemoryError the class library's buffer would
+// have raised growing to hold it, before the host holds it all.
+func (text *containerText) write(piece string) error {
+	for _, character := range piece {
+		text.units++
+		if character > 0xffff {
+			text.units++
+		}
+	}
+	if text.units > text.call.vm.config.MaxArrayLength {
+		return guestException("java/lang/OutOfMemoryError",
+			fmt.Sprintf("the text of a %s is longer than a String can be", javaClassName(text.class)))
+	}
+	text.builder.WriteString(piece)
+	return nil
+}
+
+// element adds what one element's text is: "null" for null, a String's own
+// text, and otherwise what the element's own toString answers, asked as a
+// virtual call so that a title's class answers for itself — on a platform that
+// compiled the title, through the title's own code — and "null" when that
+// answers null. It is String.valueOf of the element, which is what the class
+// library appends.
+func (text *containerText) element(value Value) error {
+	object, err := value.Reference()
+	if err != nil {
+		return err
+	}
+	if object == nil {
+		return text.write("null")
+	}
+	if held, ok := nativeStringObject(object); ok {
+		return text.write(held)
+	}
+	result, err := text.call.InvokeVirtual(object, "toString", "()Ljava/lang/String;")
+	if err != nil {
+		return err
+	}
+	answer, err := result.Reference()
+	if err != nil {
+		return err
+	}
+	if answer == nil {
+		return text.write("null")
+	}
+	held, ok := nativeStringObject(answer)
+	if !ok {
+		return fmt.Errorf("%s.toString answered a %s", object.ClassName, answer.ClassName)
+	}
+	return text.write(held)
+}
+
+// result closes the text with its bracket and answers it as a String.
+func (text *containerText) result(bracket byte) (Value, error) {
+	if err := text.write(string(bracket)); err != nil {
+		return VoidValue(), err
+	}
+	return text.call.vm.stringResult(text.builder.String())
 }
 
 // objectArrayType is the component type of the two arrays these collections
@@ -662,8 +878,128 @@ func hashtableDefinition() ClassDefinition {
 			{Name: "clear", Descriptor: "()V", Access: sync, Body: hashtableClear},
 			{Name: "keys", Descriptor: "()Ljava/util/Enumeration;", Access: sync, Body: hashtableView("keys")},
 			{Name: "elements", Descriptor: "()Ljava/util/Enumeration;", Access: sync, Body: hashtableView("values")},
+			// The search by value, the growth a subclass may ask for, and the
+			// text a table makes of itself.
+			{Name: "contains", Descriptor: "(Ljava/lang/Object;)Z", Access: sync, Body: hashtableContains},
+			{Name: "rehash", Descriptor: "()V", Access: AccessProtected, Body: hashtableRehash},
+			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: sync, Body: hashtableToString},
 		},
 	}
+}
+
+// hashtableContains is contains(value): whether any entry's value equals the
+// argument, asked of each value the table holds — `value.equals(argument)`, as
+// the class library asks it — in the order elements() hands them out. A null
+// argument is the NullPointerException the class library throws. The values
+// are read before any is asked, so an equals that edits the table does not
+// move the walk.
+func hashtableContains(call *Invocation, arguments []Value) (Value, error) {
+	table, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	wanted, err := nativeReference(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if wanted == nil {
+		return VoidValue(), guestException("java/lang/NullPointerException", "Hashtable.contains(null)")
+	}
+	_, values, size, err := hashtableState(call.vm, table)
+	if err != nil {
+		return VoidValue(), err
+	}
+	snapshot, err := values.LoadRange(0, int(size))
+	if err != nil {
+		return VoidValue(), err
+	}
+	for _, value := range snapshot {
+		stored, err := value.Reference()
+		if err != nil {
+			return VoidValue(), err
+		}
+		if stored == nil {
+			continue
+		}
+		result, err := call.InvokeVirtual(stored, "equals", "(Ljava/lang/Object;)Z", ReferenceValue(wanted))
+		if err != nil {
+			return VoidValue(), err
+		}
+		equal, err := result.Int32()
+		if err != nil {
+			return VoidValue(), err
+		}
+		if equal != 0 {
+			return IntValue(1), nil
+		}
+	}
+	return IntValue(0), nil
+}
+
+// hashtableRehash is rehash(), which the class library declares protected for
+// a subclass to call: the contents moved into a table of larger capacity. This
+// table is two arrays searched in order rather than buckets, so what it does
+// is what an automatic growth does — both arrays become 2n + 1 long, the n the
+// length they had — and the entries keep their places: keys() and elements()
+// enumerate as they did before. The capacity is nothing a title can read, so
+// the only difference a call makes is the memory it takes, refused with
+// OutOfMemoryError as any other growth is.
+func hashtableRehash(call *Invocation, arguments []Value) (Value, error) {
+	table, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	keys, _, size, err := hashtableState(call.vm, table)
+	if err != nil {
+		return VoidValue(), err
+	}
+	_, _, err = resizeHashtable(call, table, size, int64(keys.Length())*2+1)
+	return VoidValue(), err
+}
+
+// hashtableToString is `{key=value, key2=value2}`: each entry's key text and
+// value text, joined by an equals sign, in the order keys() and elements()
+// hand them out, as the class library writes it — the key's text asked before
+// its value's. The entries are read before any is asked for its text.
+func hashtableToString(call *Invocation, arguments []Value) (Value, error) {
+	table, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	keys, values, size, err := hashtableState(call.vm, table)
+	if err != nil {
+		return VoidValue(), err
+	}
+	keySnapshot, err := keys.LoadRange(0, int(size))
+	if err != nil {
+		return VoidValue(), err
+	}
+	valueSnapshot, err := values.LoadRange(0, int(size))
+	if err != nil {
+		return VoidValue(), err
+	}
+	text := call.newContainerText(HashtableClass)
+	if err := text.open('{'); err != nil {
+		return VoidValue(), err
+	}
+	defer text.close()
+	for index := range keySnapshot {
+		if index > 0 {
+			if err := text.write(", "); err != nil {
+				return VoidValue(), err
+			}
+		}
+		if err := text.element(keySnapshot[index]); err != nil {
+			return VoidValue(), err
+		}
+		if err := text.write("="); err != nil {
+			return VoidValue(), err
+		}
+		if err := text.element(valueSnapshot[index]); err != nil {
+			return VoidValue(), err
+		}
+	}
+	return text.result('}')
 }
 
 func hashtableSize(call *Invocation, arguments []Value) (Value, error) {
@@ -1036,7 +1372,18 @@ func growHashtable(call *Invocation, table *Object, size int32) (*Array, *Array,
 	if int(size) < keys.Length() {
 		return keys, values, nil
 	}
-	capacity := int32(keys.Length())*2 + 1
+	return resizeHashtable(call, table, size, int64(keys.Length())*2+1)
+}
+
+// resizeHashtable moves the first size entries into two arrays of the given
+// length, made before either is stored. A length past what an array may be is
+// refused by the array it would have made.
+func resizeHashtable(call *Invocation, table *Object, size int32, length int64) (*Array, *Array, error) {
+	keys, values, _, err := hashtableState(call.vm, table)
+	if err != nil {
+		return nil, nil, err
+	}
+	capacity := int32(min(length, math.MaxInt32))
 	var made [2]*Object
 	for index := range made {
 		if made[index], err = call.vm.newArray(objectArrayType, capacity); err != nil {

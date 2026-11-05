@@ -1,6 +1,7 @@
 package jvm
 
 import (
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -321,6 +322,398 @@ func TestVectorAndHashtableKeepTheirContents(t *testing.T) {
 	}
 	if found, _ := present.Int32(); found != 0 {
 		t.Error("a removed key is still present")
+	}
+}
+
+// containerCall invokes a collection method and answers what it answered.
+func containerCall(t *testing.T, vm *VM, receiver *Object, name, descriptor string, arguments ...Value) Value {
+	t.Helper()
+	result, err := vm.InvokeVirtual(receiver, name, descriptor, arguments...)
+	if err != nil {
+		t.Fatalf("%s.%s%s error = %v", receiver.ClassName, name, descriptor, err)
+	}
+	return result
+}
+
+func textOfContainer(t *testing.T, vm *VM, receiver *Object) string {
+	t.Helper()
+	object, err := containerCall(t, vm, receiver, "toString", "()Ljava/lang/String;").Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := StringText(object)
+	return text
+}
+
+func newVectorOf(t *testing.T, vm *VM, elements ...*Object) *Object {
+	t.Helper()
+	vector, err := vm.NewObject(VectorClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, element := range elements {
+		containerCall(t, vm, vector, "addElement", "(Ljava/lang/Object;)V", ReferenceValue(element))
+	}
+	return vector
+}
+
+func guestExceptionClass(err error) string {
+	var guest *GuestException
+	if errors.As(err, &guest) && guest.Object != nil {
+		return guest.Object.ClassName
+	}
+	return ""
+}
+
+// The searches from an index ask the argument, as the class library's
+// `elem.equals(elementData[i])` does, a null element included, and find a null
+// by identity without asking anything. A negative start to indexOf is the
+// array failure the library's loop runs into before it compares, and a start
+// to lastIndexOf at or past the size is IndexOutOfBoundsException itself.
+func TestVectorSearchesFromAnIndexAskTheArgument(t *testing.T) {
+	vm := New(nil, Options{})
+	var asked []*Object
+	if err := vm.DefineClass(ClassDefinition{Name: "test/Wanted", SuperName: ObjectClass, Access: AccessPublic,
+		Methods: []MethodDefinition{
+			{Name: "<init>", Descriptor: "()V", Access: AccessPublic, Body: emptyConstructor},
+			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: AccessPublic, Body: func(_ *Invocation, arguments []Value) (Value, error) {
+				receiver, _ := arguments[0].Reference()
+				other, _ := arguments[1].Reference()
+				if receiver.ClassName != "test/Wanted" {
+					t.Error("equals was asked of an element rather than of the argument")
+				}
+				asked = append(asked, other)
+				text, _ := StringText(other)
+				return booleanValue(text == "b"), nil
+			}},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	wanted, err := vm.NewObject("test/Wanted", "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b, later := vm.NewString("a"), vm.NewString("b"), vm.NewString("b")
+	vector := newVectorOf(t, vm, a, nil, b, later)
+	search := func(name string, from int32) (int32, error) {
+		result, err := vm.InvokeVirtual(vector, name, "(Ljava/lang/Object;I)I", ReferenceValue(wanted), IntValue(from))
+		if err != nil {
+			return 0, err
+		}
+		return result.Int32()
+	}
+	if got, err := search("indexOf", 1); err != nil || got != 2 || len(asked) != 2 || asked[0] != nil || asked[1] != b {
+		t.Fatalf("indexOf(wanted, 1) = %d, %v, asking about %v", got, err, asked)
+	}
+	asked = nil
+	if got, err := search("lastIndexOf", 2); err != nil || got != 2 || len(asked) != 1 || asked[0] != b {
+		t.Fatalf("lastIndexOf(wanted, 2) = %d, %v, asking about %v", got, err, asked)
+	}
+	asked = nil
+	if got, err := search("lastIndexOf", 1); err != nil || got != -1 || len(asked) != 2 || asked[0] != nil || asked[1] != a {
+		t.Fatalf("lastIndexOf(wanted, 1) = %d, %v, asking about %v", got, err, asked)
+	}
+	for _, probe := range []struct {
+		name string
+		from int32
+		want int32
+	}{{"indexOf", 4, -1}, {"indexOf", math.MaxInt32, -1}, {"lastIndexOf", -1, -1}, {"lastIndexOf", math.MinInt32, -1}} {
+		asked = nil
+		if got, err := search(probe.name, probe.from); err != nil || got != probe.want || len(asked) != 0 {
+			t.Errorf("%s(wanted, %d) = %d, %v, asking about %v", probe.name, probe.from, got, err, asked)
+		}
+	}
+	asked = nil
+	if _, err := search("indexOf", -1); guestExceptionClass(err) != "java/lang/ArrayIndexOutOfBoundsException" || len(asked) != 0 {
+		t.Errorf("indexOf(wanted, -1) = %v, asking about %v, want ArrayIndexOutOfBoundsException first", err, asked)
+	}
+	if _, err := search("lastIndexOf", 4); guestExceptionClass(err) != "java/lang/IndexOutOfBoundsException" {
+		t.Errorf("lastIndexOf(wanted, 4) of 4 = %v, want IndexOutOfBoundsException", err)
+	}
+	for _, probe := range []struct {
+		name string
+		from int32
+		want int32
+	}{{"indexOf", 0, 1}, {"indexOf", 2, -1}, {"lastIndexOf", 3, 1}, {"lastIndexOf", 0, -1}} {
+		result, err := vm.InvokeVirtual(vector, probe.name, "(Ljava/lang/Object;I)I", ReferenceValue(nil), IntValue(probe.from))
+		if got, _ := result.Int32(); err != nil || got != probe.want {
+			t.Errorf("%s(null, %d) = %d, %v, want %d", probe.name, probe.from, got, err, probe.want)
+		}
+	}
+}
+
+// A vector and a table write each element's own text — a String as itself,
+// null as "null", anything else through its own toString, "null" when that
+// answers null — in the order they enumerate: `[a, b]`, `{k=v, k2=v2}`, a
+// key's text asked before its value's. String.valueOf and an append of the
+// container answer the same, since they ask the container's toString now that
+// it has one.
+func TestContainersWriteEachElementsOwnText(t *testing.T) {
+	vm := New(nil, Options{})
+	var told []string
+	if err := vm.DefineClass(ClassDefinition{Name: "test/Told", SuperName: ObjectClass, Access: AccessPublic,
+		Methods: []MethodDefinition{
+			{Name: "<init>", Descriptor: "()V", Access: AccessPublic, Body: emptyConstructor},
+			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: AccessPublic, Body: func(call *Invocation, arguments []Value) (Value, error) {
+				receiver, _ := arguments[0].Reference()
+				label, _ := receiver.Native.(string)
+				told = append(told, label)
+				if label == "silent" {
+					return ReferenceValue(nil), nil
+				}
+				return call.vm.stringResult("<" + label + ">")
+			}},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	newTold := func(label string) *Object {
+		object, err := vm.NewObject("test/Told", "()V")
+		if err != nil {
+			t.Fatal(err)
+		}
+		object.Native = label
+		return object
+	}
+	five, err := vm.NewObject(IntegerClass, "(I)V", IntValue(5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer, err := vm.NewObject(StringBufferClass, "(Ljava/lang/String;)V", ReferenceValue(vm.NewString("sb")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner := newVectorOf(t, vm, vm.NewString("x"))
+	vector := newVectorOf(t, vm, vm.NewString("a"), five, nil, buffer, newTold("silent"), inner, newTold("t"))
+	if got, want := textOfContainer(t, vm, vector), "[a, 5, null, sb, null, [x], <t>]"; got != want {
+		t.Fatalf("Vector.toString() = %q, want %q", got, want)
+	}
+	for _, form := range []string{"valueOf", "append"} {
+		var result Value
+		if form == "valueOf" {
+			result, err = vm.InvokeStatic(StringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;", ReferenceValue(inner))
+		} else {
+			sink, newErr := vm.NewObject(StringBufferClass, "()V")
+			if newErr != nil {
+				t.Fatal(newErr)
+			}
+			containerCall(t, vm, sink, "append", "(Ljava/lang/Object;)Ljava/lang/StringBuffer;", ReferenceValue(inner))
+			result, err = vm.InvokeVirtual(sink, "toString", "()Ljava/lang/String;")
+		}
+		object, _ := result.Reference()
+		if got, _ := StringText(object); err != nil || got != "[x]" {
+			t.Errorf("%s of a vector = %q, %v, want its own text", form, got, err)
+		}
+	}
+	stack, err := vm.NewObject(StackClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	containerCall(t, vm, stack, "push", "(Ljava/lang/Object;)Ljava/lang/Object;", ReferenceValue(vm.NewString("p")))
+	if got := textOfContainer(t, vm, stack); got != "[p]" {
+		t.Fatalf("Stack.toString() = %q, want the vector's text", got)
+	}
+	if got := textOfContainer(t, vm, newVectorOf(t, vm)); got != "[]" {
+		t.Fatalf("an empty vector = %q", got)
+	}
+
+	table, err := vm.NewObject(HashtableClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(key, value *Object) {
+		t.Helper()
+		containerCall(t, vm, table, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", ReferenceValue(key), ReferenceValue(value))
+	}
+	if got := textOfContainer(t, vm, table); got != "{}" {
+		t.Fatalf("an empty table = %q", got)
+	}
+	put(vm.NewString("k1"), vm.NewString("v1"))
+	put(five, inner)
+	put(newTold("key"), newTold("value"))
+	containerCall(t, vm, table, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", ReferenceValue(vm.NewString("k1")))
+	told = nil
+	if got, want := textOfContainer(t, vm, table), "{5=[x], <key>=<value>}"; got != want {
+		t.Fatalf("Hashtable.toString() = %q, want %q", got, want)
+	}
+	if len(told) != 2 || told[0] != "key" || told[1] != "value" {
+		t.Fatalf("the entry's texts were asked in the order %v, want the key's first", told)
+	}
+}
+
+// A vector that holds itself, or two tables that hold each other, ask their
+// own toString for ever. The class library would run out of stack; here the
+// nesting is counted to 256 on the execution, as LGT counts it, and the call
+// past that ends with an error rather than with the Go stack running out under
+// the whole process. Nesting short of it answers, and the count is given back
+// as each call returns, so the same execution formats the next one.
+func TestContainersThatHoldThemselvesStopTheirToString(t *testing.T) {
+	vm := New(nil, Options{})
+	looped := newVectorOf(t, vm, vm.NewString("a"))
+	containerCall(t, vm, looped, "addElement", "(Ljava/lang/Object;)V", ReferenceValue(looped))
+	first, err := vm.NewObject(HashtableClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := vm.NewObject(HashtableClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := ReferenceValue(vm.NewString("k"))
+	containerCall(t, vm, first, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, ReferenceValue(second))
+	containerCall(t, vm, second, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, ReferenceValue(first))
+	for _, container := range []*Object{looped, first} {
+		_, err := vm.InvokeVirtual(container, "toString", "()Ljava/lang/String;")
+		if err == nil || guestExceptionClass(err) != "" || !strings.Contains(err.Error(), "nested 256 calls deep") {
+			t.Errorf("toString of a %s that holds itself = %v, want the nesting stopped", container.ClassName, err)
+		}
+	}
+
+	// 256 vectors one inside the next answer; 257 do not.
+	chain := newVectorOf(t, vm, vm.NewString("x"))
+	for depth := 1; depth < maxContainerTextNesting; depth++ {
+		chain = newVectorOf(t, vm, chain)
+	}
+	want := strings.Repeat("[", maxContainerTextNesting) + "x" + strings.Repeat("]", maxContainerTextNesting)
+	if got := textOfContainer(t, vm, chain); got != want {
+		t.Fatalf("toString of %d nested vectors = %.40q..., want them all", maxContainerTextNesting, got)
+	}
+	if _, err := vm.InvokeVirtual(newVectorOf(t, vm, chain), "toString", "()Ljava/lang/String;"); err == nil || !strings.Contains(err.Error(), "nested") {
+		t.Fatalf("toString of %d nested vectors = %v, want the nesting stopped", maxContainerTextNesting+1, err)
+	}
+
+	plain := newVectorOf(t, vm, vm.NewString("y"))
+	if err := vm.DefineClass(ClassDefinition{Name: "test/Twice", SuperName: ObjectClass, Access: AccessPublic,
+		Methods: []MethodDefinition{{Name: "both", Descriptor: "()Ljava/lang/String;", Access: AccessPublic | AccessStatic, Body: func(call *Invocation, _ []Value) (Value, error) {
+			if _, err := call.InvokeVirtual(looped, "toString", "()Ljava/lang/String;"); err == nil {
+				t.Error("the looped vector answered")
+			}
+			if call.state.containerTexts != 0 {
+				t.Errorf("the refusal left %d containers counted on the execution", call.state.containerTexts)
+			}
+			return call.InvokeVirtual(plain, "toString", "()Ljava/lang/String;")
+		}}}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := vm.InvokeStatic("test/Twice", "both", "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if object, _ := result.Reference(); object == nil {
+		t.Fatal("the execution could not format after a refusal")
+	} else if text, _ := StringText(object); text != "[y]" {
+		t.Fatalf("after a refusal the same execution answered %q", text)
+	}
+}
+
+// A container's text is a String, and a String is no longer than an array may
+// be: past that the text is the OutOfMemoryError the class library's buffer
+// would have raised growing to hold it.
+func TestContainerTextIsBoundedAsAStringIs(t *testing.T) {
+	vm := New(nil, Options{MaxArrayLength: 16})
+	word := vm.NewString("0123456789")
+	if got := textOfContainer(t, vm, newVectorOf(t, vm, word)); got != "[0123456789]" {
+		t.Fatalf("a short vector = %q", got)
+	}
+	if _, err := vm.InvokeVirtual(newVectorOf(t, vm, word, word), "toString", "()Ljava/lang/String;"); !vm.IsGuestException(err, "java/lang/OutOfMemoryError") {
+		t.Fatalf("a vector whose text is longer than an array = %v, want OutOfMemoryError", err)
+	}
+}
+
+// contains asks each value the table holds whether it equals the argument —
+// the stored value asked, as the class library asks it — in the order
+// elements() hands them out, and stops at the first that does. A null argument
+// is NullPointerException before anything is asked.
+func TestHashtableContainsAsksEachValueInOrder(t *testing.T) {
+	vm := New(nil, Options{})
+	var asked []string
+	var argument *Object
+	if err := vm.DefineClass(ClassDefinition{Name: "test/Stored", SuperName: ObjectClass, Access: AccessPublic,
+		Methods: []MethodDefinition{
+			{Name: "<init>", Descriptor: "()V", Access: AccessPublic, Body: emptyConstructor},
+			{Name: "equals", Descriptor: "(Ljava/lang/Object;)Z", Access: AccessPublic, Body: func(_ *Invocation, arguments []Value) (Value, error) {
+				receiver, _ := arguments[0].Reference()
+				other, _ := arguments[1].Reference()
+				label, _ := receiver.Native.(string)
+				asked = append(asked, label)
+				if other != argument {
+					t.Error("a value was asked about something other than the argument")
+				}
+				return booleanValue(label == "2"), nil
+			}},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	table, err := vm.NewObject(HashtableClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, label := range []string{"1", "2", "3"} {
+		value, err := vm.NewObject("test/Stored", "()V")
+		if err != nil {
+			t.Fatal(err)
+		}
+		value.Native = label
+		containerCall(t, vm, table, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+			ReferenceValue(vm.NewString(strings.Repeat("k", index+1))), ReferenceValue(value))
+	}
+	argument = vm.NewString("anything")
+	if got := containerCall(t, vm, table, "contains", "(Ljava/lang/Object;)Z", ReferenceValue(argument)); got != IntValue(1) {
+		t.Fatalf("contains = %v, want true", got)
+	}
+	if len(asked) != 2 || asked[0] != "1" || asked[1] != "2" {
+		t.Fatalf("the values were asked in the order %v, want 1 then 2 and no further", asked)
+	}
+	asked = nil
+	if _, err := vm.InvokeVirtual(table, "contains", "(Ljava/lang/Object;)Z", ReferenceValue(nil)); guestExceptionClass(err) != "java/lang/NullPointerException" || len(asked) != 0 {
+		t.Fatalf("contains(null) = %v, asking %v, want NullPointerException first", err, asked)
+	}
+	plain, err := vm.NewObject(HashtableClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	containerCall(t, vm, plain, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+		ReferenceValue(vm.NewString("key")), ReferenceValue(vm.NewString("value")))
+	for text, want := range map[string]int32{"value": 1, "key": 0} {
+		if got := containerCall(t, vm, plain, "contains", "(Ljava/lang/Object;)Z", ReferenceValue(vm.NewString(text))); got != IntValue(want) {
+			t.Errorf("contains(%q) = %v, want %d: it searches values, not keys", text, got, want)
+		}
+	}
+}
+
+// rehash, which a subclass may call, moves the contents into arrays of 2n + 1
+// — the growth put makes on its own — and moves no entry: keys() and
+// elements() enumerate as they did, and every lookup answers as it did.
+func TestHashtableRehashGrowsWithoutMovingAnEntry(t *testing.T) {
+	vm := New(nil, Options{})
+	table, err := vm.NewObject(HashtableClass, "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range [][2]string{{"a", "1"}, {"b", "2"}, {"c", "3"}} {
+		containerCall(t, vm, table, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+			ReferenceValue(vm.NewString(pair[0])), ReferenceValue(vm.NewString(pair[1])))
+	}
+	length := func() int {
+		t.Helper()
+		keys, _, _, err := hashtableState(vm, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return keys.Length()
+	}
+	before := length()
+	for _, want := range []int{2*before + 1, 2*(2*before+1) + 1} {
+		containerCall(t, vm, table, "rehash", "()V")
+		if got := length(); got != want {
+			t.Fatalf("after rehash the arrays are %d long, want %d", got, want)
+		}
+		if got := textOfContainer(t, vm, table); got != "{a=1, b=2, c=3}" {
+			t.Fatalf("after rehash the table is %q", got)
+		}
+		value, _ := containerCall(t, vm, table, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", ReferenceValue(vm.NewString("b"))).Reference()
+		if text, _ := StringText(value); text != "2" {
+			t.Fatalf("get(b) after rehash = %q", text)
+		}
 	}
 }
 

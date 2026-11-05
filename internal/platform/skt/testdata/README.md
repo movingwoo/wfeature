@@ -257,3 +257,25 @@ JAR's `META-INF/MANIFEST.MF`.
 | `ui.jar` | `src/UIMIDlet.java` | `UI.MF` | `lcdui_test.go`; recipe in [`lcdui.md`](../../../../docs/lcdui.md) |
 | `skvm.jar` | `src/SKVMMIDlet.java` | `SKVM.MF` | `skt_test.go`; recipe in [SKT history](../../../../docs/history/skt.md#implementation-validation) |
 | `jvm-contracts.jar` | `src/JVMContractsMIDlet.java` | `JVM_CONTRACTS.MF` | `jvm_contracts_test.go` (interpreter and core-library contracts through a MIDlet JAR) |
+
+## Shared class library members
+
+`src/LibraryMembersMIDlet.java`, `library-members.jar` and
+`LIBRARY_MEMBERS.MF` run the authored `LibraryMembers` fixture from
+`internal/jvm/testdata` — the CLDC members this platform's class library
+shares with KTF — from the MIDlet's own `startApp`, under this platform's
+EUC-KR, and leave through `Runtime.exit` (`library_members_test.go`). Compile
+the MIDlet against the generated MIDP signatures and the committed
+`LibraryMembers` classes, and package it with those classes:
+
+```sh
+fixture_dir="$(mktemp -d /tmp/wfeature-library-members.XXXXXX)"
+javac -encoding UTF-8 -source 1.8 -target 1.8 -nowarn -g:none \
+  -classpath "$stub_dir/classes:internal/jvm/testdata" -d "$fixture_dir" \
+  internal/platform/skt/testdata/src/LibraryMembersMIDlet.java
+cp internal/jvm/testdata/LibraryMembers*.class "$fixture_dir"
+jar cfm internal/platform/skt/testdata/library-members.jar \
+  internal/platform/skt/testdata/LIBRARY_MEMBERS.MF -C "$fixture_dir" .
+```
+
+Rebuild the JAR whenever `LibraryMembers.java` is recompiled.

@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
@@ -40,8 +41,60 @@ func runtimeTimerClassDefinition() runtimeJavaClass {
 			// more than a service round, so the two schedule the same way.
 			{class: runtimeTimerClass, name: "scheduleAtFixedRate", descriptor: "(Ljava/util/TimerTask;JJ)V", accessFlags: 0x0001, implementation: runtimeTimerSchedule},
 			{class: runtimeTimerClass, name: "cancel", descriptor: "()V", accessFlags: 0x0001, implementation: runtimeTimerCancel},
+			// The three forms that take a time of day rather than a delay; see
+			// runtimeTimerScheduleAt.
+			{class: runtimeTimerClass, name: "schedule", descriptor: "(Ljava/util/TimerTask;Ljava/util/Date;)V", accessFlags: 0x0001, implementation: runtimeTimerScheduleAt},
+			{class: runtimeTimerClass, name: "schedule", descriptor: "(Ljava/util/TimerTask;Ljava/util/Date;J)V", accessFlags: 0x0001, implementation: runtimeTimerScheduleAt},
+			{class: runtimeTimerClass, name: "scheduleAtFixedRate", descriptor: "(Ljava/util/TimerTask;Ljava/util/Date;J)V", accessFlags: 0x0001, implementation: runtimeTimerScheduleAt},
 		},
 	}
+}
+
+// runtimeTimerScheduleAt serves the schedule forms that name the first run by
+// a Date: the delay forms above, with the delay how far that date lies past
+// the guest's own clock now. A date already gone is a delay of nothing — due
+// as soon as the timer service runs anything, which is what it means to a
+// handset that was off when it passed; the period, when there is one, is the
+// delay forms' own. The date is asked for its time as a call, so a
+// title's own Date answers for itself, and a null task or date is the
+// NullPointerException the call dereferences it into — what SKT answers for
+// these forms (internal/api/midp).
+func runtimeTimerScheduleAt(runtime *initializationRuntime, vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+	if len(arguments) < 3 {
+		return jvm.VoidValue(), fmt.Errorf("Timer.schedule expected receiver, task, and first time")
+	}
+	task, err := arguments[1].Reference()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if task == nil {
+		return jvm.VoidValue(), jvm.Throw("java/lang/NullPointerException", "Timer.schedule task is null")
+	}
+	when, err := arguments[2].Reference()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	if when == nil {
+		return jvm.VoidValue(), jvm.Throw("java/lang/NullPointerException", "Timer.schedule first time is null")
+	}
+	firstTime, err := vm.InvokeVirtual(when, "getTime", "()J")
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	at, err := firstTime.Int64()
+	if err != nil {
+		return jvm.VoidValue(), err
+	}
+	delay := int64(0)
+	if now := runtime.GuestMillis(); at > now {
+		// The difference of two longs can wrap; one too far off to say is as
+		// far as a delay goes, which timerDuration then clamps.
+		if delay = at - now; delay < 0 {
+			delay = math.MaxInt64
+		}
+	}
+	scheduled := append([]jvm.Value{arguments[0], arguments[1], jvm.LongValue(delay)}, arguments[3:]...)
+	return runtimeTimerSchedule(runtime, vm, scheduled)
 }
 
 func runtimeTimerTaskClassDefinition() runtimeJavaClass {

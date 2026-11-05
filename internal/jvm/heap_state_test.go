@@ -2,9 +2,12 @@ package jvm
 
 import (
 	_ "embed"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -137,7 +140,7 @@ func TestHeapStateNativeListSharingAndOverlappingViewRefusal(t *testing.T) {
 
 func TestHeapStatePreservesCyclesAliasesAndWeakBindings(t *testing.T) {
 	vm := New(nil, Options{})
-	buffer := &stringBufferData{units: []uint16{'a', 0xd800, 'b'}}
+	buffer := &stringBufferData{units: []uint16{'a', 0xd800, 'b'}, capacity: 21}
 	left := &Object{ClassName: ObjectClass, Native: buffer, Fields: make(map[string]Value)}
 	right := &Object{ClassName: ObjectClass, Native: buffer, Fields: make(map[string]Value)}
 	left.Fields["peer"], right.Fields["peer"] = ReferenceValue(right), ReferenceValue(left)
@@ -192,6 +195,9 @@ func TestHeapStatePreservesCyclesAliasesAndWeakBindings(t *testing.T) {
 	}
 	if units := a.Native.(*stringBufferData).units; len(units) != 3 || units[1] != 0xd800 {
 		t.Fatal("UTF-16 units changed")
+	}
+	if capacity := a.Native.(*stringBufferData).capacity; capacity != 21 {
+		t.Fatalf("buffer capacity = %d, want the 21 it was captured with", capacity)
 	}
 	if next := fresh.objectIdentity(&Object{}); next <= identity {
 		t.Fatal("restored identity counter went backwards")
@@ -360,5 +366,169 @@ func TestClassObjectsStayCanonicalAcrossHeapRestore(t *testing.T) {
 	}
 	if object, _ := again.Reference(); object != roots[1] {
 		t.Fatalf("getClass() after restore = %p, want the restored class object %p", object, roots[1])
+	}
+}
+
+// heapThroughJSON is a heap record as a checkpoint carries it.
+func heapThroughJSON(t *testing.T, saved HeapState) HeapState {
+	t.Helper()
+	encoded, err := json.Marshal(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded HeapState
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	return decoded
+}
+
+// A StringBuffer's payload carries its capacity ahead of its units. One a
+// checkpoint from before capacities were kept wrote, "buffer", carries the
+// units alone and still restores: the buffer is given the capacity its text
+// would have grown an empty buffer to — what LGT gives a buffer it restores
+// without one — and grows on from there by the same rule.
+func TestHeapStateRestoresABufferWrittenBeforeCapacitiesWereKept(t *testing.T) {
+	vm := New(nil, Options{})
+	short := newBuffer(t, vm, "(Ljava/lang/String;)V", ReferenceValue(vm.NewString("abc")))
+	roomy := newBuffer(t, vm, "()V")
+	bufferCall(t, vm, roomy, "ensureCapacity", "(I)V", IntValue(100))
+	long := newBuffer(t, vm, "(Ljava/lang/String;)V", ReferenceValue(vm.NewString(strings.Repeat("x", 40))))
+	bufferCall(t, vm, long, "setLength", "(I)V", IntValue(40))
+	saved, err := vm.CaptureHeapState([]*Object{short, roomy, long}, HeapCodec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffers := 0
+	for _, payload := range saved.Payloads {
+		if payload.Kind == heapBufferKind {
+			buffers++
+		}
+	}
+	if buffers != 3 {
+		t.Fatalf("%d buffer payloads carry a capacity, want 3", buffers)
+	}
+	capacities := func(vm *VM, roots []*Object) []int32 {
+		t.Helper()
+		return []int32{
+			bufferInt(t, vm, roots[0], "capacity", "()I"),
+			bufferInt(t, vm, roots[1], "capacity", "()I"),
+			bufferInt(t, vm, roots[2], "capacity", "()I"),
+		}
+	}
+	current := New(nil, Options{})
+	roots, err := current.RestoreHeapState(heapThroughJSON(t, saved), HeapCodec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := capacities(current, roots), []int32{19, 100, 56}; !slices.Equal(got, want) {
+		t.Fatalf("restored capacities = %v, want the captured %v", got, want)
+	}
+
+	earlier := heapThroughJSON(t, saved)
+	for index := range earlier.Payloads {
+		if payload := &earlier.Payloads[index]; payload.Kind == heapBufferKind {
+			payload.Kind, payload.Data = "buffer", payload.Data[4:]
+		}
+	}
+	fresh := New(nil, Options{})
+	roots, err = fresh.RestoreHeapState(earlier, HeapCodec{})
+	if err != nil {
+		t.Fatalf("a buffer from before capacities were kept: %v", err)
+	}
+	if got, want := capacities(fresh, roots), []int32{16, 16, 40}; !slices.Equal(got, want) {
+		t.Fatalf("capacities without a record = %v, want what the text grows an empty buffer to: %v", got, want)
+	}
+	if got := bufferText(t, fresh, roots[0]); got != "abc" {
+		t.Fatalf("the restored text = %q", got)
+	}
+	bufferCall(t, fresh, roots[2], "append", "(C)Ljava/lang/StringBuffer;", IntValue('!'))
+	if got := bufferInt(t, fresh, roots[2], "capacity", "()I"); got != 82 {
+		t.Fatalf("growth after the restore = %d, want (40+1)*2", got)
+	}
+}
+
+// A buffer payload capture could not have written is refused: a capacity that
+// does not hold the units, a negative one, and a record too short to carry
+// one or not a whole number of units.
+func TestHeapStateRefusesABufferCapacityCaptureCannotWrite(t *testing.T) {
+	vm := New(nil, Options{})
+	buffer := newBuffer(t, vm, "(Ljava/lang/String;)V", ReferenceValue(vm.NewString("abc")))
+	saved, err := vm.CaptureHeapState([]*Object{buffer}, HeapCodec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, damage := range map[string]func([]byte) []byte{
+		"short of its units": func(data []byte) []byte { binary.LittleEndian.PutUint32(data, 2); return data },
+		"negative":           func(data []byte) []byte { binary.LittleEndian.PutUint32(data, 0x80000000); return data },
+		"without a capacity": func([]byte) []byte { return []byte{1, 0} },
+		"half a unit":        func(data []byte) []byte { return data[:len(data)-1] },
+	} {
+		damaged := heapThroughJSON(t, saved)
+		for index := range damaged.Payloads {
+			if payload := &damaged.Payloads[index]; payload.Kind == heapBufferKind {
+				payload.Data = damage(payload.Data)
+			}
+		}
+		if _, err := New(nil, Options{}).RestoreHeapState(damaged, HeapCodec{}); err == nil {
+			t.Errorf("a buffer capacity %s was restored", name)
+		}
+	}
+}
+
+// A reader from before Reader kept a lock and InputStreamReader kept what it
+// held at a mark restores with neither: the lock reads null, as it did, and a
+// reset returns the stream to its own mark holding nothing — what a reader
+// that was never marked held at the stream's start.
+func TestHeapStateRestoresAReaderWrittenBeforeItsMarkWasKept(t *testing.T) {
+	vm := New(nil, Options{})
+	unmarked := readerOver(t, vm, []byte("xy"))
+	readUnits(t, vm, unmarked, 1)
+	// A reader marked between two whole characters held nothing at its mark,
+	// so a record without what it held answers what it would have.
+	marked := readerOver(t, vm, []byte("xy"))
+	readUnits(t, vm, marked, 1)
+	streamCall(t, vm, marked, "mark", "(I)V", IntValue(4))
+	readUnits(t, vm, marked, 1)
+	saved, err := vm.CaptureHeapState([]*Object{unmarked, marked}, HeapCodec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	earlier := heapThroughJSON(t, saved)
+	dropped := map[string]int{}
+	for index := range earlier.Objects {
+		object := &earlier.Objects[index]
+		kept := object.Fields[:0]
+		for _, field := range object.Fields {
+			if strings.Contains(field.Name, ".lock:") || strings.Contains(field.Name, ".marked") {
+				dropped[field.Name[strings.LastIndexByte(field.Name, '.')+1:]]++
+				continue
+			}
+			kept = append(kept, field)
+		}
+		object.Fields = kept
+	}
+	if dropped["lock:Ljava/lang/Object;"] != 2 || dropped["markedByte:I"] != 1 || dropped["markedChar:C"] != 1 {
+		t.Fatalf("dropped %v, want both locks and the marked reader's two fields", dropped)
+	}
+	fresh := New(nil, Options{})
+	roots, err := fresh.RestoreHeapState(earlier, HeapCodec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, restored := range roots {
+		if lock, _ := fresh.Field(restored, ReaderClass, "lock", "Ljava/lang/Object;"); mustObject(lock) != nil {
+			t.Fatal("an earlier reader gained a lock")
+		}
+		if got := streamCall(t, fresh, restored, "markSupported", "()Z"); got != IntValue(1) {
+			t.Fatal("the restored reader supports no mark")
+		}
+		streamCall(t, fresh, restored, "reset", "()V")
+	}
+	if got := readUnits(t, fresh, roots[0], 3); !slices.Equal(got, []int32{'x', 'y', -1}) {
+		t.Fatalf("the unmarked reader after reset = %x, want the stream from its start", got)
+	}
+	if got := readUnits(t, fresh, roots[1], 2); !slices.Equal(got, []int32{'y', -1}) {
+		t.Fatalf("the marked reader after reset = %x, want the stream from its mark", got)
 	}
 }

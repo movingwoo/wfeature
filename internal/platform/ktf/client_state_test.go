@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,6 +186,74 @@ func TestClientActivationExcludesDetachedPreparationTime(t *testing.T) {
 	fresh.clock.Advance(time.Millisecond)
 	if ran, err := fresh.client.ServiceThreads(t.Context(), 1); err != nil || ran != 1 {
 		t.Fatalf("resumed worker = %d, %v", ran, err)
+	}
+}
+
+// A checkpoint holds the runtime classes its session laid out, as guest
+// records, and a restore keeps them: the title's own classes were numbered from
+// those records' slots and its objects point at them. So a member the class
+// library gained after a checkpoint was written is not on a class that
+// checkpoint had already laid out. A call to one fails at the lookup, by name,
+// as it did for the build that wrote the checkpoint — nothing is invented and
+// no slot moves — and a member the class now overrides still reaches the one
+// above it through the record. A class the checkpoint never laid out is laid
+// out with every member it has now.
+func TestClientCheckpointKeepsTheRuntimeClassesItLaidOut(t *testing.T) {
+	source := newContinuationFixture(t, 1700000000, continuationFixtureOptions{})
+	earlier := runtimeJavaClasses["java/util/Vector"]
+	earlier.methods = slices.DeleteFunc(slices.Clone(earlier.methods), func(method runtimeJavaMethod) bool {
+		return method.name == "toString" || method.descriptor == "(Ljava/lang/Object;I)I"
+	})
+	if len(earlier.methods) != len(runtimeJavaClasses["java/util/Vector"].methods)-3 {
+		t.Fatal("the earlier Vector record did not leave out the three members added since")
+	}
+	laidOut, err := source.runtime.createRuntimeJavaClass(earlier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := roundTripClientState(t, captureClientForTest(t, source.client))
+	source.client.StopThreads()
+	fresh := restoreClientForTest(t, saved, 1800000000, continuationFixtureOptions{})
+	vm := fresh.client.JVM()
+	restored, err := fresh.runtime.ensureJavaClass("java/util/Vector")
+	if err != nil || restored != laidOut {
+		t.Fatalf("the restored Vector is at %#x, %v; the checkpoint laid it out at %#x", restored, err, laidOut)
+	}
+	if _, found, err := vm.FindAOTMethod(restored, "indexOf", "(Ljava/lang/Object;I)I"); err != nil || found {
+		t.Fatalf("a member the record never had resolved: found=%v err=%v", found, err)
+	}
+	name, err := fresh.runtime.AllocateBytes([]byte("\x00(Ljava/lang/Object;I)I+indexOf\x00"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup := armcore.NewContext()
+	lookup.Registers[0], lookup.Registers[1] = restored, name
+	if _, err := fresh.runtime.getAOTMethod(armcore.NewThread(lookup)); err == nil || !strings.Contains(err.Error(), "indexOf(Ljava/lang/Object;I)I was not found") {
+		t.Fatalf("the guest's lookup of the missing member = %v, want it refused by name", err)
+	}
+	if _, found, err := vm.FindAOTMethod(restored, "indexOf", "(Ljava/lang/Object;)I"); err != nil || !found {
+		t.Fatalf("a member the record had does not resolve: found=%v err=%v", found, err)
+	}
+	object, err := fresh.runtime.ensureJavaClass(jvm.ObjectClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inherited, found, err := vm.FindAOTMethod(restored, "toString", "()Ljava/lang/String;")
+	above, _, _ := vm.FindAOTMethod(object, "toString", "()Ljava/lang/String;")
+	if err != nil || !found || inherited.Address != above.Address {
+		t.Fatalf("toString on the restored record = %#x (%v, %v), want Object's %#x", inherited.Address, found, err, above.Address)
+	}
+	for _, member := range []struct{ class, name, descriptor string }{
+		{"java/util/Hashtable", "contains", "(Ljava/lang/Object;)Z"},
+		{"java/io/OutputStreamWriter", "write", "(Ljava/lang/String;II)V"},
+	} {
+		address, err := fresh.runtime.ensureJavaClass(member.class)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, found, err := vm.FindAOTMethod(address, member.name, member.descriptor); err != nil || !found {
+			t.Errorf("%s.%s%s on a class laid out after the restore: found=%v err=%v", member.class, member.name, member.descriptor, found, err)
+		}
 	}
 }
 

@@ -166,9 +166,9 @@ The library is declared in Go (see
   with its hierarchy
 - `java.io`: `InputStream`, `OutputStream`, `ByteArrayInputStream`,
   `ByteArrayOutputStream`, `DataInput`, `DataOutput`, `DataInputStream`,
-  `DataOutputStream`, `PrintStream`, `Reader`, `InputStreamReader`, and
-  `IOException` with `EOFException`, `UTFDataFormatException` and
-  `UnsupportedEncodingException`
+  `DataOutputStream`, `PrintStream`, `Reader`, `InputStreamReader`, `Writer`,
+  `OutputStreamWriter`, and `IOException` with `EOFException`,
+  `UTFDataFormatException` and `UnsupportedEncodingException`
 - `java.util`: `Vector`, `Stack`, `Hashtable`, `Enumeration`, `Random`,
   `Calendar`, `Date`, `TimeZone`
 - `net/wfeature/ArrayEnumeration`, the runtime's own `Enumeration`, because the
@@ -234,6 +234,30 @@ Behaviour a title depends on:
 - `System.out` and `System.err` are real `PrintStream` fields, so the debug
   printing left in a shipped title resolves. Output goes to the logging
   boundary at debug level, one line per call rather than per newline.
+- **The members LGT already answered are answered the same here** (2026-11-05):
+  `String.regionMatches(boolean, …)`, `startsWith(String, int)`,
+  `valueOf(boolean)`; `StringBuffer`'s `capacity`, `ensureCapacity`, the
+  boolean, char-array, long and Object `insert` forms and `reverse`;
+  `Vector.indexOf` and `lastIndexOf` from an index; `Hashtable.contains` and
+  `rehash`; `Runtime.exit`; `Class.newInstance`. A `StringBuffer`'s capacity is
+  a number the buffer keeps, by the class library's growth rules (16, the text
+  plus 16, `(n + 1) * 2`), never storage. `rehash` grows the two arrays the
+  table is searched in and moves no entry, because this table has no buckets to
+  reorganize.
+- **A container's text is the class library's**: `Vector`, `Stack` and
+  `Hashtable` answer `[a, b]` and `{k=v, …}` from each element's own
+  `toString`, and `ByteArrayOutputStream.toString()` the bytes as
+  `new String(byte[])` decodes them; all four answered Object's identity text
+  before. Nesting stops at 256 such calls in one execution. A Hashtable
+  enumerates in the order its entries went in, where LGT's enumerates by the
+  class library's buckets.
+- `Reader` keeps the `lock` it is given, and its own `mark` and `reset` throw
+  IOException; an `InputStreamReader` marks and resets the stream beneath it,
+  holding the byte or surrogate half it had read ahead. `Writer` and
+  `OutputStreamWriter` are CLDC 1.1's: every write goes to the subclass's
+  `write(char[], int, int)`, and the writer sends the bytes `getBytes` would,
+  unbuffered, holding a high surrogate until its pair arrives. The static
+  `DataInputStream.readUTF(DataInput)` reads through the input it is given.
 - `Runtime.totalMemory` answers 2 MiB, the upper end of the 512 KiB–2 MiB the
   handsets gave a MIDlet. `freeMemory` answers 2 MiB less the host heap in use,
   never less than 256 KiB, because a title that reads zero free stops loading.
@@ -632,8 +656,10 @@ classes this runtime publishes still do not answer. The first run
 (2026-08-28) reported 153 members, and that list is how the undeclared group
 above was found. What is left is members that would be a guess rather than an
 implementation: `Class.forName`'s reflective neighbours,
-`Calendar.computeFields`, `Vector`'s protected `elementData`,
-`Hashtable.rehash`. **A member is worth declaring when its behaviour is exactly
+`Calendar.computeFields`, `Vector`'s protected `elementData`.
+`Hashtable.rehash` was on that list until 2026-11-05: in a table with no
+buckets it has nothing to reorganize, so growing its storage is the whole
+answer. **A member is worth declaring when its behaviour is exactly
 specified and its body is a few lines, and worth leaving out when answering it
 means inventing the answer**, which is the rule the platform tables use.
 

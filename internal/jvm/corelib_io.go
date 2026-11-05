@@ -488,8 +488,34 @@ func byteArrayOutputStreamDefinition() ClassDefinition {
 			{Name: "toByteArray", Descriptor: "()[B", Access: AccessPublic, Body: byteArrayOutputStreamToByteArray},
 			{Name: "size", Descriptor: "()I", Access: AccessPublic, Body: byteArrayOutputStreamSize},
 			{Name: "reset", Descriptor: "()V", Access: AccessPublic, Body: byteArrayOutputStreamReset},
+			{Name: "toString", Descriptor: "()Ljava/lang/String;", Access: AccessPublic, Body: byteArrayOutputStreamToString},
 		},
 	}
+}
+
+// byteArrayOutputStreamToString is the bytes written so far as text, decoded
+// with the platform's charset: `new String(buf, 0, count)`, which is what the
+// class library answers and exactly what that constructor answers here. It
+// reads the two protected fields, so a subclass that wrote them is read as it
+// left them, with the String constructor's refusals for a count that does not
+// fit the buffer and a buffer that is null.
+func byteArrayOutputStreamToString(call *Invocation, arguments []Value) (Value, error) {
+	stream, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	buffer, _, count, err := byteArrayOutputStreamBuffer(call.vm, stream)
+	if err != nil {
+		return VoidValue(), err
+	}
+	data, err := ByteArraySnapshot(buffer)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if count < 0 || int(count) > len(data) {
+		return VoidValue(), guestException("java/lang/IndexOutOfBoundsException", "String byte range")
+	}
+	return call.vm.stringResult(call.vm.decodePlatformBytes(data[:count]))
 }
 
 // byteArrayOutputStreamDefaultCapacity is what a stream constructed without a
@@ -759,6 +785,9 @@ func dataInputStreamDefinition() ClassDefinition {
 			{Name: "readFloat", Descriptor: "()F", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadFloat},
 			{Name: "readDouble", Descriptor: "()D", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: dataInputReadDouble},
 			{Name: "readUTF", Descriptor: "()Ljava/lang/String;", Access: AccessPublic | AccessNative, Throws: []string{"java/io/IOException"}},
+			// The static form reads a string out of any DataInput, a title's
+			// own included; see dataInputReadUTFFrom.
+			{Name: "readUTF", Descriptor: "(Ljava/io/DataInput;)Ljava/lang/String;", Access: AccessPublic | AccessStatic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataInputReadUTFFrom},
 			{Name: "readFully", Descriptor: "([B)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataInputReadFullyArray},
 			{Name: "readFully", Descriptor: "([BII)V", Access: AccessPublic | AccessFinal, Throws: []string{"java/io/IOException"}, Body: dataInputReadFullyRange},
 		},
@@ -828,6 +857,84 @@ func dataInputReadFully(call *Invocation, arguments []Value, offset, length int3
 		filled += count
 	}
 	return VoidValue(), nil
+}
+
+// dataInputReadUTFFrom is DataInputStream.readUTF(DataInput): a two-byte
+// length from the input's own readUnsignedShort, then that many bytes from its
+// own readFully, both asked through the interface, so a title's DataInput
+// reads its record its own way and the end of it is that input's
+// EOFException. The bytes are decoded as the class library decodes them; see
+// decodeDataUTF. A null input is the NullPointerException the call dereferences
+// it into.
+func dataInputReadUTFFrom(call *Invocation, arguments []Value) (Value, error) {
+	input, err := nativeReference(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if input == nil {
+		return VoidValue(), guestException("java/lang/NullPointerException", "readUTF from a null DataInput")
+	}
+	lengthValue, err := call.InvokeVirtual(input, "readUnsignedShort", "()I")
+	if err != nil {
+		return VoidValue(), err
+	}
+	length, err := lengthValue.Int32()
+	if err != nil {
+		return VoidValue(), err
+	}
+	// A title's own input answers whatever it answers. The array is made as
+	// the class library makes it, so a negative length is that array's
+	// NegativeArraySizeException and a long one is bounded as every array is.
+	data, err := call.vm.newArray(Type{Kind: TypeByte}, length)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if _, err := call.InvokeVirtual(input, "readFully", "([BII)V", ReferenceValue(data), IntValue(0), IntValue(length)); err != nil {
+		return VoidValue(), err
+	}
+	bytes, err := ByteArraySnapshot(data)
+	if err != nil {
+		return VoidValue(), err
+	}
+	units, err := decodeDataUTF(bytes)
+	if err != nil {
+		return VoidValue(), guestException("java/io/UTFDataFormatException", err.Error())
+	}
+	return call.vm.stringResult(string(utf16.Decode(units)))
+}
+
+// decodeDataUTF decodes the bytes readUTF(DataInput) read, as the class
+// library decodes them: a byte below 0x80 is a character, 110xxxxx 10xxxxxx
+// and 1110xxxx 10xxxxxx 10xxxxxx are one each, and anything else — a
+// continuation byte where a character starts, a lead byte of 0xf0 or more, a
+// continuation byte that is not one, a sequence the length cuts short — is
+// malformed. Nothing is refused for being a zero byte or a longer form than it
+// needed, which the class library does not refuse either.
+func decodeDataUTF(data []byte) ([]uint16, error) {
+	units := make([]uint16, 0, len(data))
+	for index := 0; index < len(data); {
+		first := data[index]
+		switch first >> 4 {
+		case 0, 1, 2, 3, 4, 5, 6, 7:
+			units = append(units, uint16(first))
+			index++
+		case 12, 13:
+			if index+2 > len(data) || data[index+1]&0xc0 != 0x80 {
+				return nil, fmt.Errorf("malformed two-byte sequence at %d", index)
+			}
+			units = append(units, uint16(first&0x1f)<<6|uint16(data[index+1]&0x3f))
+			index += 2
+		case 14:
+			if index+3 > len(data) || data[index+1]&0xc0 != 0x80 || data[index+2]&0xc0 != 0x80 {
+				return nil, fmt.Errorf("malformed three-byte sequence at %d", index)
+			}
+			units = append(units, uint16(first&0x0f)<<12|uint16(data[index+1]&0x3f)<<6|uint16(data[index+2]&0x3f))
+			index += 3
+		default:
+			return nil, fmt.Errorf("malformed input around byte %d", index)
+		}
+	}
+	return units, nil
 }
 
 func dataInputStreamInit(call *Invocation, arguments []Value) (Value, error) {
@@ -1561,6 +1668,16 @@ func intField(vm *VM, object *Object, className, name string) (int32, error) {
 	return value.Int32()
 }
 
+// typedIntField is intField for a field declared as one of the other int-sized
+// types: a field is found by its descriptor as well as its name.
+func typedIntField(vm *VM, object *Object, className, name, descriptor string) (int32, error) {
+	value, err := vm.Field(object, className, name, descriptor)
+	if err != nil {
+		return 0, err
+	}
+	return value.Int32()
+}
+
 func setIntField(vm *VM, object *Object, className, name string, value int32) error {
 	return vm.SetField(object, className, name, "I", IntValue(value))
 }
@@ -1650,8 +1767,14 @@ func readerDefinition() ClassDefinition {
 		Name:      ReaderClass,
 		SuperName: ObjectClass,
 		Access:    AccessPublic | AccessAbstract,
+		Fields: []FieldDefinition{
+			// What a subclass synchronizes on: the reader itself, or the
+			// object it was constructed with.
+			{Name: "lock", Descriptor: "Ljava/lang/Object;", Access: AccessProtected},
+		},
 		Methods: []MethodDefinition{
-			{Name: "<init>", Descriptor: "()V", Access: AccessProtected, Body: doNothing},
+			{Name: "<init>", Descriptor: "()V", Access: AccessProtected, Body: lockInit(ReaderClass)},
+			{Name: "<init>", Descriptor: "(Ljava/lang/Object;)V", Access: AccessProtected, Body: lockInitWith(ReaderClass)},
 			{Name: "read", Descriptor: "()I", Access: AccessPublic | AccessAbstract, Throws: []string{"java/io/IOException"}},
 			{Name: "read", Descriptor: "([C)I", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: readerReadArray},
 			{Name: "read", Descriptor: "([CII)I", Access: AccessPublic | AccessAbstract, Throws: []string{"java/io/IOException"}},
@@ -1659,6 +1782,10 @@ func readerDefinition() ClassDefinition {
 			{Name: "ready", Descriptor: "()Z", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: returnFalse},
 			{Name: "markSupported", Descriptor: "()Z", Access: AccessPublic, Body: returnFalse},
 			{Name: "skip", Descriptor: "(J)J", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: readerSkip},
+			// A reader that does not override these supports no mark, which
+			// is what markSupported above answers for it.
+			{Name: "mark", Descriptor: "(I)V", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: refuseIO("mark() not supported")},
+			{Name: "reset", Descriptor: "()V", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: refuseIO("reset() not supported")},
 		},
 	}
 }
@@ -1675,6 +1802,12 @@ func inputStreamReaderDefinition() ClassDefinition {
 			// the low half of a surrogate pair. Zero is nothing held.
 			{Name: "pendingByte", Descriptor: "I", Access: AccessPrivate},
 			{Name: "pendingChar", Descriptor: "C", Access: AccessPrivate},
+			// The two as they were when mark was called, which is what reset
+			// brings back with the stream's position. A reader no mark was
+			// ever made on holds zero in both, which is what it held at the
+			// start of the stream; see inputStreamReaderMark.
+			{Name: "markedByte", Descriptor: "I", Access: AccessPrivate},
+			{Name: "markedChar", Descriptor: "C", Access: AccessPrivate},
 		},
 		Methods: []MethodDefinition{
 			{Name: "<init>", Descriptor: "(Ljava/io/InputStream;)V", Access: AccessPublic, Body: inputStreamReaderInit},
@@ -1686,7 +1819,55 @@ func inputStreamReaderDefinition() ClassDefinition {
 			{Name: "read", Descriptor: "([CII)I", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: inputStreamReaderReadRange},
 			{Name: "close", Descriptor: "()V", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: inputStreamReaderClose},
 			{Name: "ready", Descriptor: "()Z", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: inputStreamReaderReady},
+			// A reader over a stream marks and resets that stream, so it
+			// supports a mark exactly when the stream does.
+			{Name: "markSupported", Descriptor: "()Z", Access: AccessPublic, Body: inputStreamReaderMarkSupported},
+			{Name: "mark", Descriptor: "(I)V", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: inputStreamReaderMark},
+			{Name: "reset", Descriptor: "()V", Access: AccessPublic, Throws: []string{"java/io/IOException"}, Body: inputStreamReaderReset},
 		},
+	}
+}
+
+// lockInit is the no-argument constructor of Reader and Writer: the object a
+// subclass synchronizes on is the reader or writer itself.
+func lockInit(class string) ContextMethod {
+	return func(call *Invocation, arguments []Value) (Value, error) {
+		receiver, err := requireObject(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		return VoidValue(), call.vm.SetField(receiver, class, "lock", "Ljava/lang/Object;", ReferenceValue(receiver))
+	}
+}
+
+// lockInitWith is the constructor that names that object. A null one is the
+// NullPointerException the class library throws, since there would be nothing
+// to synchronize on.
+func lockInitWith(class string) ContextMethod {
+	return func(call *Invocation, arguments []Value) (Value, error) {
+		receiver, err := requireObject(arguments, 0)
+		if err != nil {
+			return VoidValue(), err
+		}
+		lock, err := nativeReference(arguments, 1)
+		if err != nil {
+			return VoidValue(), err
+		}
+		if lock == nil {
+			return VoidValue(), guestException("java/lang/NullPointerException", javaClassName(class)+" lock")
+		}
+		return VoidValue(), call.vm.SetField(receiver, class, "lock", "Ljava/lang/Object;", ReferenceValue(lock))
+	}
+}
+
+// refuseIO is the body of a method the class declares and does not support,
+// which says so with IOException.
+func refuseIO(message string) ContextMethod {
+	return func(_ *Invocation, arguments []Value) (Value, error) {
+		if _, err := requireObject(arguments, 0); err != nil {
+			return VoidValue(), err
+		}
+		return VoidValue(), guestException(IOExceptionClass, message)
 	}
 }
 
@@ -1754,10 +1935,108 @@ func inputStreamReaderInit(call *Invocation, arguments []Value) (Value, error) {
 	if err != nil {
 		return VoidValue(), err
 	}
+	// Reader's own constructor runs first, as super() does, and makes the
+	// reader the object its subclasses synchronize on.
+	if _, err := call.InvokeSpecial(reader, ReaderClass, "<init>", "()V"); err != nil {
+		return VoidValue(), err
+	}
 	if source == nil {
 		return VoidValue(), guestException("java/lang/NullPointerException", "InputStreamReader source")
 	}
 	return VoidValue(), call.vm.SetField(reader, InputStreamReaderClass, "in", "Ljava/io/InputStream;", ReferenceValue(source))
+}
+
+// inputStreamReaderMarkSupported answers what the stream underneath answers.
+// A closed reader has no stream, and supports no mark.
+func inputStreamReaderMarkSupported(call *Invocation, arguments []Value) (Value, error) {
+	reader, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	value, err := call.vm.Field(reader, InputStreamReaderClass, "in", "Ljava/io/InputStream;")
+	if err != nil {
+		return VoidValue(), err
+	}
+	source, err := value.Reference()
+	if err != nil {
+		return VoidValue(), err
+	}
+	if source == nil {
+		return IntValue(0), nil
+	}
+	return call.InvokeVirtual(source, "markSupported", "()Z")
+}
+
+// inputStreamReaderMark marks the stream underneath, and keeps what the reader
+// holds past the stream's position — a byte read ahead of the character it
+// answered, or the second half of a pair — for reset to bring back with it,
+// so a read after reset answers the character a read after mark did. A stream
+// that supports no mark is the IOException the class library throws, and so is
+// a closed reader.
+//
+// The limit goes to the stream as it was given, as the CLDC reader passes it
+// and as LGT's reader does: it counts characters where the stream counts
+// bytes, so a multi-byte text can outrun it, which is the library's answer too.
+func inputStreamReaderMark(call *Invocation, arguments []Value) (Value, error) {
+	reader, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	limit, err := nativeInt(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	source, err := inputStreamReaderSource(call.vm, reader)
+	if err != nil {
+		return VoidValue(), err
+	}
+	supported, err := call.InvokeVirtual(source, "markSupported", "()Z")
+	if err != nil {
+		return VoidValue(), err
+	}
+	if flag, err := supported.Int32(); err != nil || flag == 0 {
+		if err != nil {
+			return VoidValue(), err
+		}
+		return VoidValue(), guestException(IOExceptionClass, "mark() not supported")
+	}
+	if _, err := call.InvokeVirtual(source, "mark", "(I)V", IntValue(limit)); err != nil {
+		return VoidValue(), err
+	}
+	return VoidValue(), copyReaderHeld(call.vm, reader, "pending", "marked")
+}
+
+// inputStreamReaderReset returns the stream underneath to its mark, and the
+// reader to what it held there. A stream that cannot reset says so with its
+// own IOException; a closed reader is one too.
+func inputStreamReaderReset(call *Invocation, arguments []Value) (Value, error) {
+	reader, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	source, err := inputStreamReaderSource(call.vm, reader)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if _, err := call.InvokeVirtual(source, "reset", "()V"); err != nil {
+		return VoidValue(), err
+	}
+	return VoidValue(), copyReaderHeld(call.vm, reader, "marked", "pending")
+}
+
+// copyReaderHeld copies a reader's held byte and character from one pair of
+// its fields to the other.
+func copyReaderHeld(vm *VM, reader *Object, from, to string) error {
+	for _, field := range []struct{ suffix, descriptor string }{{"Byte", "I"}, {"Char", "C"}} {
+		value, err := vm.Field(reader, InputStreamReaderClass, from+field.suffix, field.descriptor)
+		if err != nil {
+			return err
+		}
+		if err := vm.SetField(reader, InputStreamReaderClass, to+field.suffix, field.descriptor, value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func inputStreamReaderInitEncoding(call *Invocation, arguments []Value) (Value, error) {
@@ -1961,4 +2240,418 @@ func inputStreamReaderClose(call *Invocation, arguments []Value) (Value, error) 
 	}
 	_, err = call.InvokeVirtual(source, "close", "()V")
 	return VoidValue(), err
+}
+
+// java/io/Writer and java/io/OutputStreamWriter are the character side of the
+// output streams, the counterpart of Reader and InputStreamReader: a title
+// writes text through one into a byte stream — a record it stores, a buffer
+// it sends — in the handset's charset or in UTF-8.
+//
+// Writer's own write forms all come down to write(char[], int, int), which a
+// subclass implements, and they reach it through the VM, so a title's own
+// Writer receives every character its callers write the way the class library
+// hands them over.
+func writerDefinition() ClassDefinition {
+	throws := []string{IOExceptionClass}
+	return ClassDefinition{
+		Name:      WriterClass,
+		SuperName: ObjectClass,
+		Access:    AccessPublic | AccessAbstract,
+		Fields: []FieldDefinition{
+			// What a subclass synchronizes on: the writer itself, or the
+			// object it was constructed with.
+			{Name: "lock", Descriptor: "Ljava/lang/Object;", Access: AccessProtected},
+		},
+		Methods: []MethodDefinition{
+			{Name: "<init>", Descriptor: "()V", Access: AccessProtected, Body: lockInit(WriterClass)},
+			{Name: "<init>", Descriptor: "(Ljava/lang/Object;)V", Access: AccessProtected, Body: lockInitWith(WriterClass)},
+			{Name: "write", Descriptor: "(I)V", Access: AccessPublic, Throws: throws, Body: writerWriteChar},
+			{Name: "write", Descriptor: "([C)V", Access: AccessPublic, Throws: throws, Body: writerWriteArray},
+			{Name: "write", Descriptor: "([CII)V", Access: AccessPublic | AccessAbstract, Throws: throws},
+			{Name: "write", Descriptor: "(Ljava/lang/String;)V", Access: AccessPublic, Throws: throws, Body: writerWriteString},
+			{Name: "write", Descriptor: "(Ljava/lang/String;II)V", Access: AccessPublic, Throws: throws, Body: writerWriteStringRange},
+			{Name: "flush", Descriptor: "()V", Access: AccessPublic | AccessAbstract, Throws: throws},
+			{Name: "close", Descriptor: "()V", Access: AccessPublic | AccessAbstract, Throws: throws},
+		},
+	}
+}
+
+// writerWriteChar is write(int): the low sixteen bits as one character.
+func writerWriteChar(call *Invocation, arguments []Value) (Value, error) {
+	writer, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	value, err := nativeInt(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	return VoidValue(), writeUnitsThrough(call, writer, []uint16{uint16(value)})
+}
+
+// writerWriteArray is write(char[]): the whole array, a null one being the
+// NullPointerException its length is read from.
+func writerWriteArray(call *Invocation, arguments []Value) (Value, error) {
+	writer, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	array, err := nativeReference(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	characters, err := guestArray(array)
+	if err != nil {
+		return VoidValue(), err
+	}
+	_, err = call.InvokeVirtual(writer, "write", "([CII)V", ReferenceValue(array), IntValue(0), IntValue(int32(characters.Length())))
+	return VoidValue(), err
+}
+
+// writerWriteString is write(String): write(str, 0, str.length()), through the
+// writer's own three-argument form.
+func writerWriteString(call *Invocation, arguments []Value) (Value, error) {
+	writer, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	units, err := stringUnits(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	_, err = call.InvokeVirtual(writer, "write", "(Ljava/lang/String;II)V", arguments[1], IntValue(0), IntValue(int32(len(units))))
+	return VoidValue(), err
+}
+
+// writerWriteStringRange is write(String, int, int): the characters
+// String.getChars would copy out of that range, refused as getChars refuses
+// one, handed to write(char[], int, int).
+func writerWriteStringRange(call *Invocation, arguments []Value) (Value, error) {
+	writer, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	units, err := stringUnits(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	window, err := stringWindow(units, arguments)
+	if err != nil {
+		return VoidValue(), err
+	}
+	return VoidValue(), writeUnitsThrough(call, writer, window)
+}
+
+// stringWindow reads the offset and length after a String argument and answers
+// that window of its units, or the StringIndexOutOfBoundsException getChars
+// raises for a window outside it.
+func stringWindow(units []uint16, arguments []Value) ([]uint16, error) {
+	offset, err := nativeInt(arguments, 2)
+	if err != nil {
+		return nil, err
+	}
+	length, err := nativeInt(arguments, 3)
+	if err != nil {
+		return nil, err
+	}
+	end := int64(offset) + int64(length)
+	if offset < 0 || length < 0 || end > int64(len(units)) {
+		return nil, guestException("java/lang/StringIndexOutOfBoundsException",
+			fmt.Sprintf("characters %d to %d of %d", offset, end, len(units)))
+	}
+	return units[offset:end], nil
+}
+
+// writeUnitsThrough hands units to a writer's own write(char[], int, int), in
+// an array made for the call.
+func writeUnitsThrough(call *Invocation, writer *Object, units []uint16) error {
+	array, err := call.vm.newArray(Type{Kind: TypeChar}, int32(len(units)))
+	if err != nil {
+		return err
+	}
+	values := make([]Value, len(units))
+	for index, unit := range units {
+		values[index] = IntValue(int32(unit))
+	}
+	if err := SetArrayRange(array, 0, values); err != nil {
+		return err
+	}
+	_, err = call.InvokeVirtual(writer, "write", "([CII)V", ReferenceValue(array), IntValue(0), IntValue(int32(len(units))))
+	return err
+}
+
+// outputStreamWriterDefinition is the Writer over an OutputStream. Nothing is
+// buffered: every write sends its bytes to the stream before it returns, as the
+// class library's does, so flush only passes on to the stream and a title that
+// reads its byte stream after a write finds what it wrote there.
+//
+// The bytes are what String.getBytes answers here for the same characters and
+// the same encoding, with one difference a stream of separate writes needs: a
+// write that ends on the first half of a surrogate pair holds that half until
+// the next write brings the second, so a character written one unit at a time
+// comes out as it does written whole. A half nothing completes goes out as an
+// unmappable character when the writer closes.
+func outputStreamWriterDefinition() ClassDefinition {
+	throws := []string{IOExceptionClass}
+	return ClassDefinition{
+		Name:      OutputStreamWriterClass,
+		SuperName: WriterClass,
+		Access:    AccessPublic,
+		Fields: []FieldDefinition{
+			{Name: "out", Descriptor: "Ljava/io/OutputStream;", Access: AccessPrivate},
+			// Whether the text goes out in UTF-8 rather than in the
+			// platform's charset.
+			{Name: "utf8", Descriptor: "Z", Access: AccessPrivate},
+			// The first half of a surrogate pair the last write ended on.
+			// Zero is nothing held.
+			{Name: "pendingChar", Descriptor: "C", Access: AccessPrivate},
+		},
+		Methods: []MethodDefinition{
+			{Name: "<init>", Descriptor: "(Ljava/io/OutputStream;)V", Access: AccessPublic, Body: outputStreamWriterInit},
+			// The encoding names accepted are InputStreamReader's, and a name
+			// that is not one of them is refused rather than written in
+			// another charset.
+			{Name: "<init>", Descriptor: "(Ljava/io/OutputStream;Ljava/lang/String;)V", Access: AccessPublic, Throws: []string{"java/io/UnsupportedEncodingException"}, Body: outputStreamWriterInitEncoding},
+			{Name: "write", Descriptor: "(I)V", Access: AccessPublic, Throws: throws, Body: outputStreamWriterWriteChar},
+			{Name: "write", Descriptor: "([CII)V", Access: AccessPublic, Throws: throws, Body: outputStreamWriterWriteChars},
+			{Name: "write", Descriptor: "(Ljava/lang/String;II)V", Access: AccessPublic, Throws: throws, Body: outputStreamWriterWriteString},
+			{Name: "flush", Descriptor: "()V", Access: AccessPublic, Throws: throws, Body: outputStreamWriterFlush},
+			{Name: "close", Descriptor: "()V", Access: AccessPublic, Throws: throws, Body: outputStreamWriterClose},
+		},
+	}
+}
+
+func outputStreamWriterInit(call *Invocation, arguments []Value) (Value, error) {
+	return VoidValue(), openOutputStreamWriter(call, arguments, nil)
+}
+
+func outputStreamWriterInitEncoding(call *Invocation, arguments []Value) (Value, error) {
+	if len(arguments) < 3 {
+		return VoidValue(), fmt.Errorf("OutputStreamWriter expected a stream and an encoding")
+	}
+	name := arguments[2]
+	return VoidValue(), openOutputStreamWriter(call, arguments[:2], &name)
+}
+
+// openOutputStreamWriter is both constructors: Writer's own first, as super()
+// is, then a null stream or a null encoding name refused with
+// NullPointerException, and a name this runtime has no charset for with
+// UnsupportedEncodingException — the order the class library checks them in.
+func openOutputStreamWriter(call *Invocation, arguments []Value, encoding *Value) error {
+	writer, err := requireObject(arguments, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := call.InvokeSpecial(writer, WriterClass, "<init>", "()V"); err != nil {
+		return err
+	}
+	stream, err := nativeReference(arguments, 1)
+	if err != nil {
+		return err
+	}
+	utf8 := false
+	if encoding != nil {
+		name, err := encoding.Reference()
+		if err != nil {
+			return err
+		}
+		if stream == nil || name == nil {
+			return guestException("java/lang/NullPointerException", "OutputStreamWriter stream or encoding")
+		}
+		text, ok := nativeStringObject(name)
+		if !ok {
+			return fmt.Errorf("OutputStreamWriter encoding is not a String")
+		}
+		switch charsetOf(text) {
+		case charsetUnknown:
+			return guestException("java/io/UnsupportedEncodingException", text)
+		case charsetUTF8:
+			utf8 = true
+		}
+	}
+	if stream == nil {
+		return guestException("java/lang/NullPointerException", "OutputStreamWriter stream")
+	}
+	if err := call.vm.SetField(writer, OutputStreamWriterClass, "utf8", "Z", booleanValue(utf8)); err != nil {
+		return err
+	}
+	return call.vm.SetField(writer, OutputStreamWriterClass, "out", "Ljava/io/OutputStream;", ReferenceValue(stream))
+}
+
+// outputStreamWriterStream answers the stream a writer sends to, or the
+// IOException the class library throws for a writer that was closed.
+func outputStreamWriterStream(vm *VM, writer *Object) (*Object, error) {
+	value, err := vm.Field(writer, OutputStreamWriterClass, "out", "Ljava/io/OutputStream;")
+	if err != nil {
+		return nil, err
+	}
+	stream, err := value.Reference()
+	if err != nil {
+		return nil, err
+	}
+	if stream == nil {
+		return nil, guestException(IOExceptionClass, "writer is closed")
+	}
+	return stream, nil
+}
+
+// outputStreamWriterSend encodes units and writes the bytes to the stream with
+// one write(byte[], int, int), which a title's own stream receives as such.
+// The first half of a pair the units end on is held for the next write unless
+// this is the last one.
+func outputStreamWriterSend(call *Invocation, writer, stream *Object, units []uint16, last bool) error {
+	held, err := typedIntField(call.vm, writer, OutputStreamWriterClass, "pendingChar", "C")
+	if err != nil {
+		return err
+	}
+	if held != 0 {
+		units = append([]uint16{uint16(held)}, units...)
+	}
+	next := int32(0)
+	if count := len(units); !last && count > 0 && units[count-1] >= 0xd800 && units[count-1] < 0xdc00 {
+		next = int32(units[count-1])
+		units = units[:count-1]
+	}
+	if err := call.vm.SetField(writer, OutputStreamWriterClass, "pendingChar", "C", IntValue(next)); err != nil {
+		return err
+	}
+	if len(units) == 0 {
+		return nil
+	}
+	text := string(utf16.Decode(units))
+	utf8, err := typedIntField(call.vm, writer, OutputStreamWriterClass, "utf8", "Z")
+	if err != nil {
+		return err
+	}
+	data := []byte(text)
+	if utf8 == 0 {
+		data = call.vm.encodePlatformString(text)
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	array, err := call.vm.newByteArrayObject(data)
+	if err != nil {
+		return err
+	}
+	_, err = call.InvokeVirtual(stream, "write", "([BII)V", ReferenceValue(array), IntValue(0), IntValue(int32(len(data))))
+	return err
+}
+
+func outputStreamWriterWriteChar(call *Invocation, arguments []Value) (Value, error) {
+	writer, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	value, err := nativeInt(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	stream, err := outputStreamWriterStream(call.vm, writer)
+	if err != nil {
+		return VoidValue(), err
+	}
+	return VoidValue(), outputStreamWriterSend(call, writer, stream, []uint16{uint16(value)}, false)
+}
+
+// outputStreamWriterWriteChars is write(char[], int, int): a closed writer is
+// IOException first, then a null array NullPointerException, then a window
+// outside the array IndexOutOfBoundsException.
+func outputStreamWriterWriteChars(call *Invocation, arguments []Value) (Value, error) {
+	writer, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	stream, err := outputStreamWriterStream(call.vm, writer)
+	if err != nil {
+		return VoidValue(), err
+	}
+	array, err := nativeReference(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	if array == nil {
+		return VoidValue(), guestException("java/lang/NullPointerException", "write of a null char array")
+	}
+	units, err := charArrayUnits(array)
+	if err != nil {
+		return VoidValue(), err
+	}
+	offset, err := nativeInt(arguments, 2)
+	if err != nil {
+		return VoidValue(), err
+	}
+	length, err := nativeInt(arguments, 3)
+	if err != nil {
+		return VoidValue(), err
+	}
+	end := int64(offset) + int64(length)
+	if offset < 0 || length < 0 || end > int64(len(units)) {
+		return VoidValue(), guestException("java/lang/IndexOutOfBoundsException",
+			fmt.Sprintf("characters %d to %d of %d", offset, end, len(units)))
+	}
+	return VoidValue(), outputStreamWriterSend(call, writer, stream, units[offset:end], false)
+}
+
+// outputStreamWriterWriteString is write(String, int, int): a closed writer is
+// IOException first, then a null string NullPointerException, then a window
+// outside it the StringIndexOutOfBoundsException getChars raises.
+func outputStreamWriterWriteString(call *Invocation, arguments []Value) (Value, error) {
+	writer, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	stream, err := outputStreamWriterStream(call.vm, writer)
+	if err != nil {
+		return VoidValue(), err
+	}
+	units, err := stringUnits(arguments, 1)
+	if err != nil {
+		return VoidValue(), err
+	}
+	window, err := stringWindow(units, arguments)
+	if err != nil {
+		return VoidValue(), err
+	}
+	return VoidValue(), outputStreamWriterSend(call, writer, stream, window, false)
+}
+
+// outputStreamWriterFlush passes the flush on to the stream; nothing waits
+// here to be sent except a half pair, which a flush does not end.
+func outputStreamWriterFlush(call *Invocation, arguments []Value) (Value, error) {
+	writer, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	stream, err := outputStreamWriterStream(call.vm, writer)
+	if err != nil {
+		return VoidValue(), err
+	}
+	_, err = call.InvokeVirtual(stream, "flush", "()V")
+	return VoidValue(), err
+}
+
+// outputStreamWriterClose sends a half pair nothing completed, closes the
+// stream and lets it go; the writer is closed after that, and closing it again
+// does nothing.
+func outputStreamWriterClose(call *Invocation, arguments []Value) (Value, error) {
+	writer, err := requireObject(arguments, 0)
+	if err != nil {
+		return VoidValue(), err
+	}
+	value, err := call.vm.Field(writer, OutputStreamWriterClass, "out", "Ljava/io/OutputStream;")
+	if err != nil {
+		return VoidValue(), err
+	}
+	stream, err := value.Reference()
+	if err != nil || stream == nil {
+		return VoidValue(), err
+	}
+	if err := outputStreamWriterSend(call, writer, stream, nil, true); err != nil {
+		return VoidValue(), err
+	}
+	if _, err := call.InvokeVirtual(stream, "close", "()V"); err != nil {
+		return VoidValue(), err
+	}
+	return VoidValue(), call.vm.SetField(writer, OutputStreamWriterClass, "out", "Ljava/io/OutputStream;", ReferenceValue(nil))
 }

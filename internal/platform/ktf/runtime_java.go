@@ -198,6 +198,10 @@ func init() {
 				{class: "java/lang/Class", name: "forName", descriptor: "(Ljava/lang/String;)Ljava/lang/Class;", accessFlags: 0x0009},
 				{class: "java/lang/Class", name: "getResourceAsStream", descriptor: "(Ljava/lang/String;)Ljava/io/InputStream;", accessFlags: 0x0001, implementation: runtimeClassGetResourceAsStream},
 				{class: "java/lang/Class", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+				// newInstance is the JVM's, and a title's own class is made by
+				// the construction this platform gives the JVM: see
+				// constructAOTInstance.
+				{class: "java/lang/Class", name: "newInstance", descriptor: "()Ljava/lang/Object;", accessFlags: 0x0001},
 			},
 		},
 		// java/io stream classes expose the JVM-owned CLDC implementations.
@@ -238,6 +242,9 @@ func init() {
 				{class: "java/io/ByteArrayOutputStream", name: "toByteArray", descriptor: "()[B", accessFlags: 0x0001},
 				{class: "java/io/ByteArrayOutputStream", name: "size", descriptor: "()I", accessFlags: 0x0001},
 				{class: "java/io/ByteArrayOutputStream", name: "reset", descriptor: "()V", accessFlags: 0x0001},
+				// An override of Object's toString, so it takes that slot
+				// rather than a new one.
+				{class: "java/io/ByteArrayOutputStream", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 			},
 		},
 		"java/io/DataOutputStream": {
@@ -359,6 +366,9 @@ func init() {
 				// The floating-point halves CLDC 1.1 added beside the integer ones.
 				{class: "java/io/DataInputStream", name: "readFloat", descriptor: "()F", accessFlags: 0x0011},
 				{class: "java/io/DataInputStream", name: "readDouble", descriptor: "()D", accessFlags: 0x0011},
+				// The static form, which reads through whatever DataInput it is
+				// handed — a title's own included.
+				{class: "java/io/DataInputStream", name: "readUTF", descriptor: "(Ljava/io/DataInput;)Ljava/lang/String;", accessFlags: 0x0019},
 			},
 		},
 		// java/lang/Math exposes the JVM-owned builtins through KTF metadata.
@@ -428,6 +438,9 @@ func init() {
 				{class: "java/lang/Runtime", name: "gc", descriptor: "()V", accessFlags: 0x0001},
 				{class: "java/lang/Runtime", name: "totalMemory", descriptor: "()J", accessFlags: 0x0001, implementation: runtimeTotalMemory},
 				{class: "java/lang/Runtime", name: "freeMemory", descriptor: "()J", accessFlags: 0x0001, implementation: runtimeFreeMemory},
+				// exit ends the session the way System.exit does here, which
+				// is the JVM's own refusal: this platform installs no exit.
+				{class: "java/lang/Runtime", name: "exit", descriptor: "(I)V", accessFlags: 0x0001},
 			},
 		},
 		"java/lang/Math": {
@@ -680,6 +693,9 @@ func init() {
 				{class: "java/lang/String", name: "valueOf", descriptor: "(J)Ljava/lang/String;", accessFlags: 0x0009},
 				{class: "java/lang/String", name: "valueOf", descriptor: "(Ljava/lang/Object;)Ljava/lang/String;", accessFlags: 0x0009},
 				{class: "java/lang/String", name: "intern", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
+				{class: "java/lang/String", name: "startsWith", descriptor: "(Ljava/lang/String;I)Z", accessFlags: 0x0001},
+				{class: "java/lang/String", name: "regionMatches", descriptor: "(ZILjava/lang/String;II)Z", accessFlags: 0x0001},
+				{class: "java/lang/String", name: "valueOf", descriptor: "(Z)Ljava/lang/String;", accessFlags: 0x0009},
 			},
 		},
 		// java/lang/StringBuffer exposes the JVM-owned CLDC implementation through
@@ -714,6 +730,15 @@ func init() {
 				// run had reached the call yet.
 				{class: "java/lang/StringBuffer", name: "deleteCharAt", descriptor: "(I)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
 				{class: "java/lang/StringBuffer", name: "getChars", descriptor: "(II[CI)V", accessFlags: 0x0001},
+				// The rest of CLDC's buffer: four more insert forms, reverse,
+				// and the capacity the class library keeps.
+				{class: "java/lang/StringBuffer", name: "insert", descriptor: "(IZ)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "insert", descriptor: "(I[C)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "insert", descriptor: "(IJ)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "insert", descriptor: "(ILjava/lang/Object;)Ljava/lang/StringBuffer;", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "reverse", descriptor: "()Ljava/lang/StringBuffer;", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "capacity", descriptor: "()I", accessFlags: 0x0001},
+				{class: "java/lang/StringBuffer", name: "ensureCapacity", descriptor: "(I)V", accessFlags: 0x0001},
 			},
 		},
 		// java/util/TimeZone is what a title asks for before it builds a
@@ -750,6 +775,15 @@ func init() {
 				{class: "java/io/Reader", name: "ready", descriptor: "()Z", accessFlags: 0x0001},
 				{class: "java/io/Reader", name: "markSupported", descriptor: "()Z", accessFlags: 0x0001},
 				{class: "java/io/Reader", name: "skip", descriptor: "(J)J", accessFlags: 0x0001},
+				// The constructor a title's own reader that names its lock
+				// calls as its super(), and the mark pair a reader that
+				// supports none refuses. The protected lock itself is not
+				// published, as ByteArrayOutputStream's count is not: a title
+				// that reads it fails at the field rather than reading a word
+				// nothing keeps.
+				{class: "java/io/Reader", name: "<init>", descriptor: "(Ljava/lang/Object;)V", accessFlags: 0x0004},
+				{class: "java/io/Reader", name: "mark", descriptor: "(I)V", accessFlags: 0x0001},
+				{class: "java/io/Reader", name: "reset", descriptor: "()V", accessFlags: 0x0001},
 			},
 		},
 		"java/io/InputStreamReader": {
@@ -763,6 +797,47 @@ func init() {
 				{class: "java/io/InputStreamReader", name: "read", descriptor: "([CII)I", accessFlags: 0x0001},
 				{class: "java/io/InputStreamReader", name: "close", descriptor: "()V", accessFlags: 0x0001},
 				{class: "java/io/InputStreamReader", name: "ready", descriptor: "()Z", accessFlags: 0x0001},
+				// The three take Reader's slots: a reader over a stream marks
+				// that stream, and supports a mark when the stream does.
+				{class: "java/io/InputStreamReader", name: "markSupported", descriptor: "()Z", accessFlags: 0x0001},
+				{class: "java/io/InputStreamReader", name: "mark", descriptor: "(I)V", accessFlags: 0x0001},
+				{class: "java/io/InputStreamReader", name: "reset", descriptor: "()V", accessFlags: 0x0001},
+			},
+		},
+		// java/io/Writer and java/io/OutputStreamWriter are the character side
+		// of the output streams. Writer is abstract, and a title's own Writer
+		// subclass links against this record: its super() calls, and the
+		// write forms it inherits, which all come down to the write(char[],
+		// int, int) it implements. Its protected lock is not published, for
+		// the reason Reader's is not.
+		"java/io/Writer": {
+			name:        "java/io/Writer",
+			superName:   "java/lang/Object",
+			accessFlags: 0x0421,
+			methods: []runtimeJavaMethod{
+				{class: "java/io/Writer", name: "<init>", descriptor: "()V", accessFlags: 0x0004},
+				{class: "java/io/Writer", name: "<init>", descriptor: "(Ljava/lang/Object;)V", accessFlags: 0x0004},
+				{class: "java/io/Writer", name: "write", descriptor: "(I)V", accessFlags: 0x0001},
+				{class: "java/io/Writer", name: "write", descriptor: "([C)V", accessFlags: 0x0001},
+				{class: "java/io/Writer", name: "write", descriptor: "([CII)V", accessFlags: 0x0401},
+				{class: "java/io/Writer", name: "write", descriptor: "(Ljava/lang/String;)V", accessFlags: 0x0001},
+				{class: "java/io/Writer", name: "write", descriptor: "(Ljava/lang/String;II)V", accessFlags: 0x0001},
+				{class: "java/io/Writer", name: "flush", descriptor: "()V", accessFlags: 0x0401},
+				{class: "java/io/Writer", name: "close", descriptor: "()V", accessFlags: 0x0401},
+			},
+		},
+		"java/io/OutputStreamWriter": {
+			name:        "java/io/OutputStreamWriter",
+			superName:   "java/io/Writer",
+			accessFlags: 0x0021,
+			methods: []runtimeJavaMethod{
+				{class: "java/io/OutputStreamWriter", name: "<init>", descriptor: "(Ljava/io/OutputStream;)V", accessFlags: 0x0001},
+				{class: "java/io/OutputStreamWriter", name: "<init>", descriptor: "(Ljava/io/OutputStream;Ljava/lang/String;)V", accessFlags: 0x0001},
+				{class: "java/io/OutputStreamWriter", name: "write", descriptor: "(I)V", accessFlags: 0x0001},
+				{class: "java/io/OutputStreamWriter", name: "write", descriptor: "([CII)V", accessFlags: 0x0001},
+				{class: "java/io/OutputStreamWriter", name: "write", descriptor: "(Ljava/lang/String;II)V", accessFlags: 0x0001},
+				{class: "java/io/OutputStreamWriter", name: "flush", descriptor: "()V", accessFlags: 0x0001},
+				{class: "java/io/OutputStreamWriter", name: "close", descriptor: "()V", accessFlags: 0x0001},
 			},
 		},
 		// java/util/Vector and java/util/Hashtable expose the JVM-owned CLDC
@@ -795,6 +870,11 @@ func init() {
 				{class: "java/util/Vector", name: "setSize", descriptor: "(I)V", accessFlags: 0x0001},
 				{class: "java/util/Vector", name: "trimToSize", descriptor: "()V", accessFlags: 0x0001},
 				{class: "java/util/Vector", name: "elements", descriptor: "()Ljava/util/Enumeration;", accessFlags: 0x0001},
+				// The two searches from an index, and toString, which overrides
+				// Object's and so takes its slot.
+				{class: "java/util/Vector", name: "indexOf", descriptor: "(Ljava/lang/Object;I)I", accessFlags: 0x0001},
+				{class: "java/util/Vector", name: "lastIndexOf", descriptor: "(Ljava/lang/Object;I)I", accessFlags: 0x0001},
+				{class: "java/util/Vector", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 			},
 		},
 		// java/util/Stack is Vector with the four methods that make it one,
@@ -831,6 +911,11 @@ func init() {
 				{class: "java/util/Hashtable", name: "clear", descriptor: "()V", accessFlags: 0x0001},
 				{class: "java/util/Hashtable", name: "keys", descriptor: "()Ljava/util/Enumeration;", accessFlags: 0x0001},
 				{class: "java/util/Hashtable", name: "elements", descriptor: "()Ljava/util/Enumeration;", accessFlags: 0x0001},
+				// The search by value, the protected growth a subclass may call,
+				// and toString in Object's slot.
+				{class: "java/util/Hashtable", name: "contains", descriptor: "(Ljava/lang/Object;)Z", accessFlags: 0x0001},
+				{class: "java/util/Hashtable", name: "rehash", descriptor: "()V", accessFlags: 0x0004},
+				{class: "java/util/Hashtable", name: "toString", descriptor: "()Ljava/lang/String;", accessFlags: 0x0001},
 			},
 		},
 		// org/kwis/msp/handset/BackLight matches the original runtime's accepted
@@ -2519,6 +2604,25 @@ func runtimeClassReceiverName(arguments []jvm.Value) (string, error) {
 	return name, nil
 }
 
+// constructAOTInstance is how Class.newInstance makes an object of a class
+// that exists here as guest records — a title's own, whose constructor is its
+// compiled code, or a runtime class this platform laid out — once the JVM has
+// refused what CLDC refuses. It is the construction the Host gives a title's
+// main class (runtimeMainStart): the instance allocated with its guest layout,
+// then the class's own <init>()V run through the JVM-to-AOT bridge on the
+// execution that asked, so an exception the constructor throws reaches the
+// caller of newInstance as itself.
+func (runtime *initializationRuntime) constructAOTInstance(call *jvm.Invocation, class jvm.AOTClassMetadata) (*jvm.Object, error) {
+	_, object, err := runtime.allocateAOTInstance(class.Address)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := runtime.invokeAOTFromJVMContext(call, class.Name, "<init>", "()V", []jvm.Value{jvm.ReferenceValue(object)}); err != nil {
+		return nil, err
+	}
+	return object, nil
+}
+
 func runtimeClassGetName(runtime *initializationRuntime, _ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 	name, err := runtimeClassReceiverName(arguments)
 	if err != nil {
@@ -3329,6 +3433,7 @@ func (runtime *initializationRuntime) defaultDisplay() *jvm.Object {
 }
 
 func (runtime *initializationRuntime) registerRuntimeJavaNatives() error {
+	runtime.client.vm.SetAOTConstructor(runtime.constructAOTInstance)
 	for _, definition := range runtimeJavaClasses {
 		for _, method := range definition.methods {
 			implementation := method.implementation
