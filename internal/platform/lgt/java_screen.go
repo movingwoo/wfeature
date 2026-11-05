@@ -364,8 +364,8 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/lcdui/Font.charsWidth([CII)I": {Words: 4, Implementat: javaCharsWidth},
 
 	// The card the application shows, and the display it shows it on. A Card
-	// is the whole screen here, and pushing one is what makes its `paint` the
-	// frame; see java_frame.go.
+	// is the whole screen here unless it has a box (java_card.go), and pushing
+	// one is what makes its `paint` the frame; see java_frame.go.
 	"org/kwis/msp/lcdui/Display.pushCard(Lorg/kwis/msp/lcdui/Card;)V": {
 		Words: 2, Implementat: javaPushCard},
 	"org/kwis/msp/lcdui/Card.repaint(IIII)V": {Words: 5, Implementat: javaCardRepaint},

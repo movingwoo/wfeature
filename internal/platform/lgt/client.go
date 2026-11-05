@@ -626,7 +626,8 @@ func (client *Client) PaintClet(ctx context.Context) error {
 }
 
 // PauseClet and ResumeClet are the lifecycle a Host uses when the page is
-// hidden.
+// hidden. A Java title registers no Clet, so for one they do nothing; its
+// lifecycle is its Jlet's (PauseJlet, ResumeJlet and DestroyJlet).
 func (client *Client) PauseClet(ctx context.Context) error {
 	if client.clet.Pause == 0 {
 		return nil

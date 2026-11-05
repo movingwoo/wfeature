@@ -64,6 +64,10 @@ type javaThread struct {
 	// priority is what the title asked for, which nothing here schedules on;
 	// see javaThreadSetPriority.
 	priority int32
+	// interrupted is an interrupt the thread has not yet been thrown: the next
+	// sleep, wait or join it makes throws InterruptedException and clears it.
+	// See javaThreadInterrupt.
+	interrupted bool
 }
 
 type javaWorker struct {
@@ -188,6 +192,12 @@ func javaThreadStart(
 // own thread is the one inside the call, and blocking it would stop the Host
 // rather than the guest. That one advances the guest clock instead, which is
 // what the wait was for.
+//
+// **An interrupt ends a sleep with InterruptedException**, as CLDC 1.1 and the
+// KTF and SKT runtimes (internal/jvm) have it: one already pending throws
+// before the thread sleeps at all, and one that arrives while it sleeps wakes
+// it (javaThreadInterrupt) to throw when its turn comes. Either way the
+// interrupt is spent.
 func javaThreadSleep(
 	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -198,6 +208,9 @@ func javaThreadSleep(
 	if milliseconds > uint64(time.Hour/time.Millisecond) {
 		return 0, fmt.Errorf("a sleep of %d milliseconds", milliseconds)
 	}
+	if client.takeJavaInterrupt() {
+		return 0, client.throwJavaInterrupted(thread, "sleep")
+	}
 	wait := time.Duration(milliseconds) * time.Millisecond
 	worker := client.activeJavaWorker
 	if worker == nil {
@@ -207,7 +220,150 @@ func javaThreadSleep(
 	worker.wakeAt = client.clock.now() + wait
 	worker.yields = 0
 	client.noteJavaWait(worker, thread)
-	return 0, worker.park()
+	if err := worker.park(); err != nil {
+		return 0, err
+	}
+	if client.takeJavaInterrupt() {
+		return 0, client.throwJavaInterrupted(thread, "sleep")
+	}
+	return 0, nil
+}
+
+// javaInterruptedClass is what an interrupted sleep, wait or join throws.
+const javaInterruptedClass = "java/lang/InterruptedException"
+
+// javaThreadInterrupt is `Thread.interrupt()`, slot 12. The slot is the
+// declaration-order rule's, between run at 11 and the isAlive anchor at 13.
+//
+// What it does is CLDC 1.1's, as the KTF and SKT runtimes (internal/jvm) give
+// it: **the thread's interrupt is set, and a thread parked in a sleep, a wait
+// or a join is woken** to throw InterruptedException there; a thread doing
+// anything else throws it from the next sleep, wait or join it makes. Nothing
+// else reads the flag — CLDC 1.1 has no `isInterrupted` — and a thread that is
+// not running keeps it like the runtimes do, so a thread interrupted before it
+// is started throws from its first sleep.
+//
+// Waking is making the thread eligible for its next slice: its sleep or timed
+// wait is cut short, and the call it is parked in throws when it resumes.
+func javaThreadInterrupt(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	runtime := client.javaRuntimeState()
+	target, known := runtime.threads[arguments[0]]
+	if !known {
+		// A Thread subclass the module built without the constructor this
+		// platform sees stands for itself, the way javaThreadStart takes one.
+		target = &javaThread{object: arguments[0], runnable: arguments[0]}
+		runtime.threads[arguments[0]] = target
+	}
+	target.interrupted = true
+	if worker := target.worker; worker != nil && !worker.done && worker != client.activeJavaWorker {
+		worker.wakeAt = 0
+	}
+	if client.logger != nil {
+		client.logger.Debug("LGT java thread interrupted", "thread", arguments[0])
+	}
+	return 0, nil
+}
+
+// javaRunningThread answers the Thread record of whatever is running: the
+// guest thread in its slice, or the platform's own thread once a title has
+// asked for its Thread object (javaCurrentThread). It is nil for the
+// platform's thread before that, which nothing can have interrupted.
+func (client *Client) javaRunningThread() *javaThread {
+	runtime := client.javaRun
+	if runtime == nil {
+		return nil
+	}
+	if worker := client.activeJavaWorker; worker != nil {
+		for _, thread := range runtime.threads {
+			if thread != nil && thread.worker == worker {
+				return thread
+			}
+		}
+		return nil
+	}
+	if runtime.mainThread == 0 {
+		return nil
+	}
+	return runtime.threads[runtime.mainThread]
+}
+
+// javaInterruptPending reports whether the running thread holds an interrupt,
+// without spending it.
+func (client *Client) javaInterruptPending() bool {
+	thread := client.javaRunningThread()
+	return thread != nil && thread.interrupted
+}
+
+// takeJavaInterrupt spends the running thread's interrupt, and reports
+// whether there was one.
+func (client *Client) takeJavaInterrupt() bool {
+	thread := client.javaRunningThread()
+	if thread == nil || !thread.interrupted {
+		return false
+	}
+	thread.interrupted = false
+	return true
+}
+
+// javaInterruptUndelivered reports whether a guest thread is parked in a sleep,
+// a wait or a join with an interrupt it has not yet been thrown. The throw is
+// what its next slice does; a checkpoint taken before that would restore the
+// thread inside the call's remainder, which completes the call and has no
+// exception to throw, so the capture is refused as busy until it has run —
+// at most the round that wakes it.
+//
+// A yield is counted with the sleep it shares a remainder with; refusing one
+// costs the same round.
+func (client *Client) javaInterruptUndelivered() bool {
+	runtime := client.javaRun
+	if runtime == nil {
+		return false
+	}
+	for _, thread := range runtime.threads {
+		if thread == nil || !thread.interrupted || thread.worker == nil || thread.worker.done {
+			continue
+		}
+		if client.javaWorkerBlocked(thread.worker) {
+			return true
+		}
+	}
+	return false
+}
+
+// javaWorkerBlocked reports whether a parked thread's innermost platform call
+// is one an interrupt ends: a sleep or a yield, a wait, or a join.
+func (client *Client) javaWorkerBlocked(worker *javaWorker) bool {
+	var remainder javaRemainder
+	switch {
+	case len(worker.restored) != 0:
+		remainder = javaRemainder(worker.restored[len(worker.restored)-1].Remainder)
+	case worker.armThread == nil || len(worker.armThread.LiveContexts()) <= 1:
+		return false
+	default:
+		frames, err := client.core.InspectParkedCalls(worker.armThread, nil)
+		if err != nil || len(frames) == 0 {
+			return false
+		}
+		if remainder, err = client.javaFrameRemainder(frames[len(frames)-1], true); err != nil {
+			return false
+		}
+	}
+	switch remainder {
+	case javaRemainderResult, javaRemainderWait, javaRemainderJoin:
+		return true
+	}
+	return false
+}
+
+// throwJavaInterrupted throws what an interrupted sleep, wait or join throws,
+// with the message the KTF and SKT runtimes give it.
+func (client *Client) throwJavaInterrupted(thread *armcore.Thread, call string) error {
+	if client.logger != nil {
+		client.logger.Debug("LGT java thread interrupted out of a call", "call", call)
+	}
+	return client.throwJavaPlatform(thread, javaInterruptedClass, ": thread interrupted")
 }
 
 // javaStallSleeps is how many sleeps at one call site make a wait worth
@@ -483,6 +639,12 @@ func (client *Client) runJavaWorker(thread *javaThread, worker *javaWorker) {
 				err = backend.GuestPanic(client.logger, "LGT guest thread", recovered)
 			}
 		}()
+		// A timer's thread runs the one task it was started for; see
+		// java_timer.go.
+		if timer := client.javaTimerRunBy(thread); timer != nil {
+			err = client.runJavaTimerTask(ctx, worker, timer, thread)
+			return
+		}
 		err = client.callJavaRunnable(ctx, worker.armThread, thread.runnable)
 	}()
 	client.releaseJavaMonitors(worker)
@@ -553,7 +715,9 @@ func javaThreadRun(
 	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	record, known := client.javaRuntimeState().threads[arguments[0]]
-	if !known || record.runnable == 0 || record.runnable == arguments[0] {
+	// A timer's thread was built with no Runnable of the title's; the task it
+	// is running is the timer's to run, not the caller's (java_timer.go).
+	if !known || record.runnable == 0 || record.runnable == arguments[0] || client.javaTimerRunBy(record) != nil {
 		// A thread built with no Runnable stands for itself here
 		// (javaThreadConstructor), and its own run is the one being asked.
 		return 0, nil
@@ -741,7 +905,15 @@ func (worker *javaWorker) park() error {
 // passed, and reports how many ran. It is the other half of a Java title's
 // tick: `PaintJava` draws what the threads have done.
 func (client *Client) ServiceJavaThreads(ctx context.Context) (int, error) {
-	if client.javaRun == nil || len(client.javaRun.workers) == 0 {
+	if client.javaRun == nil {
+		return 0, nil
+	}
+	// A timer task that has come due starts first, so its run has a slice in
+	// this round; see java_timer.go.
+	if err := client.startDueJavaTimerTasks(); err != nil {
+		return 0, err
+	}
+	if len(client.javaRun.workers) == 0 {
 		return 0, nil
 	}
 	runtime := client.javaRun
@@ -821,6 +993,11 @@ func (client *Client) nextJavaThreadDue() (time.Duration, bool) {
 		if !found || wait < earliest {
 			earliest, found = wait, true
 		}
+	}
+	// A timer task is a deadline the same way: the tick lands on it rather than
+	// a tick past it. See java_timer.go.
+	if wait, due := client.nextJavaTimerDue(now); due && (!found || wait < earliest) {
+		earliest, found = wait, true
 	}
 	return earliest, found
 }
@@ -1056,10 +1233,38 @@ func javaThreadIsAlive(
 // thread has no slice to end, so it gives the other threads their slices
 // itself until the one it waits for is done — bounded, because a thread that
 // never ends would otherwise hold the session's own call for good.
+//
+// **An interrupt ends the join with InterruptedException**, as it does in the
+// KTF and SKT runtimes (internal/jvm): one already pending throws at once, and
+// one that arrives while the thread waits throws when its turn comes. A join
+// on a thread that is not running returns before the interrupt is looked at,
+// which is the class library's order, and leaves it pending.
 func javaThreadJoin(
-	client *Client, ctx context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	return 0, client.joinJavaThread(ctx, client.activeJavaWorker, arguments[0])
+	if !client.javaThreadAlive(arguments[0]) {
+		return 0, nil
+	}
+	if client.takeJavaInterrupt() {
+		return 0, client.throwJavaInterrupted(thread, "join")
+	}
+	err := client.awaitJavaThread(ctx, client.activeJavaWorker, arguments[0], true)
+	if errors.Is(err, errJavaJoinInterrupted) {
+		client.takeJavaInterrupt()
+		return 0, client.throwJavaInterrupted(thread, "join")
+	}
+	return 0, err
+}
+
+// errJavaJoinInterrupted is a live join an interrupt ended; javaThreadJoin
+// throws it to the title.
+var errJavaJoinInterrupted = errors.New("the join was interrupted")
+
+// javaThreadAlive reports whether a Thread object's thread is started and has
+// not ended.
+func (client *Client) javaThreadAlive(object uint32) bool {
+	target, known := client.javaRuntimeState().threads[object]
+	return known && target.worker != nil && !target.worker.done
 }
 
 // maxJavaJoinRounds is how many rounds of every guest thread the platform's
@@ -1073,13 +1278,25 @@ const maxJavaJoinRounds = 1 << 10
 // joinJavaThread is the waiting itself. It is separate because a restored
 // thread runs it again from the top: what a join had left when the checkpoint
 // was taken is all of it. See checkpoint_worker.go.
+//
+// **A restored join is not cut short by an interrupt**: it waits until the
+// thread has ended, and the interrupt stays pending for the next sleep, wait or
+// join to throw. The remainder it completes has no exception to throw into, and
+// returning early would tell the title a thread had ended that has not.
 func (client *Client) joinJavaThread(ctx context.Context, worker *javaWorker, object uint32) error {
-	alive := func() bool {
-		target, known := client.javaRuntimeState().threads[object]
-		return known && target.worker != nil && !target.worker.done
-	}
+	return client.awaitJavaThread(ctx, worker, object, false)
+}
+
+// awaitJavaThread waits until a thread has ended. An interruptible wait also
+// ends, with errJavaJoinInterrupted, once the waiting thread is interrupted.
+func (client *Client) awaitJavaThread(ctx context.Context, worker *javaWorker, object uint32, interruptible bool) error {
+	alive := func() bool { return client.javaThreadAlive(object) }
+	interrupted := func() bool { return interruptible && client.javaInterruptPending() }
 	if worker != nil {
 		for alive() {
+			if interrupted() {
+				return errJavaJoinInterrupted
+			}
 			worker.wakeAt, worker.yields = 0, 0
 			if err := worker.park(); err != nil {
 				return err
@@ -1088,6 +1305,9 @@ func (client *Client) joinJavaThread(ctx context.Context, worker *javaWorker, ob
 		return nil
 	}
 	for rounds := 0; alive(); rounds++ {
+		if interrupted() {
+			return errJavaJoinInterrupted
+		}
 		if rounds >= maxJavaJoinRounds {
 			return fmt.Errorf("join on a thread that has not ended after %d rounds of every thread", rounds)
 		}
@@ -1136,9 +1356,10 @@ func javaThreadSetPriority(
 // `synchronized` method calling another one on the same object waits from
 // inside two.
 func javaObjectWait(
-	client *Client, ctx context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
-	return client.waitOnJavaObject(ctx, arguments[0], 0)
+	answer, err := client.waitOnJavaObject(ctx, arguments[0], 0)
+	return client.javaWaitAnswer(thread, answer, err)
 }
 
 // javaObjectWaitTimed is `Object.wait(long)`, slot 7: the same handover, with a
@@ -1149,15 +1370,44 @@ func javaObjectWait(
 // spin. The long arrives in two words, low first, like every other on this
 // platform.
 func javaObjectWaitTimed(
-	client *Client, ctx context.Context, _ *armcore.Thread, arguments []uint32,
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
 	milliseconds := uint64(arguments[1]) | uint64(arguments[2])<<32
 	if milliseconds > uint64(time.Hour/time.Millisecond) {
 		return 0, fmt.Errorf("a wait of %d milliseconds", milliseconds)
 	}
-	return client.waitOnJavaObject(ctx, arguments[0], time.Duration(milliseconds)*time.Millisecond)
+	answer, err := client.waitOnJavaObject(ctx, arguments[0], time.Duration(milliseconds)*time.Millisecond)
+	return client.javaWaitAnswer(thread, answer, err)
 }
 
+// javaObjectWaitNanosInterruptible is `Object.wait(long, int)`, slot 8: the
+// form java_object.go reads, answered the way the other two wait forms are
+// when an interrupt ends it.
+func javaObjectWaitNanosInterruptible(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	answer, err := javaObjectWaitNanos(client, ctx, thread, arguments)
+	return client.javaWaitAnswer(thread, answer, err)
+}
+
+// errJavaWaitInterrupted is a wait an interrupt ended, with the lock taken
+// back: javaWaitAnswer throws it to the title.
+var errJavaWaitInterrupted = errors.New("the wait was interrupted")
+
+// javaWaitAnswer turns a wait an interrupt ended into the InterruptedException
+// it throws, and leaves every other answer alone.
+func (client *Client) javaWaitAnswer(thread *armcore.Thread, answer uint32, err error) (uint32, error) {
+	if errors.Is(err, errJavaWaitInterrupted) {
+		return 0, client.throwJavaInterrupted(thread, "wait")
+	}
+	return answer, err
+}
+
+// waitOnJavaObject is the wait every form shares. **An interrupt ends it with
+// errJavaWaitInterrupted**, as the KTF and SKT runtimes end theirs with
+// InterruptedException: one already pending before the lock is given up, which
+// then stays held, and one that arrives during the wait once the lock has been
+// taken back at its depth. The ownership check comes first, as theirs does.
 func (client *Client) waitOnJavaObject(
 	ctx context.Context, object uint32, timeout time.Duration,
 ) (uint32, error) {
@@ -1167,6 +1417,9 @@ func (client *Client) waitOnJavaObject(
 	if monitor == nil || monitor.count == 0 ||
 		monitor.owner != worker || monitor.platform != (worker == nil) {
 		return 0, fmt.Errorf("wait on %#x, whose lock the waiting thread does not hold", object)
+	}
+	if client.takeJavaInterrupt() {
+		return 0, errJavaWaitInterrupted
 	}
 	depth := monitor.count
 	delete(runtime.monitors, object)
@@ -1192,7 +1445,13 @@ func (client *Client) waitOnJavaObject(
 			return 0, err
 		}
 	}
-	return 0, client.finishJavaWait(ctx, worker, object, depth)
+	if err := client.finishJavaWait(ctx, worker, object, depth); err != nil {
+		return 0, err
+	}
+	if client.takeJavaInterrupt() {
+		return 0, errJavaWaitInterrupted
+	}
+	return 0, nil
 }
 
 // finishJavaWait is the half of a wait that runs once the turn comes back:
@@ -1219,6 +1478,11 @@ func (client *Client) finishJavaWait(
 func (client *Client) runOtherJavaWorkers(ctx context.Context) error {
 	if client.javaRun == nil {
 		return nil
+	}
+	// The turn includes a timer task that has come due, which is what a wait
+	// on the platform's own thread for a task's work is waiting for.
+	if err := client.startDueJavaTimerTasks(); err != nil {
+		return err
 	}
 	for _, worker := range append([]*javaWorker(nil), client.javaRun.workers...) {
 		if worker.done {

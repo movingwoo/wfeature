@@ -142,19 +142,28 @@ func (client *Client) PaintJava(ctx context.Context) error {
 }
 
 // paintJavaCard runs one frame: hand the card a Graphics over the screen, let
-// it paint, and present what it drew.
+// it paint, and present what it drew. A card with a box paints into a surface
+// of its own instead, which goes on the screen at the box once the paint
+// returns; see java_card.go.
 func (client *Client) paintJavaCard(ctx context.Context, thread *armcore.Thread) error {
 	client.javaRun.cardDirty = false
-	graphics, err := client.javaScreenGraphics()
+	frame, err := client.javaScreenGraphics()
 	if err != nil {
 		return err
 	}
 	card := client.javaRun.card
 	client.javaRun.beginTextReads()
-	err = client.callJavaCardMethod(ctx, thread, javaCardPaintMethod, graphics)
+	err = client.callJavaCardMethod(ctx, thread, javaCardPaintMethod, frame.graphics)
 	client.javaRun.endTextReads(card, err == nil)
 	if err != nil {
 		return err
+	}
+	// A paint of the same card inside this one — a resize, a repaint and a
+	// serviceRepaints from its own paint — makes the surface again and puts its
+	// own frame on the screen; this one's surface is then gone and has nothing
+	// newer to show.
+	if frame.positioned && client.framebuffer(frame.surface.handle) == frame.surface {
+		client.composeJavaCard(frame.surface, frame.box)
 	}
 	// The frame goes the other way here than it does on the Clet path. A Clet
 	// wrote its pixels into guest memory itself, so a flush reads them out; a
@@ -177,26 +186,32 @@ func (client *Client) paintJavaCard(ctx context.Context, thread *armcore.Thread)
 // javaScreenGraphics answers the Graphics a card paints through, building it
 // once and resetting the state a paint starts with. **The object is the same
 // every frame**: a title that keeps the Graphics it was handed — and the local
-// ones do, in a field — has to keep one that still works.
-func (client *Client) javaScreenGraphics() (uint32, error) {
+// ones do, in a field — has to keep one that still works. It draws on the
+// screen, or on the surface of a card with a box (javaPaintTarget), and keeps
+// drawing there between paints.
+func (client *Client) javaScreenGraphics() (javaCardFrame, error) {
 	runtime := client.javaRuntimeState()
 	screen, err := client.screenSurface()
 	if err != nil {
-		return 0, err
+		return javaCardFrame{}, err
 	}
 	if runtime.screenGraphics == 0 {
 		object, err := client.newJavaGraphics(screen.handle)
 		if err != nil {
-			return 0, err
+			return javaCardFrame{}, err
 		}
 		runtime.screenGraphics = object
 	}
 	state, err := client.javaGraphicsState(runtime.screenGraphics)
 	if err != nil {
-		return 0, err
+		return javaCardFrame{}, err
 	}
-	*state = *newJavaGraphicsState(screen.handle)
-	return runtime.screenGraphics, nil
+	target, box, positioned, err := client.javaPaintTarget()
+	if err != nil {
+		return javaCardFrame{}, err
+	}
+	*state = *newJavaGraphicsState(target.handle)
+	return javaCardFrame{graphics: runtime.screenGraphics, surface: target, box: box, positioned: positioned}, nil
 }
 
 // callJavaCardMethod enters one of the application card's own methods. The

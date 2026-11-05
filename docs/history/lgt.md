@@ -8551,6 +8551,62 @@ answers -1 afterwards. `skipBytes` still answers how far it got. A
 one-argument `InputStreamReader` over null is the NullPointerException KTF and
 SKT throw, not a host error.
 
+**The Jlet now hears its lifecycle.** Its launcher only ever entered
+`startApp`; a probe of three local Java titles found their module registers no
+Clet table, so the `pauseClet`, `resumeClet` and `destroyClet` the session
+called returned at once, and each title's own `pauseApp`, `resumeApp` and
+`destroyApp(Z)V` — present as method records — retired no instruction on a
+park, a resume or a close. They now run as KTF runs them (`java_lifecycle.go`):
+`pauseApp` on park, `resumeApp` on resume, `destroyApp(true)` once on close
+before the threads stop and the open files are flushed, within the ending
+bound. The methods are found by name and descriptor on the title's own Jlet
+class, the most-derived override first, and called on the Jlet the launcher
+built. On the three titles the callbacks stopped the music, disconnected the
+network and asked for a repaint (135 to 808 instructions; one `resumeApp`
+painted a frame), and the games ticked on without an error. An uncaught
+exception is counted and absorbed as on KTF, the title ending itself is an
+ending, any other failure is logged and the game goes on, and a title that
+called `notifyDestroyed` gets no `destroyApp`. Clets are unchanged. A quick
+save still runs no pause callback; a paused slot resumes through `resumeApp`.
+
+**A card can have a position.** The `Card(x, y, w, h)` and `Display` forms
+keep their box as given (KTF throws nothing for an empty one, so neither does
+this), and within LGT's one shown card such a card paints through the same
+Graphics aimed for that paint at a surface the card's size, which is copied
+onto the screen at the box when the paint returns; the paint starts with its
+origin at the corner and nothing it does can draw outside the card. The
+surface starts as what the screen held under the box and then keeps the card's
+own drawing. `move` and `resize` show at the next paint, `isShown` is whether
+the card is the shown one, and the box is written into the card's protected
+fields, where one local title reads `x` and `y` directly (it builds its card
+with `Card()`, so they stay 0). No local title names a positioned member. The
+boxes are in a version 6 screen record, written only when a session holds
+one; a session without one writes version 5 or the earlier shapes byte for
+byte, and every earlier shape loads with whole-screen cards.
+
+**`Timer`, `TimerTask` and `Thread.interrupt` are served.** No local title
+names a Timer member and no module carries a Timer class of its own; Thread's
+methods are compiled to fixed slots in every module, so who calls slot 12
+cannot be seen. A timer runs its tasks one after another on one guest thread
+of its own, each run starting at the round its deadline falls in against the
+guest clock (a tick lands on a deadline); fixed rate counts the next run from
+the deadline and fixed delay from the start of the run; a task's uncaught
+exception cancels its timer; the queue holds 256 tasks. Where KTF and SKT
+differ the class library is followed: null is NullPointerException, a
+negative delay or period IllegalArgumentException, a period of 0 one run (as
+KTF and SKT answer), scheduling on a cancelled timer or a used task
+IllegalStateException, and a date already past is due now without catch-up.
+Timer's members sit at slots 10 to 16 and TimerTask's at 11 and 12 by the
+declaration-order rule alone. A scheduled task is often held by nothing in
+guest memory, so the timers keep a 4 KiB block the collector scans as roots.
+`interrupt` wakes a sleeping, joining or waiting thread with
+InterruptedException (a wait throws once it has the lock back) and otherwise
+sets the flag the next such call throws on. The timers and pending interrupts
+are in a scheduling record, version 7, which wraps the screen record (cards
+included) and is written only when a session holds one; a quick save is
+refused as busy for the one round a parked thread holds an interrupt it has
+not yet thrown.
+
 **The C image error is the specification's.** `imageBadFormat`, which
 `createImage` returns for broken data and `decodeNextImage` for an unknown
 handle, was -20, `M_E_TIMEOUT` in the WIPI error table; it is now -6,

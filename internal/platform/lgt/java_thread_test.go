@@ -617,3 +617,219 @@ func TestJavaThreadActiveCount(t *testing.T) {
 		t.Errorf("activeCount() with two running and the platform's own = %d, want 3", got)
 	}
 }
+
+// interrupt is Thread's slot 12, by the declaration-order rule: between run at
+// 11 and the isAlive anchor at 13.
+func TestJavaThreadInterruptIsSlotTwelve(t *testing.T) {
+	fixture := newTimerFixture(t)
+	dispatch, ok := fixture.client.javaPlatformVirtualDispatch(javaVirtualSlot(javaThreadClass, 12))
+	if !ok || dispatch.Called != "interrupt()V" || dispatch.Method.Words != 1 {
+		t.Fatalf("Thread slot 12 resolves to %+v (%v), want interrupt()V", dispatch, ok)
+	}
+}
+
+// A thread asleep is woken by an interrupt and its sleep throws
+// InterruptedException on its next slice rather than when the sleep would
+// have ended; the interrupt is spent. Until the throw has happened a quick
+// save waits, and afterwards it is taken.
+func TestJavaThreadInterruptEndsASleep(t *testing.T) {
+	fixture := newTimerFixture(t)
+	client := fixture.client
+	thread := fixture.start("Sleeper", fixture.catching(0, func(a *assembler) {
+		fixture.call(a, "sleep", 10000, 0)
+		fixture.increment(a, 1)
+	}))
+	fixture.settle()
+	tickSession(t, fixture.session, 1)
+	interrupted := client.clock.now()
+	fixture.interrupt(thread)
+	if _, err := fixture.session.CaptureCheckpoint(context.Background()); !errors.Is(err, ErrCheckpointBusy) {
+		t.Fatalf("a quick save with the interrupt not yet thrown = %v, want it refused as busy", err)
+	}
+	tickSession(t, fixture.session, 1)
+	if words := fixture.words(fixture.session); words[0] != 1 || words[1] != 0 {
+		t.Fatalf("the thread counted %v, want the handler once and the line after the sleep never", words[:2])
+	}
+	if waited := client.clock.now() - interrupted; waited > 100*time.Millisecond {
+		t.Errorf("the interrupted sleep ended %v after the interrupt, not on the next slice", waited)
+	}
+	if client.javaRun.threads[thread].interrupted {
+		t.Error("the interrupt was thrown and is still pending")
+	}
+	if count, _ := fixture.session.UncaughtCallbacks(); count != 0 {
+		t.Error("the thread's own handler did not catch the exception")
+	}
+	if _, err := fixture.session.CaptureCheckpoint(context.Background()); err != nil {
+		t.Errorf("a quick save after the throw: %v", err)
+	}
+}
+
+// An interrupt that comes before the sleep — even before the thread is
+// started, which the KTF and SKT runtimes allow — throws at once.
+func TestJavaThreadInterruptPendingThrowsFromTheNextSleep(t *testing.T) {
+	fixture := newTimerFixture(t)
+	thread := fixture.build("Early", fixture.catching(0, func(a *assembler) {
+		fixture.call(a, "sleep", 10000, 0)
+		fixture.increment(a, 1)
+	}))
+	fixture.interrupt(thread)
+	if _, err := javaThreadStart(fixture.client, context.Background(), nil, []uint32{thread}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.settle()
+	tickSession(t, fixture.session, 1)
+	if words := fixture.words(fixture.session); words[0] != 1 || words[1] != 0 {
+		t.Fatalf("the thread counted %v, want its first sleep to throw at once", words[:2])
+	}
+	// An interrupt of an object the platform never saw constructed is held
+	// as the thread it stands for.
+	subclass, err := newTestObject(t, fixture.client, javaThreadClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.interrupt(subclass)
+	if record := fixture.client.javaRun.threads[subclass]; record == nil || !record.interrupted || record.runnable != subclass {
+		t.Errorf("the interrupted Thread is held as %+v", record)
+	}
+}
+
+// A join is ended by an interrupt the same way; a join on a thread that is not
+// running returns before the interrupt is looked at, and leaves it pending.
+func TestJavaThreadInterruptEndsAJoin(t *testing.T) {
+	fixture := newTimerFixture(t)
+	client := fixture.client
+	loader := fixture.start("Loader", fixture.install(func(a *assembler) {
+		a.emit(armPushLR)
+		fixture.call(a, "sleep", 10000, 0)
+		a.emit(armPopPC)
+	}))
+	waiter := fixture.start("Waiter", fixture.catching(0, func(a *assembler) {
+		fixture.call(a, "join", loader)
+		fixture.increment(a, 1)
+	}))
+	fixture.settle()
+	tickSession(t, fixture.session, 2)
+	fixture.interrupt(waiter)
+	tickSession(t, fixture.session, 1)
+	if words := fixture.words(fixture.session); words[0] != 1 || words[1] != 0 {
+		t.Fatalf("the waiter counted %v, want its join to throw", words[:2])
+	}
+	if !client.javaThreadAlive(loader) {
+		t.Fatal("the loader ended; the join was not interrupted")
+	}
+
+	main, err := javaCurrentThread(client, context.Background(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle := fixture.build("Idle", fixture.countRun(2))
+	fixture.interrupt(main)
+	if _, err := javaThreadJoin(client, context.Background(), client.thread, []uint32{idle}); err != nil {
+		t.Fatalf("a join on a thread nothing started = %v, want it to return", err)
+	}
+	if !client.javaRun.threads[main].interrupted {
+		t.Error("a join that returned at once spent the interrupt")
+	}
+	_, err = javaThreadJoin(client, context.Background(), client.thread, []uint32{loader})
+	if thrownClass(err) != javaInterruptedClass || client.javaRun.threads[main].interrupted {
+		t.Errorf("a join on a running thread with an interrupt pending = %v, want InterruptedException", err)
+	}
+}
+
+// A wait is ended by an interrupt with InterruptedException once the lock has
+// been taken back, so the handler runs holding it and gives it back; an
+// interrupt already pending throws before the lock is given up at all.
+func TestJavaThreadInterruptEndsAWait(t *testing.T) {
+	fixture := newTimerFixture(t)
+	client := fixture.client
+	object, err := newTestObject(t, client, javaObjectClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiter := fixture.start("Waiter", fixture.install(func(a *assembler) {
+		fixture.call(a, "enter", object)
+		fixture.call(a, "try")
+		a.literal(5, fixture.stubs["setjmp"])
+		a.call(5)
+		a.emit(armCmpImm(0, 0))
+		branch := len(a.words)
+		a.emit(0) // bne handler
+		fixture.call(a, "waitTimed", object, 10000, 0)
+		fixture.increment(a, 1)
+		fixture.call(a, "leave")
+		skip := len(a.words)
+		a.emit(0) // b past the handler
+		catch := a.here()
+		a.words[branch] = 0x1a000000 | uint32(int32(int64(catch)-int64(a.base+uint32(branch)*4+8))/4)&0xffffff
+		fixture.increment(a, 0)
+		exit := a.here()
+		a.words[skip] = armBranch(int32(int64(exit)-int64(a.base+uint32(skip)*4+8)) / 4)
+		fixture.call(a, "exit", object)
+		top := a.here()
+		fixture.call(a, "sleep", 30, 0)
+		fixture.loop(a, top)
+	}))
+	fixture.settle()
+	tickSession(t, fixture.session, 2)
+	if client.javaRun.monitors[object] != nil {
+		t.Fatal("the waiting thread holds the lock it waits on")
+	}
+	fixture.interrupt(waiter)
+	tickSession(t, fixture.session, 1)
+	if words := fixture.words(fixture.session); words[0] != 1 || words[1] != 0 {
+		t.Fatalf("the waiter counted %v, want its wait to throw", words[:2])
+	}
+	if client.javaRun.monitors[object] != nil {
+		t.Error("the lock is held after the handler gave it back")
+	}
+
+	main, err := javaCurrentThread(client, context.Background(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.javaMonitorEnter(context.Background(), object); err != nil {
+		t.Fatal(err)
+	}
+	fixture.interrupt(main)
+	before := client.clock.now()
+	_, err = javaObjectWaitTimed(client, context.Background(), client.thread, []uint32{object, 5000, 0})
+	if thrownClass(err) != javaInterruptedClass {
+		t.Fatalf("a wait with an interrupt pending = %v, want InterruptedException", err)
+	}
+	if held := client.javaRun.monitors[object]; held == nil || held.count != 1 || !held.platform {
+		t.Errorf("the lock after the refused wait is %+v, want it still held once by the platform's thread", held)
+	}
+	if client.clock.now() != before {
+		t.Error("the refused wait waited")
+	}
+	// The third form throws the same way.
+	fixture.interrupt(main)
+	_, err = javaObjectWaitNanosInterruptible(client, context.Background(), client.thread, []uint32{object, 5, 0, 0})
+	if thrownClass(err) != javaInterruptedClass {
+		t.Errorf("wait(long, int) with an interrupt pending = %v, want InterruptedException", err)
+	}
+}
+
+// The platform's own thread is a thread too: once a title holds its Thread
+// object an interrupt of it makes its next sleep throw, without the sleep
+// moving the clock, and the interrupt is spent.
+func TestJavaThreadInterruptOnThePlatformsThread(t *testing.T) {
+	client := fixtureClient(t)
+	ctx := context.Background()
+	main, err := javaCurrentThread(client, ctx, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := javaThreadInterrupt(client, ctx, nil, []uint32{main}); err != nil {
+		t.Fatal(err)
+	}
+	before := client.clock.now()
+	_, err = javaThreadSleep(client, ctx, client.thread, []uint32{40, 0})
+	if thrownClass(err) != javaInterruptedClass || client.clock.now() != before {
+		t.Fatalf("an interrupted sleep on the platform's thread = %v after %v, want InterruptedException at once",
+			err, client.clock.now()-before)
+	}
+	if _, err := javaThreadSleep(client, ctx, client.thread, []uint32{40, 0}); err != nil || client.clock.now()-before != 40*time.Millisecond {
+		t.Errorf("the next sleep = %v after %v, want an ordinary 40ms", err, client.clock.now()-before)
+	}
+}

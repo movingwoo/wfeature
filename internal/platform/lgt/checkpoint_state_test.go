@@ -895,16 +895,33 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"painting": boundary, "paintTextReads": boundary, "paintTextOverflow": boundary,
 			"paintedText": rebuilt, "paintedTextCard": rebuilt,
 			// In the screen record (checkpoint_java_screen.go).
-			"fontRequest": recorded,
+			"fontRequest": recorded, "cardBounds": recorded, "cardSurface": recorded, "cardSurfaceOwner": recorded,
+			// In the scheduling record (checkpoint_java_scheduling.go); what
+			// the timers' block last had written into it is read back out of
+			// the block.
+			"timers": recorded, "timerTasks": recorded, "timerRoots": recorded, "timerOrder": recorded,
+			"timerRootWords": rebuilt,
+			// Set only by a close, past which nothing is captured: a session
+			// whose threads are stopped refuses a checkpoint.
+			"jletDestroyed": boundary,
 		},
+		// In the screen record's cards (checkpoint_java_screen.go).
+		"javaCardBox": {"x": recorded, "y": recorded, "width": recorded, "height": recorded},
 		"javaWorker": {
 			"armThread": recorded, "stackBase": recorded, "grant": rebuilt, "events": rebuilt, "wakeAt": recorded,
 			"done": recorded, "yields": recorded, "monitors": recorded, "renewals": recorded, "tryFrames": recorded,
 			"tryBuffers": recorded, "callDepth": recorded, "waitSite": recorded, "waits": recorded,
 			"waitReported": recorded, "waiting": recorded, "restored": recorded,
 		},
-		"javaThread":  {"object": recorded, "runnable": recorded, "worker": recorded, "priority": recorded},
+		// The interrupt is in the scheduling record (checkpoint_java_scheduling.go).
+		"javaThread":  {"object": recorded, "runnable": recorded, "worker": recorded, "priority": recorded, "interrupted": recorded},
 		"javaMonitor": {"owner": recorded, "count": recorded, "platform": recorded},
+		// A timer's thread record is the restored Thread its object names.
+		"javaTimer": {"cancelled": recorded, "thread": recorded, "threadRecord": rebuilt, "queue": recorded},
+		"javaTimerTask": {
+			"state": recorded, "timer": recorded, "next": recorded, "period": recorded, "fixedRate": recorded,
+			"last": recorded, "order": recorded,
+		},
 		"javaRuntimeClass": {
 			"Name": recorded, "Handle": recorded, "Record": recorded, "Object": recorded, "VTable": recorded,
 			"Slots": recorded, "Instance": recorded, "Super": recorded, "ElementBytes": recorded,
@@ -1012,8 +1029,9 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 		},
 	}
 	for _, value := range []any{
-		Client{}, javaRuntime{}, javaWorker{}, javaThread{}, javaMonitor{}, javaRuntimeClass{}, javaTryFrame{},
-		javaStream{}, javaWidget{}, javaDatabase{}, databaseContent{}, javaGraphics{}, javaCalendar{}, javaObjectRecord{}, javaLink{},
+		Client{}, javaRuntime{}, javaWorker{}, javaThread{}, javaMonitor{}, javaTimer{}, javaTimerTask{},
+		javaRuntimeClass{}, javaTryFrame{},
+		javaStream{}, javaWidget{}, javaDatabase{}, databaseContent{}, javaGraphics{}, javaCardBox{}, javaCalendar{}, javaObjectRecord{}, javaLink{},
 		javaLayoutClass{}, framebuffer{}, timer{}, openFile{}, fileContent{}, mediaClip{}, javaMediaEvent{}, pendingNetConnect{}, pendingEvent{},
 		cTextInputState{}, pixelOpCache{}, guestClock{}, arena{}, notificationNetwork{}, notificationSocketState{},
 		authenticationOptionStore{}, authenticationCertificate58Store{}, authenticationCertificate100Store{},

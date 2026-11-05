@@ -81,7 +81,21 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// platform's, and this platform keeps what it has of it on its own side, so
 	// constructing one is taking delivery of an object the module allocated.
 	"org/kwis/msp/lwc/AnnunciatorComponent.<init>(Z)V": {Words: 2, Implementat: javaNoResult},
-	"org/kwis/msp/lcdui/Card.<init>()V":                {Words: 1, Implementat: javaNoResult},
+	// A Card is the whole screen unless it is built with a box, or moved or
+	// resized into one; see java_card.go. The display a constructor names is
+	// the one display there is, and the flag of the transparent forms is
+	// published and changes nothing drawn.
+	"org/kwis/msp/lcdui/Card.<init>()V":                                  {Words: 1, Implementat: javaCardConstructor},
+	"org/kwis/msp/lcdui/Card.<init>(Lorg/kwis/msp/lcdui/Display;)V":      {Words: 2, Implementat: javaCardConstructor},
+	"org/kwis/msp/lcdui/Card.<init>(Z)V":                                 {Words: 2, Implementat: javaCardConstructorTransparent},
+	"org/kwis/msp/lcdui/Card.<init>(IIII)V":                              {Words: 5, Implementat: javaCardConstructorAt(1, false)},
+	"org/kwis/msp/lcdui/Card.<init>(Lorg/kwis/msp/lcdui/Display;IIII)V":  {Words: 6, Implementat: javaCardConstructorAt(2, false)},
+	"org/kwis/msp/lcdui/Card.<init>(Lorg/kwis/msp/lcdui/Display;IIIIZ)V": {Words: 7, Implementat: javaCardConstructorAt(2, true)},
+	"org/kwis/msp/lcdui/Card.getX()I":                                    {Words: 1, Implementat: javaCardX},
+	"org/kwis/msp/lcdui/Card.getY()I":                                    {Words: 1, Implementat: javaCardY},
+	"org/kwis/msp/lcdui/Card.move(II)V":                                  {Words: 3, Implementat: javaCardMove},
+	"org/kwis/msp/lcdui/Card.resize(II)V":                                {Words: 3, Implementat: javaCardResize},
+	"org/kwis/msp/lcdui/Card.isShown()Z":                                 {Words: 1, Implementat: javaCardIsShown},
 	// A Card's own bodies for the three notifications, which a title's card
 	// reaches when its override calls the one it overrides. The specification
 	// leaves each to the card to fill in, and the base answers KTF's and SKT's
@@ -148,10 +162,11 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// for why its own methods are Vector's slots.
 	"java/util/Stack.<init>()V": {Words: 1, Implementat: javaVectorConstructor},
 
-	// The size of the drawing surface. A Card is the whole screen on this
-	// platform, and so is the display, which is what the two pairs answer with.
-	"org/kwis/msp/lcdui/Card.getWidth()I":     {Words: 1, Implementat: javaScreenWidth},
-	"org/kwis/msp/lcdui/Card.getHeight()I":    {Words: 1, Implementat: javaScreenHeight},
+	// The size of the drawing surface. The display is the whole screen, and so
+	// is a Card without a box, which is what the two pairs answer with; a Card
+	// with one answers its own size (java_card.go).
+	"org/kwis/msp/lcdui/Card.getWidth()I":     {Words: 1, Implementat: javaCardWidth},
+	"org/kwis/msp/lcdui/Card.getHeight()I":    {Words: 1, Implementat: javaCardHeight},
 	"org/kwis/msp/lcdui/Display.getWidth()I":  {Words: 1, Implementat: javaScreenWidth},
 	"org/kwis/msp/lcdui/Display.getHeight()I": {Words: 1, Implementat: javaScreenHeight},
 	// The card that is on the screen, or null before anything is pushed. A
@@ -589,6 +604,26 @@ func init() {
 		14: {Called: "setPriority(I)V",
 			Method: javaPlatformMethod{Words: 2, Implementat: javaThreadSetPriority}},
 	}
+	// Object's two `wait` forms are registered here for the same reason: a
+	// wait on the platform's own thread hands the turn round, and the turn
+	// starts the timer tasks that have come due (java_timer.go), which runs
+	// guest code.
+	objectSlots := javaBakedVirtualSlots[javaObjectClass]
+	// Slot 9 takes the receiver alone, drops its answer, and is called on
+	// the very object the instruction before it took the lock of — inside
+	// a `synchronized` body, on the object being synchronized on. Of what
+	// this class declares that is `wait`, and the run agrees: `getClass`
+	// at 1 and `notify` at 5 are four apart, which is what `hashCode`,
+	// `equals` and `toString` fill, and the three `wait` forms follow
+	// `notifyAll` at 6 — the no-argument one last, at 9.
+	objectSlots[9] = javaBakedSlot{Called: "wait()V",
+		Method: javaPlatformMethod{Words: 1, Implementat: javaObjectWait, Parks: javaRemainderWait}}
+	// Slot 7 is the same call with a deadline: the receiver and a long,
+	// which the one site here passes as forty milliseconds. It sits two
+	// before the no-argument form, where `wait(long)` and
+	// `wait(long, int)` are declared.
+	objectSlots[7] = javaBakedSlot{Called: "wait(J)V",
+		Method: javaPlatformMethod{Words: 3, Implementat: javaObjectWaitTimed, Parks: javaRemainderWait}}
 	for _, table := range []map[string]javaPlatformMethod{
 		javaGraphicsMethods, javaDatabaseMethods, javaWidgetMethods,
 	} {
@@ -681,19 +716,8 @@ var javaBakedVirtualSlots = map[string]map[uint32]javaBakedSlot{
 		// retries on its own (java_thread.go). So the notification has no
 		// queue to move anything out of.
 		5: {Called: "notify()V", Method: javaPlatformMethod{Words: 1, Implementat: javaNoResult}},
-		// Slot 9 takes the receiver alone, drops its answer, and is called on
-		// the very object the instruction before it took the lock of — inside
-		// a `synchronized` body, on the object being synchronized on. Of what
-		// this class declares that is `wait`, and the run agrees: `getClass`
-		// at 1 and `notify` at 5 are four apart, which is what `hashCode`,
-		// `equals` and `toString` fill, and the three `wait` forms follow
-		// `notifyAll` at 6 — the no-argument one last, at 9.
-		9: {Called: "wait()V", Method: javaPlatformMethod{Words: 1, Implementat: javaObjectWait, Parks: javaRemainderWait}},
-		// Slot 7 is the same call with a deadline: the receiver and a long,
-		// which the one site here passes as forty milliseconds. It sits two
-		// before the no-argument form, where `wait(long)` and
-		// `wait(long, int)` are declared.
-		7: {Called: "wait(J)V", Method: javaPlatformMethod{Words: 3, Implementat: javaObjectWaitTimed, Parks: javaRemainderWait}},
+		// Slots 7 and 9, the two `wait` forms call sites settled, are
+		// registered from init below.
 	},
 	// `java/lang/Class` slot 16 takes one argument, a String, and answers an
 	// object the caller null-checks and then reads bytes out of — the resource

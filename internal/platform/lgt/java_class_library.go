@@ -22,9 +22,10 @@ import (
 // with the rest of what titles of this era do not use.
 //
 // **Some classes here have no anchor at all**: Boolean, Character, Writer,
-// OutputStreamWriter, and Date past getTime. Their slots are the rule's alone —
-// the class page's order, counted from where the class above it ends — and
-// TestJavaBakedSlotsFollowTheDeclarationOrder holds them to it like the rest.
+// OutputStreamWriter, Timer, TimerTask, and Date past getTime. Their slots are
+// the rule's alone — the class page's order, counted from where the class
+// above it ends — and TestJavaBakedSlotsFollowTheDeclarationOrder holds them to
+// it like the rest.
 // Where the KTF and SKT runtimes have a member (internal/jvm), this one answers
 // what they answer for the same arguments; where they have none, it answers
 // what CLDC 1.1 does.
@@ -105,6 +106,11 @@ func registerJavaClassLibrary() {
 			Words: 2, Implementat: javaStreamWriterConstructor},
 		"java/io/OutputStreamWriter.<init>(Ljava/io/OutputStream;Ljava/lang/String;)V": {
 			Words: 3, Implementat: javaStreamWriterConstructor},
+
+		// The timer and the task a title's own subclass builds on; see
+		// java_timer.go.
+		"java/util/Timer.<init>()V":     {Words: 1, Implementat: javaTimerConstructor},
+		"java/util/TimerTask.<init>()V": {Words: 1, Implementat: javaTimerTaskConstructor},
 	} {
 		if _, duplicate := javaPlatformMethods[key]; duplicate {
 			panic("LGT java platform method declared twice: " + key)
@@ -136,8 +142,10 @@ func registerJavaClassLibrary() {
 			// notifyAll is notify's answer for the same reason: there is no
 			// queue of waiting threads to move anything out of (java_api.go).
 			6: slot("notifyAll()V", 1, javaNoResult),
+			// An interrupt ends this wait as it ends the other two forms
+			// (java_thread.go).
 			8: {Called: "wait(JI)V", Method: javaPlatformMethod{
-				Words: 4, Implementat: javaObjectWaitNanos, Parks: javaRemainderWait}},
+				Words: 4, Implementat: javaObjectWaitNanosInterruptible, Parks: javaRemainderWait}},
 		},
 		javaStringClass: {
 			javaHashCodeSlot: slot("hashCode()I", 1, javaStringHashCode),
@@ -244,10 +252,11 @@ func registerJavaClassLibrary() {
 		javaDataInputStreamClass: {
 			26: slot("readUnsignedShort()I", 1, javaStreamReadUnsignedShort),
 		},
-		// Thread's run between start at 10 and interrupt; getPriority one past
-		// setPriority's anchor at 14. See java_thread.go.
+		// Thread's run and interrupt between start at 10 and isAlive at 13;
+		// getPriority one past setPriority's anchor at 14. See java_thread.go.
 		javaThreadClass: {
 			11: slot("run()V", 1, javaThreadRun),
+			12: slot("interrupt()V", 1, javaThreadInterrupt),
 			15: slot("getPriority()I", 1, javaThreadGetPriority),
 			17: {Called: "join()V", Method: javaPlatformMethod{
 				Words: 1, Implementat: javaThreadJoin, Parks: javaRemainderJoin}},
@@ -336,6 +345,26 @@ func registerJavaClassLibrary() {
 		"java/lang/Runtime": {
 			10: slot("exit(I)V", 2, javaRuntimeExit),
 		},
+		// **No call site anchors either class**: no local title reaches them,
+		// so every slot here is the rule's alone — the class page's order from
+		// 10. Timer declares schedule(task, delay), schedule(task, Date),
+		// schedule(task, delay, period), schedule(task, Date, period), the two
+		// scheduleAtFixedRate forms and cancel; TimerTask declares run, cancel
+		// and scheduledExecutionTime, and run is abstract, with no body to
+		// serve. See java_timer.go.
+		javaTimerClass: {
+			10: slot("schedule(Ljava/util/TimerTask;J)V", 4, javaTimerScheduleDelay(false, false)),
+			11: slot("schedule(Ljava/util/TimerTask;Ljava/util/Date;)V", 3, javaTimerScheduleDate(false, false)),
+			12: slot("schedule(Ljava/util/TimerTask;JJ)V", 6, javaTimerScheduleDelay(true, false)),
+			13: slot("schedule(Ljava/util/TimerTask;Ljava/util/Date;J)V", 5, javaTimerScheduleDate(true, false)),
+			14: slot("scheduleAtFixedRate(Ljava/util/TimerTask;JJ)V", 6, javaTimerScheduleDelay(true, true)),
+			15: slot("scheduleAtFixedRate(Ljava/util/TimerTask;Ljava/util/Date;J)V", 5, javaTimerScheduleDate(true, true)),
+			16: slot("cancel()V", 1, javaTimerCancel),
+		},
+		javaTimerTaskClass: {
+			11: slot("cancel()Z", 1, javaTimerTaskCancel),
+			12: slot("scheduledExecutionTime()J", 1, javaTimerTaskScheduledTime),
+		},
 	} {
 		served := javaBakedVirtualSlots[class]
 		if served == nil {
@@ -352,6 +381,11 @@ func registerJavaClassLibrary() {
 
 	javaPlatformStaticFillers[javaBooleanClass] = (*Client).initializeJavaBooleanStatics
 	javaPlatformStaticFillers[javaCharacterClass] = (*Client).initializeJavaCharacterStatics
+
+	// A TimerTask is a Runnable, its run the interface's one method, so a task
+	// handed to `new Thread(task)` or called through Runnable finds the run
+	// its own class overrides at TimerTask's slot.
+	javaPlatformInterfaces[javaTimerTaskClass] = []javaInterface{{Name: javaRunnableInterface, Slot: javaTimerTaskSlotRun}}
 }
 
 // javaPlatformStaticFillers are the platform classes whose static fields hold

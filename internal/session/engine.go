@@ -399,8 +399,8 @@ func (e lgtEngine) repeat(context.Context, int32) error { return nil }
 func (e lgtEngine) pause(ctx context.Context) error  { return e.session.Pause(ctx) }
 func (e lgtEngine) resume(ctx context.Context) error { return e.session.Resume(ctx) }
 
-// close gives an LGT title's destroyClet closeWait: a close ends in bounded
-// time on every platform.
+// close gives an LGT title's ending (a Java title's destroyApp, then its
+// destroyClet) closeWait: a close ends in bounded time on every platform.
 func (e lgtEngine) close() {
 	ctx, cancel := context.WithTimeout(context.Background(), closeWait)
 	defer cancel()

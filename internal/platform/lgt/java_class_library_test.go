@@ -104,6 +104,12 @@ var javaDeclarationOrder = map[string]struct {
 		"write(Ljava/lang/String;)V", "write(Ljava/lang/String;II)V", "flush()V", "close()V"}},
 	"java/io/OutputStreamWriter": {"java/io/Writer", []string{"write(I)V", "write([CII)V",
 		"write(Ljava/lang/String;II)V", "flush()V", "close()V"}},
+	// No call site anchors either: these are the class pages' order alone.
+	"java/util/Timer": {"java/lang/Object", []string{"schedule(Ljava/util/TimerTask;J)V",
+		"schedule(Ljava/util/TimerTask;Ljava/util/Date;)V", "schedule(Ljava/util/TimerTask;JJ)V",
+		"schedule(Ljava/util/TimerTask;Ljava/util/Date;J)V", "scheduleAtFixedRate(Ljava/util/TimerTask;JJ)V",
+		"scheduleAtFixedRate(Ljava/util/TimerTask;Ljava/util/Date;J)V", "cancel()V"}},
+	"java/util/TimerTask": {"java/lang/Object", []string{"run()V", "cancel()Z", "scheduledExecutionTime()J"}},
 }
 
 // javaDeclaredSlots numbers a class's methods by the rule.

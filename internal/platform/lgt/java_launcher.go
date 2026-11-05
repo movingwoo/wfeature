@@ -29,9 +29,11 @@ const javaLauncherChainLimit = 16
 // running — the launcher call itself is a platform call, and its caller's frame
 // is live above it.
 //
-// What this does not do is a Jlet's lifecycle. `startApp` is entered; nothing
-// yet pauses, resumes or destroys the application, and nothing drives the
-// event queue it is expected to run on.
+// `startApp` is the one lifecycle method entered here. The other three —
+// `pauseApp`, `resumeApp` and `destroyApp` — are the session's to enter, on
+// the object this builds, when it is parked, resumed and closed; see
+// java_lifecycle.go. Nothing drives the event queue the application is
+// expected to run on.
 func (client *Client) runJavaLauncher(
 	ctx context.Context, thread *armcore.Thread, count, argv uint32,
 ) error {
@@ -162,9 +164,17 @@ func (client *Client) javaSuperChain(record javaClass) []string {
 // address the image already holds — and the lifecycle methods are as often the
 // superclass's as the launcher class's own.
 func (client *Client) findJavaMethod(record javaClass, name string) (javaMember, string, bool) {
+	return client.findJavaMethodDescribed(record, name, "")
+}
+
+// findJavaMethodDescribed is findJavaMethod held to a descriptor as well, when
+// it is given one: an overload a title declares under the same name is not the
+// method the specification means. An empty descriptor matches any, which is
+// findJavaMethod.
+func (client *Client) findJavaMethodDescribed(record javaClass, name, descriptor string) (javaMember, string, bool) {
 	for step := 0; step < javaLauncherChainLimit; step++ {
 		for _, method := range record.Methods {
-			if method.Name == name {
+			if method.Name == name && (descriptor == "" || method.Descriptor == descriptor) {
 				return method, record.Name, true
 			}
 		}
