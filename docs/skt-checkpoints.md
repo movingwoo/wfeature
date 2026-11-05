@@ -30,6 +30,13 @@ already-popped arguments restored to the logical stack; the body has not run.
 A second capture before a restored worker's first grant retains its continuation.
 The standalone heap API remains strict and the KTF/AOT heap schema is unchanged.
 
+A WIPI `Graphics`' XOR mode and stroke style are entries in the object's own
+field map under undeclared `host:` keys, which the heap record keeps like any
+field; a quick save from before they existed restores them off and SOLID. A
+`StringBuffer` keeps its capacity in its `buffer-v2` payload, and one saved as
+`buffer` by an earlier build restores with the capacity the class library's
+rule gives its length.
+
 The MIDP timer worker uses newly authored embedded Java bytecode. Its task,
 remaining delay, period and callback frame therefore follow the ordinary worker
 path. A blocking vendor audio call carries a native wait token. The token names

@@ -96,15 +96,16 @@ func (runtime *Runtime) wipiRegistrations() []nativeRegistration {
 		{wipi.CardClass, "move", "(II)V", runtime.wipiCardMove},
 		{wipi.CardClass, "resize", "(II)V", runtime.wipiCardResize},
 
+		// reset, drawChar and the drawImage with a source rectangle are not
+		// here: internal/api/wipi answers them over the MIDP calls of the same
+		// contract, so that the XOR mode and the stroke style it keeps on the
+		// Graphics reach them.
 		{wipi.GraphicsClass, "getFont", "()Lorg/kwis/msp/lcdui/Font;", runtime.getGraphicsFont},
-		{wipi.GraphicsClass, "reset", "()V", runtime.resetGraphics},
 		{wipi.GraphicsClass, "clipRect", "(IIII)V", runtime.clipGraphicsRect},
-		{wipi.GraphicsClass, "drawChar", "(CIII)V", runtime.drawGraphicsChar},
 		{wipi.GraphicsClass, "setAlpha", "(I)V", runtime.setGraphicsAlpha},
 		{wipi.GraphicsClass, "getAlpha", "()I", runtime.getGraphicsAlpha},
 		{wipi.GraphicsClass, "getRGBPixels", "(IIII[III)V", runtime.getGraphicsRGBPixels},
 		{wipi.GraphicsClass, "setRGBPixels", "(IIII[III)V", runtime.setGraphicsRGBPixels},
-		{wipi.GraphicsClass, "drawImage", "(Lorg/kwis/msp/lcdui/Image;IIIIIII)V", runtime.wipiDrawImageRegion},
 
 		{wipi.ImageClass, "createImage", "(II)Lorg/kwis/msp/lcdui/Image;", runtime.createMutableImage},
 		{wipi.ImageClass, "createImage", "(" + text + ")Lorg/kwis/msp/lcdui/Image;", runtime.createImageFromResource},
@@ -638,25 +639,6 @@ func graphicsRGBArguments(arguments []jvm.Value) (
 		scanLength = width
 	}
 	return context, x, y, width, height, values, offset, scanLength, nil
-}
-
-// wipiDrawImageRegion is the WIPI blit with a source rectangle. Its argument
-// order is the image, the destination point, and then the rectangle inside the
-// image, which is MIDP's drawRegion with the two halves swapped and no
-// transform.
-func (runtime *Runtime) wipiDrawImageRegion(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
-	if len(arguments) < 9 {
-		return jvm.VoidValue(), fmt.Errorf("WIPI drawImage takes an image, a destination and a source rectangle")
-	}
-	destinationX, destinationY := arguments[2], arguments[3]
-	sourceX, sourceY := arguments[4], arguments[5]
-	width, height := arguments[6], arguments[7]
-	region := []jvm.Value{
-		arguments[0], arguments[1],
-		sourceX, sourceY, width, height,
-		jvm.IntValue(0), destinationX, destinationY, jvm.IntValue(0),
-	}
-	return runtime.drawGraphicsRegion(vm, region)
 }
 
 // The WIPI file surface over the same handle the SKVM one uses. What differs

@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+MIDlet-1: WIPI Graphics Members Fixture, , WIPIGraphicsMembersJlet
+MIDlet-Name: WIPI Graphics Members Fixture
+MIDlet-Version: 1.0
+MIDlet-Vendor: wfeature
