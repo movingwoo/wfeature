@@ -76,6 +76,32 @@ func javaRemoveCard(
 	return 1, nil
 }
 
+// javaPopCard is `Display.popCard()`: the card on the display comes off it and
+// is the answer, or null when nothing is shown. This display holds one card —
+// a push replaces it — so popping it leaves nothing shown, as removing it does;
+// KTF keeps a stack of cards and a pop there uncovers the one below.
+func javaPopCard(
+	client *Client, _ context.Context, _ *armcore.Thread, _ []uint32,
+) (uint32, error) {
+	runtime := client.javaRuntimeState()
+	card := runtime.card
+	runtime.card = 0
+	runtime.cardDirty = false
+	return card, nil
+}
+
+// javaCountCard is `Display.countCard()`: how many cards the display holds,
+// which on this one-card display is one while a card is shown and none
+// otherwise. KTF counts its stack.
+func javaCountCard(
+	client *Client, _ context.Context, _ *armcore.Thread, _ []uint32,
+) (uint32, error) {
+	if client.javaRuntimeState().card != 0 {
+		return 1, nil
+	}
+	return 0, nil
+}
+
 // javaRemoveAllCards is `Display.removeAllCards()`. Nothing is shown after it
 // until something is pushed again, and the platform has no card to paint.
 func javaRemoveAllCards(

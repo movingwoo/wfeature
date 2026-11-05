@@ -503,15 +503,7 @@ func (client *Client) callJavaRunnable(
 	if !known {
 		return fmt.Errorf("the runnable at %#x is not an object this platform issued", runnable)
 	}
-	body, owner := uint32(0), class.Name
-	if method, named, ok := client.findJavaMethod(class.Record, javaThreadRunMethod); ok {
-		body, owner = method.Body, named
-	} else if slot, ok := client.javaInterfaceMethod(class, javaRunnableInterface, 0); ok {
-		// A class the compiler laid out itself declares no members at all, and
-		// its record says where `java/lang/Runnable` sits in its own dispatch
-		// table instead. See readJavaInterfaces.
-		body = slot
-	}
+	body, owner := client.javaRunnableBody(class)
 	if body == 0 {
 		return fmt.Errorf("%s declares no %s", class.Name, javaThreadRunMethod)
 	}
@@ -524,10 +516,118 @@ func (client *Client) callJavaRunnable(
 	return nil
 }
 
+// javaRunnableBody answers the entry point of a Runnable's own `run`, and the
+// class that declares it, or zero when its class gives it none.
+func (client *Client) javaRunnableBody(class *javaRuntimeClass) (uint32, string) {
+	if method, named, ok := client.findJavaMethod(class.Record, javaThreadRunMethod); ok {
+		return method.Body, named
+	}
+	if slot, ok := client.javaInterfaceMethod(class, javaRunnableInterface, 0); ok {
+		// A class the compiler laid out itself declares no members at all, and
+		// its record says where `java/lang/Runnable` sits in its own dispatch
+		// table instead. See readJavaInterfaces.
+		return slot, class.Name
+	}
+	return 0, class.Name
+}
+
 // javaRunnableInterface is the one interface whose contract names a method by
 // position: it declares `run()V` and nothing else, so the slot its entry gives
 // is that method.
 const javaRunnableInterface = "java/lang/Runnable"
+
+// javaThreadSlotRun is `run()`, Thread's second method: slot 11, between the
+// start at 10 and the interrupt at 12 the rule puts beside it.
+const javaThreadSlotRun = 11
+
+// javaThreadRun is `Thread.run()`, slot 11, called as a method rather than
+// entered by a start: the `run` of the Runnable the thread was built with, on
+// the calling thread, and nothing at all for a thread built with none — which
+// is what the class library's own run does, and what a Thread subclass that
+// calls `super.run()` from its own reaches. An exception the Runnable throws
+// and does not catch is the caller's, thrown on from this call.
+//
+// The slot is the declaration-order rule's: start at 10 and isAlive at 13 are
+// anchors either side of it.
+func javaThreadRun(
+	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	record, known := client.javaRuntimeState().threads[arguments[0]]
+	if !known || record.runnable == 0 || record.runnable == arguments[0] {
+		// A thread built with no Runnable stands for itself here
+		// (javaThreadConstructor), and its own run is the one being asked.
+		return 0, nil
+	}
+	return 0, client.runJavaTarget(ctx, thread, record.runnable)
+}
+
+// runJavaTarget runs a thread's Runnable on the calling thread. A Thread
+// handed over as the Runnable is asked through its own run slot, so a title's
+// own Thread subclass answers itself and a platform one runs its own Runnable
+// in turn.
+func (client *Client) runJavaTarget(ctx context.Context, thread *armcore.Thread, runnable uint32) error {
+	class, known := client.javaClassOfObject(runnable)
+	if !known {
+		return fmt.Errorf("the runnable at %#x is not an object this platform issued", runnable)
+	}
+	if client.javaClassReaches(class, javaThreadClass) {
+		_, err := client.javaCallVirtual(ctx, thread, runnable, javaThreadSlotRun)
+		return err
+	}
+	body, owner := client.javaRunnableBody(class)
+	if body == 0 {
+		return fmt.Errorf("%s declares no %s", class.Name, javaThreadRunMethod)
+	}
+	if _, err := client.callOn(ctx, thread, body, []uint32{runnable}); err != nil {
+		return client.rethrowFromCallback(thread,
+			fmt.Errorf("run %s.%s at %#x: %w", owner, javaThreadRunMethod, body, err))
+	}
+	return nil
+}
+
+// javaThreadNormPriority is NORM_PRIORITY, what a thread runs at until a title
+// sets another.
+const javaThreadNormPriority = 5
+
+// javaThreadGetPriority is `Thread.getPriority()`, slot 15, one past the
+// setPriority anchor at 14: what setPriority kept, and NORM_PRIORITY for a
+// thread nothing set one on — the answer the KTF and SKT runtimes give, whose
+// threads start with none recorded either.
+func javaThreadGetPriority(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	thread, known := client.javaRuntimeState().threads[arguments[0]]
+	if !known || thread.priority == 0 {
+		return javaThreadNormPriority, nil
+	}
+	return uint32(thread.priority), nil
+}
+
+// javaThreadActiveCount is the static `Thread.activeCount()`, answered the way
+// the KTF and SKT runtimes answer it: every thread object this platform holds
+// that is started and still running, and the platform's own thread once a title
+// has asked for its Thread object (javaCurrentThread), and never less than one,
+// because something is running the call. The specification counts the current
+// thread group, and this platform has the one.
+func javaThreadActiveCount(
+	client *Client, _ context.Context, _ *armcore.Thread, _ []uint32,
+) (uint32, error) {
+	runtime := client.javaRuntimeState()
+	count := uint32(0)
+	for object, thread := range runtime.threads {
+		if thread == nil {
+			continue
+		}
+		running := thread.worker != nil && !thread.worker.done
+		if running || object != 0 && object == runtime.mainThread {
+			count++
+		}
+	}
+	if count == 0 {
+		count = 1
+	}
+	return count, nil
+}
 
 // javaInterfaceMethod answers the address in a class's own dispatch table for
 // one method of an interface the class implements, by the slot the record's
@@ -586,6 +686,14 @@ func (client *Client) javaInterfaceTable(receiver, namePointer uint32) (uint32, 
 	if !ok {
 		return 0, fmt.Errorf("the interface at %#x has no name", namePointer)
 	}
+	return client.javaInterfaceBase(class, name)
+}
+
+// javaInterfaceBase is javaInterfaceTable for a class and an interface name
+// this platform already holds: the address an interface's method n is read
+// from at `answer + 4 + 4n`, which is how the platform itself reaches a
+// method a title's class implements an interface with (java_data_input.go).
+func (client *Client) javaInterfaceBase(class *javaRuntimeClass, name string) (uint32, error) {
 	for owner := class; owner != nil; owner = owner.Super {
 		// A platform class's table is the one this platform gives it
 		// (javaPlatformInterfaces): it has no record to carry one.

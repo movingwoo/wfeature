@@ -30,8 +30,10 @@ const (
 	// both what a create answers and what a request for the next frame does.
 	imageDone int32 = 1
 	// imageBadFormat is M_E_BADFORMAT, for data that is not an image this
-	// build decodes.
-	imageBadFormat int32 = -20
+	// build decodes and for a handle that is no image. The specification's
+	// error table gives it as -6, which is what KTF's decodeNextImage answers;
+	// this runtime answered -20, which the same table gives to M_E_TIMEOUT.
+	imageBadFormat int32 = -6
 )
 
 // Image property indices. The specification lists animation flags first and

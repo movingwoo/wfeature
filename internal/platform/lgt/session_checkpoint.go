@@ -170,7 +170,11 @@ func (session *Session) CaptureCheckpointWithSession(
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
-	record, err := encodeLGTSessionRecord(saved, media, library)
+	screen, err := client.captureJavaScreenState()
+	if err != nil {
+		return backend.Checkpoint{}, err
+	}
+	record, err := encodeLGTScreenRecord(saved, media, library, screen)
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
@@ -227,7 +231,7 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 	if checkpoint.Variant != backend.CheckpointLGTClet && checkpoint.Variant != backend.CheckpointLGTJava {
 		return nil, backend.ErrCheckpointVersion
 	}
-	saved, media, library, err := decodeLGTSessionRecord(checkpoint.Runtime)
+	saved, media, library, screen, err := decodeLGTScreenRecord(checkpoint.Runtime)
 	if err != nil {
 		return nil, err
 	}
@@ -272,6 +276,9 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 		return nil, err
 	}
 	if err := client.restoreJavaLibraryState(library); err != nil {
+		return nil, err
+	}
+	if err := client.restoreJavaScreenState(screen); err != nil {
 		return nil, err
 	}
 	if err := client.audio.RebasePlaybackClock(client.clock.now(), saved.Speed); err != nil {

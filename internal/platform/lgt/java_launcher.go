@@ -193,3 +193,26 @@ func javaCurrentJlet(
 ) (uint32, error) {
 	return client.javaRuntimeState().jlet, nil
 }
+
+// javaJletAppProperty is `Jlet.getAppProperty(key)`: a property of the
+// application, which the specification calls the ones each application is
+// given. An LGT archive gives them in app_info, the descriptor beside the JAR
+// that names the AID, PID and main class and keeps every other key it carries
+// (ParseDescriptor) — the counterpart of the descriptor KTF answers this call
+// from. A key the descriptor does not carry answers null, as KTF and SKT
+// answer it, and so does a key that is no string, which is KTF's answer for
+// one. A manifest inside the JAR, if there is one, is not read: KTF reads only
+// its descriptor.
+func javaJletAppProperty(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	key, ok := client.javaText(arguments[1])
+	if !ok || client.archive == nil {
+		return 0, nil
+	}
+	value, found := client.archive.Descriptor.Property(key)
+	if !found {
+		return 0, nil
+	}
+	return client.newJavaString(value)
+}

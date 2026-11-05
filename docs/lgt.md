@@ -132,9 +132,26 @@ classes, Vector, Stack, Hashtable and its enumerations, InputStreamReader,
 declaration-order rule's — a class's own methods from slot 10 in the order its
 CLDC class page declares them, an override at the slot above — and
 `TestJavaBakedSlotsFollowTheDeclarationOrder` holds every served slot of these
-classes to that order. Floating point, `Boolean`, `Character`, the exception
-classes' own constructors, `Class` queries such as `isArray`, and the methods a
-title's own `Reader` subclass would inherit are not served.
+classes to that order. Since 2026-11-05 it also serves `Boolean` and
+`Character` (their static fields are written when the class is prepared),
+`Writer` and `OutputStreamWriter`, the `Reader` and `OutputStream` bodies a
+title's own subclass inherits, `Random.nextInt(int)`, `String.intern`,
+`Date.setTime`, `equals` and `hashCode`, `Thread.run`, `getPriority` and
+`activeCount`, `ByteArrayOutputStream.toString`, `DataOutputStream.writeChars`
+and the static `DataInputStream.readUTF(DataInput)`, and every instance read of
+a `DataInputStream` throws `EOFException` at the end of the stream
+([history](history/lgt.md#lgt-parity-fill-2026-11-05)). Floating point, the
+exception classes' own constructors, `Class` queries such as `isArray`,
+`Timer`, `Date.toString` and `getGrayScale` are not served.
+
+The `org/kwis` members are all served by name. The 2026-11-05 pass added
+`Font`'s attribute getters, `Display`'s capability answers, `countCard`,
+`popCard` and `getKeyName`, `Graphics`' pixel reads and writes, colour
+components, stroke style, gray-scale setter and `drawPolygon`,
+`Image.createImage(Image)` (masked pixels copied white, as the specification
+says) and `isMutable`, `Jlet.getAppProperty` from `app_info`, and the
+remaining `BackLight`, `HandsetProperty` and `Volume` statics. C image calls
+answer the specification's `M_E_BADFORMAT` (-6) for broken data.
 
 - **hashCode, equals and toString are the receiver's own.** A Hashtable hashing
   a key, a Vector searching for an element, `append(Object)` and

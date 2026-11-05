@@ -157,6 +157,29 @@ func ParseDescriptor(data []byte) (Descriptor, error) {
 	return descriptor, nil
 }
 
+// Property answers the value app_info gives a key, whatever case either spells
+// it in, the way the KTF and SKT descriptors are read: KTF keeps every key upper
+// case and upper-cases the one asked for, SKT matches without regard to case.
+// The key asked for is trimmed as KTF trims it. The exact spelling wins, and
+// among other spellings the first in byte order does, so a descriptor that
+// carries two spellings of one key answers the same one every time.
+func (descriptor Descriptor) Property(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if value, ok := descriptor.Fields[name]; ok {
+		return value, true
+	}
+	match, found := "", false
+	for key := range descriptor.Fields {
+		if strings.EqualFold(key, name) && (!found || key < match) {
+			match, found = key, true
+		}
+	}
+	if !found {
+		return "", false
+	}
+	return descriptor.Fields[match], true
+}
+
 // Open reads an LGT archive: a zip holding app_info and the game's JAR.
 func Open(data []byte) (*Archive, error) {
 	files, err := readZIP(data, "LGT archive")

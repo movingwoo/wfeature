@@ -244,14 +244,16 @@ func TestGuestStreamResetRepeatsTheMarkedBytes(t *testing.T) {
 	if _, err := javaStreamMark(client, t.Context(), client.thread, []uint32{wrapper, 8}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := javaStreamReadInt(client, t.Context(), client.thread, []uint32{wrapper}); err == nil {
-		t.Fatal("a partial four-byte read did not reach EOF")
+	if _, err := javaStreamReadInt(client, t.Context(), client.thread, []uint32{wrapper}); thrownClass(err) != javaEOFClass {
+		t.Fatalf("a partial four-byte read = %v, want EOFException", err)
 	}
 	stream, err := client.javaStreamOf(wrapper)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stream.Data)-stream.Read != 1 || stream.Data[stream.Read] != 'B' || !stream.Source.Ended {
+	// The one byte the source had before its end was taken by the read that
+	// ended, and the source is known to have ended.
+	if len(stream.Data) != 1 || stream.Data[0] != 'B' || stream.Read != 1 || !stream.Source.Ended {
 		t.Fatalf("partial read state = data %v read %d ended %v", stream.Data, stream.Read, stream.Source.Ended)
 	}
 

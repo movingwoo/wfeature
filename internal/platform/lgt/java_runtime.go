@@ -186,6 +186,8 @@ type javaRuntime struct {
 	card             uint32
 	cardDirty        bool
 	screenGraphics   uint32
+	// fontRequest is what the last Font.getFont asked for; see java_font.go.
+	fontRequest javaFontRequest
 	// named is every distinct string constant the title has built. A constant
 	// is built by the code that holds it, so the set answers "has the title
 	// reached the code that names this" — and the set, rather than a line per
@@ -465,6 +467,9 @@ var javaPlatformStatics = map[string]map[string]string{
 func (client *Client) initializePlatformStatics(class *javaRuntimeClass) error {
 	if class.Name == javaPlayListenerClass {
 		return client.initializeJavaPlayListenerStatics(class)
+	}
+	if fill, special := javaPlatformStaticFillers[class.Name]; special {
+		return fill(client, class)
 	}
 	held, known := javaPlatformStatics[class.Name]
 	if !known || client.javaLink == nil || client.javaLink.layout == nil {

@@ -894,6 +894,8 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			// last paint read is read again by the next one.
 			"painting": boundary, "paintTextReads": boundary, "paintTextOverflow": boundary,
 			"paintedText": rebuilt, "paintedTextCard": rebuilt,
+			// In the screen record (checkpoint_java_screen.go).
+			"fontRequest": recorded,
 		},
 		"javaWorker": {
 			"armThread": recorded, "stackBase": recorded, "grant": rebuilt, "events": rebuilt, "wakeAt": recorded,
@@ -934,6 +936,8 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"surface": recorded, "color": recorded, "translateX": recorded, "translateY": recorded,
 			"clipX": recorded, "clipY": recorded, "clipWidth": recorded, "clipHeight": recorded, "clipSet": recorded,
 			"alpha": recorded, "packed": recorded, "xor": recorded,
+			// In the screen record (checkpoint_java_screen.go).
+			"stroke": recorded,
 		},
 		"javaCalendar":     {"millis": recorded, "pending": recorded},
 		"javaObjectRecord": {"block": recorded, "blockSize": recorded, "condemned": recorded},

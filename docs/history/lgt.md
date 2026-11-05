@@ -57,6 +57,8 @@ This consolidation adds no execution or acceptance evidence.
 - [The graphics block's three gaps and the rest of the net block — 2026-10-28](#lgt-graphics-net-gaps-2026-10-28)
 - [A record table the title's own search runs off — 2026-10-28](#lgt-qa-2026-10-28-unterminated-record-table)
 - [A Clet's localtime is local time — 2026-10-31](#lgt-localtime-zone-2026-10-31)
+- [A packaged certificate served at the name a title opens — 2026-11-03](#lgt-new-archives-2026-11-03-packaged-certificate)
+- [What the other platforms already answered — 2026-11-05](#lgt-parity-fill-2026-11-05)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -8426,3 +8428,177 @@ has to ship exactly one `c.nm` inside a directory (two would leave the choice
 to a map's order), and only then is the module hashed and the registry asked.
 One of the 144 local LGT archives gets that far, so opening any other one, as
 the library's save-owner scan does for every archive, costs no hash.
+
+<a id="lgt-parity-fill-2026-11-05"></a>
+
+## What the other platforms already answered — 2026-11-05
+
+The [cross-platform comparison](coverage.md#cross-platform-parity-2026-11-05)
+listed members KTF or SKT serve and LGT did not, and CLDC 1.1 members none of
+the three served. This pass gives LGT every one of them whose answer is
+settled: where KTF or SKT answers a member, LGT answers the same for the same
+arguments; where neither does, CLDC 1.1's answer. No local run was seen to
+reach any of them; they are filled ahead of the titles, as the
+[class library's core](#lgt-class-library-2026-10-28) was.
+
+**Every `org/kwis` member goes in by name.** Each one LGT served before is in a
+name table, and none uses a baked slot, because the module hands each one over
+by class, name and descriptor and `javaPlatformVirtualDispatch` resolves a
+vtable stub through `javaVirtualMember` to that name. The new ones:
+
+- `Font`: `getFont(face, style, size)` records the three numbers on the one
+  Font, as KTF does, and `getFace`, `getStyle` and `getSize` answer the last
+  request (0, 0, 0 before one); `isPlain` is style 0 and `isBold`, `isItalic`
+  and `isUnderlined` its bits 1, 2 and 4; `getBaselinePosition` is the face's
+  ascent, the one the BASELINE anchor already uses (`java_font.go`).
+- `Display`: `numColors` 65536 and `getBitsPerPixel` 16 (KTF's; SKT answers
+  2^24 and 24), `isColor` and `isDoubleBuffered` true, `getKeyName` KTF's
+  table (the digits, `*` and `#` name themselves, any other code `""`),
+  `getDisplay(String)` the one display, `callSerially(Runnable, int)` the same
+  queue with the delay ignored, `flush` nothing, `countCard` 1 while a card is
+  shown, `popCard` the shown card taken off, or null. LGT holds one card, so
+  there is nothing beneath it to uncover. **`hasPointerEvents`,
+  `hasPointerMotionEvents` and `hasRepeatEvents` answer false**, where KTF
+  answers true: LGT delivers no pointer events and no key repeat, and KTF's own
+  answer follows what it delivers (`java_display.go`).
+- `Graphics`: `getAlpha` (255 fresh), `isXORMode`, `getRed/Green/BlueComponent`
+  and `getStrokeStyle` answer what their setters stored; `setStrokeStyle`
+  keeps any number and lines stay solid, as on KTF; `setGrayScale` takes the
+  low eight bits as KTF does; `getPixel` and `get/setRGBPixels` match KTF's
+  (`bpl` a byte pitch, the reads and the writes both unclipped); `get/setPixels`
+  move a pixel's two framebuffer bytes, low byte first; `drawPolygon` is the C
+  slot's closed outline, so each edge is drawLine's line (`java_pixels.go`,
+  `java_screen.go`). Where KTF stops a title on a null array or a range past
+  the array, LGT throws the NullPointerException or
+  ArrayIndexOutOfBoundsException the specification names, and a pitch too
+  short for a row moves nothing rather than rows over one another.
+- `Image.createImage(Image)` answers an editable copy, which is what the
+  specification's page says and what KTF answers; `isMutable` is false for a
+  picture still on the decode cache's shared surface.
+- `Card`'s `keyNotify` and `pointerNotify` answer false and `showNotify` does
+  nothing, the bodies a title's super call reaches.
+- `Jlet.getAppProperty` reads the archive's `app_info`, the key compared
+  without case and the value trimmed; a missing key is null.
+- `BackLight.on`, `off` and `before` do nothing, `HandsetProperty.
+  setSystemProperty` answers false, as KTF's Java and C answers do, and
+  `Volume.get` the level `set` stored, 100 before one.
+
+**`getGrayScale` is left unserved.** KTF answers it with the packed colour, as
+getColor does, and the specification's page says it answers the grey level;
+the two disagree, so neither is taken. **Where KTF is lenient and the
+specification is not, LGT is lenient too**: `setStrokeStyle` with a style that
+is neither SOLID nor DOTTED, `setGrayScale` outside 0 to 255, `drawPolygon`
+with arrays of different lengths (the shorter length is drawn) and pixel writes
+outside the clip throw nothing on KTF and throw nothing here. A title that
+reaches one of them today stops on a missing member; one that reached it on a
+handset that checked would have thrown. The leniency keeps the three platforms
+answering alike until a title shows which the handsets did.
+
+**The `java/*` members go in by name where they are constructors and statics,
+and by the declaration-order rule where they are virtual.**
+
+| Class | By name | Baked slots (anchor → placed) |
+| --- | --- | --- |
+| `ByteArrayInputStream` | `(byte[], int, int)` | — |
+| `InputStreamReader` | `(InputStream, String)`, names as KTF and SKT accept them | — |
+| `Math` | `abs(long)` | — |
+| `Thread` | `activeCount` | `run` 11, `getPriority` 15 (10, 13, 14) |
+| `DataInputStream` | static `readUTF(DataInput)` | — |
+| `String` | — | `intern` 35 (34) |
+| `Date` | — | `setTime` 11 (10); `equals` 3, `hashCode` 2 |
+| `Random` | — | `nextInt(int)` 13 (12) |
+| `ByteArrayOutputStream` | — | `toString` 4 |
+| `DataOutputStream` | — | `writeChars` 23 (22, 24) |
+| `Reader` | `()`, `(Object)` | 10, 11, 13–17 (InputStreamReader's served positions) |
+| `OutputStream` | — | 11–14 |
+| `Boolean` | `(boolean)` | `booleanValue` 10; 2, 3, 4 — rule alone |
+| `Character` | `(char)`, the six static tests | `charValue` 10; 2, 3, 4 — rule alone |
+| `Writer` | `()`, `(Object)` | 10, 11, 13, 14 — rule alone |
+| `OutputStreamWriter` | `(OutputStream)`, `(OutputStream, String)` | 10, 12, 14, 15, 16 — rule alone |
+
+`Random.nextInt(int)` is CLDC 1.1's, not on the WIPI 1.2.1 page, which is why
+the 2026-10-21 comparison did not count it: the library's own algorithm, its
+31 bits taken from the same generator `nextInt()` draws from.
+`ByteArrayOutputStream.toString()` decodes its bytes as `String(byte[])` does;
+before, it reached Object's form. `TestJavaBakedSlotsFollowTheDeclarationOrder`
+now covers Date, Boolean, Character, OutputStream, ByteArrayOutputStream,
+DataOutputStream, Writer and OutputStreamWriter, and checks that the class an
+order is counted from is the one `javaPlatformSuper` walks.
+
+- **A platform class's static field is read straight out of its class object**:
+  the module numbers each one it reads (`layoutPlatformStatics`) and its code
+  loads `data[5 + offset]` with no platform call, so the value has to be there
+  when the class is prepared. `initializePlatformStatics` gained one hook,
+  `javaPlatformStaticFillers`: Boolean builds `TRUE` and `FALSE` into the words
+  the module numbered, and Character writes its four constants. The block is a
+  collector root, so the two objects live as long as the title.
+- **`InputStreamReader` now walks up to `Reader` and `OutputStreamWriter` to
+  `Writer`**, so `instanceof Reader` holds for an InputStreamReader and a
+  writer's `write(char[])` and `write(String)` are Writer's bodies.
+- **OutputStream's base bodies refuse a PrintStream by name.** PrintStream
+  declares its own write, flush and close, and LGT serves none of them, so
+  `System.out` still stops a title that writes to it, now saying the class
+  declares its own form.
+
+**A data stream's end is an EOFException.** Every instance read of a
+`DataInputStream` (`readBoolean`, `readByte`, `readUnsignedByte`, `readShort`,
+`readUnsignedShort`, `readChar`, `readInt`, `readLong`, `readUTF`, both
+`readFully` forms) stopped the title with a host error when the stream ran out,
+where KTF, SKT and CLDC throw `java/io/EOFException`; only `readLong` threw it.
+They now throw it, after taking the bytes that were left, as a byte-by-byte
+read does: `readFully` leaves the partial bytes in the array, and `read()`
+answers -1 afterwards. `skipBytes` still answers how far it got. A
+one-argument `InputStreamReader` over null is the NullPointerException KTF and
+SKT throw, not a host error.
+
+**The C image error is the specification's.** `imageBadFormat`, which
+`createImage` returns for broken data and `decodeNextImage` for an unknown
+handle, was -20, `M_E_TIMEOUT` in the WIPI error table; it is now -6,
+`M_E_BADFORMAT`, the value KTF's `decodeNextImage` already returns.
+
+**Checkpoints.** The stroke styles other than SOLID and the last font request
+are new state, in a record of its own: version 5 wraps the session, media and
+class-library records with a screen record (`checkpoint_java_screen.go`), is
+written only when a session holds either, and otherwise the record is the
+shape an earlier build writes. Every earlier shape still loads, with every
+stroke SOLID and no font asked for. The class-library additions need no new
+record: a Boolean's flag, a Character's unit and a writer's charset are in the
+version-4 record's numbers, a writer's stream in the wrapped table, a set
+Date in the dates table and the intern pool in the singletons, all tables an
+earlier build already reads and ignores what it does not know.
+
+Found and left:
+
+- KTF's and SKT's `InputStreamReader` checks the encoding name and then
+  always decodes the platform's EUC-KR, while `String(byte[], "UTF-8")` decodes
+  UTF-8; LGT's reader matches them, so text an `OutputStreamWriter` named UTF-8
+  writes does not read back through a reader named UTF-8 on any of the three.
+- The shared class library's `Date.equals` accepts a `Long`, and its
+  `Character.isLowerCase` answers false for 0xDF and 0xFF, which CLDC's
+  Latin-1 table counts as lower case. LGT follows CLDC for the first and the
+  library for the second.
+- LGT's `Thread.setPriority` has no range check, where the shared library
+  throws IllegalArgumentException outside 1 to 10.
+- A `DataOutputStream` over another `DataOutputStream` cannot write, because
+  `javaByteSinkOf` resolves one level of wrapping.
+- A malformed instance `readUTF` and a `readFully` or `read(byte[], int, int)`
+  range outside the array still stop the title with a host error (the sources
+  disagree on the first: KTF throws IOException, CLDC UTFDataFormatException;
+  the second is IndexOutOfBoundsException on KTF, SKT and in CLDC), and so does
+  a `DataInputStream` over null.
+- String constants are not interned, so `s.intern() == "literal"` holds only
+  when that literal was the first such string interned.
+- `Date.toString` is unserved and refused by name.
+- A worker parked inside a platform call that is running the title's code
+  (`Thread.run`, the Reader, Writer and OutputStream base bodies, `readUTF` on a
+  title's own DataInput) refuses a quick save, as the earlier callbacks do.
+- A blank `createImage(int, int)` surface is not cleared in guest memory, so
+  drawing one before anything is drawn into it can show a released surface's
+  pixels.
+- Four descriptors on a class are no longer unique (`Font` `()I`, `Display`
+  `()V` and `()Lorg/kwis/msp/lcdui/Card;`, `BackLight` `()V`). That matters
+  only to an entry a module leaves unnamed, which `javaStaticByDescriptor`
+  resolves by a unique descriptor; the one such entry seen is on `Network`.
+
+The validation of this pass, corpus and quick-save upgrade included, is with
+[the comparison](coverage.md#cross-platform-parity-2026-11-05).

@@ -427,3 +427,11 @@ func javaClipEmpty(
 	}
 	return 0, nil
 }
+
+// javaGetVolume is `Volume.get()`: the system level, the one Volume.set and
+// MC_mdaSetVolume move. It is the loudest, 100, until one of them moves it —
+// the level KTF's Volume.get answers before any set — and what a set left it
+// at after, clamped to 0..100 the way both platforms clamp it.
+func javaGetVolume(client *Client, _ context.Context, _ *armcore.Thread, _ []uint32) (uint32, error) {
+	return uint32(client.volume), nil
+}

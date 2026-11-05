@@ -58,6 +58,12 @@ type javaGraphics struct {
 	// the colour and what is already there. Setting an alpha turns it off, in
 	// as many words.
 	xor bool
+	// stroke is the style `setStrokeStyle` last set: the specification's
+	// SOLID (0) or DOTTED (1). It is kept and answered back and changes no
+	// pixel — every line here is drawn solid — which is what KTF's Graphics
+	// does with it too. It is not in the Graphics record a checkpoint keeps;
+	// checkpoint_java_screen.go carries it.
+	stroke int32
 }
 
 // The anchor constants, which the specification fixes: a call names one
@@ -257,6 +263,27 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	"org/kwis/msp/lcdui/Graphics.getClipWidth()I":  {Words: 1, Implementat: javaClipValue(2)},
 	"org/kwis/msp/lcdui/Graphics.getClipHeight()I": {Words: 1, Implementat: javaClipValue(3)},
 
+	// The rest of what a Graphics reports about itself, each the value its own
+	// setter left: the transparency, the drawing mode, the stroke style, and
+	// the colour taken apart into its three channels.
+	"org/kwis/msp/lcdui/Graphics.getAlpha()I":          {Words: 1, Implementat: javaGetAlpha},
+	"org/kwis/msp/lcdui/Graphics.isXORMode()Z":         {Words: 1, Implementat: javaIsXORMode},
+	"org/kwis/msp/lcdui/Graphics.getStrokeStyle()I":    {Words: 1, Implementat: javaGetStrokeStyle},
+	"org/kwis/msp/lcdui/Graphics.setStrokeStyle(I)V":   {Words: 2, Implementat: javaSetStrokeStyle},
+	"org/kwis/msp/lcdui/Graphics.getRedComponent()I":   {Words: 1, Implementat: javaColorComponent(16)},
+	"org/kwis/msp/lcdui/Graphics.getGreenComponent()I": {Words: 1, Implementat: javaColorComponent(8)},
+	"org/kwis/msp/lcdui/Graphics.getBlueComponent()I":  {Words: 1, Implementat: javaColorComponent(0)},
+	// A grey is a colour given by one number; see javaSetGrayScale.
+	"org/kwis/msp/lcdui/Graphics.setGrayScale(I)V": {Words: 2, Implementat: javaSetGrayScale},
+
+	// The pixels themselves, read and written as numbers; see java_pixels.go.
+	"org/kwis/msp/lcdui/Graphics.getPixel(II)I":           {Words: 3, Implementat: javaGetPixel},
+	"org/kwis/msp/lcdui/Graphics.getRGBPixels(IIII[III)V": {Words: 8, Implementat: javaTransferRGBPixels(false)},
+	"org/kwis/msp/lcdui/Graphics.setRGBPixels(IIII[III)V": {Words: 8, Implementat: javaTransferRGBPixels(true)},
+	"org/kwis/msp/lcdui/Graphics.getPixels(IIII[BII)V":    {Words: 8, Implementat: javaTransferPixels(false)},
+	"org/kwis/msp/lcdui/Graphics.setPixels(IIII[BII)V":    {Words: 8, Implementat: javaTransferPixels(true)},
+	"org/kwis/msp/lcdui/Graphics.drawPolygon([I[I)V":      {Words: 3, Implementat: javaDrawPolygon},
+
 	// The font this Graphics draws text with. There is one face here — the
 	// same one `getDefaultFont` answers and the same one the C drawing calls
 	// render — so a title that reads the font off a Graphics to measure a
@@ -283,6 +310,11 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 		Words: 2, Implementat: javaCreateBlankImage},
 	"org/kwis/msp/lcdui/Image.getGraphics()Lorg/kwis/msp/lcdui/Graphics;": {
 		Words: 1, Implementat: javaImageGraphics},
+	// A copy of a picture, which is a picture a title can draw into, and the
+	// question of which kind a picture is.
+	"org/kwis/msp/lcdui/Image.createImage(Lorg/kwis/msp/lcdui/Image;)Lorg/kwis/msp/lcdui/Image;": {
+		Words: 1, Implementat: javaCreateImageCopy},
+	"org/kwis/msp/lcdui/Image.isMutable()Z": {Words: 1, Implementat: javaImageIsMutable},
 
 	// Taking the card off the display, and painting one that has asked to be
 	// painted without waiting for the next frame; see java_frame.go.
@@ -311,11 +343,20 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	// A named face, style and size answer the same font, because there is one
 	// face here. It is the default font rather than a refusal: a title that
 	// asks for a bold face and is refused stops, and a title that asks for one
-	// and gets the plain face draws the text it meant to.
+	// and gets the plain face draws the text it meant to. What it asked for is
+	// what the font then reports about itself; see java_font.go.
 	"org/kwis/msp/lcdui/Font.getFont(III)Lorg/kwis/msp/lcdui/Font;": {
-		Words: 3, Implementat: javaPlatformSingleton(javaFontClass)},
-	"org/kwis/msp/lcdui/Font.getHeight()I":  {Words: 1, Implementat: javaFontHeight},
-	"org/kwis/msp/lcdui/Font.charWidth(C)I": {Words: 2, Implementat: javaCharWidth},
+		Words: 3, Implementat: javaFontGetFont},
+	"org/kwis/msp/lcdui/Font.getFace()I":             {Words: 1, Implementat: javaFontFace},
+	"org/kwis/msp/lcdui/Font.getStyle()I":            {Words: 1, Implementat: javaFontStyle},
+	"org/kwis/msp/lcdui/Font.getSize()I":             {Words: 1, Implementat: javaFontSize},
+	"org/kwis/msp/lcdui/Font.isPlain()Z":             {Words: 1, Implementat: javaFontStyleIs(0)},
+	"org/kwis/msp/lcdui/Font.isBold()Z":              {Words: 1, Implementat: javaFontStyleIs(javaFontStyleBold)},
+	"org/kwis/msp/lcdui/Font.isItalic()Z":            {Words: 1, Implementat: javaFontStyleIs(javaFontStyleItalic)},
+	"org/kwis/msp/lcdui/Font.isUnderlined()Z":        {Words: 1, Implementat: javaFontStyleIs(javaFontStyleUnderlined)},
+	"org/kwis/msp/lcdui/Font.getBaselinePosition()I": {Words: 1, Implementat: javaFontBaseline},
+	"org/kwis/msp/lcdui/Font.getHeight()I":           {Words: 1, Implementat: javaFontHeight},
+	"org/kwis/msp/lcdui/Font.charWidth(C)I":          {Words: 2, Implementat: javaCharWidth},
 	"org/kwis/msp/lcdui/Font.stringWidth(Ljava/lang/String;)I": {
 		Words: 2, Implementat: javaStringWidth},
 	"org/kwis/msp/lcdui/Font.substringWidth(Ljava/lang/String;II)I": {
@@ -334,6 +375,32 @@ var javaGraphicsMethods = map[string]javaPlatformMethod{
 	// have been dealt with; see java_frame.go.
 	"org/kwis/msp/lcdui/Display.callSerially(Ljava/lang/Runnable;)V": {
 		Words: 2, Implementat: javaCallSerially},
+	// The form with a delay, which runs on the same queue at the same point:
+	// the delay is not honoured, as KTF does not honour it, and the call takes
+	// its Runnable where the other form does.
+	"org/kwis/msp/lcdui/Display.callSerially(Ljava/lang/Runnable;I)V": {
+		Words: 3, Implementat: javaCallSerially},
+	// The cards on the display, counted and taken off; see java_frame.go.
+	"org/kwis/msp/lcdui/Display.countCard()I":                       {Words: 1, Implementat: javaCountCard},
+	"org/kwis/msp/lcdui/Display.popCard()Lorg/kwis/msp/lcdui/Card;": {Words: 1, Implementat: javaPopCard},
+	// Putting the buffer on the screen is what the end of every paint already
+	// does here (paintJavaCard), and KTF's flush does nothing either.
+	"org/kwis/msp/lcdui/Display.flush()V": {Words: 1, Implementat: javaNoResult},
+	// What the display reports about itself and its events; see
+	// java_display.go.
+	"org/kwis/msp/lcdui/Display.numColors()I":              {Words: 1, Implementat: javaDisplayNumColors},
+	"org/kwis/msp/lcdui/Display.getBitsPerPixel()I":        {Words: 1, Implementat: javaDisplayBitsPerPixel},
+	"org/kwis/msp/lcdui/Display.isColor()Z":                {Words: 1, Implementat: javaDisplayAnswer(true)},
+	"org/kwis/msp/lcdui/Display.isDoubleBuffered()Z":       {Words: 1, Implementat: javaDisplayAnswer(true)},
+	"org/kwis/msp/lcdui/Display.hasPointerEvents()Z":       {Words: 1, Implementat: javaDisplayAnswer(false)},
+	"org/kwis/msp/lcdui/Display.hasPointerMotionEvents()Z": {Words: 1, Implementat: javaDisplayAnswer(false)},
+	"org/kwis/msp/lcdui/Display.hasRepeatEvents()Z":        {Words: 1, Implementat: javaDisplayAnswer(false)},
+	"org/kwis/msp/lcdui/Display.getKeyName(I)Ljava/lang/String;": {
+		Words: 1, Implementat: javaKeyName},
+	// A display named by a string is the one display there is, whatever the
+	// string, which is what KTF answers.
+	"org/kwis/msp/lcdui/Display.getDisplay(Ljava/lang/String;)Lorg/kwis/msp/lcdui/Display;": {
+		Words: 1, Implementat: javaPlatformSingleton(javaDisplayClass)},
 
 	// What a key means rather than which key it was. A title that handles the
 	// pad through actions asks for this in its own `keyNotify` and branches on
@@ -853,4 +920,213 @@ func javaClipRect(
 	state.clipWidth, state.clipHeight = right-left, bottom-top
 	state.clipSet = true
 	return 0, nil
+}
+
+// javaGetAlpha is `getAlpha()`: the transparency as the title last set it,
+// opaque until it sets one, which is what KTF's Graphics answers.
+func javaGetAlpha(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	state, err := client.javaGraphicsState(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return uint32(int32(state.alpha)), nil
+}
+
+// javaIsXORMode is `isXORMode()`: whether setXORMode last turned the
+// difference-drawing mode on.
+func javaIsXORMode(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	state, err := client.javaGraphicsState(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return javaBoolean(state.xor), nil
+}
+
+// javaSetStrokeStyle is `setStrokeStyle(style)`. KTF keeps whatever number it
+// is given, without the check the specification describes for one that is
+// neither SOLID nor DOTTED, and so does this.
+func javaSetStrokeStyle(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	state, err := client.javaGraphicsState(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	state.stroke = int32(arguments[1])
+	return 0, nil
+}
+
+// javaGetStrokeStyle is `getStrokeStyle()`: the style last set, SOLID (0)
+// until one is. A reset puts it back to SOLID, as KTF's reset does.
+func javaGetStrokeStyle(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	state, err := client.javaGraphicsState(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return uint32(state.stroke), nil
+}
+
+// javaColorComponent answers one 8-bit channel of the colour as the title set
+// it: 16 for red, 8 for green, 0 for blue, out of the same packed value
+// getColor answers.
+func javaColorComponent(shift uint) func(
+	*Client, context.Context, *armcore.Thread, []uint32) (uint32, error) {
+	return func(
+		client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+	) (uint32, error) {
+		state, err := client.javaGraphicsState(arguments[0])
+		if err != nil {
+			return 0, err
+		}
+		return state.packed >> shift & 0xff, nil
+	}
+}
+
+// javaSetGrayScale is `setGrayScale(level)`: the colour later calls draw in
+// becomes the grey of that level on all three channels. The level is the low
+// eight bits of the argument, which is how KTF's Graphics takes it; the
+// specification's IllegalArgumentException for a level outside 0 to 255 is not
+// thrown there, and is not here.
+//
+// **`getGrayScale` is left unserved.** KTF answers it with the packed colour,
+// as getColor does, while the specification's page says it answers the grey
+// level, set or nearest; the two disagree, so neither is taken here.
+func javaSetGrayScale(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	state, err := client.javaGraphicsState(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	level := arguments[1] & 0xff
+	state.color = rgb565(level, level, level)
+	state.packed = level<<16 | level<<8 | level
+	return 0, nil
+}
+
+// javaDrawPolygon is `drawPolygon(xPoints, yPoints)`: the outline of the closed
+// polygon the two arrays describe, each edge the line drawLine draws and the
+// last point joined back to the first. It goes through the same outline the C
+// polygon slot draws (graphicsContext.polygon), so the clip, the translation,
+// the alpha and the XOR mode apply as they do to a line.
+//
+// The vertices are as many as the shorter array holds and fewer than two draw
+// nothing, which is KTF's reading of arrays of different lengths. A null array
+// is the NullPointerException the specification names. A polygon of more
+// points than the C slot takes (maxPolygonPoints) is refused the way that slot
+// refuses one, because every edge is a line walked in host code.
+func javaDrawPolygon(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	xView, err := client.javaTypedArray(thread, arguments[1], "[I", "drawPolygon")
+	if err != nil {
+		return 0, err
+	}
+	yView, err := client.javaTypedArray(thread, arguments[2], "[I", "drawPolygon")
+	if err != nil {
+		return 0, err
+	}
+	count := min(xView.Length, yView.Length)
+	if count > maxPolygonPoints {
+		return 0, fmt.Errorf("a polygon of %d points is more than the %d this platform draws", count, maxPolygonPoints)
+	}
+	xs, err := client.javaIntElements(xView, count)
+	if err != nil {
+		return 0, err
+	}
+	ys, err := client.javaIntElements(yView, count)
+	if err != nil {
+		return 0, err
+	}
+	return 0, client.javaDraw(arguments[0], func(context *graphicsContext, state *javaGraphics) error {
+		pointsX, pointsY := make([]int, count), make([]int, count)
+		for index := range count {
+			pointsX[index] = int(xs[index]) + state.translateX
+			pointsY[index] = int(ys[index]) + state.translateY
+		}
+		context.polygon(pointsX, pointsY, state.color, false)
+		return nil
+	})
+}
+
+// javaCreateImageCopy is `Image.createImage(Image source)`: a new picture
+// holding the source's pixels. The specification calls it an image that can be
+// edited — a copy of a resource is how a title gets a picture it may draw into —
+// and KTF's copy is the mutable kind too. **A masked source is copied with its
+// mask turned white**, and the copy has no mask: the specification's page says
+// so in as many words. KTF's copy keeps the transparency, which is a difference
+// of KTF's from the page; SKT's copy is the page's. Every pixel a blit would
+// leave out (blitPixel: the colour key, the declared mask, or the mask colour of
+// a surface the title built) is the one turned white. The source is left as it
+// was, and a null source is the NullPointerException the specification names.
+//
+// The pixels are the runtime's copy of the source, which is the correct one
+// for a Java title (see javaDraw), and the copy is published to guest memory
+// the way a decoded picture is, because a blit reads a surface nothing has
+// drawn into back out of it (syncRowsFromGuest).
+// copiedMaskPixel is the white a masked pixel becomes in a copy.
+const copiedMaskPixel = 0xffff
+
+func javaCreateImageCopy(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	source, err := client.javaImageArgument(thread, arguments[0], "createImage")
+	if err != nil {
+		return 0, err
+	}
+	duplicate, err := client.newFramebuffer(source.width, source.height, false)
+	if err != nil {
+		return 0, err
+	}
+	for index := range duplicate.pixels {
+		pixel, drawn := source.blitPixel(index)
+		if !drawn {
+			pixel = copiedMaskPixel
+		}
+		duplicate.pixels[index] = pixel
+	}
+	if err := client.syncToGuest(duplicate); err != nil {
+		return 0, err
+	}
+	class, err := client.preparePlatformJavaClass(javaImageClass)
+	if err != nil {
+		return 0, err
+	}
+	object, err := client.allocateJavaObject(class)
+	if err != nil {
+		return 0, err
+	}
+	client.javaRuntimeState().images[object] = duplicate.handle
+	return object, nil
+}
+
+// javaImageIsMutable is `isMutable()`. A picture decoded from a resource or
+// from bytes stands on the surface the decode cache hands every Image of that
+// picture (newSharedJavaImage), and that is the immutable kind; a picture with
+// pixels of its own — createImage(width, height), or a copy — is the mutable
+// kind. KTF records the same split as a flag when it makes the picture.
+//
+// One case comes out otherwise than on KTF: this platform lets a title draw
+// into a decoded picture, and getGraphics gives such a picture pixels of its
+// own first (unshareDecodedSurface), so from then on it answers mutable. KTF's
+// getGraphics on a decoded picture draws nothing and it stays immutable.
+func javaImageIsMutable(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	surface, err := client.javaImageArgument(thread, arguments[0], "isMutable")
+	if err != nil {
+		return 0, err
+	}
+	for _, handle := range client.javaRuntimeState().decodedImages {
+		if handle == surface.handle {
+			return javaFalse, nil
+		}
+	}
+	return javaTrue, nil
 }

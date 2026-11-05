@@ -82,6 +82,14 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// constructing one is taking delivery of an object the module allocated.
 	"org/kwis/msp/lwc/AnnunciatorComponent.<init>(Z)V": {Words: 2, Implementat: javaNoResult},
 	"org/kwis/msp/lcdui/Card.<init>()V":                {Words: 1, Implementat: javaNoResult},
+	// A Card's own bodies for the three notifications, which a title's card
+	// reaches when its override calls the one it overrides. The specification
+	// leaves each to the card to fill in, and the base answers KTF's and SKT's
+	// Card give: a key or a pointer event it did not take (false), and nothing
+	// to do on being shown or hidden.
+	"org/kwis/msp/lcdui/Card.keyNotify(II)Z":      {Words: 3, Implementat: javaZeroResult},
+	"org/kwis/msp/lcdui/Card.pointerNotify(III)Z": {Words: 4, Implementat: javaZeroResult},
+	"org/kwis/msp/lcdui/Card.showNotify(Z)V":      {Words: 2, Implementat: javaNoResult},
 	// `ShellComponent(int x, int y, int w, int h)` is the toolkit's top-level
 	// container — the one a title has to use to put any widget on a Card — and
 	// the four arguments are the box it occupies. It is taken the same way as
@@ -111,6 +119,10 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// nothing with it yet gets the one object, every time.
 	"org/kwis/msp/lcdui/Jlet.getEventQueue()Lorg/kwis/msp/lcdui/EventQueue;": {
 		Words: 1, Implementat: javaPlatformSingleton("org/kwis/msp/lcdui/EventQueue")},
+	// A property of the application, out of its own descriptor; see
+	// javaJletAppProperty.
+	"org/kwis/msp/lcdui/Jlet.getAppProperty(Ljava/lang/String;)Ljava/lang/String;": {
+		Words: 2, Implementat: javaJletAppProperty},
 	// Showing the annunciator is showing the handset's own status bar, which
 	// this platform does not draw at all — so it takes no room either, and a
 	// title that lays its card out below one gets the whole screen.
@@ -153,6 +165,12 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// a platform with no backlight to hold is nothing to do rather than
 	// something unimplemented.
 	"org/kwis/msp/handset/BackLight.alwaysOn()V": {Implementat: javaNoResult},
+	// The rest of the class asks for the light for a while, turns it off, and
+	// puts back what was there before; with no backlight to hold each of those
+	// is nothing to do as well, which is what KTF's and SKT's BackLight do.
+	"org/kwis/msp/handset/BackLight.on(III)V":  {Words: 3, Implementat: javaNoResult},
+	"org/kwis/msp/handset/BackLight.off()V":    {Implementat: javaNoResult},
+	"org/kwis/msp/handset/BackLight.before()V": {Implementat: javaNoResult},
 
 	// Collection is the platform's business and this platform's answer is that
 	// it has none to do; the specification defines the call as a request.
@@ -176,6 +194,7 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// The system volume, which is the same level `MC_mdaSetVolume` sets: one
 	// handset, one volume, whichever side of the platform asks for it.
 	"org/kwis/msp/media/Volume.set(I)V": {Words: 1, Implementat: javaSetVolume},
+	"org/kwis/msp/media/Volume.get()I":  {Implementat: javaGetVolume},
 	// Sound; see java_sound.go.
 	"org/kwis/msp/media/Clip.<init>(Ljava/lang/String;[B)V": {Words: 3, Implementat: javaClipConstructor},
 	// The two forms that name a type and no data. The specification's second
@@ -250,9 +269,10 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// stream it was built on, so a read through either moves the one cursor.
 	// **What it decodes with is not settled here** — nothing has been watched
 	// reading characters out of one yet — and it does not have to be for the
-	// wrapping to be right.
+	// wrapping to be right. A null stream is the reader's own
+	// NullPointerException; see javaReaderConstructor.
 	"java/io/InputStreamReader.<init>(Ljava/io/InputStream;)V": {
-		Words: 2, Implementat: javaWrapStream},
+		Words: 2, Implementat: javaReaderConstructor},
 
 	// A stream over bytes a title already holds, which is how one reads a
 	// record back out of its own save. There is nothing to open: the array is
@@ -421,6 +441,9 @@ var javaPlatformMethods = map[string]javaPlatformMethod{
 	// rather than an empty string it would take for an answer.
 	"org/kwis/msp/handset/HandsetProperty.getSystemProperty(Ljava/lang/String;)Ljava/lang/String;": {
 		Words: 1, Implementat: javaSystemProperty},
+	// Setting one is refused; see javaSetSystemProperty.
+	"org/kwis/msp/handset/HandsetProperty.setSystemProperty(Ljava/lang/String;Ljava/lang/String;)Z": {
+		Words: 2, Implementat: javaSetSystemProperty},
 
 	// A title's game loop runs on a thread of its own; see java_thread.go.
 	"java/lang/Thread.<init>(Ljava/lang/Runnable;)V":     {Words: 2, Implementat: javaThreadConstructor},

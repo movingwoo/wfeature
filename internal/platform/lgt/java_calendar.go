@@ -223,6 +223,65 @@ func javaDateTime(
 	return uint32(uint64(millis)), nil
 }
 
+// The rest of Date. The class declares getTime and setTime, then equals,
+// hashCode and toString over Object's own, so setTime takes 11 — one past the
+// getTime anchor, by the rule alone — and equals and hashCode Object's 3 and 2.
+// What each answers is the class page's, and what the KTF and SKT runtimes
+// answer (internal/jvm); toString's date format is not served yet, and a call
+// to it is still refused by name (javaLibraryOverrides).
+
+// javaDateOf answers the instant a Date stands for.
+func (client *Client) javaDateOf(object uint32) (int64, error) {
+	millis, ok := client.javaRuntimeState().dates[object]
+	if !ok {
+		return 0, fmt.Errorf("the object at %#x is not a date this platform built", object)
+	}
+	return millis, nil
+}
+
+// javaDateSetTime is `setTime(long)`, slot 11: the Date moved to another
+// instant.
+func javaDateSetTime(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	if _, err := client.javaDateOf(arguments[0]); err != nil {
+		return 0, err
+	}
+	client.javaRuntimeState().dates[arguments[0]] = int64(uint64(arguments[1]) | uint64(arguments[2])<<32)
+	return 0, nil
+}
+
+// javaDateEquals is `equals(Object)`, slot 3: another Date standing for the
+// same millisecond. Null and an object of any other class are not equal.
+func javaDateEquals(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	millis, err := client.javaDateOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	if !client.javaObjectIs(arguments[1], javaDateClass) {
+		return javaFalse, nil
+	}
+	other, err := client.javaDateOf(arguments[1])
+	if err != nil {
+		return javaFalse, nil
+	}
+	return javaBoolean(other == millis), nil
+}
+
+// javaDateHashCode is `hashCode()`, slot 2: the two halves of the instant
+// folded together, `(int) t ^ (int) (t >> 32)`, as the class page defines it.
+func javaDateHashCode(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	millis, err := client.javaDateOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return uint32(int32(millis) ^ int32(millis>>32)), nil
+}
+
 // javaTimeZoneOffset is `TimeZone.getRawOffset()`, slot 11: milliseconds east
 // of GMT. It is read at the instant the clock stands at rather than fixed,
 // because a zone that observes daylight saving has two of them.

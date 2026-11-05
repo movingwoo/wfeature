@@ -13,7 +13,13 @@ import (
 // is how a title puts one in a Vector or keys a Hashtable with one.
 //
 // The number lives on this side, keyed by the object, the way a String's text
-// does (java_string.go). Each class's own methods take its slots from 10 in
+// does (java_string.go). The same table keeps a Boolean's flag and a
+// Character's code unit (java_boolean.go, java_character.go) and the encoding
+// an OutputStreamWriter writes in (java_writer.go): one number against one
+// object, which a checkpoint carries in the class library's record and the
+// collector lets go of with the object.
+//
+// Each class's own methods take its slots from 10 in
 // declaration order — Integer's byteValue, shortValue, intValue and longValue
 // at 10 to 13, the others' one value method at 10 — and equals, hashCode and
 // toString take Object's 3, 2 and 4. floatValue and doubleValue are left out
@@ -207,6 +213,24 @@ func javaParseRadix(bits int) func(*Client, context.Context, *armcore.Thread, []
 	return func(client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32) (uint32, error) {
 		return client.javaParseNumber(thread, arguments[0], int(int32(arguments[1])), bits)
 	}
+}
+
+// javaMathAbsLong is `Math.abs(long)`: the value without its sign, in the
+// register pair a long goes back in. The long is two words, low first, as
+// `Math.max(long, long)`'s are. Long.MIN_VALUE has no positive twin and stays
+// itself, as two's complement negation leaves it — the language's answer, and
+// the KTF and SKT runtimes'.
+func javaMathAbsLong(
+	_ *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	value := int64(uint64(arguments[0]) | uint64(arguments[1])<<32)
+	if value < 0 {
+		value = -value
+	}
+	if err := thread.SetRegister(1, uint32(uint64(value)>>32)); err != nil {
+		return 0, err
+	}
+	return uint32(uint64(value)), nil
 }
 
 // javaParseLong is `Long.parseLong(String)` and `parseLong(String, int)`. It is

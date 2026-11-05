@@ -524,3 +524,96 @@ func TestAStartPastTheThreadBoundIsAVirtualMachineError(t *testing.T) {
 		}
 	}
 }
+
+// newTestRunnable is a Runnable the title wrote whose run counts its calls in
+// its own object (recordingWrite), declared in its record the way a class
+// with member records declares one.
+func newTestRunnable(t *testing.T, client *Client, name string, offset uint32) uint32 {
+	t.Helper()
+	runnable := installGuestSubclass(t, client, name, javaObjectClass, 64, 0)
+	class, _ := client.javaClassOfObject(runnable)
+	class.Record.Inline = true
+	class.Record.Methods = []javaMember{{Name: "run", Descriptor: "()V",
+		Body: installThumbAt(t, client, offset, recordingWrite...)}}
+	return runnable
+}
+
+// Thread.run called as a method runs the Runnable the thread was built with,
+// on the calling thread, once per call; a thread built with none runs nothing,
+// and a Thread handed over as the Runnable runs its own in turn.
+func TestJavaThreadRunRunsItsRunnable(t *testing.T) {
+	client := fixtureClient(t)
+	task := newTestRunnable(t, client, "game/Task", 0)
+	thread, err := newTestObject(t, client, javaThreadClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustJavaCall(t, client, "java/lang/Thread.<init>(Ljava/lang/Runnable;)V", thread, task)
+	mustSlot(t, client, javaThreadClass, javaThreadSlotRun, thread)
+	if got := len(recorded(t, client, task)); got != 1 {
+		t.Fatalf("run() ran the Runnable %d times, want once", got)
+	}
+
+	bare, err := newTestObject(t, client, javaThreadClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustJavaCall(t, client, "java/lang/Thread.<init>()V", bare)
+	mustSlot(t, client, javaThreadClass, javaThreadSlotRun, bare)
+
+	outer, err := newTestObject(t, client, javaThreadClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustJavaCall(t, client, "java/lang/Thread.<init>(Ljava/lang/Runnable;)V", outer, thread)
+	mustSlot(t, client, javaThreadClass, javaThreadSlotRun, outer)
+	if got := len(recorded(t, client, task)); got != 2 {
+		t.Errorf("run() through a Thread handed over as the Runnable ran it %d times in all, want twice", got)
+	}
+	if runtime := client.javaRuntimeState(); runtime.threads[thread].worker != nil || runtime.threads[outer].worker != nil {
+		t.Error("run() started a thread")
+	}
+}
+
+// getPriority answers what setPriority kept, and NORM_PRIORITY before.
+func TestJavaThreadGetPriority(t *testing.T) {
+	client := fixtureClient(t)
+	thread, err := javaCurrentThread(client, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustSlot(t, client, javaThreadClass, 15, thread); got != 5 {
+		t.Errorf("getPriority() before any setPriority = %d, want 5", got)
+	}
+	mustSlot(t, client, javaThreadClass, 14, thread, 10)
+	if got := mustSlot(t, client, javaThreadClass, 15, thread); got != 10 {
+		t.Errorf("getPriority() after setPriority(10) = %d, want 10", got)
+	}
+}
+
+// activeCount counts the threads running, and the platform's own once a title
+// has its Thread object, and is never less than one.
+func TestJavaThreadActiveCount(t *testing.T) {
+	client := fixtureClient(t)
+	runtime := client.javaRuntimeState()
+	count := func() uint32 {
+		t.Helper()
+		return mustJavaCall(t, client, "java/lang/Thread.activeCount()I")
+	}
+	if got := count(); got != 1 {
+		t.Errorf("activeCount() with nothing started = %d, want 1", got)
+	}
+	runtime.threads[0x2000] = &javaThread{object: 0x2000, runnable: 0x2000}
+	runtime.threads[0x3000] = &javaThread{object: 0x3000, runnable: 0x3000, worker: &javaWorker{}}
+	runtime.threads[0x4000] = &javaThread{object: 0x4000, runnable: 0x4000, worker: &javaWorker{}}
+	runtime.threads[0x5000] = &javaThread{object: 0x5000, runnable: 0x5000, worker: &javaWorker{done: true}}
+	if got := count(); got != 2 {
+		t.Errorf("activeCount() with two running = %d, want 2", got)
+	}
+	if _, err := javaCurrentThread(client, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(); got != 3 {
+		t.Errorf("activeCount() with two running and the platform's own = %d, want 3", got)
+	}
+}
