@@ -4,18 +4,26 @@ import "testing"
 
 // compareStandIn runs the same Thumb loop twice from the same start, once with
 // the recognisers refused and once allowed, and fails on the first register,
-// flag or byte of [from, from+length) that differs. build lays out a fresh
-// memory and the context the loop starts in.
+// flag or byte of [from, from+length) that differs, and on a different count
+// of charged instructions. build lays out a fresh memory and the context the
+// loop starts in.
 func compareStandIn(t *testing.T, end uint32, from, length uint32, build func() (*Memory, *Context)) {
 	t.Helper()
 	interpreted, reference := build()
 	stood, subject := build()
 	interpreted.standInsRefused = true
-	if _, err := (Engine{}).Run(reference, interpreted, end, 10_000_000); err != nil {
+	control, err := (Engine{}).Run(reference, interpreted, end, 10_000_000)
+	if err != nil {
 		t.Fatalf("interpreting the loop: %v", err)
 	}
-	if _, err := (Engine{}).Run(subject, stood, end, 10_000_000); err != nil {
+	result, err := (Engine{}).Run(subject, stood, end, 10_000_000)
+	if err != nil {
 		t.Fatalf("standing in for the loop: %v", err)
+	}
+	// A stand-in charges what it stood in for, so a budget runs out where it
+	// would have.
+	if control.Steps != result.Steps {
+		t.Errorf("charged %d steps, interpreting the same loop retired %d", result.Steps, control.Steps)
 	}
 	for register := 0; register < 16; register++ {
 		if reference.Registers[register] != subject.Registers[register] {

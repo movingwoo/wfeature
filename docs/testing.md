@@ -251,6 +251,7 @@ others take an absolute path.
 | `TestLocalImageFramebufferOriginArchive` | `internal/platform/lgt` | `WFEATURE_LGT_IMAGE_ORIGIN_ARCHIVE` | registry entry `lgt.image_framebuffer_origin` |
 | `TestLocalFramebufferOriginArchive` | `internal/platform/lgt` | `WFEATURE_LGT_ORIGIN_ARCHIVE` | registry entry `lgt.visible_framebuffer_origin` |
 | `TestLocalRecordTableArchive` | `internal/platform/lgt` | `WFEATURE_LGT_RECORD_TABLE_ARCHIVE` | registry entry `lgt.record_table_terminator` |
+| `TestLocalPackagedCertificateArchive` | `internal/platform/lgt` | `WFEATURE_LGT_PACKAGED_CERTIFICATE_ARCHIVE` | registry entry `lgt.packaged_certificate` |
 | `TestLocalAPIDemandProbe` | `internal/platform/lgt` | `WFEATURE_API_DEMAND_ARCHIVE` | the members an LGT Java title links against ([CLI](cli.md)) |
 | `TestLocalLGTLoadCostProbe` | `internal/platform/lgt` | `WFEATURE_PERF_ARCHIVE` | what a routed run costs the host; a `make pgo` run ([armcore](armcore.md)) |
 | `TestLocalSKTArchivesBootAndPaint` | `internal/platform/skt` | `WFEATURE_SKT_ACCEPTANCE=1` | rung 1 |

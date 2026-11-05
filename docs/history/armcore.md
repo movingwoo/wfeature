@@ -2120,6 +2120,45 @@ Whole-corpus controls: all 34 local LGT and 42 of the 43 local KTF archives
 rendered byte-identical first frames, and two other KTF titles driven through their
 own routes were unmoved to within 1%, so it costs nothing where it never fires.
 
+<a id="implementation-a-keyed-blit-and-a-tint-fill-2026-11-03"></a>
+
+#### A keyed blit and a tint fill — 2026-11-03
+
+A KTF title was reported as playable but very slow. Its guest profile put 41% of
+its instructions in its sprite blit and 32% in a fill that blends a rectangle
+toward one colour, and no recogniser read either. The same two loops are in a
+second title of the same batch and in none of the other 328 local client images,
+so this is the case the paragraph on ARM loops above leaves open: a report of a
+title running too slow, answered with a stand-in for exactly its loops.
+
+- **The keyed blit** (`keyed_blit.go`) is the palette blit with a word for each
+  palette entry, a key colour that is not stored, a source indexed by a counter
+  that counts up to a limit, and both bases reloaded from frame slots every
+  pixel. A mirrored sprite reads its row backwards. The second title emits the
+  same blit with one register for both bases and the limit in a low register,
+  so registers and slots are read from the instructions; every instruction has
+  a fixed place and form, and anything else is refused.
+- **The tint fill** (`tint_fill.go`) is forty-one instructions a pixel, most of
+  them reloading masks and the target colour from frame slots. Both titles emit
+  it byte for byte, so it is matched against a template rather than walked —
+  the strictest proof there is, for a shape no third title has asked about.
+
+Both leave the last iteration to the interpreter, as `byte_blend.go` does: every
+scratch register, flag and spill slot they touch is written before it is read,
+so the interpreted iteration leaves them as the guest would. Both refuse a
+destination over what they read every pixel (a frame slot, the palette, the
+source), and the tint fill refuses a watched run, since its spills would be
+recorded once where the guest stores them per pixel.
+
+Checked deterministically, on a manual clock with paint dropping off, against
+the same build without the two recognisers: the first title through 3,000
+rounds of a minigame and the second through 2,500 rounds of its menus and a
+mission briefing both ended on **byte-identical guest memory and the same
+frame**, and took 11.26 s → 5.37 s and 17.27 s → 8.17 s. The authored tests
+compare registers, flags, memory and charged instructions with the
+interpreter, including a row across a page, an uncommitted row and the
+declines.
+
 <a id="implementation-the-supervisor-call-boundary-and-the-slots-that-do-not-need-it"></a>
 
 ### The supervisor-call boundary, and the slots that do not need it

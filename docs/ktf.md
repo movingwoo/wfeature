@@ -18,8 +18,12 @@ the combined image and BSS are limited to 256 MiB. A duplicate entry is
 inflated to be compared with the first and counts against the 512 MiB
 expansion bound like any other. It maps the image at
 `0x00100000`, enters Thumb code at `0x00100001`, and validates the returned
-initialization and class metadata before using it. Saves belong to the
-descriptor's PID, or to its AID when the PID is absent.
+initialization and class metadata before using it. The callbacks table its
+initialization is handed fills slots 0 to 2, 4 to 6, 8 and 11, and slot 20,
+which one runtime generation asks for an object's class record; the others stay
+zero, as nothing that runs calls them
+([history](history/ktf.md#ktf-new-archives-2026-11-03-object-class)). Saves
+belong to the descriptor's PID, or to its AID when the PID is absent.
 
 An older generation carries a relocatable module in the same `client.bin<BSS>`
 entry: a header naming the BSS size and a relocation table, then a segment
@@ -241,7 +245,9 @@ does the WIPI-C polygon fill (`curve.FillPolygonWithin`). Image
 decoding reads the header first and refuses a picture of more than 16,777,216
 pixels (`backend.MaxFramebufferPixels`, the rule SKT already applied) before
 allocating, and the checksum repair for a picture with a wrong zlib trailer
-stops at the size its header implies.
+stops at the size its header implies. A picture handed over without the end
+of its `IEND` decodes, as a handset's decoder draws it
+([history](history/ktf.md#ktf-new-archives-2026-11-03-png-end)).
 
 ## Files and records
 

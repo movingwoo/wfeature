@@ -10138,3 +10138,106 @@ one moves between runs of either build, and eight existing KTF titles move
 every run. Their last frames show the same screen at another point of its
 animation — the clock that now moves during `startApp` — and every one runs
 all 500 ticks under both builds.
+
+<a id="ktf-new-archives-2026-11-03"></a>
+
+## Newly added archives — 2026-11-03
+
+A batch of plaintext WIPI 2.0 KTF archives, two LGT archives of one title and a
+repackaged KTF archive, launched by hand. Two of the stops were this platform's
+and are fixed below.
+
+<a id="ktf-new-archives-2026-11-03-object-class"></a>
+
+### The callbacks table's slot 20
+
+One title failed in `startApp` with `execute guest memory at 0x74636568`. Its
+AOT runtime resolves a field reference the first time it is used and checks
+access as it does: it hands the object being written to slot 20 of the
+initialization callbacks table (`[table+0x50]`) and walks the superclass chain
+of the class record that comes back. Its array store asks the same slot for the
+array's class before reading the element class at the descriptor's `+0x14`,
+where the other generations read the object header's second word themselves.
+The table stopped at slot 11, so the guest branched through the next words of
+the arena: the name of `java/lang/Object`, `"ject"`. Of the 330 local client
+images, this runtime is the only one that calls the slot.
+
+Slot 20 now answers the class record the object's header names
+(`initSVCJavaObjectClass`, through `aotObjectClassAddress`), for an instance
+and an array alike. A null object raises a NullPointerException in the guest,
+which is what a field write or an array store through null is, rather than
+ending the session; a word that is not an object address is still refused.
+Slots 12 to 19 stay empty, since nothing calls them. The
+same runtime also reads slot 7, from the root enumerator the client exports at
+`WipiExe` word 8 for a collector to call, which this platform never calls, and
+slot 10, from `startClet`'s argument copy, which runs only for a non-empty
+argument array; neither is reached. The title shows its own start notice, its
+user authentication fails offline and it carries on, as it does without a
+network, and it reaches its menu and its first map.
+`TestInitializationCallbackSlotTwentyAnswersAnObjectsClass` fails without the
+slot.
+
+A checkpoint carries its arena and its stub table, so one taken before this
+change keeps the twelve-slot table it was taken with. A fresh session places
+everything allocated after the table 36 bytes later.
+
+<a id="ktf-new-archives-2026-11-03-png-end"></a>
+
+### A picture handed over without its end
+
+A second title failed its first timer with a read at `0x18`:
+`MC_grpCreateImage` answered `M_E_INVALID` for a 214-byte PNG it had been handed
+209 bytes of, and the title went on with the null image. Most of its pictures
+carry five bytes after `IEND` (`48 00 00 00 00`), and its loader hands over each
+picture's length without them; this one was packaged without them, so the five
+bytes the loader leaves off are the end of its `IEND`. The pixels are all there.
+A handset's decoder draws once the pixel stream has inflated; Go's reads every
+chunk to `IEND` and refuses the picture with `unexpected EOF`.
+
+`wipic.RepairPNGEnd` cuts such a picture after its last whole chunk and supplies
+the `IEND`, only after a decode has failed and only for a picture whose pixel
+stream it reached, so a picture cut inside its pixels still fails to inflate.
+It runs before the two checksum repairs, whose walks stop at a chunk that runs
+past the data. All three platforms' image routers end in `wipic.DecodeStandard`,
+so the tolerance is the same on each. The title reaches its menu and a mission.
+`TestAPictureCutShortInItsEndStillDecodes` fails without the repair.
+
+<a id="ktf-new-archives-2026-11-03-rest"></a>
+
+### The rest of the batch
+
+- **A title that needs its server.** Its first run restarts itself by design;
+  the second asks to authenticate once and to accept advertising messages, and
+  either answer dials. The dial fails as every dial here does, and the title's
+  own failure path draws a dialog over a screen whose image is loaded only after
+  a successful login, reading through a null image. Nothing here can stand in
+  for the server.
+- **A title that is slow, and its server prompts.** Its "connecting" dialogs are
+  its ranking server being refused, which it reports and recovers from. The
+  slowness was its software renderer; see
+  [the keyed blit and the tint fill](armcore.md#implementation-a-keyed-blit-and-a-tint-fill-2026-11-03).
+- **A first run that fails once.** A title finds the packaged saves of the
+  handset the archive was dumped from, deletes them as another handset's, and
+  then reads through a pointer the deleted saves would have set. Its second run
+  starts from its own new saves and plays.
+- **A repackaged archive** whose descriptor names one application id and whose
+  JAR is named after another is refused as having no JAR for its id; renaming
+  the JAR after the descriptor's id is the whole repair. It is the only such
+  archive of the 334 local KTF descriptor packages.
+- Two titles carry the previous owner's licence or authentication state,
+  bound to the handset the archive was dumped from, and stop on it here; they
+  are not adapted yet. The LGT title of the batch that stopped on its own
+  certificate dialog reads the certificate its archive ships
+  ([packaged certificate](lgt.md#lgt-new-archives-2026-11-03-packaged-certificate)).
+
+<a id="ktf-new-archives-2026-11-03-validation"></a>
+
+### Validation
+
+Unit tests for the slot, the PNG end, the two stand-ins and the packaged
+certificate; `make test`, `make test-debug`, `go test -race ./internal/...` and
+`go vet ./...`. Each fixed title was run past where it stopped. The 611 local
+archives at 500 ticks from an empty save, under the build before these changes
+and with them: the KTF and LGT ones end on the same digest except the two
+titles that now start, one of each, and the SKT ones that moved also move
+between runs of either build.

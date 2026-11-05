@@ -46,6 +46,12 @@ const LGTSaveSubscriberIdentity = "lgt.save_subscriber_identity"
 // LGTCertificateMessage selects the recognized two-stage local certificate exchange.
 const LGTCertificateMessage = "lgt.certificate_message"
 
+// LGTPackagedCertificate serves a recognized archive's own packaged
+// certificate at the bare name the title opens it by, so a title whose online
+// certificate exchange cannot complete offline reads the certificate the
+// archive already ships. A saved certificate the title writes still wins.
+const LGTPackagedCertificate = "lgt.packaged_certificate"
+
 // LGTWideExclusiveClip selects a wide context with exclusive clip edges.
 const LGTWideExclusiveClip = "lgt.wide_exclusive_clip"
 
@@ -144,7 +150,7 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		seen := make(map[string]bool)
 		for _, fix := range entry.Fixes {
 			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache || fix == SKTResumeWithoutStart) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
-				(fix == LGTCertificateMessage || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule ||
+				(fix == LGTCertificateMessage || fix == LGTPackagedCertificate || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule ||
 				(fix == SKTNativeSaveIdentity || fix == SKTNativeCertSubscriber || fix == SKTNativeDiscardOwnerState) && entry.Platform == "skt" && entry.Match.Kind == NativeModule
 			if !supported {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)

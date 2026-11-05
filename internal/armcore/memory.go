@@ -241,6 +241,7 @@ type Memory struct {
 	wordModulateScratch wordModulate
 	spilledBlitScratch  spilledBlit
 	clippedBlitScratch  clippedBlit
+	keyedBlitScratch    keyedBlit
 	// The one decline worth not deriving twice.
 	//
 	// A refusal by analysis is cached in the branch's decode entry and a

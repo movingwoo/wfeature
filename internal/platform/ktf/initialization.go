@@ -59,6 +59,13 @@ const (
 	// across those categories, and a reader should not have to check which
 	// category a repeated one belongs to.
 	initSVCJavaThrowObject uint32 = 19
+	// initSVCJavaObjectClass is the callbacks table's slot 20: it is handed
+	// an object, an array included, and answers the class record the
+	// object's header names. One generation of the AOT runtime asks it where
+	// the others read the header themselves — the access check a field
+	// reference runs the first time it resolves, and the array-store check.
+	// Its number continues the same run as initSVCJavaThrowObject's.
+	initSVCJavaObjectClass uint32 = 20
 
 	javaSVCJump1          uint32 = 7
 	javaSVCJump2          uint32 = 8
@@ -572,6 +579,10 @@ func (runtime *initializationRuntime) makeInitCallbacks() (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
+	objectClass, err := runtime.Stub(svcCategoryInit, initSVCJavaObjectClass)
+	if err != nil {
+		return 0, err
+	}
 	return runtime.AllocateWords([]uint32{
 		getInterface,
 		javaThrow,
@@ -585,6 +596,8 @@ func (runtime *initializationRuntime) makeInitCallbacks() (uint32, error) {
 		0,
 		0,
 		allocate,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		objectClass,
 	})
 }
 
@@ -751,6 +764,22 @@ func (runtime *initializationRuntime) handleInitCall(thread *armcore.Thread, id 
 		return runtime.newAOTArray(thread)
 	case initSVCJavaClassLoad:
 		return runtime.loadJavaClass(thread)
+	case initSVCJavaObjectClass:
+		object, err := thread.Register(0)
+		if err != nil {
+			return 0, err
+		}
+		if object == 0 {
+			// Both callers hand over the object a field is written through or
+			// an array is stored into, and either through a null is a
+			// NullPointerException. A word that is not an object at all is
+			// still refused below: no answer for it could be right.
+			return 0, runtime.raiseGuestException(thread, &jvm.GuestException{
+				Object:  &jvm.Object{ClassName: "java/lang/NullPointerException", Native: "class of a null object"},
+				Message: "class of a null object",
+			})
+		}
+		return runtime.aotObjectClassAddress(object)
 	case initSVCAlloc:
 		size, err := thread.Register(0)
 		if err != nil {

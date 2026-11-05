@@ -196,6 +196,18 @@
       "evidence": "docs/history/lgt.md#lgt-qa-2026-10-28-unterminated-record-table"
     },
     {
+      "id": "lgt-packaged-certificate-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "b27f192f95bed260aa55e3da44c0f2948ad174876b28db1f6b21078805d4e635"
+      },
+      "fixes": [
+        "lgt.packaged_certificate"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-new-archives-2026-11-03-packaged-certificate"
+    },
+    {
       "id": "skt-native-certificate-001",
       "platform": "skt",
       "match": {

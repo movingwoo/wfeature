@@ -7,6 +7,8 @@ package lgt
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"path"
@@ -16,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/platform/detect"
 	"github.com/movingwoo/wfeature/internal/zipentry"
 )
@@ -75,8 +78,10 @@ type Archive struct {
 	// It is kept apart from Resources rather than merged because the JAR is
 	// the application and has to win a name collision.
 	Packaged map[string][]byte
-	// supplemental aliases a unique outer wrapper/AID directory. Canonical
-	// packaged paths and JAR resources take precedence over these aliases.
+	// supplemental aliases a unique outer wrapper/AID directory, and a
+	// recognized archive's packaged certificate at the bare name its title
+	// opens it by (aliasPackagedCertificate). Canonical packaged paths and JAR
+	// resources take precedence over these aliases.
 	supplemental map[string][]byte
 }
 
@@ -198,6 +203,7 @@ func Open(data []byte) (*Archive, error) {
 	if err != nil {
 		return nil, err
 	}
+	supplemental = aliasPackagedCertificate(packaged, supplemental, func() bool { return packagedCertificateRecognized(module) })
 	return &Archive{
 		Descriptor:   descriptor,
 		Module:       module,
@@ -237,6 +243,64 @@ func supplementalFiles(files map[string][]byte, aid string) (map[string][]byte, 
 		}
 	}
 	return aliases, nil
+}
+
+// certificateBareName is the name a recognized title opens its certificate by,
+// which its archive ships under a directory rather than at this bare name.
+const certificateBareName = "c.nm"
+
+// moduleDigest is the lowercase hex SHA-256 the compatibility registry keys a
+// native module by.
+func moduleDigest(module []byte) string {
+	sum := sha256.Sum256(module)
+	return hex.EncodeToString(sum[:])
+}
+
+// packagedCertificateRecognized reports whether the registry selects the
+// packaged-certificate fix for this module.
+func packagedCertificateRecognized(module []byte) bool {
+	return compatibility.HasFix("lgt", compatibility.NativeModule, moduleDigest(module), compatibility.LGTPackagedCertificate)
+}
+
+// aliasPackagedCertificate adds the recognized archive's shipped certificate at
+// the bare name the title opens it by. A title whose online certificate
+// exchange cannot complete offline reads its certificate from a bare name its
+// save holds; the archive ships that certificate under a directory of its own,
+// where the bare name does not reach it, so a first run stops on the
+// certificate dialog. The alias lets the first run read it present instead. A
+// certificate the title later writes is a save, which readFile answers before
+// any packaged file, so it still wins, and nothing is written to the save here.
+//
+// It is the one place a packaged file is found by its base name, which
+// supplementalFiles never does, and what keeps that narrow is the order of the
+// checks: a certificate the declared application's directory already mounts
+// stays, the archive has to ship exactly one file of that name inside a
+// directory, and only then is the module hashed and the registry asked, so an
+// archive that is not a candidate costs nothing. recognized makes that last
+// check. See docs/history/lgt.md#lgt-new-archives-2026-11-03-packaged-certificate.
+func aliasPackagedCertificate(packaged, supplemental map[string][]byte, recognized func() bool) map[string][]byte {
+	if _, mounted := supplemental[certificateBareName]; mounted {
+		return supplemental
+	}
+	found := ""
+	for name := range packaged {
+		if path.Base(name) != certificateBareName || path.Dir(name) == "." {
+			continue
+		}
+		if found != "" {
+			// Two certificates: neither is known to be the one.
+			return supplemental
+		}
+		found = name
+	}
+	if found == "" || !recognized() {
+		return supplemental
+	}
+	if supplemental == nil {
+		supplemental = map[string][]byte{}
+	}
+	supplemental[certificateBareName] = packaged[found]
+	return supplemental
 }
 
 // selectJAR finds the game's JAR. It is normally named after the AID, but

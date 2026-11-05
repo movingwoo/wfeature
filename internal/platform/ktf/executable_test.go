@@ -371,6 +371,91 @@ func TestInitializationCreatesBoundAOTObjectsAndArrays(t *testing.T) {
 	}
 }
 
+// One generation of the AOT runtime asks the callbacks table, at slot 20, for
+// the class record an object's header names — where the others read the header
+// themselves — the first time a field reference resolves and on every array
+// store. A table that stopped at slot 11 had the guest branch through whatever
+// the arena held next, the text of a class name.
+func TestInitializationCallbackSlotTwentyAnswersAnObjectsClass(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	table, err := runtime.makeInitCallbacks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	words := readTestBytes(t, client, table, 21*4)
+	stub, err := runtime.Stub(svcCategoryInit, initSVCJavaObjectClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slot := binary.LittleEndian.Uint32(words[20*4:]); slot != stub {
+		t.Fatalf("callbacks slot 20 = %#x, want the object-class stub %#x", slot, stub)
+	}
+	for index := 12; index < 20; index++ {
+		if slot := binary.LittleEndian.Uint32(words[index*4:]); slot != 0 {
+			t.Errorf("callbacks slot %d = %#x, want it left empty", index, slot)
+		}
+	}
+
+	record := func(name string) uint32 {
+		t.Helper()
+		class := writeGuestClass(t, runtime, name, 0, nil, 0x21)
+		metadata, err := runtime.readAOTClass(class)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := client.JVM().RegisterAOTClass(metadata); err != nil {
+			t.Fatal(err)
+		}
+		return class
+	}
+	class := record("game/Owner")
+	object, _, err := runtime.allocateAOTInstance(class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arrayContext := armcore.NewContext()
+	arrayContext.Registers[0], arrayContext.Registers[1] = 'I', 2
+	array, err := runtime.handleInitCall(armcore.NewThread(arrayContext), initSVCJavaArrayNew)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arrayClass, ok := client.JVM().AOTClass("[I")
+	if !ok {
+		t.Fatal("the [I class was not registered")
+	}
+	for _, test := range []struct {
+		name   string
+		object uint32
+		want   uint32
+	}{
+		{name: "instance", object: object, want: class},
+		{name: "array", object: array, want: arrayClass.Address},
+	} {
+		context := armcore.NewContext()
+		context.Registers[0] = test.object
+		got, err := runtime.handleInitCall(armcore.NewThread(context), initSVCJavaObjectClass)
+		if err != nil {
+			t.Fatalf("%s: %v", test.name, err)
+		}
+		if got != test.want {
+			t.Errorf("%s: slot 20 answered %#x, want the class record %#x", test.name, got, test.want)
+		}
+	}
+	// A null object is the NullPointerException a field write or an array
+	// store through it is, raised in the guest rather than ending the session.
+	_, err = runtime.handleInitCall(armcore.NewThread(armcore.NewContext()), initSVCJavaObjectClass)
+	var uncaught *UncaughtAOTException
+	if !errors.As(err, &uncaught) || uncaught.Exception == nil || uncaught.Exception.Object.ClassName != "java/lang/NullPointerException" {
+		t.Errorf("slot 20 for a null object = %v, want an uncaught NullPointerException", err)
+	}
+	// A word that is not an object address has no class to answer.
+	unaligned := armcore.NewContext()
+	unaligned.Registers[0] = object + 2
+	if _, err := runtime.handleInitCall(armcore.NewThread(unaligned), initSVCJavaObjectClass); err == nil || errors.As(err, &uncaught) {
+		t.Errorf("slot 20 for an unaligned word = %v, want a refusal", err)
+	}
+}
+
 func TestInitializationRejectsInvalidAOTArrayRequests(t *testing.T) {
 	client, err := LoadClient(ClientImage{Name: "client.bin0", Data: syntheticInitializableClient()}, armcore.CoreOptions{})
 	if err != nil {
