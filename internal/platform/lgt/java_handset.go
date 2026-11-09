@@ -43,3 +43,12 @@ func javaSystemProperty(
 	}
 	return client.newJavaString(value)
 }
+
+// javaSetSystemProperty is `HandsetProperty.setSystemProperty(name, value)`,
+// and it answers false: no property is set. That is KTF's answer from its Java
+// class, and its C MC_knlSetSystemProperty refuses every property too
+// (M_E_INVALID) — a title does not get to rewrite the handset's own values, so
+// what getSystemProperty answers stays what the table says.
+func javaSetSystemProperty(*Client, context.Context, *armcore.Thread, []uint32) (uint32, error) {
+	return javaFalse, nil
+}

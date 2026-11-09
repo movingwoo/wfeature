@@ -60,6 +60,12 @@ var javaPlatformSupers = map[string]string{
 	"java/io/DataOutputStream":      "java/io/OutputStream",
 	"java/io/ByteArrayOutputStream": "java/io/OutputStream",
 	"java/io/PrintStream":           "java/io/OutputStream",
+	// The character streams are the same arrangement: a reader or a writer
+	// takes the slots its abstract base declares, and an `OutputStreamWriter`
+	// answers `write(char[])` and `write(String)` with the bodies `Writer`
+	// gives them, as the class library's does.
+	"java/io/InputStreamReader":  "java/io/Reader",
+	"java/io/OutputStreamWriter": "java/io/Writer",
 
 	// A Stack is a Vector with four more methods, and a title reaches those
 	// four through slots the compiler baked against Vector's own vtable. Left

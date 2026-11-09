@@ -1,0 +1,3 @@
+Manifest-Version: 1.0
+MIDlet-Name: Library Members Fixture
+MIDlet-1: Library Members Fixture, , LibraryMembersMIDlet

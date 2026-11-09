@@ -312,10 +312,11 @@ func TestStringLastIndexOfSearchesBackFromAnIndex(t *testing.T) {
 }
 
 // The root toString is what a title reaches through an append or a valueOf on
-// an object whose class does not override it.
+// an object whose class does not override it. Random is one: Vector was, until
+// it was given the toString CLDC declares for it.
 func TestObjectToStringNamesItsClass(t *testing.T) {
 	vm := New(nil, Options{})
-	object, err := vm.NewObject(VectorClass, "()V")
+	object, err := vm.NewObject(RandomClass, "()V")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,8 +326,8 @@ func TestObjectToStringNamesItsClass(t *testing.T) {
 	}
 	got, _ := result.Reference()
 	text, _ := StringText(got)
-	if len(text) <= len(VectorClass) || text[:len(VectorClass)] != VectorClass {
-		t.Fatalf("toString() = %q, want it to start with %q", text, VectorClass)
+	if len(text) <= len(RandomClass) || text[:len(RandomClass)] != RandomClass {
+		t.Fatalf("toString() = %q, want it to start with %q", text, RandomClass)
 	}
 }
 
@@ -932,7 +933,7 @@ func TestObjectFormsAskForTheObjectsOwnText(t *testing.T) {
 
 	// A class with no toString of its own is still named rather than asked, so
 	// nothing is invoked for the case every other caller in the corpus takes.
-	plain, err := vm.NewObject(VectorClass, "()V")
+	plain, err := vm.NewObject(RandomClass, "()V")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -942,8 +943,8 @@ func TestObjectFormsAskForTheObjectsOwnText(t *testing.T) {
 	}
 	got, _ = result.Reference()
 	text, _ := StringText(got)
-	if !strings.HasPrefix(text, VectorClass+"@") {
-		t.Fatalf("String.valueOf(Vector) = %q, want its identity", text)
+	if !strings.HasPrefix(text, RandomClass+"@") {
+		t.Fatalf("String.valueOf(Random) = %q, want its identity", text)
 	}
 }
 

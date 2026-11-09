@@ -21,6 +21,15 @@ import (
 // method answers is the page's own account of it. Floating point is left out,
 // with the rest of what titles of this era do not use.
 //
+// **Some classes here have no anchor at all**: Boolean, Character, Writer,
+// OutputStreamWriter, Timer, TimerTask, and Date past getTime. Their slots are
+// the rule's alone — the class page's order, counted from where the class
+// above it ends — and TestJavaBakedSlotsFollowTheDeclarationOrder holds them to
+// it like the rest.
+// Where the KTF and SKT runtimes have a member (internal/jvm), this one answers
+// what they answer for the same arguments; where they have none, it answers
+// what CLDC 1.1 does.
+//
 // They are registered from java_api.go's init rather than written into its
 // tables, because most of them call back into the title — a key's hashCode, an
 // element's toString, a constructor — and a guest call reaches these tables
@@ -72,6 +81,36 @@ func registerJavaClassLibrary() {
 		"java/lang/Long.toString(JI)Ljava/lang/String;":    {Words: 3, Implementat: javaLongToStringRadix},
 		"java/lang/Short.parseShort(Ljava/lang/String;I)S": {Words: 2, Implementat: javaParseRadix(16)},
 		"java/lang/Byte.parseByte(Ljava/lang/String;I)B":   {Words: 2, Implementat: javaParseRadix(8)},
+		"java/lang/Math.abs(J)J":                           {Words: 2, Implementat: javaMathAbsLong},
+		"java/lang/Thread.activeCount()I":                  {Implementat: javaThreadActiveCount},
+
+		"java/lang/Boolean.<init>(Z)V":        {Words: 2, Implementat: javaBooleanConstructor},
+		"java/lang/Character.<init>(C)V":      {Words: 2, Implementat: javaCharacterConstructor},
+		"java/lang/Character.isLowerCase(C)Z": {Words: 1, Implementat: javaCharacterIsLowerCase},
+		"java/lang/Character.isUpperCase(C)Z": {Words: 1, Implementat: javaCharacterIsUpperCase},
+		"java/lang/Character.isDigit(C)Z":     {Words: 1, Implementat: javaCharacterIsDigit},
+		"java/lang/Character.toLowerCase(C)C": {Words: 1, Implementat: javaCharacterToLowerCase},
+		"java/lang/Character.toUpperCase(C)C": {Words: 1, Implementat: javaCharacterToUpperCase},
+		"java/lang/Character.digit(CI)I":      {Words: 2, Implementat: javaCharacterDigit},
+
+		"java/io/ByteArrayInputStream.<init>([BII)V": {Words: 4, Implementat: javaByteStreamRangeConstructor},
+		"java/io/InputStreamReader.<init>(Ljava/io/InputStream;Ljava/lang/String;)V": {
+			Words: 3, Implementat: javaReaderConstructorIn},
+		"java/io/DataInputStream.readUTF(Ljava/io/DataInput;)Ljava/lang/String;": {
+			Words: 1, Implementat: javaDataInputReadUTF},
+		"java/io/Reader.<init>()V":                   {Words: 1, Implementat: javaReaderBaseConstructor},
+		"java/io/Reader.<init>(Ljava/lang/Object;)V": {Words: 2, Implementat: javaReaderBaseConstructor},
+		"java/io/Writer.<init>()V":                   {Words: 1, Implementat: javaWriterBaseConstructor},
+		"java/io/Writer.<init>(Ljava/lang/Object;)V": {Words: 2, Implementat: javaWriterBaseConstructor},
+		"java/io/OutputStreamWriter.<init>(Ljava/io/OutputStream;)V": {
+			Words: 2, Implementat: javaStreamWriterConstructor},
+		"java/io/OutputStreamWriter.<init>(Ljava/io/OutputStream;Ljava/lang/String;)V": {
+			Words: 3, Implementat: javaStreamWriterConstructor},
+
+		// The timer and the task a title's own subclass builds on; see
+		// java_timer.go.
+		"java/util/Timer.<init>()V":     {Words: 1, Implementat: javaTimerConstructor},
+		"java/util/TimerTask.<init>()V": {Words: 1, Implementat: javaTimerTaskConstructor},
 	} {
 		if _, duplicate := javaPlatformMethods[key]; duplicate {
 			panic("LGT java platform method declared twice: " + key)
@@ -103,8 +142,10 @@ func registerJavaClassLibrary() {
 			// notifyAll is notify's answer for the same reason: there is no
 			// queue of waiting threads to move anything out of (java_api.go).
 			6: slot("notifyAll()V", 1, javaNoResult),
+			// An interrupt ends this wait as it ends the other two forms
+			// (java_thread.go).
 			8: {Called: "wait(JI)V", Method: javaPlatformMethod{
-				Words: 4, Implementat: javaObjectWaitNanos, Parks: javaRemainderWait}},
+				Words: 4, Implementat: javaObjectWaitNanosInterruptible, Parks: javaRemainderWait}},
 		},
 		javaStringClass: {
 			javaHashCodeSlot: slot("hashCode()I", 1, javaStringHashCode),
@@ -121,6 +162,9 @@ func registerJavaClassLibrary() {
 			30:               slot("replace(CC)Ljava/lang/String;", 3, javaStringReplace),
 			31:               slot("toLowerCase()Ljava/lang/String;", 1, javaStringCase(false)),
 			32:               slot("toUpperCase()Ljava/lang/String;", 1, javaStringCase(true)),
+			// The last method the page declares, one past toCharArray's anchor
+			// at 34; see java_string_intern.go.
+			35: slot("intern()Ljava/lang/String;", 1, javaStringIntern),
 		},
 		javaStringBufferClass: {
 			11: slot("capacity()I", 1, javaBufferCapacityOf),
@@ -208,9 +252,86 @@ func registerJavaClassLibrary() {
 		javaDataInputStreamClass: {
 			26: slot("readUnsignedShort()I", 1, javaStreamReadUnsignedShort),
 		},
+		// Thread's run and interrupt between start at 10 and isAlive at 13;
+		// getPriority one past setPriority's anchor at 14. See java_thread.go.
 		javaThreadClass: {
+			11: slot("run()V", 1, javaThreadRun),
+			12: slot("interrupt()V", 1, javaThreadInterrupt),
+			15: slot("getPriority()I", 1, javaThreadGetPriority),
 			17: {Called: "join()V", Method: javaPlatformMethod{
 				Words: 1, Implementat: javaThreadJoin, Parks: javaRemainderJoin}},
+		},
+		// Date declares getTime and setTime, then equals, hashCode and
+		// toString over Object's; getTime at 10 is the anchor. See
+		// java_calendar.go.
+		javaDateClass: {
+			javaHashCodeSlot: slot("hashCode()I", 1, javaDateHashCode),
+			javaEqualsSlot:   slot("equals(Ljava/lang/Object;)Z", 2, javaDateEquals),
+			11:               slot("setTime(J)V", 3, javaDateSetTime),
+		},
+		// setSeed, next, nextInt, nextInt(int): one past the nextInt anchor at
+		// 12. See java_random.go.
+		"java/util/Random": {
+			13: slot("nextInt(I)I", 2, javaRandomNextBounded),
+		},
+		// The sink's text, over Object's toString; and the data stream's
+		// writeChars, between writeDouble and the writeUTF at 24. See
+		// java_stream.go.
+		javaByteSinkClass: {
+			javaToStringSlot: slot("toString()Ljava/lang/String;", 1, javaByteSinkToString),
+		},
+		javaDataOutputStreamClass: {
+			23: slot("writeChars(Ljava/lang/String;)V", 2, javaSinkWriteChars),
+		},
+		// The bodies the abstract stream bases give a title's own subclass:
+		// Reader's at InputStreamReader's served positions, OutputStream's at
+		// the ones ByteArrayOutputStream and DataOutputStream serve. The two
+		// methods each declares abstract — Reader's read([CII) and close,
+		// OutputStream's write(int) — have no body to serve. See java_reader.go
+		// and java_output_stream.go.
+		javaReaderClass: {
+			10: slot("read()I", 1, javaReaderBaseRead),
+			11: slot("read([C)I", 2, javaReaderBaseReadArray),
+			13: slot("skip(J)J", 3, javaReaderBaseSkip),
+			14: slot("ready()Z", 1, javaReaderBaseReady),
+			15: slot("markSupported()Z", 1, javaReaderBaseMarkSupported),
+			16: slot("mark(I)V", 2, javaReaderBaseMark),
+			17: slot("reset()V", 1, javaReaderBaseReset),
+		},
+		javaOutputStreamClass: {
+			11: slot("write([B)V", 2, javaOutputStreamBaseWriteAll),
+			12: slot("write([BII)V", 4, javaOutputStreamBaseWriteRange),
+			13: slot("flush()V", 1, javaOutputStreamBaseFlush),
+			14: slot("close()V", 1, javaOutputStreamBaseClose),
+		},
+		// The character sink and the bridge onto a byte stream; see
+		// java_writer.go.
+		javaWriterClass: {
+			10: slot("write(I)V", 2, javaWriterBaseWriteChar),
+			11: slot("write([C)V", 2, javaWriterBaseWriteChars),
+			13: slot("write(Ljava/lang/String;)V", 2, javaWriterBaseWriteText),
+			14: slot("write(Ljava/lang/String;II)V", 4, javaWriterBaseWriteTextRange),
+		},
+		javaStreamWriterClass: {
+			10: slot("write(I)V", 2, javaStreamWriterWriteChar),
+			12: slot("write([CII)V", 4, javaStreamWriterWriteChars),
+			14: slot("write(Ljava/lang/String;II)V", 4, javaStreamWriterWriteText),
+			15: slot("flush()V", 1, javaStreamWriterFlush),
+			16: slot("close()V", 1, javaStreamWriterClose),
+		},
+		// The two boxes beside the numbers; see java_boolean.go and
+		// java_character.go.
+		javaBooleanClass: {
+			javaHashCodeSlot: slot("hashCode()I", 1, javaBooleanHashCode),
+			javaEqualsSlot:   slot("equals(Ljava/lang/Object;)Z", 2, javaBooleanEquals),
+			javaToStringSlot: slot("toString()Ljava/lang/String;", 1, javaBooleanToString),
+			10:               slot("booleanValue()Z", 1, javaBooleanValue),
+		},
+		javaCharacterClass: {
+			javaHashCodeSlot: slot("hashCode()I", 1, javaCharacterHashCode),
+			javaEqualsSlot:   slot("equals(Ljava/lang/Object;)Z", 2, javaCharacterEquals),
+			javaToStringSlot: slot("toString()Ljava/lang/String;", 1, javaCharacterToString),
+			10:               slot("charValue()C", 1, javaCharacterValue),
 		},
 		javaClassClass: {
 			10: slot("newInstance()Ljava/lang/Object;", 1, javaClassNewInstance),
@@ -223,6 +344,26 @@ func registerJavaClassLibrary() {
 		},
 		"java/lang/Runtime": {
 			10: slot("exit(I)V", 2, javaRuntimeExit),
+		},
+		// **No call site anchors either class**: no local title reaches them,
+		// so every slot here is the rule's alone — the class page's order from
+		// 10. Timer declares schedule(task, delay), schedule(task, Date),
+		// schedule(task, delay, period), schedule(task, Date, period), the two
+		// scheduleAtFixedRate forms and cancel; TimerTask declares run, cancel
+		// and scheduledExecutionTime, and run is abstract, with no body to
+		// serve. See java_timer.go.
+		javaTimerClass: {
+			10: slot("schedule(Ljava/util/TimerTask;J)V", 4, javaTimerScheduleDelay(false, false)),
+			11: slot("schedule(Ljava/util/TimerTask;Ljava/util/Date;)V", 3, javaTimerScheduleDate(false, false)),
+			12: slot("schedule(Ljava/util/TimerTask;JJ)V", 6, javaTimerScheduleDelay(true, false)),
+			13: slot("schedule(Ljava/util/TimerTask;Ljava/util/Date;J)V", 5, javaTimerScheduleDate(true, false)),
+			14: slot("scheduleAtFixedRate(Ljava/util/TimerTask;JJ)V", 6, javaTimerScheduleDelay(true, true)),
+			15: slot("scheduleAtFixedRate(Ljava/util/TimerTask;Ljava/util/Date;J)V", 5, javaTimerScheduleDate(true, true)),
+			16: slot("cancel()V", 1, javaTimerCancel),
+		},
+		javaTimerTaskClass: {
+			11: slot("cancel()Z", 1, javaTimerTaskCancel),
+			12: slot("scheduledExecutionTime()J", 1, javaTimerTaskScheduledTime),
 		},
 	} {
 		served := javaBakedVirtualSlots[class]
@@ -237,4 +378,56 @@ func registerJavaClassLibrary() {
 			served[index] = entry
 		}
 	}
+
+	javaPlatformStaticFillers[javaBooleanClass] = (*Client).initializeJavaBooleanStatics
+	javaPlatformStaticFillers[javaCharacterClass] = (*Client).initializeJavaCharacterStatics
+
+	// A TimerTask is a Runnable, its run the interface's one method, so a task
+	// handed to `new Thread(task)` or called through Runnable finds the run
+	// its own class overrides at TimerTask's slot.
+	javaPlatformInterfaces[javaTimerTaskClass] = []javaInterface{{Name: javaRunnableInterface, Slot: javaTimerTaskSlotRun}}
+}
+
+// javaPlatformStaticFillers are the platform classes whose static fields hold
+// values of their own rather than one of javaPlatformStatics' singletons —
+// Boolean's two instances, Character's four constants — and what fills them
+// when the class is laid out (initializePlatformStatics).
+var javaPlatformStaticFillers = map[string]func(*Client, *javaRuntimeClass) error{}
+
+// javaPlatformStaticWord answers where in a platform class's storage the
+// module reads one of its static fields, when the module asked the load call
+// to number that field. A field it never asked for is one nothing reads, and is
+// left alone, the way initializePlatformStatics leaves one.
+func (client *Client) javaPlatformStaticWord(class *javaRuntimeClass, name, descriptor string) (uint32, bool) {
+	if client.javaLink == nil || client.javaLink.layout == nil || class.dataBlock == 0 {
+		return 0, false
+	}
+	laid, ok := client.javaLink.layout.classes[class.Name]
+	if !ok {
+		return 0, false
+	}
+	slot, declared := laid.Statics[name+descriptor]
+	if !declared || slot >= class.StaticWords {
+		return 0, false
+	}
+	return class.dataBlock + (javaClassDataWords+slot)*4, true
+}
+
+// javaClassReaches reports whether a class is the named one or below it, which
+// is the `instanceof` test (javaTypeCheck) asked of a class rather than of a
+// word a call site handed over.
+func (client *Client) javaClassReaches(class *javaRuntimeClass, name string) bool {
+	for step := class; step != nil; step = client.javaSuperOf(step) {
+		if step.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// javaObjectIs is javaClassReaches for an object: false for null and for a
+// word this platform never issued as an object.
+func (client *Client) javaObjectIs(object uint32, name string) bool {
+	class, known := client.javaClassOfObject(object)
+	return known && client.javaClassReaches(class, name)
 }

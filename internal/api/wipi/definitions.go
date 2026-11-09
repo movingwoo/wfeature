@@ -396,40 +396,74 @@ func cardKeyBridge(eventType int32) jvm.ContextMethod {
 
 // graphicsDefinition is the MIDP Graphics plus what WIPI has and MIDP does
 // not. Everything a title draws with that both standards share — the fills,
-// the lines, the clip, the colour — is inherited.
+// the lines, the clip, the colour — is MIDP's call underneath; the drawing
+// calls among them are declared again here only so that XOR mode reaches them
+// (graphics.go), and outside it they forward to MIDP's as they are.
 func graphicsDefinition() jvm.ClassDefinition {
 	return jvm.ClassDefinition{
 		Name:      GraphicsClass,
 		SuperName: midp.GraphicsClass,
 		Access:    jvm.AccessPublic,
+		Fields: []jvm.FieldDefinition{
+			{Name: "SOLID", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(StrokeSolid)},
+			{Name: "DOTTED", Descriptor: "I", Access: constantField, Constant: jvm.IntValue(StrokeDotted)},
+		},
 		Methods: []jvm.MethodDefinition{
 			{Name: "<init>", Descriptor: "()V", Access: publicMethod, Body: superInit(midp.GraphicsClass, "()V")},
 			{Name: "setColor", Descriptor: "(III)V", Access: publicMethod, Body: forwardSpecial(midp.GraphicsClass, "setColor", "(III)V")},
-			{Name: "drawImage", Descriptor: "(Lorg/kwis/msp/lcdui/Image;III)V", Access: publicMethod, Body: forwardSpecial(midp.GraphicsClass, "drawImage", "(Ljavax/microedition/lcdui/Image;III)V")},
-			{Name: "drawImage", Descriptor: "(Lorg/kwis/msp/lcdui/Image;IIIIIII)V", Access: publicNative},
+			{Name: "drawImage", Descriptor: "(Lorg/kwis/msp/lcdui/Image;III)V", Access: publicMethod, Body: xorAware("drawImage", "(Ljavax/microedition/lcdui/Image;III)V", picturePasses, imageBounds)},
+			// The blit with a source rectangle is MIDP's drawRegion with its
+			// halves swapped and no transform; see drawImageRegion.
+			{Name: "drawImage", Descriptor: "(Lorg/kwis/msp/lcdui/Image;IIIIIII)V", Access: publicMethod, Body: drawImageRegion},
 			{Name: "getFont", Descriptor: "()Lorg/kwis/msp/lcdui/Font;", Access: publicNative},
 			{Name: "setFont", Descriptor: "(Lorg/kwis/msp/lcdui/Font;)V", Access: publicMethod, Body: forwardSpecial(midp.GraphicsClass, "setFont", "(Ljavax/microedition/lcdui/Font;)V")},
-			// The two WIPI has of its own. setAlpha is a blend factor this
-			// platform keeps and reports, and reset puts back the state a
-			// fresh Graphics would have had — both are already the SKVM
-			// contracts of the same name.
-			//
-			// **`setXORMode` is the third and is deliberately absent.** The
-			// other two carriers' runtimes implement it, and one of their
-			// titles composes all of its Korean out of it; here the name does
-			// not occur in a single archive of either local corpus, and a
-			// declared member with nothing behind it is a contract this layer
-			// would owe the drawing surface underneath. A Jlet that calls it
-			// is the evidence that would add it.
+			// setAlpha is a blend factor this platform keeps and reports, and
+			// reset puts back the state a fresh Graphics would have had — both
+			// are already the SKVM contracts of the same name, and reset here
+			// also puts back the two states below, as KTF's does.
 			{Name: "setAlpha", Descriptor: "(I)V", Access: publicNative},
 			{Name: "getAlpha", Descriptor: "()I", Access: publicNative},
-			{Name: "reset", Descriptor: "()V", Access: publicNative},
+			{Name: "reset", Descriptor: "()V", Access: publicMethod, Body: resetGraphics},
 			{Name: "getRGBPixels", Descriptor: "(IIII[III)V", Access: publicNative},
 			{Name: "setRGBPixels", Descriptor: "(IIII[III)V", Access: publicNative},
-			{Name: "drawChar", Descriptor: "(CIII)V", Access: publicNative},
+			{Name: "drawChar", Descriptor: "(CIII)V", Access: publicMethod, Body: xorAware("drawChar", "(CIII)V", inkPasses, textBounds(measureChar, 1))},
 			{Name: "clipRect", Descriptor: "(IIII)V", Access: publicNative},
-			{Name: "drawArc", Descriptor: "(IIIIII)V", Access: publicMethod, Body: forwardSpecial(midp.GraphicsClass, "drawArc", "(IIIIII)V")},
-			{Name: "fillArc", Descriptor: "(IIIIII)V", Access: publicMethod, Body: forwardSpecial(midp.GraphicsClass, "fillArc", "(IIIIII)V")},
+			{Name: "drawArc", Descriptor: "(IIIIII)V", Access: publicMethod, Body: xorAware("drawArc", "(IIIIII)V", inkPasses, curveBounds)},
+			{Name: "fillArc", Descriptor: "(IIIIII)V", Access: publicMethod, Body: xorAware("fillArc", "(IIIIII)V", inkPasses, curveBounds)},
+			{Name: "drawRoundRect", Descriptor: "(IIIIII)V", Access: publicMethod, Body: xorAware("drawRoundRect", "(IIIIII)V", inkPasses, curveBounds)},
+			{Name: "fillRoundRect", Descriptor: "(IIIIII)V", Access: publicMethod, Body: xorAware("fillRoundRect", "(IIIIII)V", inkPasses, curveBounds)},
+			{Name: "fillRect", Descriptor: "(IIII)V", Access: publicMethod, Body: xorFillRect},
+			{Name: "drawRect", Descriptor: "(IIII)V", Access: publicMethod, Body: xorAware("drawRect", "(IIII)V", inkPasses, rectBounds)},
+			{Name: "drawLine", Descriptor: "(IIII)V", Access: publicMethod, Body: xorAware("drawLine", "(IIII)V", inkPasses, lineBounds)},
+			{Name: "drawString", Descriptor: "(Ljava/lang/String;III)V", Access: publicMethod, Body: xorAware("drawString", "(Ljava/lang/String;III)V", inkPasses, textBounds(measureString, 1))},
+			{Name: "drawSubstring", Descriptor: "(Ljava/lang/String;IIIII)V", Access: publicMethod, Body: xorAware("drawSubstring", "(Ljava/lang/String;IIIII)V", inkPasses, textBounds(measureSubstring, 3))},
+			{Name: "drawChars", Descriptor: "([CIIIII)V", Access: publicMethod, Body: xorAware("drawChars", "([CIIIII)V", inkPasses, textBounds(measureChars, 3))},
+			// What WIPI has and MIDP does not, composed from the calls above
+			// in graphics.go. KTF answers each of them, and the comments there
+			// say where this platform answers differently.
+			//
+			// **`getGrayScale` is deliberately absent.** KTF answers it with the
+			// whole packed colour and the specification with the colour's grey
+			// level, and nothing here settles which a title expects; a Jlet that
+			// calls it is the evidence that would.
+			//
+			// **So are `getPixels` and `setPixels`.** Their byte form is the
+			// handset's own — the specification ties it to the LCD — and the
+			// two-byte RGB565 one KTF hands out is its 16-bit panel's, while
+			// this platform's Display answers 24 bits a pixel. Which form an SKT
+			// title reads is not settled; getRGBPixels and setRGBPixels move the
+			// same rectangles as 0x00RRGGBB words.
+			{Name: "setXORMode", Descriptor: "(Z)V", Access: publicMethod, Body: setXORMode},
+			{Name: "isXORMode", Descriptor: "()Z", Access: publicMethod, Body: isXORMode},
+			{Name: "setStrokeStyle", Descriptor: "(I)V", Access: publicMethod, Body: setStrokeStyle},
+			{Name: "getStrokeStyle", Descriptor: "()I", Access: publicMethod, Body: getStrokeStyle},
+			{Name: "getRedComponent", Descriptor: "()I", Access: publicMethod, Body: colorComponent(16)},
+			{Name: "getGreenComponent", Descriptor: "()I", Access: publicMethod, Body: colorComponent(8)},
+			{Name: "getBlueComponent", Descriptor: "()I", Access: publicMethod, Body: colorComponent(0)},
+			{Name: "getPixel", Descriptor: "(II)I", Access: publicMethod, Body: getPixel},
+			{Name: "setPixel", Descriptor: "(II)V", Access: publicMethod, Body: setPixel},
+			{Name: "copyArea", Descriptor: "(IIIIII)V", Access: publicMethod, Body: copyArea},
+			{Name: "drawPolygon", Descriptor: "([I[I)V", Access: publicMethod, Body: drawPolygon},
 		},
 	}
 }
@@ -447,6 +481,10 @@ func imageDefinition() jvm.ClassDefinition {
 			{Name: "createImage", Descriptor: "(Ljava/lang/String;)Lorg/kwis/msp/lcdui/Image;", Access: publicStaticNat},
 			{Name: "createImage", Descriptor: "([BII)Lorg/kwis/msp/lcdui/Image;", Access: publicStaticNat},
 			{Name: "createImage", Descriptor: "(Lorg/kwis/msp/lcdui/Image;IIII)Lorg/kwis/msp/lcdui/Image;", Access: publicStaticNat},
+			// The copy is a new image from createImage(int, int) with the
+			// source drawn into it, rather than one the platform stamps; see
+			// imageCopy for why it is mutable.
+			{Name: "createImage", Descriptor: "(Lorg/kwis/msp/lcdui/Image;)Lorg/kwis/msp/lcdui/Image;", Access: publicStatic, Body: imageCopy},
 			{Name: "getGraphics", Descriptor: "()Lorg/kwis/msp/lcdui/Graphics;", Access: publicNative},
 		},
 	}

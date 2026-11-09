@@ -102,8 +102,12 @@ var runtimeClassParents = map[string]string{
 	"java/io/UTFDataFormatException":            "java/io/IOException",
 	"java/io/UnsupportedEncodingException":      "java/io/IOException",
 	"java/lang/ClassNotFoundException":          "java/lang/Exception",
-	"java/lang/Exception":                       "java/lang/Throwable",
-	"java/lang/Error":                           "java/lang/Throwable",
+	// The two Class.newInstance declares: a class it cannot make an object
+	// of, and one whose no-argument constructor the caller may not call.
+	"java/lang/InstantiationException": "java/lang/Exception",
+	"java/lang/IllegalAccessException": "java/lang/Exception",
+	"java/lang/Exception":              "java/lang/Throwable",
+	"java/lang/Error":                  "java/lang/Throwable",
 	// A title that guards a large allocation catches this one by name. The
 	// runtime never raises it — an allocation past a bound here is refused
 	// with the limit that refused it — but the class has to exist or the catch

@@ -43,6 +43,22 @@ func (vm *VM) SetContextAOTInvoker(invoker ContextAOTInvoker) {
 	vm.mu.Unlock()
 }
 
+// AOTConstructor makes an object of a class that exists only as registered AOT
+// metadata and runs that class's own no-argument constructor, on the execution
+// of the call that asked. Class.newInstance has already refused what CLDC
+// refuses — an abstract class, an interface, a class without its own
+// `<init>()V`, a constructor the caller may not reach — before it is called. A
+// platform installs one so the object is made the way the platform makes its
+// guest's objects; without one the constructor runs through the AOT invoker.
+type AOTConstructor func(call *Invocation, class AOTClassMetadata) (*Object, error)
+
+// SetAOTConstructor installs the platform's construction of AOT classes.
+func (vm *VM) SetAOTConstructor(constructor AOTConstructor) {
+	vm.mu.Lock()
+	vm.aotConstructor = constructor
+	vm.mu.Unlock()
+}
+
 // AOTInvoker bridges AOT methods without preserving an invocation context.
 type AOTInvoker func(className, name, descriptor string, arguments []Value) (Value, error)
 
@@ -234,6 +250,7 @@ type VM struct {
 	aotObjects        map[uint32]aotBinding
 	aotInvoker        AOTInvoker
 	contextAOTInvoker ContextAOTInvoker
+	aotConstructor    AOTConstructor
 
 	initMu       sync.Mutex
 	initCond     *sync.Cond
@@ -266,6 +283,9 @@ type execution struct {
 	// valuePool is the same for the slice an invoke pops its arguments into.
 	// See takeValues.
 	valuePool [][]Value
+	// containerTexts is how many Vector and Hashtable toStrings are running
+	// on this execution, each inside the one before; see containerText.
+	containerTexts int
 }
 
 type ExecutionError struct {

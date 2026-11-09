@@ -103,6 +103,29 @@ stride shorter than the width overlaps the rows in the array, a later row
 overwriting an earlier one; the read writes each element once, so its work is
 bounded by the array.
 
+Since 2026-11-05 SKT's WIPI `Graphics` also answers what KTF answers for
+`copyArea`, `drawPolygon`, `setPixel`, `getPixel` (`0x00RRGGBB`, translated,
+not clipped), the colour components, `setXORMode`/`isXORMode` and
+`setStrokeStyle`/`getStrokeStyle`, and `Image.createImage(Image)` is an
+editable copy with the mask turned white, as the specification says
+(`internal/api/wipi/graphics.go`). They are built from the MIDP calls the
+platform already registers. **XOR mode reaches every drawing call** — the
+rectangles, lines, curves, text, `drawChar`, both `drawImage` forms,
+`setPixel`, `drawPolygon` and `copyArea` — by drawing the platform's own call
+onto a scratch picture and inverting each covered pixel once, by its coverage
+at a picture's blended edge; KTF inverts on every write, so where two strokes
+of one call meet (a rectangle's corners) KTF leaves the pixel and SKT inverts
+it. The stroke style is kept and answered but lines stay solid, as on KTF.
+`reset` and the start of every paint put XOR mode off and the stroke back to
+SOLID, as a new Graphics has them; SKT reuses one screen Graphics for the
+session. `getGrayScale` and the byte forms `getPixels`/`setPixels` are not
+served: KTF's gray-scale answer is the packed colour where the specification
+says the grey level, and the byte form is a handset's own LCD format, which
+for a display answering 24 bits a pixel is not settled. Where KTF is lenient
+and the specification would throw or clip (a stroke style other than SOLID or
+DOTTED, polygon arrays of different lengths), SKT is lenient too
+([history](history/coverage.md#cross-platform-parity-2026-11-05-skt-graphics)).
+
 `Canvas.getHeight()` reports the display less 16 rows (`canvasReservedRows`),
 because the corpus adds those rows back; the framebuffer and the `XDisplay`
 `width`, `height` and `height2` fields still answer the whole display, and

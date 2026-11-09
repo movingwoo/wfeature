@@ -21,9 +21,10 @@ import (
 // owes (checkpoint_worker.go).
 //
 // **Taking one runs no guest code and tells the title nothing.** A pause would
-// call the title's own pauseClet, and a title is free to change what it holds
-// when it is paused — which is the state being recorded. A load is the same:
-// the title is not started, initialised or resumed, it is simply there again.
+// call the title's own pauseClet, or its Jlet's pauseApp, and a title is free
+// to change what it holds when it is paused — which is the state being
+// recorded. A load is the same: the title is not started, initialised or
+// resumed, it is simply there again.
 //
 // **A load leaves the ordinary saves alone.** A checkpoint is the game's
 // execution state and nothing else: the slot carries no save, and a load never
@@ -119,6 +120,13 @@ func (session *Session) CaptureCheckpointWithSession(
 	if err := client.checkpointIdle(); err != nil {
 		return backend.Checkpoint{}, err
 	}
+	// A thread parked in a sleep, a wait or a join with an interrupt it has not
+	// been thrown throws it on its next slice, and the call it would be
+	// restored into has no exception to throw (java_thread.go): the quick save
+	// waits until it has.
+	if client.javaInterruptUndelivered() {
+		return backend.Checkpoint{}, ErrCheckpointBusy
+	}
 	// A slot carries no save, so a load has to find the saves in a store. A
 	// session that has none could be captured and never loaded.
 	if _, base, err := client.captureAdapters(); err != nil {
@@ -170,7 +178,15 @@ func (session *Session) CaptureCheckpointWithSession(
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
-	record, err := encodeLGTSessionRecord(saved, media, library)
+	screen, err := client.captureJavaScreenState()
+	if err != nil {
+		return backend.Checkpoint{}, err
+	}
+	scheduling, err := client.captureJavaSchedulingState()
+	if err != nil {
+		return backend.Checkpoint{}, err
+	}
+	record, err := encodeLGTSchedulingRecord(saved, media, library, screen, scheduling)
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
@@ -227,7 +243,7 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 	if checkpoint.Variant != backend.CheckpointLGTClet && checkpoint.Variant != backend.CheckpointLGTJava {
 		return nil, backend.ErrCheckpointVersion
 	}
-	saved, media, library, err := decodeLGTSessionRecord(checkpoint.Runtime)
+	saved, media, library, screen, scheduling, err := decodeLGTSchedulingRecord(checkpoint.Runtime)
 	if err != nil {
 		return nil, err
 	}
@@ -272,6 +288,14 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 		return nil, err
 	}
 	if err := client.restoreJavaLibraryState(library); err != nil {
+		return nil, err
+	}
+	if err := client.restoreJavaScreenState(screen); err != nil {
+		return nil, err
+	}
+	// Before the threads start: a timer's run waiting for its first slice
+	// starts as the timer's (java_timer.go).
+	if err := client.restoreJavaSchedulingState(scheduling); err != nil {
 		return nil, err
 	}
 	if err := client.audio.RebasePlaybackClock(client.clock.now(), saved.Speed); err != nil {

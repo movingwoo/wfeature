@@ -2,6 +2,7 @@ package skt
 
 import (
 	"fmt"
+	"github.com/movingwoo/wfeature/internal/api/wipi"
 	"math"
 	"sync"
 
@@ -389,13 +390,15 @@ func (runtime *Runtime) screenGraphics(clip paintRect) *jvm.Object {
 		}
 	}
 	// A paint starts from the state MIDP promises it: the repaint's clip, no
-	// translation, and the default font.
+	// translation, and the default font; and, as a new WIPI Graphics would,
+	// XOR mode off and the solid stroke.
 	context := runtime.screenGraphicsContext
 	context.deviceClip = clip
 	context.clip = clip
 	context.translateX = 0
 	context.translateY = 0
 	context.font = runtime.fontObject(fontSystem, fontPlain, fontMedium)
+	wipi.StartPaint(runtime.screenGraphicsObject)
 	return runtime.screenGraphicsObject
 }
 

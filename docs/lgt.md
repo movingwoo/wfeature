@@ -132,9 +132,29 @@ classes, Vector, Stack, Hashtable and its enumerations, InputStreamReader,
 declaration-order rule's — a class's own methods from slot 10 in the order its
 CLDC class page declares them, an override at the slot above — and
 `TestJavaBakedSlotsFollowTheDeclarationOrder` holds every served slot of these
-classes to that order. Floating point, `Boolean`, `Character`, the exception
-classes' own constructors, `Class` queries such as `isArray`, and the methods a
-title's own `Reader` subclass would inherit are not served.
+classes to that order. Since 2026-11-05 it also serves `Boolean` and
+`Character` (their static fields are written when the class is prepared),
+`Writer` and `OutputStreamWriter`, the `Reader` and `OutputStream` bodies a
+title's own subclass inherits, `Random.nextInt(int)`, `String.intern`,
+`Date.setTime`, `equals` and `hashCode`, `Thread.run`, `getPriority` and
+`activeCount`, `ByteArrayOutputStream.toString`, `DataOutputStream.writeChars`
+and the static `DataInputStream.readUTF(DataInput)`, and every instance read of
+a `DataInputStream` throws `EOFException` at the end of the stream
+([history](history/lgt.md#lgt-parity-fill-2026-11-05)). Floating point, the
+exception classes' own constructors, `Class` queries such as `isArray`,
+`Date.toString` and `getGrayScale` are not served. `Timer` and `TimerTask`
+run each timer's tasks one after another on a guest thread of their own
+against the guest clock, and `Thread.interrupt` wakes a sleeping, joining or
+waiting thread with InterruptedException.
+
+The `org/kwis` members are all served by name. The 2026-11-05 pass added
+`Font`'s attribute getters, `Display`'s capability answers, `countCard`,
+`popCard` and `getKeyName`, `Graphics`' pixel reads and writes, colour
+components, stroke style, gray-scale setter and `drawPolygon`,
+`Image.createImage(Image)` (masked pixels copied white, as the specification
+says) and `isMutable`, `Jlet.getAppProperty` from `app_info`, and the
+remaining `BackLight`, `HandsetProperty` and `Volume` statics. C image calls
+answer the specification's `M_E_BADFORMAT` (-6) for broken data.
 
 - **hashCode, equals and toString are the receiver's own.** A Hashtable hashing
   a key, a Vector searching for an element, `append(Object)` and
@@ -175,13 +195,37 @@ instruction ceiling still bounds the callback. See the
 [gameplay hang investigation](history/lgt.md#lgt-key-callback-hang-2026-09-23) for the live
 server evidence, failing input replay and corrected path.
 
+### The Jlet's lifecycle
+
+A Java title's Jlet is paused, resumed and destroyed by the platform, as on
+KTF: `pauseApp` runs when the session parks, `resumeApp` when it comes back,
+and `destroyApp(true)` once when it closes, before its threads stop and before
+its open files are flushed, within the ending bound. The modules register no
+Clet table, so their `pauseClet`, `resumeClet` and `destroyClet` reach no Java
+code; the methods are found by name and descriptor on the title's own Jlet
+class, the most-derived override first. An uncaught exception in one is
+counted and the game goes on; the title ending itself in one is an ending; a
+title that already called `notifyDestroyed` gets no `destroyApp`. What the
+title had queued with `callSerially` runs once right after an entered
+`pauseApp`, as a handset keeps serving that queue while the application is
+paused: a frame chain that re-arms itself reads the pause there, rather than
+running beside the chain `resumeApp` queues. A quick save runs none of them
+([history](history/lgt.md#lgt-parity-fill-2026-11-05)).
+
 ## Display and input
 
 The LCD is the Host's choice, 240×320 by default (`-screen WxH` in the CLI).
 The Java display holds one active card. `Card.repaint` repaints the whole
 card, whatever rectangle it names. `removeCard` removes the active card and
 cancels its pending paint, returning false for a null or unrelated card.
-General multi-card stacking and notification lifecycle remain incomplete.
+A card built with a position (`Card(x, y, w, h)` and the `Display` forms)
+paints into a surface of its own size, with its origin at its corner and its
+drawing clipped to it, and that surface is copied onto the screen at the box,
+the rest of the screen keeping what it held; `move` and `resize` show at the
+next paint, `getX`, `getY`, `getWidth` and `getHeight` answer the box, and the
+box is written into the card's protected `x`, `y`, `w` and `h` as KTF writes
+it. A box equal to the screen is a whole-screen card. General multi-card
+stacking and notification lifecycle remain incomplete.
 
 Graphics contexts belong to guest memory. Supported drawing honors compact
 context origins, clips, overlapping self-blits, and nested pixel callbacks.
@@ -299,7 +343,8 @@ hiding or losing them:
   stream holding its file open, or the collector closing either one when
   nothing holds it) or the flush or close of a stream on it, and in any case
   at the ending: `MC_knlExit`, `Jlet.notifyDestroyed` and closing the session
-  (before `destroyClet` and again after it). The ending also gives the store
+  (before `destroyClet` and again after it; a Java title's `destroyApp(true)`
+  runs first, while its threads still run, so what it writes is stored). The ending also gives the store
   again a database or a path list it refused earlier. A quick load stores the
   waiting writes of the session it displaces, as a quick save does (below).
 - **Objects the collector reclaims.** A `File`, or a stream holding its file

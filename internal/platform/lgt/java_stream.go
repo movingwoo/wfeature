@@ -597,8 +597,27 @@ func javaWrapStream(
 	return 0, nil
 }
 
+// javaStreamEnded is a DataInputStream read reaching the end of its stream
+// before it had every byte it needs. **The read throws EOFException**, which is
+// what every DataInput read throws at the end of its input — the class
+// library's, and the KTF and SKT runtimes' (internal/jvm) — and what a title
+// reading records until its file runs out catches by name. Reporting the end
+// instead stopped such a title where its own handler would have carried on.
+//
+// What was left is taken first: the class library reads a number a byte at a
+// time through the stream underneath, so the bytes before the end have been
+// read by the time it finds the end, and a read after the throw finds nothing.
+func (client *Client) javaStreamEnded(thread *armcore.Thread, stream *javaStream, what string) error {
+	left := len(stream.Data) - stream.Read
+	stream.Read = len(stream.Data)
+	return client.throwJavaPlatform(thread, javaEOFClass,
+		fmt.Sprintf(": %s with %d bytes left of %s", what, left, stream.Name))
+}
+
 // javaStreamReadShort reads the two bytes a data stream's halfword takes, most
-// significant first, which is the order every Java stream reads numbers in.
+// significant first, which is the order every Java stream reads numbers in. A
+// stream with fewer left is EOFException (javaStreamEnded), here and for the
+// readUnsignedShort and readChar that read the same two bytes.
 func javaStreamReadShort(
 	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -607,7 +626,7 @@ func javaStreamReadShort(
 		return 0, err
 	}
 	if stream.Read+2 > len(stream.Data) {
-		return 0, fmt.Errorf("%s ends after %d bytes", stream.Name, len(stream.Data))
+		return 0, client.javaStreamEnded(thread, stream, "a two-byte read")
 	}
 	value := int16(uint16(stream.Data[stream.Read])<<8 | uint16(stream.Data[stream.Read+1]))
 	stream.Read += 2
@@ -617,9 +636,8 @@ func javaStreamReadShort(
 // javaStreamReadInt is `DataInputStream.readInt()`, slot 28: four bytes,
 // big-endian, which is the order every DataInput method reads in. A stream
 // with fewer than four bytes left is the end of the file rather than a short
-// read, and the language says so by throwing; this reports it, which stops the
-// title where the truncated data is rather than somewhere downstream of a
-// number made out of nothing.
+// read, and the language says so by throwing EOFException (javaStreamEnded)
+// rather than answering a number made out of nothing.
 func javaStreamReadInt(
 	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -628,7 +646,7 @@ func javaStreamReadInt(
 		return 0, err
 	}
 	if stream.Read+4 > len(stream.Data) {
-		return 0, fmt.Errorf("readInt past the end of %q, at %d of %d", stream.Name, stream.Read, len(stream.Data))
+		return 0, client.javaStreamEnded(thread, stream, "readInt")
 	}
 	value := uint32(stream.Data[stream.Read])<<24 |
 		uint32(stream.Data[stream.Read+1])<<16 |
@@ -638,14 +656,15 @@ func javaStreamReadInt(
 	return value, nil
 }
 
-// javaStreamReadLong returns a big-endian long in the ABI's low/high registers.
+// javaStreamReadLong returns a big-endian long in the ABI's low/high registers,
+// and EOFException when fewer than eight bytes are left (javaStreamEnded).
 func javaStreamReadLong(client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32) (uint32, error) {
 	stream, err := client.javaStreamNeeding(ctx, thread, arguments[0], 8)
 	if err != nil {
 		return 0, err
 	}
 	if len(stream.Data)-stream.Read < 8 {
-		return 0, client.throwJavaPlatform(thread, "java/io/EOFException", "readLong past the end of stream")
+		return 0, client.javaStreamEnded(thread, stream, "readLong")
 	}
 	value := binary.BigEndian.Uint64(stream.Data[stream.Read : stream.Read+8])
 	if err := thread.SetRegister(1, uint32(value>>32)); err != nil {
@@ -658,7 +677,8 @@ func javaStreamReadLong(client *Client, ctx context.Context, thread *armcore.Thr
 // javaStreamReadByte is `DataInputStream.readByte()`, slot 23: one byte read
 // as a signed number, which is what separates it from `read()` on the same
 // stream — that one answers 0 to 255 and -1 at the end, this one answers -128
-// to 127 and has no room left for an end marker, so the end is reported.
+// to 127 and has no room left for an end marker, so the end is EOFException
+// (javaStreamEnded).
 func javaStreamReadByte(
 	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -667,7 +687,7 @@ func javaStreamReadByte(
 		return 0, err
 	}
 	if stream.Read >= len(stream.Data) {
-		return 0, fmt.Errorf("readByte past the end of %q, at %d of %d", stream.Name, stream.Read, len(stream.Data))
+		return 0, client.javaStreamEnded(thread, stream, "readByte")
 	}
 	value := int8(stream.Data[stream.Read])
 	stream.Read++
@@ -675,10 +695,12 @@ func javaStreamReadByte(
 }
 
 // javaStreamReadFully is `DataInputStream.readFully([BII)`, slot 20: exactly
-// the bytes asked for or none at all. That is the whole difference from
+// the bytes asked for, or EOFException. That is the whole difference from
 // `read([BII)` beside it, which answers a short count and leaves the caller to
 // loop; a title that calls this one has sized its array from a count it read
-// first and treats a short read as a corrupt file.
+// first and treats a short read as a corrupt file. At the end, what was left is
+// in the array before the throw, as the class library's own loop of reads
+// leaves it (javaStreamEnded).
 func javaStreamReadFully(
 	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -700,9 +722,13 @@ func javaStreamReadFully(
 	if _, err := client.needJavaStream(ctx, thread, stream, int(count)); err != nil {
 		return 0, err
 	}
-	if uint64(count) > uint64(len(stream.Data)-stream.Read) {
-		return 0, fmt.Errorf("readFully of %d bytes past the end of %q, at %d of %d",
-			count, stream.Name, stream.Read, len(stream.Data))
+	if left := len(stream.Data) - stream.Read; uint64(count) > uint64(left) {
+		if left > 0 {
+			if err := client.core.Memory().Write(block+javaArrayLengthWords*4+offset, stream.Data[stream.Read:]); err != nil {
+				return 0, err
+			}
+		}
+		return 0, client.javaStreamEnded(thread, stream, fmt.Sprintf("readFully of %d bytes", count))
 	}
 	data := stream.Data[stream.Read : stream.Read+int(count)]
 	if err := client.core.Memory().Write(block+javaArrayLengthWords*4+offset, data); err != nil {
@@ -901,6 +927,19 @@ func javaByteSinkSize(
 	return uint32(len(held)), nil
 }
 
+// javaByteSinkToString is `toString()` over Object's slot 4: what has been
+// written, decoded the way `String(byte[])` decodes it (javaStringConstructor)
+// — in the handset's own encoding — as a new String every call.
+func javaByteSinkToString(
+	client *Client, _ context.Context, _ *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, _, err := client.javaByteSinkOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	return client.newJavaString(backend.DecodeEUCKR(held))
+}
+
 // `java/io/DataOutputStream`: numbers written into the sink underneath it,
 // most significant byte first, which is the order every Java stream writes in
 // and the order the read side beside it reads in. The pair is one round trip:
@@ -987,6 +1026,32 @@ func javaSinkWriteUTF(
 	return 0, client.putJavaSink(thread, sink, append(held, encoded...))
 }
 
+// javaSinkWriteChars is `writeChars(String)`, slot 23 — between writeDouble and
+// writeUTF's 24 in the class page's order: every code unit of the text as two
+// bytes, high first, the way `writeChar` writes one, with no length before
+// them. A null String is the NullPointerException the call throws on it, as on
+// the KTF and SKT runtimes.
+func javaSinkWriteChars(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	held, sink, err := client.javaByteSinkOf(arguments[0])
+	if err != nil {
+		return 0, err
+	}
+	text, err := client.javaTextArgument(thread, arguments[1], "writeChars")
+	if err != nil {
+		return 0, err
+	}
+	units := utf16Units(text)
+	if err := javaSinkRoom(held, 2*len(units)); err != nil {
+		return 0, err
+	}
+	for _, unit := range units {
+		held = append(held, byte(unit>>8), byte(unit))
+	}
+	return 0, client.putJavaSink(thread, sink, held)
+}
+
 // javaStreamReadUTF is `DataInputStream.readUTF()`, slot 32: a two-byte length
 // and then that many bytes of modified UTF-8. It is the read side of the
 // `writeUTF` beside it and decodes with the same encoding, so a name a title
@@ -994,7 +1059,8 @@ func javaSinkWriteUTF(
 //
 // **The length is in bytes, not in characters**, which is what makes a short
 // stream tell-able from a long name: the count is checked against what is left
-// before any of it is decoded.
+// before any of it is decoded, and a stream that ends inside the length or the
+// text is EOFException (javaStreamEnded).
 func javaStreamReadUTF(
 	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -1003,16 +1069,14 @@ func javaStreamReadUTF(
 		return 0, err
 	}
 	if stream.Read+2 > len(stream.Data) {
-		return 0, fmt.Errorf("readUTF past the end of %q, at %d of %d",
-			stream.Name, stream.Read, len(stream.Data))
+		return 0, client.javaStreamEnded(thread, stream, "readUTF")
 	}
 	count := int(stream.Data[stream.Read])<<8 | int(stream.Data[stream.Read+1])
 	if _, err := client.needJavaStream(ctx, thread, stream, 2+count); err != nil {
 		return 0, err
 	}
 	if stream.Read+2+count > len(stream.Data) {
-		return 0, fmt.Errorf("readUTF of %d bytes past the end of %q, at %d of %d",
-			count, stream.Name, stream.Read, len(stream.Data))
+		return 0, client.javaStreamEnded(thread, stream, fmt.Sprintf("readUTF of %d bytes", count))
 	}
 	text, err := decodeModifiedUTF8(stream.Data[stream.Read+2 : stream.Read+2+count])
 	if err != nil {
@@ -1027,6 +1091,20 @@ func javaStreamReadUTF(
 // title's own file, and text that does not decode means the cursor is not where
 // the title thinks it is.
 func decodeModifiedUTF8(data []byte) (string, error) {
+	units, err := modifiedUTF8Units(data)
+	if err != nil {
+		return "", err
+	}
+	return string(utf16.Decode(units)), nil
+}
+
+// modifiedUTF8Units is the code units modified UTF-8 encodes: a byte below
+// 0x80 alone, a lead byte 110xxxxx with one continuation byte, a lead byte
+// 1110xxxx with two, and anything else — a continuation byte where a lead
+// belongs, a four-byte lead, a sequence the data ends inside — refused. That
+// is the class library's reading of the bytes, `readUTF(DataInput)`'s
+// UTFDataFormatException included.
+func modifiedUTF8Units(data []byte) ([]uint16, error) {
 	units := make([]uint16, 0, len(data))
 	for index := 0; index < len(data); {
 		first := data[index]
@@ -1036,22 +1114,22 @@ func decodeModifiedUTF8(data []byte) (string, error) {
 			index++
 		case first&0xe0 == 0xc0:
 			if index+1 >= len(data) || data[index+1]&0xc0 != 0x80 {
-				return "", fmt.Errorf("a two-byte sequence at %d is cut short", index)
+				return nil, fmt.Errorf("a two-byte sequence at %d is cut short", index)
 			}
 			units = append(units, uint16(first&0x1f)<<6|uint16(data[index+1]&0x3f))
 			index += 2
 		case first&0xf0 == 0xe0:
 			if index+2 >= len(data) || data[index+1]&0xc0 != 0x80 || data[index+2]&0xc0 != 0x80 {
-				return "", fmt.Errorf("a three-byte sequence at %d is cut short", index)
+				return nil, fmt.Errorf("a three-byte sequence at %d is cut short", index)
 			}
 			units = append(units, uint16(first&0x0f)<<12|
 				uint16(data[index+1]&0x3f)<<6|uint16(data[index+2]&0x3f))
 			index += 3
 		default:
-			return "", fmt.Errorf("byte %#02x at %d begins no sequence", first, index)
+			return nil, fmt.Errorf("byte %#02x at %d begins no sequence", first, index)
 		}
 	}
-	return string(utf16.Decode(units)), nil
+	return units, nil
 }
 
 // modifiedUTF8 is the encoding a Java stream's UTF methods use.
@@ -1098,9 +1176,46 @@ func javaByteStreamConstructor(
 	return 0, nil
 }
 
+// javaByteStreamRangeConstructor is `ByteArrayInputStream(byte[], int, int)`:
+// a stream over a window of the array, which is how a title reads one record
+// out of a buffer that holds several. It answers what the KTF and SKT
+// runtimes' constructor does (internal/jvm): a null array is a
+// NullPointerException, a negative offset or length or an offset past the
+// array an IndexOutOfBoundsException, and a window that runs past the end is
+// cut to the array, as the class page says. Reading starts at the offset and
+// a reset goes back there, because the mark starts where reading does.
+//
+// The window's bytes are copied, as the whole-array form copies its array;
+// a cursor into the copy is a cursor into the window, which is all a reader
+// of the stream can tell apart.
+func javaByteStreamRangeConstructor(
+	client *Client, _ context.Context, thread *armcore.Thread, arguments []uint32,
+) (uint32, error) {
+	if arguments[1] == 0 {
+		return 0, client.throwJavaPlatform(thread, javaThrowNullClass,
+			"a null array handed to ByteArrayInputStream")
+	}
+	data, err := client.readJavaArrayBytes(arguments[1])
+	if err != nil {
+		return 0, err
+	}
+	offset, length := int64(int32(arguments[2])), int64(int32(arguments[3]))
+	if offset < 0 || length < 0 || offset > int64(len(data)) {
+		return 0, client.throwJavaPlatform(thread, javaIndexClass,
+			fmt.Sprintf(": a window of %d bytes from %d of %d", length, offset, len(data)))
+	}
+	end := min(offset+length, int64(len(data)))
+	held := append([]byte(nil), data[offset:end]...)
+	client.javaRuntimeState().streams[arguments[0]] = &javaStream{
+		Name: fmt.Sprintf("%d bytes from %d of a byte array of %d", len(held), offset, len(data)),
+		Data: held, Markable: true}
+	return 0, nil
+}
+
 // javaStreamReadBoolean is `DataInputStream.readBoolean()`, slot 22: one byte,
 // false when it is zero and true otherwise, which is what the specification
-// defines and the byte `writeBoolean` wrote.
+// defines and the byte `writeBoolean` wrote; EOFException at the end
+// (javaStreamEnded).
 func javaStreamReadBoolean(
 	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -1109,7 +1224,7 @@ func javaStreamReadBoolean(
 		return 0, err
 	}
 	if stream.Read >= len(stream.Data) {
-		return 0, fmt.Errorf("the stream of %s ended before a boolean", stream.Name)
+		return 0, client.javaStreamEnded(thread, stream, "readBoolean")
 	}
 	value := stream.Data[stream.Read]
 	stream.Read++
@@ -1316,8 +1431,8 @@ func javaStreamReadChar(
 }
 
 // javaStreamReadUnsignedByte is `DataInputStream.readUnsignedByte()`, slot 24:
-// the byte `readByte` reads, as 0 to 255. The end of the stream is reported
-// rather than answered with -1, because 255 values are already spoken for.
+// the byte `readByte` reads, as 0 to 255. The end of the stream is EOFException
+// (javaStreamEnded) rather than -1, because 255 values are already spoken for.
 func javaStreamReadUnsignedByte(
 	client *Client, ctx context.Context, thread *armcore.Thread, arguments []uint32,
 ) (uint32, error) {
@@ -1326,8 +1441,7 @@ func javaStreamReadUnsignedByte(
 		return 0, err
 	}
 	if stream.Read >= len(stream.Data) {
-		return 0, fmt.Errorf("readUnsignedByte past the end of %q, at %d of %d",
-			stream.Name, stream.Read, len(stream.Data))
+		return 0, client.javaStreamEnded(thread, stream, "readUnsignedByte")
 	}
 	value := uint32(stream.Data[stream.Read])
 	stream.Read++

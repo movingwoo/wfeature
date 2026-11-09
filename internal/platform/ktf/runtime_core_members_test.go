@@ -251,6 +251,206 @@ func mustReference(value jvm.Value) *jvm.Object {
 	return object
 }
 
+// The CLDC members the class library shares with SKT, each found the way
+// guest code finds it: through the class record, with a body to call. The ones
+// that override a member above them take that member's slot rather than a new
+// one, so a call compiled against the slot reaches the override; and the two
+// writer classes are records of their own, the abstract one above the other.
+func TestTheSharedCLDCMembersResolveFromTheGuestsClassRecords(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	members := []struct{ class, name, descriptor string }{
+		{"java/lang/String", "regionMatches", "(ZILjava/lang/String;II)Z"},
+		{"java/lang/String", "startsWith", "(Ljava/lang/String;I)Z"},
+		{"java/lang/String", "valueOf", "(Z)Ljava/lang/String;"},
+		{"java/lang/StringBuffer", "capacity", "()I"},
+		{"java/lang/StringBuffer", "ensureCapacity", "(I)V"},
+		{"java/lang/StringBuffer", "insert", "(IZ)Ljava/lang/StringBuffer;"},
+		{"java/lang/StringBuffer", "insert", "(I[C)Ljava/lang/StringBuffer;"},
+		{"java/lang/StringBuffer", "insert", "(IJ)Ljava/lang/StringBuffer;"},
+		{"java/lang/StringBuffer", "insert", "(ILjava/lang/Object;)Ljava/lang/StringBuffer;"},
+		{"java/lang/StringBuffer", "reverse", "()Ljava/lang/StringBuffer;"},
+		{"java/util/Vector", "indexOf", "(Ljava/lang/Object;I)I"},
+		{"java/util/Vector", "lastIndexOf", "(Ljava/lang/Object;I)I"},
+		{"java/util/Vector", "toString", "()Ljava/lang/String;"},
+		{"java/util/Stack", "toString", "()Ljava/lang/String;"},
+		{"java/util/Hashtable", "contains", "(Ljava/lang/Object;)Z"},
+		{"java/util/Hashtable", "rehash", "()V"},
+		{"java/util/Hashtable", "toString", "()Ljava/lang/String;"},
+		{"java/io/Reader", "<init>", "(Ljava/lang/Object;)V"},
+		{"java/io/Reader", "mark", "(I)V"},
+		{"java/io/Reader", "reset", "()V"},
+		{"java/io/InputStreamReader", "markSupported", "()Z"},
+		{"java/io/InputStreamReader", "mark", "(I)V"},
+		{"java/io/InputStreamReader", "reset", "()V"},
+		{"java/lang/Runtime", "exit", "(I)V"},
+		{"java/lang/Class", "newInstance", "()Ljava/lang/Object;"},
+		{"java/io/ByteArrayOutputStream", "toString", "()Ljava/lang/String;"},
+		{"java/io/DataInputStream", "readUTF", "(Ljava/io/DataInput;)Ljava/lang/String;"},
+		{"java/io/Writer", "<init>", "()V"},
+		{"java/io/Writer", "<init>", "(Ljava/lang/Object;)V"},
+		{"java/io/Writer", "write", "(I)V"},
+		{"java/io/Writer", "write", "([C)V"},
+		{"java/io/Writer", "write", "([CII)V"},
+		{"java/io/Writer", "write", "(Ljava/lang/String;)V"},
+		{"java/io/Writer", "write", "(Ljava/lang/String;II)V"},
+		{"java/io/Writer", "flush", "()V"},
+		{"java/io/Writer", "close", "()V"},
+		{"java/io/OutputStreamWriter", "<init>", "(Ljava/io/OutputStream;)V"},
+		{"java/io/OutputStreamWriter", "<init>", "(Ljava/io/OutputStream;Ljava/lang/String;)V"},
+		{"java/io/OutputStreamWriter", "write", "(I)V"},
+		{"java/io/OutputStreamWriter", "write", "([CII)V"},
+		{"java/io/OutputStreamWriter", "write", "(Ljava/lang/String;II)V"},
+		{"java/io/OutputStreamWriter", "write", "(Ljava/lang/String;)V"},
+		{"java/io/OutputStreamWriter", "flush", "()V"},
+		{"java/io/OutputStreamWriter", "close", "()V"},
+		{runtimeTimerClass, "schedule", "(Ljava/util/TimerTask;Ljava/util/Date;)V"},
+		{runtimeTimerClass, "schedule", "(Ljava/util/TimerTask;Ljava/util/Date;J)V"},
+		{runtimeTimerClass, "scheduleAtFixedRate", "(Ljava/util/TimerTask;Ljava/util/Date;J)V"},
+	}
+	vm := client.JVM()
+	resolve := func(class, name, descriptor string) jvm.AOTMethodMetadata {
+		t.Helper()
+		address, err := runtime.ensureJavaClass(class)
+		if err != nil {
+			t.Fatal(err)
+		}
+		method, found, err := vm.FindAOTMethod(address, name, descriptor)
+		if err != nil || !found || method.Body == 0 {
+			t.Errorf("%s.%s%s does not resolve from the guest's class record: found=%v err=%v", class, name, descriptor, found, err)
+		}
+		return method
+	}
+	for _, member := range members {
+		resolve(member.class, member.name, member.descriptor)
+	}
+	for _, override := range []struct{ class, above, name, descriptor string }{
+		{"java/util/Vector", jvm.ObjectClass, "toString", "()Ljava/lang/String;"},
+		{"java/util/Hashtable", jvm.ObjectClass, "toString", "()Ljava/lang/String;"},
+		{"java/io/ByteArrayOutputStream", jvm.ObjectClass, "toString", "()Ljava/lang/String;"},
+		{"java/io/InputStreamReader", "java/io/Reader", "markSupported", "()Z"},
+		{"java/io/InputStreamReader", "java/io/Reader", "mark", "(I)V"},
+		{"java/io/OutputStreamWriter", "java/io/Writer", "write", "(Ljava/lang/String;II)V"},
+	} {
+		own, inherited := resolve(override.class, override.name, override.descriptor), resolve(override.above, override.name, override.descriptor)
+		if own.Address == inherited.Address || own.VTableIndex != inherited.VTableIndex {
+			t.Errorf("%s.%s%s is at slot %d (method %#x), want %s's slot %d in a method of its own",
+				override.class, override.name, override.descriptor, own.VTableIndex, own.Address, override.above, inherited.VTableIndex)
+		}
+	}
+	writer, err := runtime.ensureJavaClass("java/io/Writer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamWriter, err := runtime.ensureJavaClass("java/io/OutputStreamWriter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record, ok := vm.AOTClassAt(writer); !ok || record.AccessFlags&0x0400 == 0 || record.SuperName != jvm.ObjectClass {
+		t.Errorf("Writer's record = %+v, want an abstract class above Object", record)
+	}
+	if record, ok := vm.AOTClassAt(streamWriter); !ok || record.AccessFlags&0x0400 != 0 || record.SuperName != "java/io/Writer" {
+		t.Errorf("OutputStreamWriter's record = %+v, want a concrete class above Writer", record)
+	}
+
+	// What the records' stubs call — the member at the record's own class —
+	// answers.
+	vector, err := vm.NewObject("java/util/Vector", "()V")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vm.InvokeVirtual(vector, "addElement", "(Ljava/lang/Object;)V", jvm.ReferenceValue(vm.NewString("a"))); err != nil {
+		t.Fatal(err)
+	}
+	text, err := vm.InvokeSpecial(vector, "java/util/Vector", "toString", "()Ljava/lang/String;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := jvm.StringText(mustReference(text)); got != "[a]" {
+		t.Errorf("Vector.toString through its record = %q", got)
+	}
+	buffer, err := vm.NewObject("java/lang/StringBuffer", "(Ljava/lang/String;)V", jvm.ReferenceValue(vm.NewString("abc")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capacity, err := vm.InvokeSpecial(buffer, "java/lang/StringBuffer", "capacity", "()I"); err != nil || capacity != jvm.IntValue(19) {
+		t.Errorf("StringBuffer.capacity through its record = %v, %v, want 19", capacity, err)
+	}
+	// Runtime.exit ends the session as System.exit does here: this platform
+	// installs no exit of its own, so both are the same refusal.
+	runtimeObject, err := vm.InvokeStatic("java/lang/Runtime", "getRuntime", "()Ljava/lang/Runtime;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, runtimeErr := vm.InvokeSpecial(mustReference(runtimeObject), "java/lang/Runtime", "exit", "(I)V", jvm.IntValue(0))
+	_, systemErr := vm.InvokeStatic("java/lang/System", "exit", "(I)V", jvm.IntValue(0))
+	if runtimeErr == nil || systemErr == nil || !strings.Contains(runtimeErr.Error(), "no platform shutdown installed") ||
+		!strings.Contains(systemErr.Error(), "no platform shutdown installed") {
+		t.Errorf("Runtime.exit = %v and System.exit = %v, want the same ending", runtimeErr, systemErr)
+	}
+}
+
+// Class.newInstance of a class this platform holds as guest records is made
+// the way the Host makes a title's main class: the instance allocated with its
+// guest layout, then the class's own <init>()V run through the JVM-to-AOT
+// bridge on the guest thread. The class here is a runtime record whose
+// constructor is a native; a title's is its compiled code, reached the same
+// way. A record that cannot be instantiated is refused before anything is
+// allocated.
+func TestClassNewInstanceMakesAGuestClassAsTheMainClassIsMade(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	vm := client.JVM()
+	const name = "test/Stage"
+	made := 0
+	if err := vm.RegisterNative(name, "<init>", "()V", func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+		receiver := mustReference(arguments[0])
+		if _, bound := vm.AOTAddress(receiver); !bound {
+			t.Error("the constructor ran on an instance with no guest layout")
+		}
+		made++
+		return jvm.VoidValue(), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.createRuntimeJavaClass(runtimeJavaClass{name: name, superName: jvm.ObjectClass, accessFlags: 0x0021,
+		methods: []runtimeJavaMethod{{class: name, name: "<init>", descriptor: "()V", accessFlags: 0x0001}}}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.CurrentThread, runtime.CurrentContext = client.Thread, t.Context()
+	defer func() { runtime.CurrentThread, runtime.CurrentContext = nil, nil }()
+	newInstance := func(dotted string) (*jvm.Object, error) {
+		class, err := vm.InvokeStatic(jvm.ClassClass, "forName", "(Ljava/lang/String;)Ljava/lang/Class;", jvm.ReferenceValue(vm.NewString(dotted)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := vm.InvokeVirtual(mustReference(class), "newInstance", "()Ljava/lang/Object;")
+		if err != nil {
+			return nil, err
+		}
+		return mustReference(result), nil
+	}
+	tracked := len(runtime.objects)
+	object, err := newInstance("test.Stage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if object == nil || object.ClassName != name || made != 1 {
+		t.Fatalf("newInstance = %v, constructor runs %d, want one %s", object, made, name)
+	}
+	if _, bound := vm.AOTAddress(object); !bound || len(runtime.objects) != tracked+1 {
+		t.Fatal("the instance newInstance answered is not one guest allocation")
+	}
+	if _, err := runtime.ensureJavaClass(runtimeCardClass); err != nil {
+		t.Fatal(err)
+	}
+	before := len(runtime.objects)
+	if _, err := newInstance("org.kwis.msp.lcdui.Card"); !vm.IsGuestException(err, "java/lang/InstantiationException") {
+		t.Fatalf("newInstance of the abstract Card = %v, want InstantiationException", err)
+	}
+	if len(runtime.objects) != before {
+		t.Fatal("a refused class was allocated")
+	}
+}
+
 // setPriority used to keep nothing, so a getPriority published beside it would
 // have answered the default whatever a title set. It keeps what is in range
 // now, in the field getPriority reads, and still ignores what is not.

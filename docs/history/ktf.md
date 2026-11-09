@@ -10241,3 +10241,88 @@ archives at 500 ticks from an empty save, under the build before these changes
 and with them: the KTF and LGT ones end on the same digest except the two
 titles that now start, one of each, and the SKT ones that moved also move
 between runs of either build.
+
+<a id="ktf-parity-fill-2026-11-05"></a>
+
+## The shared library's members LGT already answered — 2026-11-05
+
+The [cross-platform comparison](coverage.md#cross-platform-parity-2026-11-05)
+found members of the shared class library that LGT answered and KTF and SKT did
+not, and CLDC 1.1 members none of the three did. They are now in the shared
+library (`internal/jvm`), with the answers LGT gives and CLDC 1.1 where LGT had
+none, and KTF publishes each of them in `runtimeJavaClasses`:
+`String.regionMatches(boolean, …)`, `startsWith(String, int)` and
+`valueOf(boolean)`; `StringBuffer`'s `capacity`, `ensureCapacity`, four
+`insert` forms and `reverse`; `Vector.indexOf` and `lastIndexOf` from an index
+and `toString`; `Hashtable.contains`, `rehash` and `toString`; `Reader(Object)`,
+`Reader.mark` and `reset`, and `InputStreamReader`'s `markSupported`, `mark`
+and `reset`; `ByteArrayOutputStream.toString`; the static
+`DataInputStream.readUTF(DataInput)`; `Runtime.exit`; `Class.newInstance`; and
+the classes `Writer` and `OutputStreamWriter`. KTF alone gained `Timer`'s three
+Date forms, which SKT's MIDP library already had.
+
+- **The new entries go at the end of each class's list**, so the slots that
+  were there keep their numbers, and an override takes the slot of the member
+  above: `toString` on Vector, Hashtable and ByteArrayOutputStream is Object's
+  slot, and an InputStreamReader's mark pair is Reader's.
+  `TestEveryPublishedCoreClassDeclaresItsCLDCMembers` listed exactly the 26
+  members before the entries were added.
+- **A title's own subclass is unaffected by a parent that grew**: it numbers
+  its methods from the end of the parent's table when its class is prepared.
+  The older relocatable modules lay their compiled numbers over the parent
+  table instead, so each of the eight local ones ran 600 ticks with a fire press
+  every 40 under a probe that listed every class it registered: none extends
+  `Vector`, `Stack`, `Hashtable`, `Reader`, `InputStreamReader`,
+  `DataInputStream` or `Timer`.
+- **`Class.newInstance` of a title's class goes through the platform**: the
+  shared library has a hook for a compiled class (`SetAOTConstructor`), and KTF
+  answers it the way the main class is built, allocating the instance and
+  running its compiled `<init>()V`. An array, an interface, an abstract class or
+  one with no own no-argument constructor is InstantiationException, a private
+  constructor IllegalAccessException; with no interpreted caller (a compiled
+  title) the caller counts as the same package. Both exceptions are classes now.
+- **A Date form counts its delay from the guest clock**, `date.getTime()` minus
+  now, and goes on through the existing delay path, so a date already past is
+  due on the next frame, like a zero delay; a null task or date is the
+  NullPointerException SKT throws.
+- **A container answers the class library's text**: `[a, b]` and `{k=v, …}`
+  from each element's own `toString` (a title's class answers through the
+  compiled bridge), and a byte array stream the bytes as text; all answered
+  Object's identity text before. One local title splits a text resource it
+  reads through a byte array stream: with the identity text its dialog box
+  stayed empty and its paint threw ArrayIndexOutOfBoundsException every frame,
+  and it now shows its lines (found by the deeper play of the
+  [2026-11-06 review](coverage.md#cross-platform-parity-2026-11-05)). Two
+  library tests that used Vector as a class without its own
+  `toString` use Random now.
+- **Checkpoints**: a `StringBuffer` is saved as `buffer-v2`, its capacity before
+  its units; a `buffer` an earlier build wrote restores with the capacity the
+  class library's rule gives its length (16 up to 16 units, 34 up to 34, else
+  the length). An earlier reader restores with no lock and nothing held at its
+  mark, which is all a reader could have had. A session restored from an
+  earlier checkpoint keeps the class records it saved: calling a member added
+  since is the same `KTF AOT method … was not found` error the earlier build
+  gives, and an AOT `toString()` on a container still reaches Object's record
+  while `"" + vector` reaches the library's, until the session restarts.
+
+Found and left:
+
+- `Reader.read()` is declared abstract in the library and in KTF's table,
+  where CLDC's is concrete, so a title's Reader that implements only
+  `read(char[], int, int)` fails on `read()`.
+- `InputStreamReader` checks its encoding name and then decodes the platform's
+  EUC-KR whatever it was; `OutputStreamWriter` honours UTF-8, so text written
+  under that name does not read back under it.
+- The instance `readUTF()` is stricter than the static one (it refuses zero
+  bytes and overlong forms and throws IOException where CLDC throws
+  UTFDataFormatException); `equalsIgnoreCase` folds all of Unicode where
+  `regionMatches` folds Latin-1; `getBytes(String)` and the charset String
+  constructors throw IOException for an unknown name where CLDC throws
+  UnsupportedEncodingException; `StringBuffer.setLength(-1)` throws
+  IndexOutOfBoundsException rather than StringIndexOutOfBoundsException.
+- On KTF, `String.valueOf`, `append` and `insert` of a title's own object give
+  its identity text, while a Vector or Hashtable holding it asks its
+  `toString`.
+
+The validation of this pass, corpus and quick-save upgrade included, is with
+[the comparison](coverage.md#cross-platform-parity-2026-11-05).

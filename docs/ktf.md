@@ -35,6 +35,21 @@ the module's own, and leaves its statics alone: a static's last word is its
 value, not an offset
 ([history](history/ktf.md#ktf-new-archives-2026-10-21-statics)).
 
+The Java classes this side publishes (`runtimeJavaClasses`) expose the shared
+class library to compiled titles. On 2026-11-05 they gained the CLDC members
+LGT already answered and two classes, `Writer` and `OutputStreamWriter`
+([history](history/ktf.md#ktf-parity-fill-2026-11-05)). A new member takes the
+next slot of its class's table and an override takes the slot of the member
+above it, so a title's own subclass, which numbers its methods from the end of
+the parent's table, is unaffected; the relocatable modules lay their own
+numbers over the parent table, and none of them extends a class that gained a
+member. `Class.newInstance` builds a title's own class the way the main class
+is built. `Timer`'s Date forms count the delay from the guest clock, so a date
+already past is due at once, like a zero delay. A session restored from a
+checkpoint taken before a member existed keeps the class records it saved: a
+title's call to that member is the same "KTF AOT method … was not found" error
+the earlier build gives, until the session restarts.
+
 The earlier native package has no descriptor and no JAR: a module information
 file, a raw ARM module and the title's resource files. Its signature chain
 identifies it as a BREW module, so BREW, not WIPI, is the specification to
