@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"testing"
+	"time"
 )
 
 // lifecycleMark reads the word the fixture's Clet writes when the platform
@@ -104,5 +105,56 @@ func TestAFailedStartStopsTheThreadsItStarted(t *testing.T) {
 	}
 	if !worker.done || !client.javaThreadsStopped || len(client.javaRun.workers) != 0 {
 		t.Fatal("a failed start left the title's thread waiting for a slice")
+	}
+}
+
+// A handset kept time while a title was paused, so the timer a Clet had armed
+// came due during the pause, and a title that does its pausing in that
+// callback depends on it: one stopped its sound and its frame timer there, for
+// resumeClet to start them again, and a park that served no timer before the
+// resume froze it for good. The fixture's resume entry stands in for such a
+// callback: it writes the running mark, so the mark after the pause says
+// whether the timer ran while the title was paused.
+func TestParkingACletServesTheTimerThatComesDueWhilePaused(t *testing.T) {
+	ctx := context.Background()
+	session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{
+		Width: 16, Height: 8, MaxSteps: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(ctx)
+	client := session.client
+
+	const structure = fixtureDataBase + 0x200
+	before := client.clock.millis()
+	client.mu.Lock()
+	client.timers[structure] = &timer{structure: structure, callback: client.clet.Resume,
+		dueAt: time.Duration(before+70) * time.Millisecond, armed: true}
+	client.mu.Unlock()
+
+	if err := session.Pause(ctx); err != nil {
+		t.Fatalf("Pause() error = %v", err)
+	}
+	if got := lifecycleMark(t, session); got != fixtureLifecycleRunning {
+		t.Fatalf("the Clet is %d after a pause, want %d: the timer that came due while it was paused never ran", got, fixtureLifecycleRunning)
+	}
+	if after := client.clock.millis(); after < before+70 {
+		t.Fatalf("the clock reads %d ms after the pause, want at least %d: it has to reach the timer's deadline", after, before+70)
+	}
+	if client.timers[structure].armed {
+		t.Fatal("the timer is still armed after it fired")
+	}
+
+	// With nothing armed a pause moves no clock.
+	if err := session.Resume(ctx); err != nil {
+		t.Fatal(err)
+	}
+	still := client.clock.millis()
+	if err := session.Pause(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.clock.millis(); got != still {
+		t.Fatalf("a pause with no timer armed moved the clock from %d to %d ms", still, got)
 	}
 }
