@@ -173,6 +173,20 @@ func attachFixtureTextComponent(t *testing.T, runtime *skt.Runtime) *jvm.Object 
 	return component
 }
 
+// One local title asks whether the input method is up in every paint and, when
+// it is, draws the mode indicator from images the platform holds and this
+// runtime does not. The method was missing, so that paint ended the title.
+func TestTheTextComponentHandlerSaysItIsNotLoaded(t *testing.T) {
+	runtime := startFixture(t, nil)
+	value, err := runtime.VM.InvokeStatic(apiskt.TextComponentHandlerClass, "isLoaded", "()Z")
+	if err != nil {
+		t.Fatalf("isLoaded() error = %v", err)
+	}
+	if got, err := value.Int32(); err != nil || got != 0 {
+		t.Fatalf("isLoaded() = %v, %v; want false", got, err)
+	}
+}
+
 // A Timer runs its task on a thread of its own, which is why the fixture can
 // wait for it on the thread that scheduled it. A task invoked inline would
 // deadlock this test rather than fail it.
