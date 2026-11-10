@@ -294,7 +294,7 @@ func listenSecurely(value, address, dir string, logger *slog.Logger) (net.Listen
 		logger.Warn("serving without HTTPS", "error", err)
 		return nil, nil
 	}
-	certificate, created, err := secureCertificate(dir, reachableNames(), reachableAddresses(), time.Now())
+	certificate, created, err := secureCertificate(dir, reachableNames(), openedAddresses(secureAddress), reachableAddresses(), time.Now())
 	if err != nil {
 		return fail(err)
 	}
