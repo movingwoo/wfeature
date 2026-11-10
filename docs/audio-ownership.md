@@ -180,11 +180,12 @@ reconnect to a parked game is rebuilt the same way, after the first tick that
 brings the audio timeline to the resumed guest clock.
 
 Collector overflow follows the same path. Normal batches are bounded to 4,096
-operations (`maxPendingAudio`). Reconstruction temporarily permits 65,536
-(`maxReplayAudio`), enough for the largest owned reconstruction: 58,176
-operations for all 256 owners plus owner zero (fourteen operations per channel,
-gains, voices and tracked samples), plus up to three controls for each of 2,048
-PCM groups (6,144 more). The ordinary bound then applies again. Debug logs
+operations (`maxPendingAudio`). Reconstruction temporarily permits 262,144
+(`maxReplayAudio`), enough for the largest owned reconstruction, about 134,000
+operations: all 256 owners plus owner zero, each with sixteen channels of
+fifteen channel operations and up to 255 FM voice definitions, 32 notes and 256
+sampled sources, plus up to three controls for each of 2,048 PCM groups. The
+ordinary bound then applies again. Debug logs
 distinguish collector overflow, dropped audio batches and successful
 reconstruction. This keeps a missed note-off or stop from leaving a voice stuck
 once delivery resumes; it does not reproduce events missed while delivery was
