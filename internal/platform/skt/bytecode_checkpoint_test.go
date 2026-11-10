@@ -41,10 +41,12 @@ func TestPackagedMIDletResumesBytecodeWithoutRepeatingStartup(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.Pause(); err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.Resume(); err != nil {
+	// The MIDlet runs its probe from a second startApp, which a resume does
+	// not make (resumeStarted); the event loop calls it here instead.
+	if err := runtime.dispatch("probe", func() error {
+		_, err := runtime.VM.InvokeVirtual(runtime.MIDlet, "startApp", "()V")
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 	fresh := jvm.New(archive, jvm.Options{})

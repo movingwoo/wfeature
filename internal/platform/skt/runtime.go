@@ -63,6 +63,10 @@ type Runtime struct {
 	// Selected only for original revisions whose startApp replaces a live
 	// Canvas and leaves its previous workers running on every resume.
 	resumeWithoutStart bool
+	// Selected only for original revisions whose startApp starts again the
+	// thread their pauseApp ended (Archive.resumeThroughStart). It comes from
+	// the archive, so a checkpoint does not carry it.
+	resumeThroughStart bool
 	startCompleted     bool
 
 	// pad makes a keyboard's overlapping holds look like a thumb on a handset
@@ -412,6 +416,13 @@ func newRuntime(archive *Archive, options Options) (*Runtime, error) {
 	if options.JVM.RenewSteps == nil {
 		options.JVM.RenewSteps = runtime.renewGuestSteps
 	}
+	// The class sets resumed through startApp start again there the thread
+	// their pauseApp ended, which the handset VM they were written for
+	// allowed; every other title gets the language's refusal.
+	throughStart := archive.resumeThroughStart()
+	if throughStart {
+		options.JVM.RestartableThreads = true
+	}
 	// These handsets' default charset is EUC-KR, and a title finds out through
 	// its own text: `"…".getBytes()` handed to a renderer that indexes a glyph
 	// table by the byte it was given. UTF-8 makes that index a different number
@@ -472,6 +483,7 @@ func newRuntime(archive *Archive, options Options) (*Runtime, error) {
 		frameHeight:        frameHeight,
 		legacyClip:         archive.legacyClipEndpoints(),
 		resumeWithoutStart: archive.resumeWithoutRestart(),
+		resumeThroughStart: throughStart,
 		frameRGBA:          make([]byte, frameLength),
 		fullScreen:         make(map[*jvm.Object]bool),
 		fonts:              make(map[fontKey]*jvm.Object),
@@ -696,6 +708,12 @@ func (runtime *Runtime) resume(requirePaused bool) error {
 		runtime.transition("resume", StateActive)
 		return nil
 	}
+	// The class sets written for MIDP's reactivation are resumed as MIDP has
+	// it, through the startApp below, which starts again the thread their
+	// pauseApp ended (resumeThroughStart).
+	if requirePaused && runtime.startCompleted && !runtime.resumeThroughStart {
+		return runtime.resumeStarted()
+	}
 	action := "resume"
 	if state == StateCreated {
 		action = "start"
@@ -726,6 +744,55 @@ func (runtime *Runtime) resume(requirePaused bool) error {
 	runtime.startCompleted = true
 	runtime.transition(action, StateActive)
 	return nil
+}
+
+// resumeStarted brings back a title whose start completed: through its
+// resumeApp, when it is a Jlet or a MIDlet that declares one, and never
+// through a second startApp.
+//
+// **SKT resumed a title, it did not start it again.** A WIPI Jlet is resumed
+// through resumeApp, as KTF and LGT resume theirs; running its startApp again
+// left a Jlet whose pauseApp stopped its timer standing still for good. MIDP
+// reactivates a MIDlet through startApp, but the SKT titles were not written
+// for that: 56 of the 93 local MIDlets declare a resumeApp of their own, which
+// MIDP has no use for, six of them answering pauseApp's hideNotify with a
+// showNotify there, and a second startApp starts a thread it already started,
+// builds a second game beside the first, or ends the title. See
+// docs/history/skt.md#skt-resume-2026-11-10.
+//
+// **The screen is drawn again once the title is back**, as a handset redrew
+// it after whatever had covered it; the second startApp did that by setting
+// its Canvas current again. Two titles depend on it: one's resumeApp marks its
+// screen for a redraw that only a paint carries out, and another's game thread
+// waits for the notify its paint ends with. A title about to draw anyway — a
+// paint already queued, or a serial call its frame loop hands itself back
+// through — is not asked for another: a handset's repaint joined the pending
+// one, but a second paint here starts a second such loop beside the first, and
+// one title then ran at double rate. The paint resets the screen Graphics that
+// a title may be drawing through from its own thread at that moment, which
+// races as two threads drawing at once do (screenGraphics).
+func (runtime *Runtime) resumeStarted() error {
+	runtime.transition("resume", StateActive)
+	if runtime.jlet || runtime.VM.HasMethodBody(runtime.MIDlet.ClassName, "resumeApp", "()V") {
+		// resumeApp is not MIDP's lifecycle, so an exception nothing caught
+		// ends that callback and the title goes on, as one from a Jlet's
+		// resumeApp does on LGT (absorbUncaughtCallback). One title's
+		// resumeApp does what it has to and then calls notify without
+		// holding the monitor.
+		if _, err := runtime.VM.InvokeVirtual(runtime.MIDlet, "resumeApp", "()V"); err != nil {
+			if err := runtime.absorbUncaughtCallback("resumeApp", err); err != nil {
+				return runtime.fail("resume", err)
+			}
+		}
+	}
+	runtime.displayMu.RLock()
+	current := runtime.currentDisplayable
+	drawing := runtime.paintQueued || len(runtime.pendingSerial) > 0 || runtime.runningSerial
+	runtime.displayMu.RUnlock()
+	if drawing {
+		return nil
+	}
+	return runtime.repaintNewCurrentCanvas(current)
 }
 
 func (runtime *Runtime) dispatch(name string, handler func() error) error {

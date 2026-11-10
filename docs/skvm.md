@@ -27,19 +27,59 @@ error is retained and returned at the next `RunPending` boundary. Terminal
 transitions close JVM waits and release audio waits. An exception that escapes
 a Host-entered guest callback (paint, key, serial Runnable, command, listener)
 ends that callback, not the MIDlet (`uncaught.go`). Lifecycle callbacks are not
-absorbed: a `MIDletStateChangeException` from `startApp` pauses until retry,
-and a runtime exception forces cleanup and destroys the runtime.
+absorbed: a `MIDletStateChangeException` from the initial `startApp` pauses
+until retry, and a runtime exception forces cleanup and destroys the runtime.
 
-Two recognized class sets recreate their Canvas and workers on every
-`startApp`, despite leaving the previous workers alive on pause. Their resume
-correction (`skt.resume_without_start`) retains a successful initial start;
-ordinary MIDP reactivation and deferred initial starts still invoke the
-callback. See the [retained-session investigation](history/skt.md#skt-resume-2026-09-30).
+**A title whose start completed is resumed, not started again**
+(`resumeStarted`). A Jlet is resumed through its `resumeApp`, as KTF and LGT
+resume theirs. A MIDlet is resumed through a `resumeApp` it declares itself,
+which MIDP does not have, and one without it is made active with no callback.
+MIDP reactivates a MIDlet through `startApp`, and that is what this runtime
+did before 0.6.0, but the SKT titles were not written for it: 56 of the 93 local
+MIDlets declare their own `resumeApp`, and a second `startApp` started a
+thread it had already started, built a second game beside the first or ended
+the title. Only a deferred initial start is tried again through `startApp`.
+An exception a `resumeApp` lets out ends that callback, as one from a paint or
+a key does, and not the title. The screen is then queued for a full repaint,
+as a handset redrew it after whatever covered it, unless the title is about to
+draw anyway — a paint already queued, or a serial call its frame loop hands
+itself back through — where a second paint would start a second frame loop.
+Two recognized class sets that recreate their Canvas and workers on every
+`startApp` keep their earlier correction (`skt.resume_without_start`), which
+calls nothing on a resume
+([first investigation](history/skt.md#skt-resume-2026-09-30)).
+
+Two local MIDlets are written for MIDP's reactivation: a park ends a thread
+of theirs, and their `startApp` starts that same `Thread` object again once
+`isAlive()` says it has ended, which the language refuses and the handset VM
+they were written for allowed. Their class sets select
+`skt.resume_through_start`: a resume runs their `startApp` again, and their
+VM starts a finished thread again (`jvm.Options.RestartableThreads`); a thread
+still running is refused as before. Every other title keeps the rule above:
+the same two changes as a rule left 91 of the 96 local archives playing on
+after a park, where the rule leaves 94 and the exception brings back the other
+two. A park shorter than one of the two's loop takes to stop (`-park tick:0`
+in the CLI) lets its `startApp` turn the loop's flag back on before the old
+loop has seen it go off, and the old loop runs beside the one `startApp`
+starts, at double rate; from a 100 ms park both play on as unparked, and a
+park the page makes lasts at least a reconnect.
+
+The repaint after a resume resets the one screen Graphics while a title that
+draws through it from its own thread, pushing frames with `XDisplay.refresh`,
+can be drawing: each native handed that Graphics holds its state lock for the
+call, and the reset takes it too (`screenStateMu`), so the two take turns call
+by call. A thread that sets a clip and then draws can still find the paint's
+clip between the two calls, as a handset's threads could. A park of no length
+(`-park tick:0` in the CLI) leaves one Jlet's earlier timer thread running
+beside the one its `resumeApp` starts; a park the page makes gives that thread
+time to stop. See [the resume rule](history/skt.md#skt-resume-2026-11-10).
 
 Thread state belongs to the Thread object. Only active threads and the main
 thread remain roots; completion and failed starts preserve restart prohibition
-without retaining inactive roots. Untimed `Thread.join()` supports multiple
-waiters, interruption, and VM shutdown. Joining a live cooperative thread is
+without retaining inactive roots. A VM built with `RestartableThreads` starts a
+finished thread again on a fresh state, and the run that ended unregisters
+only itself, not a run started in the moment between. Untimed `Thread.join()`
+supports multiple waiters, interruption, and VM shutdown. Joining a live cooperative thread is
 explicitly unsupported. `VM.Close` does not wait for arbitrary Host native calls.
 
 Pause/resume callbacks and stopped Host ticks do not prove that every guest

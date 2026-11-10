@@ -160,11 +160,13 @@ func checkSharedJavaCheckpointContinuation(t *testing.T, s *Session, expected sh
 		if _, err := s.Tick(t.Context(), 0); !errors.Is(err, ErrPaused) {
 			t.Fatalf("restored paused session tick: %v", err)
 		}
+		// A started SKT title is resumed, not started again (resumeStarted),
+		// so the restored one keeps its single startApp.
 		if err := s.Resume(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		if got := sharedJavaCheckpointInt(t, s.sktRuntime().VM, "starts"); got != 2 {
-			t.Fatalf("explicit resume called startApp %d times, want 2 total", got)
+		if got := sharedJavaCheckpointInt(t, s.sktRuntime().VM, "starts"); got != 1 {
+			t.Fatalf("explicit resume left startApp run %d times, want only the first", got)
 		}
 	}
 	value, err := s.sktRuntime().VM.StaticField("CheckpointMIDlet", "worker", "Ljava/lang/Thread;")

@@ -38,7 +38,8 @@ import (
 //
 // The MIDlet's own lifecycle calls are deliberately not absorbed. MIDP says a
 // `startApp` that throws is a MIDlet that failed to start, and a start failure
-// is what a Host has to be told.
+// is what a Host has to be told. `resumeApp`, which MIDP does not have, is a
+// callback like the others (resumeStarted).
 type uncaughtCallbacks struct {
 	mu       sync.Mutex
 	recorded backend.UncaughtCallbacks

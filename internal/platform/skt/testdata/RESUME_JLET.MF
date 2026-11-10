@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+MIDlet-1: Resume Jlet Fixture, , ResumeJlet
+MIDlet-Name: Resume Jlet Fixture
+MIDlet-Version: 1.0
+MIDlet-Vendor: wfeature

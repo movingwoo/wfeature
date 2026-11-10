@@ -259,7 +259,8 @@ others take an absolute path.
 | `TestLocalSKTArchivesAnswerAKey` | `internal/platform/skt` | `WFEATURE_SKT_INTERACTIVE_ACCEPTANCE=1` | rung 3 |
 | `TestLocalSKTArchiveSoundsDecode` | `internal/platform/skt` | `WFEATURE_SKT_ACCEPTANCE=1` | every SMAF resource decodes |
 | `TestLocalClipCompatibilityArchive` | `internal/platform/skt` | `WFEATURE_SKT_CLIP_ARCHIVE` | registry entry `skt.inclusive_set_clip` |
-| `TestLocalResumeCompatibilityFingerprints` | `internal/platform/skt` | `WFEATURE_SKT_RESUME_ARCHIVES` | registry entry `skt.resume_without_start`, over comma-separated archives |
+| `TestLocalResumeCompatibilityFingerprints` | `internal/platform/skt` | `WFEATURE_SKT_RESUME_ARCHIVES` | registry entry `skt.resume_without_start`, over archives separated as `PATH` is |
+| `TestLocalResumeThroughStartFingerprints` | `internal/platform/skt` | `WFEATURE_SKT_RESUME_THROUGH_START_ARCHIVES` | registry fix `skt.resume_through_start`, over archives separated as `PATH` is |
 | `TestLocalTutorialCompatibilityFingerprint` | `internal/platform/skt` | `WFEATURE_SKT_TUTORIAL_ARCHIVE` | registry entry `skt.tutorial_name_cache` |
 | `TestLocalSKTArchiveCost` | `internal/platform/skt` | `WFEATURE_SKT_COST_ARCHIVE` | a run for the Go profiler ([JVM](jvm.md)) |
 | `TestLocalSKTCheckpoint` | `internal/session` | `WFEATURE_SKT_CHECKPOINT_ACCEPTANCE=1` | SKT checkpoints over the local archives ([SKT checkpoints](skt-checkpoints.md)) |
