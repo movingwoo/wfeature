@@ -128,6 +128,11 @@ type Runtime struct {
 	// stays usable after the paint returns. See screenGraphics.
 	screenGraphicsObject  *jvm.Object
 	screenGraphicsContext *graphicsContext
+	// screenStateMu keeps that Graphics' state — clip, translation, colour,
+	// font — to one caller at a time: a native that is handed it, for the
+	// length of the call, and the reset a paint starts with. Its pixels have
+	// renderMu as well. See lockingScreenGraphics.
+	screenStateMu sync.Mutex
 
 	fontMu sync.Mutex
 	fonts  map[fontKey]*jvm.Object
