@@ -352,11 +352,32 @@ func (runtime *Runtime) storageUsed() (int, error) {
 		return runtime.Hooks.StorageUsed()
 	}
 	// With nothing but the WIPI-C file table, the storage a program occupies
-	// is the bytes its open files hold over what the package shipped.
+	// is the bytes its files hold over what the package shipped: the files
+	// this session holds, and the saves earlier sessions stored that it has
+	// not opened, less the names it deleted. Counting only the open ones told
+	// a program its earlier saves took no room until it opened them.
 	used := 0
+	add := func(size, packaged int) {
+		if size > packaged {
+			used += size - packaged
+		}
+	}
 	for _, store := range runtime.CFiles {
-		if len(store.Data) > store.Packaged {
-			used += len(store.Data) - store.Packaged
+		add(len(store.Data), store.Packaged)
+	}
+	names, err := runtime.ListSaves(CFileScope)
+	if err != nil {
+		return 0, err
+	}
+	removed := runtime.RemovedDatabases()
+	for _, name := range names {
+		if _, open := runtime.CFiles[name]; open || removed[name] || ReservedStorageName(CFileScope, name) {
+			continue
+		}
+		if data, ok := runtime.LoadSave(CFileScope + "/" + name); ok {
+			// The packaged copy is the one an open would measure against.
+			packaged, _ := runtime.PackagedDatabase(name)
+			add(len(data), len(packaged))
 		}
 	}
 	return used, nil

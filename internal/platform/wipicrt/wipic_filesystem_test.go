@@ -439,3 +439,47 @@ func TestStatAfterRemoveReportsNoFile(t *testing.T) {
 		t.Fatalf("stat after the delete = %#x, want M_E_NOENT", got)
 	}
 }
+
+// TestFreeSpaceCountsTheSavesOfEarlierSessions holds MC_fsAvailable to
+// docs/wipi-storage.md: the budget less what the title has stored, whichever
+// session stored it, each file less the archive's copy of the same name. A
+// platform with no count of its own, the SKT Clet, counted only the files this
+// session had opened, so a program that asked before opening its save was told
+// the save took no room.
+func TestFreeSpaceCountsTheSavesOfEarlierSessions(t *testing.T) {
+	saves := t.TempDir()
+	packaged := func(client *wipicrt.Client) {
+		client.Files = map[string][]byte{"level.dat": make([]byte, 400)}
+	}
+	_, first := wipicrttest.NewRuntimeWith(t, armcore.CoreOptions{}, packaged)
+	first.Client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
+	for name, size := range map[string]int{"save.dat": 1000, "level.dat": 1000, "gone.dat": 300} {
+		if handle := int32(wipicrttest.DatabaseCall(t, first, wipicrt.WIPICFileOpen, name, 4)); handle < 0 {
+			t.Fatalf("open %s for creation = %d", name, handle)
+		}
+		first.CFiles[name].Data = make([]byte, size)
+		if err := first.CFiles[name].Persist(first); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := wipicrttest.DatabaseCall(t, first, wipicrt.WIPICFileDelete, "gone.dat", 1); got != 0 {
+		t.Fatalf("delete = %#x", got)
+	}
+
+	_, second := wipicrttest.NewRuntimeWith(t, armcore.CoreOptions{}, packaged)
+	second.Client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
+	// save.dat whole, level.dat over the 400 bytes the archive ships, and
+	// nothing of the deleted gone.dat.
+	const want = wipicrt.WIPICFileStorageLimit - 1000 - 600
+	if got := wipicrttest.DatabaseCall(t, second, wipicrt.WIPICFileAvailable, ""); got != want {
+		t.Fatalf("free space before the saves are opened = %d, want %d", got, want)
+	}
+	for _, name := range []string{"save.dat", "level.dat"} {
+		if handle := int32(wipicrttest.DatabaseCall(t, second, wipicrt.WIPICFileOpen, name, 1)); handle < 0 {
+			t.Fatalf("%s does not open: %d", name, handle)
+		}
+		if got := wipicrttest.DatabaseCall(t, second, wipicrt.WIPICFileAvailable, ""); got != want {
+			t.Fatalf("free space once %s is open = %d, want %d", name, got, want)
+		}
+	}
+}
