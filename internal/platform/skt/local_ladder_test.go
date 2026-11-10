@@ -102,27 +102,24 @@ var localLadderKeys = []struct {
 func TestLocalSKTArchivesSustainAFrame(t *testing.T) {
 	testlocal.Enabled(t, "WFEATURE_SKT_SUSTAINED_ACCEPTANCE", "run ignored local SKT archives past their first frame")
 	sustain := testlocal.Int(t, "WFEATURE_SKT_SUSTAIN_TICKS", localLadderSustainTicks)
-	eachLocalSKTArchive(t, func(t *testing.T, session *skt.Runtime, framebuffer *backend.MemoryFramebuffer) {
-		painted, ticks, why := tickToFirstFrame(t, session, framebuffer)
+	eachLocalSKTArchive(t, func(t *testing.T, title probeTitle) {
+		painted, ticks, why := tickToFirstFrame(t, title)
 		if !painted {
 			// The boot rung below already reports this archive, and reporting
 			// it twice would count one defect as two.
 			t.Skipf("%s in %d ticks, which the boot rung below this one reports", why, ticks)
 		}
-		_, before := framebuffer.Snapshot()
+		_, before := title.presented()
 		for tick := 0; tick < sustain; tick++ {
-			if state := session.State(); state == skt.StateDestroyed {
-				t.Fatalf("the MIDlet destroyed itself %d ticks after its first frame", tick)
-			} else if state == skt.StateError {
-				t.Fatalf("the MIDlet ended in error %d ticks after its first frame: %v", tick, session.Summary().Error)
+			if why := title.ended(); why != "" {
+				t.Fatalf("%s %d ticks after its first frame", why, tick)
 			}
-			session.AdvanceAudio()
-			if err := session.RunPending(); err != nil {
+			if err := title.tick(); err != nil {
 				t.Fatalf("tick %d after the first frame: %v", tick, err)
 			}
 			time.Sleep(localLadderTickPause)
 		}
-		_, after := framebuffer.Snapshot()
+		_, after := title.presented()
 		// A title that is still presenting is drawing; one that is not may be
 		// running a loop that draws only when something changes, so this is
 		// logged rather than required.
@@ -137,12 +134,12 @@ func TestLocalSKTArchivesSustainAFrame(t *testing.T) {
 func TestLocalSKTArchivesAnswerAKey(t *testing.T) {
 	testlocal.Enabled(t, "WFEATURE_SKT_INTERACTIVE_ACCEPTANCE", "send keys to ignored local SKT archives")
 	hold := testlocal.Int(t, "WFEATURE_SKT_HOLD_TICKS", localLadderHoldTicks)
-	eachLocalSKTArchive(t, func(t *testing.T, session *skt.Runtime, framebuffer *backend.MemoryFramebuffer) {
-		painted, ticks, why := tickToFirstFrame(t, session, framebuffer)
+	eachLocalSKTArchive(t, func(t *testing.T, title probeTitle) {
+		painted, ticks, why := tickToFirstFrame(t, title)
 		if !painted {
 			t.Skipf("%s in %d ticks, which the boot rung below this one reports", why, ticks)
 		}
-		_, presented := framebuffer.Snapshot()
+		_, presented := title.presented()
 		// The screen is settled and asked, and if it answers nothing and then
 		// moves on its own, the screen it moved to is settled and asked in
 		// turn: a title whose opening outlasts the press window answered
@@ -152,7 +149,7 @@ func TestLocalSKTArchivesAnswerAKey(t *testing.T) {
 		rounds, moved := 0, 0
 		for round := 1; round <= ladder.SettleRounds; round++ {
 			rounds = round
-			screen, settled, waited := tickUntilSettled(t, session, framebuffer)
+			screen, settled, waited := tickUntilSettled(t, title)
 			if !settled {
 				t.Skipf("%s", screen.Unsettled(waited))
 			}
@@ -160,12 +157,12 @@ func TestLocalSKTArchivesAnswerAKey(t *testing.T) {
 			answered := false
 			for _, key := range localLadderKeys {
 				tried = append(tried, key.name)
-				changed, after, err := pressAndWatch(t, session, framebuffer, key.code, screen, hold)
+				changed, after, err := pressAndWatch(t, title, key.code, screen, hold)
 				if err != nil {
 					t.Fatalf("holding %s: %v", key.name, err)
 				}
 				if changed {
-					_, now := framebuffer.Snapshot()
+					_, now := title.presented()
 					t.Logf("%s changed the screen after %d ticks (settled after %d on round %d of %d, %d screens into its opening, presented %d → %d)",
 						key.name, after, waited, round, ladder.SettleRounds, moved, presented, now)
 					answered = true
@@ -178,12 +175,12 @@ func TestLocalSKTArchivesAnswerAKey(t *testing.T) {
 			if round == ladder.SettleRounds {
 				break
 			}
-			if !tickUntilScreenMoves(t, session, framebuffer, screen, localLadderOpeningTicks) {
+			if !tickUntilScreenMoves(t, title, screen, localLadderOpeningTicks) {
 				break
 			}
 			moved++
 		}
-		_, now := framebuffer.Snapshot()
+		_, now := title.presented()
 		t.Fatalf("no key changed the screen%s: tried %s, held %d ticks each over %d settled %s, %d presents since it settled",
 			ladder.OpeningMovedOn(moved, localLadderOpeningTicks), strings.Join(tried, ", "), hold, rounds, ladder.Screens(rounds), now-presented)
 	})
@@ -192,15 +189,14 @@ func TestLocalSKTArchivesAnswerAKey(t *testing.T) {
 // tickUntilScreenMoves ticks with nothing held and reports whether the screen
 // leaves the set it settled on. That is a title whose opening is still
 // running: what it moves to is a screen the rung has not asked yet.
-func tickUntilScreenMoves(t *testing.T, session *skt.Runtime, framebuffer *backend.MemoryFramebuffer, screen *ladder.Watcher, budget int) bool {
+func tickUntilScreenMoves(t *testing.T, title probeTitle, screen *ladder.Watcher, budget int) bool {
 	t.Helper()
 	for waited := 0; waited < budget; waited++ {
-		session.AdvanceAudio()
-		if err := session.RunPending(); err != nil {
+		if err := title.tick(); err != nil {
 			return false
 		}
 		time.Sleep(localLadderTickPause)
-		if screen.Changed(presentedFrame(framebuffer)) {
+		if screen.Changed(presentedFrame(title)) {
 			return true
 		}
 	}
@@ -211,7 +207,7 @@ func tickUntilScreenMoves(t *testing.T, session *skt.Runtime, framebuffer *backe
 // front of it, so a rung is written as the question it asks rather than as
 // another copy of the walk to it. One subtest per archive is what lets a
 // report name the archive a refusal came from.
-func eachLocalSKTArchive(t *testing.T, ask func(t *testing.T, session *skt.Runtime, framebuffer *backend.MemoryFramebuffer)) {
+func eachLocalSKTArchive(t *testing.T, ask func(t *testing.T, title probeTitle)) {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
@@ -234,23 +230,11 @@ func eachLocalSKTArchive(t *testing.T, ask func(t *testing.T, session *skt.Runti
 			if err != nil {
 				t.Fatalf("read archive: %v", err)
 			}
-			archive, err := skt.Open(data)
-			if err != nil {
-				t.Fatalf("open archive: %v", err)
-			}
-			framebuffer := localProbeFramebuffer(t, archive)
-			// Saves go to the test's own directory: these rungs run long
-			// enough for a title to reach a write, and a probe must not read
-			// or write the progress a person made playing.
-			session, err := skt.Start(archive, skt.Options{
-				Framebuffer: framebuffer,
-				SaveStore:   backend.NewDirectorySaveStore(t.TempDir()),
-			})
-			if err != nil {
-				t.Fatalf("start: %v", err)
-			}
-			defer session.Destroy(true)
-			ask(t, session, framebuffer)
+			// These rungs run long enough for a title to reach a write, and
+			// startProbeTitle keeps its saves to this test.
+			title := startProbeTitle(t, data)
+			defer title.close()
+			ask(t, title)
 		})
 		ran++
 	}
@@ -290,7 +274,7 @@ func localProbeFramebuffer(t *testing.T, archive *skt.Archive) *backend.MemoryFr
 // covers a title that ran out of ticks, a title that ended itself, and a title
 // whose first tick refused, and a rung that reported all three the same way
 // would send whoever read it to the wrong place.
-func tickToFirstFrame(t *testing.T, session *skt.Runtime, framebuffer *backend.MemoryFramebuffer) (painted bool, ticks int, why string) {
+func tickToFirstFrame(t *testing.T, title probeTitle) (painted bool, ticks int, why string) {
 	t.Helper()
 	for ; ticks < localLadderBootTicks; ticks++ {
 		// The frame is looked at before the state, because a title can paint
@@ -298,19 +282,15 @@ func tickToFirstFrame(t *testing.T, session *skt.Runtime, framebuffer *backend.M
 		// a screen up and destroys itself has painted. The boot rung below
 		// counts that as a frame, so this must agree with it or the two rungs
 		// would disagree about the same archive.
-		frame, presents := framebuffer.Snapshot()
+		frame, presents := title.presented()
 		if presents > 0 && litPixels(frame) > 0 {
 			return true, ticks, ""
 		}
-		switch state := session.State(); state {
-		case skt.StateDestroyed:
-			return false, ticks, "the MIDlet destroyed itself before it painted"
-		case skt.StateError:
-			return false, ticks, fmt.Sprintf("the MIDlet ended in error before it painted: %v", session.Summary().Error)
+		if why := title.ended(); why != "" {
+			return false, ticks, why + " before it painted"
 		}
-		session.AdvanceAudio()
-		if err := session.RunPending(); err != nil {
-			return false, ticks, fmt.Sprintf("the MIDlet refused a tick before it painted: %v", err)
+		if err := title.tick(); err != nil {
+			return false, ticks, fmt.Sprintf("the title refused a tick before it painted: %v", err)
 		}
 		time.Sleep(localLadderTickPause)
 	}
@@ -319,17 +299,16 @@ func tickToFirstFrame(t *testing.T, session *skt.Runtime, framebuffer *backend.M
 
 // tickUntilSettled waits for the screen to stop changing on its own, by the
 // judgment all three platforms share.
-func tickUntilSettled(t *testing.T, session *skt.Runtime, framebuffer *backend.MemoryFramebuffer) (screen *ladder.Watcher, settled bool, waited int) {
+func tickUntilSettled(t *testing.T, title probeTitle) (screen *ladder.Watcher, settled bool, waited int) {
 	t.Helper()
 	screen = &ladder.Watcher{}
-	screen.Observe(presentedFrame(framebuffer))
+	screen.Observe(presentedFrame(title))
 	for ; waited < localLadderSettleLimit; waited++ {
-		session.AdvanceAudio()
-		if err := session.RunPending(); err != nil {
+		if err := title.tick(); err != nil {
 			return screen, false, waited
 		}
 		time.Sleep(localLadderTickPause)
-		if screen.Observe(presentedFrame(framebuffer)) {
+		if screen.Observe(presentedFrame(title)) {
 			return screen, true, waited
 		}
 	}
@@ -340,8 +319,8 @@ func tickUntilSettled(t *testing.T, session *skt.Runtime, framebuffer *backend.M
 // rather than compared, because what a settled screen is compared against is a
 // set of frames rather than one of them: a blinking prompt is settled and half
 // its ticks differ from the other half.
-func presentedFrame(framebuffer *backend.MemoryFramebuffer) uint64 {
-	frame, _ := framebuffer.Snapshot()
+func presentedFrame(title probeTitle) uint64 {
+	frame, _ := title.presented()
 	return ladder.Digest(frame.RGBA)
 }
 
@@ -349,21 +328,20 @@ func presentedFrame(framebuffer *backend.MemoryFramebuffer) uint64 {
 // draws content the settled screen never held. The comparison is against the
 // set the screen was cycling through rather than against one frame of it: a
 // blinking prompt differs from any single frame of itself.
-func pressAndWatch(t *testing.T, session *skt.Runtime, framebuffer *backend.MemoryFramebuffer, key int32, screen *ladder.Watcher, hold int) (bool, int, error) {
+func pressAndWatch(t *testing.T, title probeTitle, key int32, screen *ladder.Watcher, hold int) (bool, int, error) {
 	t.Helper()
-	if err := session.SendKey(skt.KeyPressed, key); err != nil {
+	if err := title.key(true, key); err != nil {
 		return false, 0, err
 	}
 	elapsed := 0
 	watch := func(ticks int) (bool, error) {
 		for index := 0; index < ticks; index++ {
-			session.AdvanceAudio()
-			if err := session.RunPending(); err != nil {
+			if err := title.tick(); err != nil {
 				return false, err
 			}
 			time.Sleep(localLadderTickPause)
 			elapsed++
-			if screen.Changed(presentedFrame(framebuffer)) {
+			if screen.Changed(presentedFrame(title)) {
 				return true, nil
 			}
 		}
@@ -373,7 +351,7 @@ func pressAndWatch(t *testing.T, session *skt.Runtime, framebuffer *backend.Memo
 	if err != nil {
 		return false, elapsed, err
 	}
-	if releaseErr := session.SendKey(skt.KeyReleased, key); releaseErr != nil && !changed {
+	if releaseErr := title.key(false, key); releaseErr != nil && !changed {
 		return false, elapsed, releaseErr
 	}
 	if changed {

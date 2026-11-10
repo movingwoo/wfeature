@@ -51,38 +51,25 @@ func TestLocalSKTArchivesBootAndPaint(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read archive: %v", err)
 			}
-			archive, err := skt.Open(data)
-			if err != nil {
-				t.Fatalf("open archive: %v", err)
-			}
-			framebuffer := localProbeFramebuffer(t, archive)
-			// Saves go to the test's own directory: a probe must not read or
-			// write the progress a person made playing.
-			session, err := skt.Start(archive, skt.Options{
-				Framebuffer: framebuffer,
-				SaveStore:   backend.NewDirectorySaveStore(t.TempDir()),
-			})
-			if err != nil {
-				t.Fatalf("start: %v", err)
-			}
-			defer session.Destroy(true)
+			// A MIDlet, or a native program the SKT Clet engine runs; saves go
+			// to the test's own directory (startProbeTitle).
+			title := startProbeTitle(t, data)
+			defer title.close()
 
 			for tick := 0; tick < localAcceptanceTicks; tick++ {
-				state := session.State()
-				if state == skt.StateDestroyed || state == skt.StateError {
+				if title.ended() != "" {
 					break
 				}
-				session.AdvanceAudio()
-				if err := session.RunPending(); err != nil {
+				if err := title.tick(); err != nil {
 					t.Fatalf("tick %d: %v", tick, err)
 				}
 				time.Sleep(16 * time.Millisecond)
 			}
-			if state := session.State(); state == skt.StateError {
-				t.Fatalf("the MIDlet ended in error: %v", session.Summary().Error)
+			if why := title.ended(); strings.Contains(why, "in error") {
+				t.Fatal(why)
 			}
 
-			frame, _ := framebuffer.Snapshot()
+			frame, _ := title.presented()
 			lit := 0
 			for offset := 0; offset+3 < len(frame.RGBA); offset += 4 {
 				if frame.RGBA[offset] != 0 || frame.RGBA[offset+1] != 0 || frame.RGBA[offset+2] != 0 {

@@ -323,6 +323,9 @@ func TestLocalKTFArchivesConstructMainClass(t *testing.T) {
 			if err := runClientEntry(context.Background(), client); err != nil {
 				t.Fatal(err)
 			}
+			// As startSession does: the constructor is the first Host service
+			// call, under the allowance every later one gets.
+			defer client.BeginHostService(context.Background())()
 			object, constructed, err := client.NewObject(context.Background(), archive.Descriptor.MainClass, "()V")
 			if err != nil {
 				t.Fatal(withDiagnosticCounts(client.runtime.DiagnosticCounts(), 2000,
@@ -386,6 +389,12 @@ func TestLocalKTFArchivesStartMainClass(t *testing.T) {
 			if err := runClientEntry(context.Background(), client); err != nil {
 				t.Fatal(err)
 			}
+			// As startSession does: the constructor and startApp are the first
+			// Host service call, under the allowance every later one gets. A
+			// title that unpacks its resources in startApp needs more than the
+			// single window a bounded run has, and this probe called two such
+			// titles broken while a session started them.
+			defer client.BeginHostService(context.Background())()
 			object, _, err := client.NewObject(context.Background(), archive.Descriptor.MainClass, "()V")
 			if err != nil {
 				t.Fatal(withDiagnosticCounts(client.runtime.DiagnosticCounts(), 2000, "construct: %v", err))

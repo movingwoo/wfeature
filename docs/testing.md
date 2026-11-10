@@ -301,7 +301,11 @@ WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchivesBootAndPaint -v ./int
 | SKT | — | sound | `TestLocalSKTArchiveSoundsDecode` | `WFEATURE_SKT_ACCEPTANCE` |
 
 The sound stage asks whether every SMAF resource decodes; it is not a rung, so
-a title whose sounds fail has not fallen down the ladder. The interactive
+a title whose sounds fail has not fallen down the ladder. The KTF construct
+and start rungs run the constructor and `startApp` under the Host service
+allowance, as `startSession` does. The SKT rungs drive an archive whose
+executable is a native `.daf` program through the session a Host starts it
+with (the SKT Clet engine), and a MIDlet as before. The interactive
 judgment (settle, hold, release, compare, and *unanswerable* when the screen
 never settles) and the rules for settling again and for a second launch live in
 `internal/ladder`, shared by all three platforms.
