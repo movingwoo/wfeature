@@ -129,6 +129,16 @@ type Options struct {
 	// whose guest threads share one cooperative execution core queue the
 	// thread object for their own service loop instead.
 	GuestThreadStarter func(thread *Object) error
+	// RestartableThreads lets Thread.start run a thread again once its run()
+	// has returned. The language refuses a second start with
+	// IllegalThreadStateException, and so does this runtime unless a platform
+	// selects this for a code revision written for a handset VM that allowed
+	// it: one whose startApp starts again, on the same Thread object, the loop
+	// its pauseApp ended. The second run starts as a new thread would, not
+	// interrupted and with nothing of the first run left; a thread still alive
+	// is refused as before. A platform whose GuestThreadStarter keeps its own
+	// record of a thread has to expect the same object a second time.
+	RestartableThreads bool
 	// RenewSteps is asked whether an execution that has spent MaxSteps may have
 	// another window. Without it MaxSteps is a ceiling on one execution, which
 	// is the right answer for a Host call that should not run away and the
