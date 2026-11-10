@@ -25,7 +25,10 @@ the state and unrelated threads keep private values. KTF uses it for Java
 exception-handler heads.
 
 Default quanta contain 1,000 instructions and the default run ceiling is
-1,000,000, both configurable through `CoreOptions`. Cancellation is checked
+1,000,000, both configurable through `CoreOptions`. The KTF, LGT and SKT Clet
+platforms set 16,384: their guests run long stretches between platform calls,
+and a yield every thousand instructions cost them scheduler wakeups
+([history](history/armcore.md#ktf-quantum-2026-11-10)). Cancellation is checked
 between quanta. A thread's `SetStepBudget` and `SetLimitHook` support bounded
 execution windows and parking without discarding the suspended call stack:
 returning nil from the hook grants the next window, and the hook may block.
@@ -51,7 +54,10 @@ bounded:
 - `CaptureState` / `NewCoreFromState`: mappings, committed pages (at most
   512 MiB), registered thread-local words (at most 4,096), and step counters.
   Decode caches and Host callbacks are omitted, and the platform must stop all
-  execution and memory producers before capture.
+  execution and memory producers before capture. A restore refuses a record
+  saved under another step ceiling, so a record cannot grant itself a larger
+  one, and runs a record saved at another quantum at its own: nothing in the
+  record depends on how often the saving core yielded.
 - `CaptureRootThread` / `RestoreRootThread`: a logical thread whose execution
   lives in derived calls. Its instruction budget is checked against Host policy
   on restore.

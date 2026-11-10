@@ -178,3 +178,39 @@ func TestCoreStateRejectsInvalidMemoryBeforeAdoption(t *testing.T) {
 		})
 	}
 }
+
+// **The quantum is the restoring core's, not the record's.** A record saved by
+// a core that yielded every thousand instructions restores on one that yields
+// every 16,384 with its memory and step count, and runs at the restoring
+// core's quantum; a different step limit is still refused.
+func TestACoreStateSavedAtAnotherQuantumRestoresAtTheCoresOwn(t *testing.T) {
+	saving := NewCore(CoreOptions{MaxSteps: 5000, Quantum: 1000})
+	if err := saving.Memory().Map(0x1000, 4096, PermissionReadWrite); err != nil {
+		t.Fatal(err)
+	}
+	if err := saving.Memory().Write(0x1000, []byte{42}); err != nil {
+		t.Fatal(err)
+	}
+	saving.steps.Store(1234)
+	state, err := saving.CaptureState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Quantum != 1000 {
+		t.Fatalf("recorded quantum = %d, want 1000", state.Quantum)
+	}
+	restored, err := NewCoreFromState(state, CoreOptions{MaxSteps: 5000, Quantum: 16384})
+	if err != nil {
+		t.Fatalf("a record saved at another quantum was refused: %v", err)
+	}
+	if restored.quantum != 16384 {
+		t.Fatalf("restored core runs at quantum %d, want its own 16384", restored.quantum)
+	}
+	value := make([]byte, 1)
+	if err := restored.Memory().Read(0x1000, value); err != nil || value[0] != 42 || restored.Steps() != 1234 {
+		t.Fatalf("restored memory %v (%v), steps %d", value, err, restored.Steps())
+	}
+	if again, err := NewCoreFromState(state, CoreOptions{MaxSteps: 6000, Quantum: 16384}); err == nil || again != nil {
+		t.Fatal("a record was restored under a step limit it was not saved with")
+	}
+}

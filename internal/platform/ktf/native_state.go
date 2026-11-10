@@ -397,7 +397,7 @@ func restoreNativeState(archive *NativeArchive, saved nativeState, options Nativ
 	if steps == 0 {
 		steps = nativeSessionDefaultMaxSteps
 	}
-	client, err := LoadNativeClient(archive, armcore.CoreOptions{MaxSteps: steps})
+	client, err := LoadNativeClient(archive, armcore.CoreOptions{MaxSteps: steps, Quantum: ktfQuantum})
 	if err != nil {
 		return nil, err
 	}
@@ -413,7 +413,7 @@ func restoreNativeState(archive *NativeArchive, saved nativeState, options Nativ
 	if !slices.Equal(saved.Core.Memory.Mappings, expected.Memory.Mappings) {
 		return nil, fmt.Errorf("KTF native checkpoint changes memory mapping policy")
 	}
-	core, err := armcore.NewCoreFromState(saved.Core, armcore.CoreOptions{MaxSteps: steps})
+	core, err := armcore.NewCoreFromState(saved.Core, armcore.CoreOptions{MaxSteps: steps, Quantum: ktfQuantum})
 	if err != nil {
 		return nil, err
 	}
