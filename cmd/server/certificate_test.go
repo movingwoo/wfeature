@@ -283,7 +283,7 @@ func TestThePageAndItsSessionAreServedOverHTTPS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secure := tls.NewListener(plain, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12})
+	secure := secureListener(plain, certificate)
 	requested := make(chan struct{})
 	served := make(chan error, 1)
 	go func() { served <- serve(listener, secure, handler, logger, requested) }()

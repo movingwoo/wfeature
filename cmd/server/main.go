@@ -10,7 +10,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -306,9 +305,7 @@ func listenSecurely(value, address, dir string, logger *slog.Logger) (net.Listen
 	if err != nil {
 		return fail(err)
 	}
-	// HTTP/1.1 only: the session is a WebSocket upgrade, which HTTP/2 here
-	// would not carry.
-	return tls.NewListener(plain, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}), nil
+	return secureListener(plain, certificate), nil
 }
 
 // openWhenServing shows the page once the port answers. A launcher used to

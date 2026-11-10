@@ -164,9 +164,15 @@ with a warning in the log while plain HTTP goes on. Moving the plain port with
 `-addr :11542` moves the automatic HTTPS one to `:11642`. `-https 11700` puts it
 on that port, `-https 192.168.0.5:11700` on that address, `-https off` turns it
 off; a port or address given is required, and a server that cannot open it
-does not start. The startup log names where both listen
-(`url=http://[::]:11541 https=https://[::]:11641`) and, on the next line, the
-addresses another device on the same network opens
+does not start. Plain HTTP that reaches the HTTPS port — a phone's browser
+puts `http://` in front of `192.168.0.60:11641` typed without a scheme — is
+redirected to the same address over HTTPS (`301`, or `308` for a method other
+than GET and HEAD), where the standard library would answer `400` and an
+English line. The redirect names the port the request reached, wherever
+`-addr`, `-https` or `WFEATURE_HTTPS_PORT` put it; an address typed without a
+port (`-https 80`) keeps that port rather than becoming 443. The startup log
+names where both listen (`url=http://[::]:11541 https=https://[::]:11641`)
+and, on the next line, the addresses another device on the same network opens
 (`open from another device on the same network`); `status` names the HTTPS one
 too:
 
