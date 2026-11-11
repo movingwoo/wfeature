@@ -279,6 +279,22 @@ func (runtime *Runtime) InvalidateClip(state *ClipState) {
 // names may carry a leading slash that the mounted names do not. A removed
 // path resolves to none of the three.
 func (runtime *Runtime) GuestFile(name string) ([]byte, bool) {
+	return runtime.guestFileThrough(name, runtime.LoadSave)
+}
+
+// GuestFileForSpace is GuestFile for the space a title is told it has: the
+// save is read through ReadSaveForSpace, so one that cannot be read, or that
+// is past the bound on a file, is no file here and ends nothing. The removal
+// list it consults is still read through LoadSave, as every list a later write
+// is built on is (docs/wipi-storage.md, Space).
+func (runtime *Runtime) GuestFileForSpace(name string) ([]byte, bool) {
+	return runtime.guestFileThrough(name, func(key string) ([]byte, bool) {
+		data, present, over := runtime.ReadSaveForSpace(key, MaxCFileBytes)
+		return data, present && !over
+	})
+}
+
+func (runtime *Runtime) guestFileThrough(name string, load func(string) ([]byte, bool)) ([]byte, bool) {
 	if runtime.RemovedGuestFiles()[strings.TrimPrefix(name, "/")] {
 		return nil, false
 	}
@@ -287,7 +303,7 @@ func (runtime *Runtime) GuestFile(name string) ([]byte, bool) {
 			return data, true
 		}
 	}
-	if data, exists := runtime.LoadSave("fs/" + strings.TrimPrefix(name, "/")); exists {
+	if data, exists := load("fs/" + strings.TrimPrefix(name, "/")); exists {
 		return data, true
 	}
 	for _, candidate := range []string{name, strings.TrimPrefix(name, "/")} {
@@ -386,7 +402,7 @@ func (runtime *Runtime) storageUsed() (int, error) {
 //
 // A save is read for the figure only (ReadSaveForSpace): one that cannot be
 // read counts nothing and ends nothing, and one past the bound on a file
-// counts the bound.
+// counts the whole bound, with nothing the archive ships taken from it.
 func (runtime *Runtime) AddStoredFiles(scope string, held, removed map[string]bool, add func(size, packaged int)) error {
 	names, err := runtime.ListSaves(scope)
 	if err != nil {
@@ -401,7 +417,8 @@ func (runtime *Runtime) AddStoredFiles(scope string, held, removed map[string]bo
 		data, present, over := runtime.ReadSaveForSpace(scope+"/"+name, MaxCFileBytes)
 		switch {
 		case over:
-			add(MaxCFileBytes, len(runtime.Client.Files[name]))
+			// At least the bound, which nothing shipped is taken from.
+			add(MaxCFileBytes, 0)
 		case present:
 			add(len(data), len(runtime.Client.Files[name]))
 		}

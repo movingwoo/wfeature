@@ -102,9 +102,12 @@ func (runtime *Runtime) LoadSave(name string) ([]byte, bool) {
 // The lists a later write is built on, such as the removal list, are still
 // read through LoadSave.
 //
-// And it reads at most limit bytes. A save past that is answered as over, with
-// no bytes, for the caller to count at the limit, which is past the budget
-// already.
+// And it reads at most limit bytes from a store that can bound a read
+// (backend.SaveLimitReader, as DirectorySaveStore is). A store that cannot,
+// such as one that wraps another to decode what it holds, is read whole and
+// measured after, as backend.ReadSaveLimit reads it. A save past the limit is
+// answered as over, with no bytes, for the caller to count at the limit, which
+// is past the budget already.
 func (runtime *Runtime) ReadSaveForSpace(key string, limit int) (data []byte, present, over bool) {
 	data, present, err := backend.ReadSaveLimit(runtime.Client.SaveStore, key, int64(limit))
 	switch {

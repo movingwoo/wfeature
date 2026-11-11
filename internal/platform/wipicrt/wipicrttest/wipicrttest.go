@@ -355,6 +355,10 @@ type UnreadableSaves struct {
 	// Keys are the save keys, scope included ("db/slot3.dat"), whose reads
 	// fail.
 	Keys map[string]bool
+	// Whole are the keys whose whole read fails while a read bounded by a
+	// limit (ReadSaveLimit) does not: what pins a read that may only go as
+	// far as the limit.
+	Whole map[string]bool
 }
 
 func (store UnreadableSaves) refuse(name string) error {
@@ -367,9 +371,9 @@ func (store UnreadableSaves) LoadSave(name string) ([]byte, bool) {
 	return data, found && err == nil
 }
 
-// ReadSave fails for a named key.
+// ReadSave fails for a named key, and for one only a bounded read may reach.
 func (store UnreadableSaves) ReadSave(name string) ([]byte, bool, error) {
-	if store.Keys[name] {
+	if store.Keys[name] || store.Whole[name] {
 		return nil, false, store.refuse(name)
 	}
 	return store.DirectorySaveStore.ReadSave(name)

@@ -470,6 +470,12 @@ func TestStorageContractCSpaceSkipsASaveItCannotRead(t *testing.T) {
 	if next.saveReadError != nil {
 		t.Fatalf("the read for the figure was kept as a failed save read: %v", next.saveReadError)
 	}
+	// Nor is it kept as the save's size: once the store reads the save again,
+	// the next question counts it.
+	store.unreadable = ""
+	if got := int32(callSlot(t, next, slotFsAvailable)); got != quota-1500 {
+		t.Fatalf("once the save reads again %d is available, want %d", got, quota-1500)
+	}
 	newContractFiles(t, next).save("after.dat", "kept")
 	if got := store.held("fs/after.dat"); got != "kept" {
 		t.Fatalf("a save after the question holds %q", got)

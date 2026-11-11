@@ -239,6 +239,9 @@ func TestSpaceCountsASaveOnceAndSkipsOneItCannotRead(t *testing.T) {
 		"db/slot3.dat": make([]byte, 500),
 		"rdb/scores":   wipicrt.EncodeSaveRecords([][]byte{make([]byte, 200)}),
 		"rdb/broken":   wipicrt.EncodeSaveRecords([][]byte{make([]byte, 300)}),
+		// A Java file named as the database's data file, which is where its
+		// packaged copy is looked for.
+		"fs/scores.db": make([]byte, 50),
 	} {
 		if err := store.StoreSave(key, data); err != nil {
 			t.Fatal(err)
@@ -246,7 +249,7 @@ func TestSpaceCountsASaveOnceAndSkipsOneItCannotRead(t *testing.T) {
 	}
 	runtime.client.SaveStore = wipicrttest.UnreadableSaves{
 		DirectorySaveStore: store,
-		Keys:               map[string]bool{"db/slot3.dat": true, "rdb/broken": true},
+		Keys:               map[string]bool{"db/slot3.dat": true, "rdb/broken": true, "fs/scores.db": true},
 	}
 	if handle := int32(wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileOpen, "./save.dat", 1)); handle < 0 {
 		t.Fatalf("./save.dat does not open: %d", handle)
@@ -257,7 +260,7 @@ func TestSpaceCountsASaveOnceAndSkipsOneItCannotRead(t *testing.T) {
 		t.Fatalf("MC_fsAvailable = %v: a save it only measures ended the call", err)
 	}
 	if want := uint32(wipicrt.StorageBudget - 1000 - 200); got != want {
-		t.Fatalf("MC_fsAvailable = %d, want %d: save.dat once, the readable database, and nothing of the two that cannot be read", got, want)
+		t.Fatalf("MC_fsAvailable = %d, want %d: save.dat once, the readable database, and nothing of the three that cannot be read", got, want)
 	}
 	if runtime.SaveReadError != nil {
 		t.Fatalf("the space read was kept as a failed save read: %v", runtime.SaveReadError)

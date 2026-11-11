@@ -566,8 +566,16 @@ func TestFreeSpaceIsAnsweredWhenAnUnopenedSaveCannotBeRead(t *testing.T) {
 		t.Fatalf("a save after the space query is refused: %v", err)
 	}
 
+	// A save past the bound on one file counts at least the bound, and is read
+	// only as far as the bound: this store refuses to read it whole, and a
+	// whole read would have counted nothing of it.
 	if err := wipicrt.NewDirectorySaveStore(saves).StoreSave("db/huge.dat", make([]byte, wipicrt.MaxCFileBytes+1)); err != nil {
 		t.Fatal(err)
+	}
+	second.Client.SaveStore = wipicrttest.UnreadableSaves{
+		DirectorySaveStore: wipicrt.NewDirectorySaveStore(saves),
+		Keys:               map[string]bool{"db/slot3.dat": true},
+		Whole:              map[string]bool{"db/huge.dat": true},
 	}
 	if got, err := second.HandleWIPICCall(thread, available); err != nil || got != 0 {
 		t.Fatalf("MC_fsAvailable beside a save past the bound on one file = %d, %v; want 0", got, err)

@@ -74,8 +74,13 @@ func (runtime *initializationRuntime) platformStorageUsed() (int, error) {
 	// file as a database record — one keeps 1.4 MB of its own data so — had
 	// that whole file counted, was told it had no room left, and refused to
 	// start (docs/history/ktf.md#ktf-storage-review-2026-10-22).
+	//
+	// Its files are read for the figure only (GuestFileForSpace), as the saves
+	// below are: a Java file of the database's name that an earlier session
+	// wrote and that cannot be read ended the question, through GuestFile,
+	// after the saves themselves had stopped ending it.
 	packagedBytes := func(name string) int {
-		if records, ok := runtime.packagedRecordDatabase(name, 0); ok {
+		if records, ok := runtime.packagedRecordDatabaseThrough(name, 0, runtime.GuestFileForSpace); ok {
 			return recordBytes(records)
 		}
 		return len(runtime.client.Files[strings.TrimPrefix(name, "/")])
@@ -107,7 +112,8 @@ func (runtime *initializationRuntime) platformStorageUsed() (int, error) {
 			// Read for the figure only, as a file is (ReadSaveForSpace).
 			data, present, over := runtime.ReadSaveForSpace(scope.name+"/"+name, maxStoredDatabaseForm)
 			if over {
-				add(maxStoredBytes, packagedBytes(name))
+				// At least the bound, which nothing shipped is taken from.
+				add(maxStoredBytes, 0)
 				continue
 			}
 			if !present {

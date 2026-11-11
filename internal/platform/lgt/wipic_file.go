@@ -1858,12 +1858,16 @@ func (client *Client) savedSize(path string) (int, bool) {
 		return known.size, known.saved
 	}
 	var data []byte
-	saved := false
+	saved, measured := false, true
 	if client.saveStore != nil {
-		data, saved = client.measureSave(key)
+		data, saved, measured = client.measureSave(key)
 	}
 	if !saved {
 		data, saved = client.sessionFiles[key]
+	}
+	if !measured {
+		// A read that failed is no answer to keep (measureSave).
+		return len(data), saved
 	}
 	if !ok || known.epoch != epoch {
 		known = storedSize{epoch: epoch}
@@ -1910,12 +1914,21 @@ func (file *openFile) extend(end int) bool {
 // nothing is built on this read. The lists a write is built on — what was
 // made, what was removed, which databases there are — are still read through
 // loadSave.
-func (client *Client) measureSave(key string) ([]byte, bool) {
+//
+// It answers ok false for a read that failed, which its callers do not keep
+// with the path's epoch as they keep an answer: kept, one read that failed
+// once left the save out of the figure for the rest of the session, after the
+// store had recovered and the title had read the save back. The failure is
+// logged, since nothing else reports it.
+func (client *Client) measureSave(key string) (data []byte, present, ok bool) {
 	data, present, err := backend.ReadSave(client.saveStore, key)
 	if err != nil {
-		return nil, false
+		if client.logger != nil {
+			client.logger.Debug("LGT space read failed", "key", key, "error", err)
+		}
+		return nil, false, false
 	}
-	return data, present
+	return data, present, true
 }
 
 // loadSave records an unrecoverable read failure so a native boundary reports

@@ -530,14 +530,20 @@ func (runtime *initializationRuntime) persistRecordDatabase(store *runtimeRecord
 // recordSize is what the caller asked to open the database with. It is only
 // consulted when the index disagrees with the size of its own data file.
 func (runtime *initializationRuntime) packagedRecordDatabase(name string, recordSize uint32) ([][]byte, bool) {
-	if index, exists := runtime.GuestFile(name + recordDatabaseIndexSuffix); exists {
-		data, _ := runtime.GuestFile(name + recordDatabaseDataSuffix)
+	return runtime.packagedRecordDatabaseThrough(name, recordSize, runtime.GuestFile)
+}
+
+// packagedRecordDatabaseThrough is packagedRecordDatabase with its files read
+// through file: GuestFile, or GuestFileForSpace for the space figure.
+func (runtime *initializationRuntime) packagedRecordDatabaseThrough(name string, recordSize uint32, file func(string) ([]byte, bool)) ([][]byte, bool) {
+	if index, exists := file(name + recordDatabaseIndexSuffix); exists {
+		data, _ := file(name + recordDatabaseDataSuffix)
 		if records, ok := runtime.parseRecordDatabaseIndex(name, index, data, recordSize); ok {
 			return records, true
 		}
 	}
 	for _, candidate := range []string{name, name + recordDatabaseDataSuffix} {
-		data, exists := runtime.GuestFile(candidate)
+		data, exists := file(candidate)
 		if !exists {
 			continue
 		}
