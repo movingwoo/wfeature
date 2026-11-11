@@ -1043,6 +1043,108 @@ func TestLGTDeliveryToleratesAFlushInsideTheCarrier(t *testing.T) {
 	}
 }
 
+// **A widget that reads its keys in a timer gets them beside a busy frame
+// timer.** One local title queues the keys it is handed and reads them in a
+// timer of its own, so a commit runs the title's timers until the carrier is
+// read (serviceDeferredCarrier). Its rounds moved the clock by the wait, which
+// landed short by the work of the last frame: beside a 20 ms frame of 10 ms
+// work every other round fired nothing, the rounds ran out before the 150 ms
+// timer that reads the keys came due, the commit failed, and the queued
+// carrier reached the field later as the key it is.
+func TestCTextInputReachesAWidgetThatReadsItsKeysInATimer(t *testing.T) {
+	ctx := t.Context()
+	session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{Width: 16, Height: 8, MaxSteps: 1 << 26})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(ctx)
+	client := session.client
+	if applied := callSlot(t, client, slotIMSetCurrentMode, 2); applied != 1 {
+		t.Fatalf("setting input mode 2 answered %d", applied)
+	}
+	client.SendEvent(EventKeyPressed, '#', 0)
+	if err := client.deliverEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		keyTimer   = fixtureDataBase + 0x200
+		frameTimer = fixtureDataBase + 0x240
+		frames     = fixtureDataBase + 0x400
+		keyRounds  = fixtureDataBase + 0x404
+		queued     = fixtureDataBase + 0x408
+		frameCode  = fixtureDataBase + 0x800
+		code       = fixtureDataBase + 0x900
+	)
+	widget := client.clet.HandleEvent
+	setTimer, err := client.importFunction(importTableWIPIC, slotSetTimer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &assembler{base: code}
+	// handleCletEvent(type, key, _): the key is queued, and nothing else.
+	queue := a.here()
+	a.emit(armPushLR)
+	a.literal(7, queued)
+	a.emit(armStr(1, 7, 0), armMovImm(0, 0), armPopPC)
+	// The key timer: 10 ms of work, the queued key, if there is one, handed
+	// to the widget's own handler, and the timer armed again for 150 ms.
+	keys := a.here()
+	a.emit(armPushLR, armMovReg(5, 0))
+	emitWork(a, 750_000)
+	a.literal(7, queued)
+	a.emit(armLdr(1, 7, 0), armCmpImm(1, 0))
+	none := len(a.words)
+	a.emit(0) // beq counted
+	a.emit(armMovImm(0, 0), armStr(0, 7, 0))
+	a.literal(0, EventKeyPressed)
+	a.emit(armMovImm(2, 0))
+	a.literal(6, widget)
+	a.call(6)
+	a.words[none] = armBranchEq(int32(len(a.words) - none - 2))
+	a.literal(7, keyRounds)
+	a.emit(armLdr(0, 7, 0), armAddImm(0, 0, 1), armStr(0, 7, 0))
+	a.emit(armMovReg(0, 5))
+	a.literal(1, 150)
+	a.emit(armMovImm(2, 0), armMovImm(3, 0))
+	a.literal(6, setTimer)
+	a.call(6)
+	a.emit(armMovImm(0, 0), armPopPC)
+	if err := client.core.Memory().Write(code, a.finish()); err != nil {
+		t.Fatal(err)
+	}
+	// The frame timer: 10 ms of work every 20 ms.
+	assembleTimerCallback(t, client, frameCode, frames, 750_000, 20)
+	client.clet.HandleEvent = queue
+	callSlot(t, client, slotDefTimer, keyTimer, keys)
+	callSlot(t, client, slotSetTimer, keyTimer, 150, 0, 0)
+	callSlot(t, client, slotDefTimer, frameTimer, frameCode)
+	callSlot(t, client, slotSetTimer, frameTimer, 20, 0, 0)
+	// Play until the key timer has run twice; the commit comes right after a
+	// tick that ran a frame.
+	for tick := 0; tick < 2_000 && fixtureWord(t, client, keyRounds) < 2; tick++ {
+		if err := session.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	input, err := session.TextInput(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "가"
+	if err := input.Commit(ctx, want); err != nil {
+		t.Fatalf("Commit(%q) through a widget reading its keys in a timer: %v", want, err)
+	}
+	encoded, err := validateCTextInput(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := client.readCString(fixtureInputCompleted); err != nil || got != string(encoded) {
+		t.Fatalf("completed text = %x, %v; want %x", got, err, encoded)
+	}
+}
+
 // A title's name widget can call the input method only from its key handler:
 // one local title calls it once while starting and then not until a key
 // arrives on its name screen, so the key that opened the screen bypassed the

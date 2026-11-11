@@ -707,6 +707,39 @@ func TestTimerCallbackComesFromDefineNotFromArm(t *testing.T) {
 	}
 }
 
+// A timeout is an M_Int64 of milliseconds. One longer than a year, longer than
+// any session runs, is armed for a year rather than converted: converted, the
+// longest a title can ask for overflowed into a deadline that came due at once,
+// and one near 2^63 microseconds wrapped into a deadline before the clock
+// began. One below zero is a deadline already passed and comes due at once.
+func TestTimerTimeoutsPastAYearAndBelowZero(t *testing.T) {
+	client := fixtureClient(t)
+	structure, err := client.allocate(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callSlot(t, client, slotDefTimer, structure, 0x4771)
+	now := time.Duration(client.clock.millis()) * time.Millisecond
+	pastAYear := uint64(maxTimerTimeout/time.Millisecond) + 1
+	for _, timeout := range []struct {
+		name      string
+		low, high uint32
+		due       time.Duration
+	}{
+		{"the longest M_Int64", 0xffffffff, 0x7fffffff, now + maxTimerTimeout},
+		{"9223372036854 ms", 0x7bd05af6, 0x863, now + maxTimerTimeout},
+		{"a year and a millisecond", uint32(pastAYear), uint32(pastAYear >> 32), now + maxTimerTimeout},
+		{"an hour", 3_600_000, 0, now + time.Hour},
+		{"minus one", 0xffffffff, 0xffffffff, now + minTimerPeriod},
+	} {
+		callSlot(t, client, slotSetTimer, structure, timeout.low, timeout.high, 0)
+		entry := client.timers[structure]
+		if !entry.armed || entry.dueAt != timeout.due {
+			t.Errorf("%s: armed %t, due at %v, want armed and due at %v", timeout.name, entry.armed, entry.dueAt, timeout.due)
+		}
+	}
+}
+
 // MC_knlCurrentTime is declared `M_Int64 MC_knlCurrentTime()` and its unit is
 // milliseconds since 1970, so both halves of the answer have to be written. A
 // title's loading screen holds a start time, subtracts the two as 64-bit

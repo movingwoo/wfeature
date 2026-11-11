@@ -1353,6 +1353,12 @@ func (client *Client) defineTimer(thread *armcore.Thread) error {
 	return answerCode(thread, wipiSuccess)
 }
 
+// maxTimerTimeout is the longest timeout a timer is armed for. A year is longer
+// than any session runs, so a timer armed for longer comes due no sooner than
+// one armed for a year: never, for the session. It keeps a deadline, the clock
+// plus the timeout, inside a time.Duration.
+const maxTimerTimeout = 365 * 24 * time.Hour
+
 // setTimer arms a timer: `M_Int32 MC_knlSetTimer(MCTimer *tm, M_Int64 timeout,
 // void *parm)`. The 64-bit timeout occupies r1 and r2 without the even-register
 // alignment a modern ABI would give it, so the parameter lands in r3 — which is
@@ -1388,12 +1394,22 @@ func (client *Client) setTimer(thread *armcore.Thread) int32 {
 			entry.callback = callback
 		}
 	}
-	timeout := uint64(high)<<32 | uint64(low)
-	period := time.Duration(timeout) * time.Millisecond
+	timeout := int64(uint64(high)<<32 | uint64(low))
+	var period time.Duration
+	switch {
+	case timeout >= int64(maxTimerTimeout/time.Millisecond):
+		// Converted as it stood, a timeout this long overflowed: one a title
+		// meant as "not for a long time" came due at once, or wrapped into a
+		// deadline before the clock began, which the pause took for the
+		// earliest of all and stopped at (servePausedTimer).
+		period = maxTimerTimeout
+	case timeout > 0:
+		period = time.Duration(timeout) * time.Millisecond
+	}
 	if period < minTimerPeriod {
 		// See minTimerPeriod: a timer shorter than the display can show is
 		// answered at the resolution the specification says a handset's own
-		// timer has.
+		// timer has. A timeout below zero, a deadline already passed, is one.
 		period = minTimerPeriod
 	}
 	entry.param = param

@@ -220,12 +220,18 @@ due, the clock moved on to each deadline (`servePausedTimer`), as a handset
 went on keeping time and serving timers while a title was paused. A title that
 does its pausing in its frame timer — stopping its sound there and not arming
 the timer again, for `resumeClet` to start it — reads the pause in that
-callback; without it, one title stood still after every park. The rounds stop
-once each timer armed at the pause has fired, been cancelled or been armed
-again, after sixteen of them, or at the first timer more than a second of
-guest time off, which is left for after the resume rather than the clock
-jumping to it. A title with no timer armed is told nothing more and its clock
-does not move ([history](history/lgt.md#lgt-paused-timer-2026-11-10)).
+callback; without it, one title stood still after every park. Each round goes
+to the earliest deadline among the timers armed at the pause that have not had
+their turn — fired, been cancelled or been armed again — and the timers due by
+then fire with it, each once, as a tick fires them; a timer armed again in the
+pause is not gone back to. The first of them is served wherever it lies within
+a minute of guest time, since a slow timer, a splash or a blink, can be the one
+that carries the pause, and each one after it only within a second; a timer
+further off is left for after the resume rather than the clock jumping to it,
+and there are at most sixteen rounds. A timeout of more than a year is armed
+for a year, which no session reaches. A title with no timer armed is told
+nothing more and its clock does not move
+([history](history/lgt.md#lgt-paused-timer-2026-11-10)).
 
 ## Display and input
 

@@ -215,20 +215,28 @@ const (
 // order at their own deadlines, so this is the next frames of the game run
 // early; it stops at the first input-method call, or when nothing is armed
 // within the bound and the carrier stays a key the title did not route.
+//
+// Each round moves the clock to the deadline itself, as a pause does
+// (servePausedTimer): a wait handed to advance landed short by the work since
+// the last tick, so after a frame of real work a round fired nothing, and a
+// frame timer that came due every other round used the rounds up before the
+// timer that reads the keys was reached.
 func (client *Client) serviceDeferredCarrier(ctx context.Context, reached uint64) error {
 	state := &client.cTextInput
-	var waited time.Duration
+	start := client.clock.now()
 	for round := 0; round < maxDeferredCarrierRounds && state.calls == reached && len(state.pending) != 0; round++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		wait, armed := client.nextTimerDue()
-		if !armed || waited+max(wait, 0) > maxDeferredCarrierWait {
+		deadline, armed := client.earliestTimerDeadline()
+		if !armed {
 			return nil
 		}
-		if wait > 0 {
-			waited += client.clock.advance(wait)
+		target := timerTarget(deadline)
+		if target-start > maxDeferredCarrierWait {
+			return nil
 		}
+		client.clock.advanceTo(target)
 		if err := client.serviceTimers(ctx); err != nil {
 			return err
 		}
