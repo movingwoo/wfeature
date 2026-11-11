@@ -90,11 +90,14 @@ func (title *midletTitle) key(pressed bool, code int32) error {
 func (title *midletTitle) close() { _ = title.runtime.Destroy(true) }
 
 // nativeTitle is a native program in the session a Host plays it in, ticked
-// with the budget a server's pass has. A present is a pass that leaves a frame
-// on the screen.
+// with the budget a server's pass has. Presents are the frames the program
+// finished (Progress.Flushes), and the frame kept is the last one taken when
+// that count moved, as a Host takes them: a pass that drew nothing new
+// presents nothing, and a program that ended itself leaves its last frame.
 type nativeTitle struct {
 	session  *session.Session
 	presents uint64
+	frame    backend.Frame
 	exited   string
 }
 
@@ -105,29 +108,39 @@ func (title *nativeTitle) tick() error {
 	if title.exited != "" {
 		return errors.New(title.exited)
 	}
-	_, err := title.session.Tick(context.Background(), nativeTickBudget)
-	if errors.Is(err, session.ErrExited) {
-		title.exited = "the program ended itself: " + title.session.ExitReason()
+	progress, err := title.session.Tick(context.Background(), nativeTickBudget)
+	// A program that ends itself in a tick says so in the progress, with no
+	// error; the next tick would only answer that nothing is running.
+	if progress.Exited || errors.Is(err, session.ErrExited) {
+		reason := progress.ExitReason
+		if reason == "" {
+			reason = title.session.ExitReason()
+		}
+		title.exited = "the program ended itself: " + reason
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if _, _, _, ok := title.session.Frame(); ok {
-		title.presents++
-	}
+	title.take(progress.Flushes)
 	return nil
+}
+
+// take keeps the frame on the screen when the count of finished frames has
+// moved.
+func (title *nativeTitle) take(flushes uint64) {
+	if flushes == title.presents {
+		return
+	}
+	title.presents = flushes
+	if rgba, width, height, ok := title.session.Frame(); ok {
+		title.frame = backend.Frame{Width: width, Height: height, RGBA: rgba}
+	}
 }
 
 func (title *nativeTitle) ended() string { return title.exited }
 
-func (title *nativeTitle) presented() (backend.Frame, uint64) {
-	rgba, width, height, ok := title.session.Frame()
-	if !ok {
-		return backend.Frame{}, title.presents
-	}
-	return backend.Frame{Width: width, Height: height, RGBA: rgba}, title.presents
-}
+func (title *nativeTitle) presented() (backend.Frame, uint64) { return title.frame, title.presents }
 
 func (title *nativeTitle) key(pressed bool, code int32) error {
 	action := session.KeyRelease
@@ -138,6 +151,9 @@ func (title *nativeTitle) key(pressed bool, code int32) error {
 	if errors.Is(err, session.ErrExited) {
 		title.exited = "the program ended itself: " + title.session.ExitReason()
 		return nil
+	}
+	if err == nil {
+		title.take(title.session.Flushes())
 	}
 	return err
 }
