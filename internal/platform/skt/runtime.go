@@ -64,8 +64,8 @@ type Runtime struct {
 	// Canvas and leaves its previous workers running on every resume.
 	resumeWithoutStart bool
 	// Selected only for original revisions whose startApp starts again the
-	// thread their pauseApp ended (Archive.resumeThroughStart). It comes from
-	// the archive, so a checkpoint does not carry it.
+	// thread their pauseApp ended (classSetFixes.resumeThroughStart). It comes
+	// from the archive, so a checkpoint does not carry it.
 	resumeThroughStart bool
 	startCompleted     bool
 

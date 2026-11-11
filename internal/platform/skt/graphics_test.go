@@ -393,6 +393,71 @@ func TestAGraphics2DOverTheScreenTakesTheScreenGraphicsStateLock(t *testing.T) {
 	}
 }
 
+// **A Graphics2D over the screen reads its pixels under the render lock.** The
+// screen is drawn from a title's own threads under that lock — Toolkit's
+// drawString, a paint, a GameCanvas flush — while another reads it back
+// through getPixel and getPixelMask, as getRGBPixels reads it. It fails under
+// `go test -race` without the lock.
+func TestAGraphics2DOverTheScreenReadsPixelsUnderTheRenderLock(t *testing.T) {
+	archive, err := Open(canvasJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Start(archive, Options{Framebuffer: newTestFramebuffer(t, 8, 8)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Destroy(true) })
+	graphics := runtime.screenGraphics(paintRect{maxX: 8, maxY: 8})
+	value, err := runtime.VM.InvokeStatic("com/skt/m/Graphics2D", "getGraphics2D",
+		"(Ljavax/microedition/lcdui/Graphics;)Lcom/skt/m/Graphics2D;", jvm.ReferenceValue(graphics))
+	if err != nil {
+		t.Fatal(err)
+	}
+	over, _ := value.Reference()
+	screen, ok := graphics.Native.(*graphicsContext)
+	if !ok || screen.screen == nil {
+		t.Fatalf("the screen Graphics draws on no screen: %#v", graphics.Native)
+	}
+	index, ok := contextPixelIndexUnclipped(screen, 1, 1)
+	if !ok {
+		t.Fatal("no pixel at (1, 1)")
+	}
+
+	var group sync.WaitGroup
+	group.Add(2)
+	failures := make(chan error, 1)
+	// The title's thread reading the screen back.
+	go func() {
+		defer group.Done()
+		for round := 0; round < 200; round++ {
+			for _, read := range []struct{ name, descriptor string }{{"getPixel", "(II)I"}, {"getPixelMask", "(II)Z"}} {
+				if _, err := runtime.VM.InvokeVirtual(over, read.name, read.descriptor, jvm.IntValue(1), jvm.IntValue(1)); err != nil {
+					failures <- err
+					return
+				}
+			}
+		}
+	}()
+	// Another drawing on the screen, under the render lock as every writer of
+	// it is.
+	go func() {
+		defer group.Done()
+		for round := 0; round < 200; round++ {
+			screen.withDestinationWrite(func() {
+				for channel := range 4 {
+					screen.pixels[index+channel] = byte(round)
+				}
+			})
+		}
+	}()
+	group.Wait()
+	close(failures)
+	for err := range failures {
+		t.Fatal(err)
+	}
+}
+
 // A thread parked on a sound is released when the program ends. A loop has no
 // length of its own, so without this a title whose music nothing ever stops
 // leaves a thread waiting on a program that is gone.

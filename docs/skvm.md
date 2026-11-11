@@ -59,8 +59,9 @@ local archives, none of the 634 that could be read holds the string
 `resumeRequest` (the eight that could not are KTF and LGT ones), and none of
 the 2,327 classes of the 96 SKT titles parked in the 0.6.0 review refers to
 `resumeRequest` or `notifyPaused`, where the same scan of the class files'
-constant pools and code finds `notifyDestroyed` in 51 of them (the ignored
-`build/_review-273/lifecycle_scan.py`). A title found to pause
+constant pools and code finds `notifyDestroyed`, a title ending itself, in 58
+classes of 51 of the titles (the ignored `build/_review-273/lifecycle_scan.py`,
+which prints these counts). A title found to pause
 itself and ask to come back through `startApp` would get the registry's
 `skt.resume_through_start`, which answers its request through `startApp` as it
 answers a Host resume.

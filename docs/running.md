@@ -146,24 +146,27 @@ told to accept, so the page cannot be installed or opened offline there.
 
 The certificate is made at the first start, kept in `<data>/tls` (`-tls`) and
 served again, because each new one is a new warning on every phone. It names
-`localhost`, the machine's host name and every address of its interfaces,
-lasts 800 days (Apple's platforms refuse longer) and is made again a month
-before it ends, or when `localhost` or an address a person opens is not on it:
-loopback, the address printed for another device, and one given to `-https`.
-The new one keeps the old names and addresses, so a machine that moves between
-two networks settles on one, whatever host name each network gives it. The
-address printed for another device is the one the machine's route out leaves
-by, so a virtual adapter's (WSL's, Hyper-V's) or a VPN tunnel's is not
-printed. An address the system replaces on its own, a temporary IPv6 one or a
-virtual adapter's, makes no new certificate, and neither does a host name; a
-browser that opens one the certificate does not name is warned for it once. On
-a network with IPv6 alone the printed address can itself be a temporary one,
-and each day's makes a new certificate. A `-https` address the machine does
-not have stops the start before the certificate is looked at, and changes
-nothing. Its key is
-the file `key.pem`, readable by its owner only. Deleting the folder makes a
-new certificate at the next start, and every browser that accepted the old one
-warns again.
+`localhost`, the machine's host name and every address of its interfaces, lasts
+800 days (Apple's platforms refuse longer) and is made again a month before it
+ends, or when `localhost` or an address a person opens is not on it: loopback,
+the address printed for another device, and one given to `-https`. The new one
+keeps the old names and addresses, so a machine that moves between two networks
+settles on one, whatever host name each network gives it. The address printed
+for another device is the one the machine's route out leaves by, so a virtual
+adapter's (WSL's, Hyper-V's) is not printed, and neither is a VPN tunnel's
+where the system reports the tunnel as point-to-point, as macOS and Linux do.
+Windows reports only its PPP and tunnel-type adapters so: a VPN that takes the
+whole route through another kind of adapter has its address printed, and the
+one to open from a phone is then the machine's Wi-Fi or Ethernet address. An
+address the system replaces on its own, a temporary IPv6 one or a virtual
+adapter's, makes no new certificate, and neither does a host name; a browser
+that opens one the certificate does not name is warned for it once. On a
+network with IPv6 alone the printed address can itself be a temporary one, and
+each day's makes a new certificate. A `-https` address the machine does not
+have stops the start before the certificate is looked at, and changes nothing.
+Its key is the file `key.pem`, readable by its owner only. Deleting the folder
+makes a new certificate at the next start, and every browser that accepted the
+old one warns again.
 
 `auto` gives no HTTPS listener to `-addr 127.0.0.1:…` or a socket, which are
 the machine itself or a proxy's to secure, and one it cannot open is left out
