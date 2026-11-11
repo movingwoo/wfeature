@@ -211,6 +211,46 @@ func TestAnAddressNobodyOpensKeepsTheCertificate(t *testing.T) {
 	}
 }
 
+// **A new host name keeps the certificate.** macOS takes its host name from
+// the network's DHCP, so a laptop that moves between two networks has another
+// at each move, and a kept certificate asked for it was made again at each
+// one, a new warning on every phone. Only localhost and the opened addresses
+// are asked of a kept certificate; a new one, made for a new opened address,
+// keeps the names the old one had, up to maxCertificateNames.
+func TestAHostNameChangeKeepsTheCertificate(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tls")
+	home := []net.IP{net.IPv4(127, 0, 0, 1).To4(), net.ParseIP("192.168.0.60").To4()}
+	named := func(host string) []string { return []string{"localhost", host, host + ".local"} }
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	first, _, err := secureCertificate(dir, named("home-mac"), home, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for hour, host := range []string{"office-mac", "home-mac", "cafe-mac"} {
+		served, created, err := secureCertificate(dir, named(host), home, nil, now.Add(time.Duration(hour+1)*time.Hour))
+		if err != nil || created || !bytes.Equal(served.Certificate[0], first.Certificate[0]) {
+			t.Fatalf("the host name %s made a new certificate: created %v, %v", host, created, err)
+		}
+	}
+
+	office := append(slices.Clone(home), net.ParseIP("10.1.2.3").To4())
+	moved, created, err := secureCertificate(dir, named("office-mac"), office, nil, now.Add(5*time.Hour))
+	if err != nil || !created {
+		t.Fatalf("a new opened address did not make a new certificate: created %v, %v", created, err)
+	}
+	if want := []string{"localhost", "office-mac", "office-mac.local", "home-mac", "home-mac.local"}; !slices.Equal(moved.Leaf.DNSNames, want) {
+		t.Fatalf("names %v, want %v: this network's, then the ones the old certificate had", moved.Leaf.DNSNames, want)
+	}
+
+	var earlier []string
+	for index := range maxCertificateNames + 4 {
+		earlier = append(earlier, "host"+strconv.Itoa(index))
+	}
+	if kept := mergeNames(named("studio"), earlier); len(kept) != maxCertificateNames || !slices.Equal(kept[:3], named("studio")) {
+		t.Fatalf("mergeNames kept %v, want this machine's names first and %d in all", kept, maxCertificateNames)
+	}
+}
+
 // The addresses a kept certificate has to name are loopback, the one the
 // server prints for another device, and the one the HTTPS listener was given.
 func TestTheOpenedAddressesAreTheOnesAPersonIsGiven(t *testing.T) {
@@ -255,6 +295,32 @@ func TestAnHTTPSListenerThatCannotOpenIsRequiredOnlyWhenAskedFor(t *testing.T) {
 	}
 	if _, err := listenSecurely("127.0.0.1:0", "127.0.0.1:11541", filepath.Join(blocked, "tls"), logger); err == nil {
 		t.Fatal("an HTTPS address asked for failed silently")
+	}
+}
+
+// **An HTTPS address this machine does not have keeps the certificate.** The
+// address given to -https is one a kept certificate has to name, and the
+// certificate used to be looked at before the port was opened: a typing slip
+// made a new certificate, a new warning on every phone, for a server that then
+// did not start.
+func TestAnHTTPSAddressThatCannotOpenKeepsTheCertificate(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tls")
+	if _, _, err := secureCertificate(dir, reachableNames(), openedAddresses("[::]:11641"), reachableAddresses(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, certificateFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// 192.0.2.1 is TEST-NET-1 (RFC 5737), an address no machine is given.
+	if listener, err := listenSecurely("192.0.2.1:11641", "0.0.0.0:11541", dir, logger); err == nil {
+		listener.Close()
+		t.Fatal("an HTTPS address this machine does not have was opened")
+	}
+	after, err := os.ReadFile(filepath.Join(dir, certificateFile))
+	if err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("a listener that could not open replaced the certificate (%v)", err)
 	}
 }
 

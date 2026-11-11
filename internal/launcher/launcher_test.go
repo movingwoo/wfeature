@@ -405,3 +405,51 @@ func TestStopWaitsForTheServerProcessNotOnlyItsPort(t *testing.T) {
 			took.Round(time.Millisecond))
 	}
 }
+
+// **The address printed for another device is the one the route leaves by.**
+// The first routable address of the interface listing was printed, and on
+// Windows a virtual adapter's (WSL's, Hyper-V's) is often listed first: no
+// phone reaches it, it changes at every boot, and the HTTPS certificate, which
+// has to name it, was made again at every start. A tunnel's address is not on
+// the local network either. Without a route, or with one through a tunnel,
+// the listing decides, IPv4 first.
+func TestTheLANAddressIsTheOneTheRouteLeavesBy(t *testing.T) {
+	address := func(text string) net.IP { return net.ParseIP(text) }
+	virtual, wifi := address("172.26.16.1").To4(), address("192.168.0.60").To4()
+	stable, temporary := address("2001:db8:1::5"), address("2001:db8:1::a1b2")
+	for _, probe := range []struct {
+		name             string
+		candidates       []net.IP
+		routed4, routed6 net.IP
+		want             string
+	}{
+		{"a virtual adapter listed first", []net.IP{virtual, wifi}, wifi, nil, "192.168.0.60"},
+		{"no route", []net.IP{virtual, wifi}, nil, nil, "172.26.16.1"},
+		{"a route through a tunnel", []net.IP{wifi}, address("100.90.13.106"), nil, "192.168.0.60"},
+		{"IPv4 before an IPv6 route", []net.IP{stable, wifi}, nil, stable, "192.168.0.60"},
+		{"IPv6 only", []net.IP{temporary, stable}, nil, stable, "2001:db8:1::5"},
+		{"IPv6 only, no route", []net.IP{temporary, stable}, nil, nil, "2001:db8:1::a1b2"},
+		{"nothing reachable", nil, wifi, nil, ""},
+	} {
+		if got := pickLANAddress(probe.candidates, probe.routed4, probe.routed6); got != probe.want {
+			t.Errorf("%s: pickLANAddress = %q, want %q", probe.name, got, probe.want)
+		}
+	}
+
+	network := func(text string) net.Addr {
+		ip, block, err := net.ParseCIDR(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &net.IPNet{IP: ip, Mask: block.Mask}
+	}
+	listed := []net.Addr{network("fe80::1/64"), network("192.168.0.60/24"), network("2001:db8:1::5/64")}
+	if got := lanAddresses(net.FlagUp|net.FlagBroadcast, listed); len(got) != 2 || !got[0].Equal(wifi) || !got[1].Equal(stable) {
+		t.Errorf("an interface's reachable addresses = %v, want the IPv4 and global IPv6 ones", got)
+	}
+	for _, flags := range []net.Flags{0, net.FlagUp | net.FlagLoopback, net.FlagUp | net.FlagPointToPoint} {
+		if got := lanAddresses(flags, listed); got != nil {
+			t.Errorf("an interface flagged %v offered %v", flags, got)
+		}
+	}
+}

@@ -86,11 +86,15 @@ func (connection *plainRedirectConn) redirect() {
 		return
 	}
 	host := redirectHost(request.Host, connection.LocalAddr())
-	// 301 is the redirect every browser keeps to GET; another method keeps
-	// its own through 308.
-	status := http.StatusMovedPermanently
+	// The redirect is temporary: 302 for GET and HEAD, and 307 for another
+	// method, which keeps its method and body through it. A permanent one
+	// (301, 308) a browser keeps with no end and goes by without asking the
+	// server again, so a port that served HTTPS once would send that browser
+	// to HTTPS for good, after the person turned HTTPS off or moved it, and
+	// nothing the server answers could take it back.
+	status := http.StatusFound
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
-		status = http.StatusPermanentRedirect
+		status = http.StatusTemporaryRedirect
 	}
 	_, _ = fmt.Fprintf(connection.Conn, "HTTP/1.1 %d %s\r\nLocation: https://%s%s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
 		status, http.StatusText(status), host, request.URL.RequestURI())
