@@ -110,6 +110,7 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
 | `Clock` | wall clock | the guest clock every date-shaped builtin reads |
 | `Speed` | game speed | scales `Thread.sleep` and timed `Object.wait`; a platform scales `Clock` by the same factor |
 | `GuestThreadStarter` | one goroutine per thread | replaces `Thread.start` for a platform whose guest threads share one cooperative core |
+| `RestartableThreads` | off | lets `Thread.start` run a thread again once it is no longer alive — its run returned, or its start failed — on a fresh state; a live thread is still refused. SKT turns it on for the class sets of `skt.resume_through_start` ([SKVM](skvm.md)) |
 | `ThreadYield` | unset (no-op) | what `Thread.yield` does |
 | `ByteDecoder`, `ByteEncoder` | UTF-8 with replacement | the platform's default charset; KTF installs EUC-KR |
 | `Exit` | unset | what `System.exit` does |
@@ -128,7 +129,10 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
   rather than block the one guest core (KTF parks the calling worker; see
   [the KTF history](history/ktf.md#implementation-publishing-the-rest-of-the-core-library)).
   Finished and failed-start threads leave the root set; their objects keep the
-  restart prohibition (`IllegalThreadStateException`). An interrupt is consumed
+  restart prohibition (`IllegalThreadStateException`) unless the VM was built
+  with `RestartableThreads`, where `start` runs such a thread again on a fresh
+  state (not interrupted, nothing of the first run left) and the run that
+  ended unregisters only itself. An interrupt is consumed
   by the one sleep, wait or join that throws for it. A sleep or wait longer
   than a Go duration can hold (`Long.MAX_VALUE` is how a title says "for
   ever") is held at about 292 years rather than wrapping to a wait that
