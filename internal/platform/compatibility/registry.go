@@ -166,6 +166,13 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 			}
 			seen[fix] = true
 		}
+		// The two resume rules answer the same question two ways — call
+		// nothing, or run startApp again — and the runtime takes the first it
+		// checks, so an entry with both would mean whichever that happened to
+		// be.
+		if seen[SKTResumeWithoutStart] && seen[SKTResumeThroughStart] {
+			return nil, fmt.Errorf("entry %q selects both %q and %q", entry.ID, SKTResumeWithoutStart, SKTResumeThroughStart)
+		}
 		registry[key] = entry
 	}
 	return registry, nil

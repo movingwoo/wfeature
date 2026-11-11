@@ -46,8 +46,24 @@ draw anyway — a paint already queued, or a serial call its frame loop hands
 itself back through — where a second paint would start a second frame loop.
 Two recognized class sets that recreate their Canvas and workers on every
 `startApp` keep their earlier correction (`skt.resume_without_start`), which
-calls nothing on a resume
+calls nothing on a resume — neither their `resumeApp` nor the repaint
 ([first investigation](history/skt.md#skt-resume-2026-09-30)).
+
+**A title's own `resumeRequest` is answered by the same rule.** MIDP has the
+application manager answer it by moving the MIDlet to the active state, which
+it does through `startApp`; here the request resumes a paused MIDlet as a Host
+resume does, through its `resumeApp` and without a second `startApp`, and a
+`notifyPaused` before it calls no `pauseApp`. This differs from the
+specification on purpose and has nothing local to check it against: of the 642
+local archives, none of the 634 that could be read holds the string
+`resumeRequest` (the eight that could not are KTF and LGT ones), and none of
+the 2,327 classes of the 96 SKT titles parked in the 0.6.0 review refers to
+`resumeRequest` or `notifyPaused`, where the same scan of the class files'
+constant pools and code finds `notifyDestroyed` in 51 of them (the ignored
+`build/_review-273/lifecycle_scan.py`). A title found to pause
+itself and ask to come back through `startApp` would get the registry's
+`skt.resume_through_start`, which answers its request through `startApp` as it
+answers a Host resume.
 
 Two local MIDlets are written for MIDP's reactivation: a park ends a thread
 of theirs, and their `startApp` starts that same `Thread` object again once

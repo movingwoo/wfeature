@@ -5,15 +5,14 @@ import (
 	"encoding/binary"
 
 	"github.com/movingwoo/wfeature/internal/jvm/classfile"
-	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 // This original revision retains its item-name table when the tutorial returns
 // to combat. Clear it at that transition so the ordinary ability loader runs.
 // The overwritten phase assignment is redundant: the same block sets phase 5
 // before calling another method. Bytecode lengths and branch targets stay fixed.
-func prepareTutorialCompatibility(archive *Archive) authenticationClasses {
-	if !compatibility.HasFix("skt", compatibility.JavaClassSet, archive.clipCodeDigest(), compatibility.SKTTutorialNameCache) {
+func prepareTutorialCompatibility(archive *Archive, fixes classSetFixes) authenticationClasses {
+	if !fixes.tutorialNameCache {
 		return nil
 	}
 	data := replaceTutorialPhaseStore(archive.Entries["f.class"], "a", "(Ljavax/microedition/lcdui/Graphics;)V", 1648, "h", "am", "w")

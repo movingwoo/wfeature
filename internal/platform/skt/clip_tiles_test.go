@@ -102,7 +102,7 @@ func TestClipCompatibilityDoesNotFollowProfile(t *testing.T) {
 			t.Fatal(err)
 		}
 		archive.Descriptor.Properties["MicroEdition-Profile"] = profile
-		if archive.legacyClipEndpoints() {
+		if archive.classSetFixes().inclusiveSetClip {
 			t.Fatalf("profile %q enabled compatibility for unrelated code", profile)
 		}
 	}

@@ -36,7 +36,7 @@ func TestEmbeddedCompatibilityRegistry(t *testing.T) {
 }
 
 func TestCompatibilityRejectsInvalidEntries(t *testing.T) {
-	for _, name := range []string{"version", "id", "platform", "wrong platform", "kind", "digest", "uppercase", "evidence", "no fixes", "unknown fix", "duplicate fix", "duplicate id", "duplicate digest", "unknown field", "trailing document"} {
+	for _, name := range []string{"version", "id", "platform", "wrong platform", "kind", "digest", "uppercase", "evidence", "no fixes", "unknown fix", "duplicate fix", "two resume rules", "duplicate id", "duplicate digest", "unknown field", "trailing document"} {
 		t.Run(name, func(t *testing.T) {
 			var document struct {
 				Version int                  `json:"version"`
@@ -69,6 +69,10 @@ func TestCompatibilityRejectsInvalidEntries(t *testing.T) {
 				entry.Fixes = []string{"unknown"}
 			case "duplicate fix":
 				entry.Fixes = append(entry.Fixes, entry.Fixes[0])
+			case "two resume rules":
+				// Each is a fix an SKT class set may select, and not both.
+				entry.Platform, entry.Match.Kind = "skt", JavaClassSet
+				entry.Fixes = []string{SKTResumeWithoutStart, SKTResumeThroughStart}
 			case "duplicate id":
 				document.Entries = append(document.Entries, *entry)
 			case "duplicate digest":
