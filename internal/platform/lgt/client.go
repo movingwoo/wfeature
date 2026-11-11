@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -638,8 +639,15 @@ func (client *Client) PauseClet(ctx context.Context) error {
 	return client.servePausedTimer(ctx)
 }
 
-// servePausedTimer fires, once, the timer that comes due first after a
-// pauseClet, with the clock moved to its deadline when it lies ahead.
+// Bounds on serving a Clet's timers while it is paused (servePausedTimer).
+const (
+	maxPausedTimerRounds = 16
+	maxPausedTimerWait   = time.Second
+)
+
+// servePausedTimer fires the timers that come due in the moments after a
+// pauseClet, the clock moved on to each one's deadline, until every timer
+// armed at that point has had its turn.
 //
 // **A handset kept time while a title was paused**, so the title's own frame
 // timer came due during the pause, and a title can do its pausing there:
@@ -650,15 +658,54 @@ func (client *Client) PauseClet(ctx context.Context) error {
 // found and never armed itself again: the title stood still for good
 // (docs/history/lgt.md#lgt-paused-timer-2026-11-10). It is the Clet's half of
 // what servePausedSerialCalls does for a Java title.
+//
+// **The clock is moved to the deadline itself** (advanceTo), the first whole
+// millisecond at or after it, because a timer is due when the millisecond
+// clock has reached its deadline. A wait measured from now and handed to
+// advance fell short by the smaller of the wait and the work since the last
+// tick — so after any frame of real work, a millisecond being 150,000
+// instructions, the timer was still not due and the title stood still as
+// before — and a deadline between two milliseconds, which a 1/60 s period
+// makes, was short by the fraction even with no work.
+//
+// **Every timer armed at the pause has its turn, not only the first.** A title
+// with a shorter timer beside its frame timer had the shorter one fired and
+// the frame timer, which carries the pause, left armed. Timers fire in their
+// own order at their own deadlines, so the rounds are the next moments of the
+// game run early, as serviceDeferredCarrier runs them. They stop once each
+// timer armed at the pause has fired, been cancelled or been armed again;
+// when nothing is armed within a second of the pause; or after
+// maxPausedTimerRounds. A timer further off is left for after the resume,
+// rather than the clock jumping to it: a timeout is a guest's 64-bit number of
+// milliseconds.
 func (client *Client) servePausedTimer(ctx context.Context) error {
-	wait, armed := client.nextTimerDue()
-	if !armed {
+	waiting := client.armedTimers()
+	if len(waiting) == 0 {
 		return nil
 	}
-	if wait > 0 {
-		client.clock.advance(wait)
+	start := client.clock.now()
+	for round := 0; round < maxPausedTimerRounds && len(waiting) != 0; round++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		deadline, armed := client.earliestTimerDeadline()
+		if !armed {
+			return nil
+		}
+		target := deadline.Truncate(time.Millisecond)
+		if target < deadline {
+			target += time.Millisecond
+		}
+		if target-start > maxPausedTimerWait {
+			return nil
+		}
+		client.clock.advanceTo(target)
+		if err := client.serviceTimers(ctx); err != nil {
+			return err
+		}
+		client.forgetServedTimers(waiting)
 	}
-	return client.serviceTimers(ctx)
+	return nil
 }
 
 func (client *Client) ResumeClet(ctx context.Context) error {

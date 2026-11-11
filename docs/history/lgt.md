@@ -8713,3 +8713,26 @@ callback writes the fixture's running mark; on the old code the mark is still
 the paused one after the pause. With the change both revisions of the title
 answer every key after a two-second park as a run that was never parked does.
 
+A review of the change the next day found it short in three ways, none of
+which its fixture reached. The clock was moved by the wait to the deadline,
+and `advance` takes the larger of that wait and the work since the last tick
+rather than their sum, so the clock landed short by the smaller of the two:
+after a frame of 1.5 million instructions, 10 ms of guest time, the timer was
+still armed at the resume, on about half of the parks at the title's real
+rate; the fixture's callback was 141 instructions. A deadline between two
+milliseconds, which the 1/60 s floor on a period makes, was short by the
+fraction. Only the first timer fired, so a title with a shorter timer beside
+its frame timer had the shorter one served and the pause left unread. And the
+clock went to the earliest deadline however far off: a timer armed ten
+minutes ahead took ten minutes of guest time in a park, and a timeout is a
+64-bit number of milliseconds. The pause now moves the clock to each deadline
+itself (`advanceTo`, to the first whole millisecond at or after it) and serves
+the timers armed at the pause until each has had its turn, within sixteen
+rounds and a second of guest time; a timer further off is left for after the
+resume. `TestParkingACletServesItsFrameTimerAfterRealWork` drives a frame
+callback that spends 1.5 and 2.2 million instructions and arms itself again
+through `MC_knlSetTimer`, `TestParkingACletServesEveryTimerArmedAtThePause` a
+shorter timer beside the frame timer, and
+`TestParkingACletLeavesATimerFarAheadForTheResume` one ten minutes off; all
+three fail on the change they follow.
+

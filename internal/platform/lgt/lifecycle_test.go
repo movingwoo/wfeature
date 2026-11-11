@@ -158,3 +158,153 @@ func TestParkingACletServesTheTimerThatComesDueWhilePaused(t *testing.T) {
 		t.Fatalf("a pause with no timer armed moved the clock from %d to %d ms", still, got)
 	}
 }
+
+// **The frame timer of a title doing real work comes due while it is paused
+// too.** The pause used to move the clock by the wait to the deadline, and
+// that fell short by the smaller of the wait and the work of the last frame:
+// a frame of a million and a half instructions is 10 ms of guest time, and
+// after it the timer was still armed when the title was resumed. A deadline
+// between two milliseconds, which a 1/60 s period makes, fell short by the
+// fraction with no work at all. The fixture's frame callback spends the work,
+// counts itself and arms itself again through MC_knlSetTimer, driven by real
+// ticks; the park comes right after a frame.
+func TestParkingACletServesItsFrameTimerAfterRealWork(t *testing.T) {
+	for _, frame := range []struct {
+		loops  uint32 // two instructions each
+		period uint32 // what the callback asks MC_knlSetTimer for, in ms
+	}{
+		{750_000, 50}, // 1.5 million instructions: 10 ms of work
+		{1_000, 1},    // answered at 1/60 s, with next to no work
+		{1_080_000, 1},
+	} {
+		ctx := context.Background()
+		session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{Width: 16, Height: 8, MaxSteps: 1 << 26})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := session.client
+		setTimer, err := client.importFunction(importTableWIPIC, slotSetTimer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const (
+			code      = fixtureDataBase + 0x800
+			counter   = fixtureDataBase + 0x400
+			structure = fixtureDataBase + 0x200
+		)
+		a := &assembler{base: code}
+		a.emit(armPushLR)
+		a.emit(armMovReg(5, 0)) // r5 = the timer's structure
+		a.literal(4, frame.loops)
+		loop := a.here()
+		a.emit(0xe2544001)                                                           // subs r4, r4, #1
+		a.emit(0x1a000000 | uint32(int32(int64(loop)-int64(a.here()+8))/4)&0xffffff) // bne loop
+		a.literal(7, counter)
+		a.emit(armLdr(0, 7, 0), armAddImm(0, 0, 1), armStr(0, 7, 0))
+		// MC_knlSetTimer(structure, period, 0, 0), last: the frame arms the next.
+		a.emit(armMovReg(0, 5), armMovImm(1, frame.period), armMovImm(2, 0), armMovImm(3, 0))
+		a.literal(6, setTimer)
+		a.call(6)
+		a.emit(armMovImm(0, 0))
+		a.emit(armPopPC)
+		if err := client.core.Memory().Write(code, a.finish()); err != nil {
+			t.Fatal(err)
+		}
+		frames := func() uint32 {
+			var word [4]byte
+			if err := client.core.Memory().Read(counter, word[:]); err != nil {
+				t.Fatal(err)
+			}
+			return binary.LittleEndian.Uint32(word[:])
+		}
+		client.mu.Lock()
+		client.timers[structure] = &timer{structure: structure, callback: code,
+			dueAt: time.Duration(client.clock.millis()) * time.Millisecond, armed: true}
+		client.mu.Unlock()
+		// Play until a tick has run a frame, and park right after it.
+		before := frames()
+		for tick := 0; tick < 50; tick++ {
+			if err := session.Tick(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if frames() > before+2 {
+				break
+			}
+		}
+		played := frames()
+		if played <= before {
+			t.Fatalf("%d loops a %d ms frame: no frame ran before the park", frame.loops, frame.period)
+		}
+		if err := session.Pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if frames() == played {
+			t.Errorf("%d loops a %d ms frame: the frame timer did not come due while the title was paused", frame.loops, frame.period)
+		}
+		session.Close(ctx)
+	}
+}
+
+// **Every timer armed at the pause has its turn.** With a shorter timer armed
+// beside the frame timer that carries the pause, the pause used to fire the
+// shorter one alone and leave the frame timer armed, so the pause it carries
+// never ran. The fixture's pause entry stands in for the shorter timer and its
+// resume entry, which writes the running mark, for the frame timer.
+func TestParkingACletServesEveryTimerArmedAtThePause(t *testing.T) {
+	ctx := context.Background()
+	session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{Width: 16, Height: 8, MaxSteps: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(ctx)
+	client := session.client
+	const frameTimer, shorter = fixtureDataBase + 0x200, fixtureDataBase + 0x240
+	before := client.clock.millis()
+	client.mu.Lock()
+	client.timers[frameTimer] = &timer{structure: frameTimer, callback: client.clet.Resume,
+		dueAt: time.Duration(before+70) * time.Millisecond, armed: true}
+	client.timers[shorter] = &timer{structure: shorter, callback: client.clet.Pause,
+		dueAt: time.Duration(before+30) * time.Millisecond, armed: true}
+	client.mu.Unlock()
+
+	if err := session.Pause(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := lifecycleMark(t, session); got != fixtureLifecycleRunning {
+		t.Fatalf("the Clet is %d after a pause, want %d: the frame timer did not run while it was paused", got, fixtureLifecycleRunning)
+	}
+	if client.timers[frameTimer].armed || client.timers[shorter].armed {
+		t.Fatal("a timer armed at the pause is still armed after it")
+	}
+}
+
+// **A timer far ahead is left for after the resume.** The pause used to move
+// the clock to the earliest deadline however far off — a timeout is a guest's
+// 64-bit number of milliseconds — and fire it there: ten minutes of guest
+// time, or days, gone in a park. Nothing further than a second off is fired,
+// and the clock does not move for it.
+func TestParkingACletLeavesATimerFarAheadForTheResume(t *testing.T) {
+	ctx := context.Background()
+	session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{Width: 16, Height: 8, MaxSteps: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(ctx)
+	client := session.client
+	const structure = fixtureDataBase + 0x200
+	before := client.clock.millis()
+	client.mu.Lock()
+	client.timers[structure] = &timer{structure: structure, callback: client.clet.Resume,
+		dueAt: time.Duration(before+600_000) * time.Millisecond, armed: true}
+	client.mu.Unlock()
+
+	if err := session.Pause(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.clock.millis(); got != before {
+		t.Fatalf("the clock moved from %d to %d ms for a timer ten minutes off", before, got)
+	}
+	if !client.timers[structure].armed || lifecycleMark(t, session) != fixtureLifecyclePaused {
+		t.Fatal("a timer ten minutes off fired in the pause")
+	}
+}

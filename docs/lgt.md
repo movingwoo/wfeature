@@ -215,14 +215,17 @@ running beside the chain `resumeApp` queues. A quick save runs none of them
 ### A Clet's pause
 
 A Clet is told through the `pauseClet` and `resumeClet` it registered. Right
-after an entered `pauseClet` the timer that comes due first fires once, with
-the clock moved to its deadline when that lies ahead (`servePausedTimer`), as a
-handset went on keeping time and serving timers while a title was paused. A
-title that does its pausing in its frame timer — stopping its sound there and
-not arming the timer again, for `resumeClet` to start it — reads the pause in
-that callback; without it, one title stood still after every park. A title
-with no timer armed is told nothing more and its clock does not move
-([history](history/lgt.md#lgt-paused-timer-2026-11-10)).
+after an entered `pauseClet` the timers armed at that point fire as they come
+due, the clock moved on to each deadline (`servePausedTimer`), as a handset
+went on keeping time and serving timers while a title was paused. A title that
+does its pausing in its frame timer — stopping its sound there and not arming
+the timer again, for `resumeClet` to start it — reads the pause in that
+callback; without it, one title stood still after every park. The rounds stop
+once each timer armed at the pause has fired, been cancelled or been armed
+again, after sixteen of them, or at the first timer more than a second of
+guest time off, which is left for after the resume rather than the clock
+jumping to it. A title with no timer armed is told nothing more and its clock
+does not move ([history](history/lgt.md#lgt-paused-timer-2026-11-10)).
 
 ## Display and input
 

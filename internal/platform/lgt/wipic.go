@@ -1415,19 +1415,52 @@ func (client *Client) setTimer(thread *armcore.Thread) int32 {
 // for 1ms, meaning "as soon as you can", and gets 50.
 func (client *Client) nextTimerDue() (time.Duration, bool) {
 	now := time.Duration(client.clock.millis()) * time.Millisecond
+	deadline, found := client.earliestTimerDeadline()
+	if !found {
+		return 0, false
+	}
+	return deadline - now, true
+}
+
+// earliestTimerDeadline is the deadline of the armed timer that comes due
+// first, and whether one is armed.
+func (client *Client) earliestTimerDeadline() (time.Duration, bool) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	var earliest time.Duration
 	found := false
 	for _, entry := range client.timers {
-		if !entry.armed {
-			continue
-		}
-		if wait := entry.dueAt - now; !found || wait < earliest {
-			earliest, found = wait, true
+		if entry.armed && (!found || entry.dueAt < earliest) {
+			earliest, found = entry.dueAt, true
 		}
 	}
 	return earliest, found
+}
+
+// armedTimers are the armed timers by structure, each with its deadline.
+func (client *Client) armedTimers() map[uint32]time.Duration {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	armed := make(map[uint32]time.Duration)
+	for structure, entry := range client.timers {
+		if entry.armed {
+			armed[structure] = entry.dueAt
+		}
+	}
+	return armed
+}
+
+// forgetServedTimers drops from waiting each timer that has had its turn since
+// waiting was taken: one that fired, was cancelled, or was armed again for
+// another deadline.
+func (client *Client) forgetServedTimers(waiting map[uint32]time.Duration) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	for structure, dueAt := range waiting {
+		if entry := client.timers[structure]; entry == nil || !entry.armed || entry.dueAt != dueAt {
+			delete(waiting, structure)
+		}
+	}
 }
 
 // serviceTimers fires the timers that are due. It runs between guest calls,
