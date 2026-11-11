@@ -66,10 +66,15 @@ park the page makes lasts at least a reconnect.
 
 The repaint after a resume resets the one screen Graphics while a title that
 draws through it from its own thread, pushing frames with `XDisplay.refresh`,
-can be drawing: each native handed that Graphics holds its state lock for the
-call, and the reset takes it too (`screenStateMu`), so the two take turns call
-by call. A thread that sets a clip and then draws can still find the paint's
-clip between the two calls, as a handset's threads could. A park of no length
+can be drawing: each native handed that Graphics, or a `com.skt.m.Graphics2D`
+made over it, holds its state lock for the call, and the reset takes it too
+(`screenStateMu`), so the two take turns call by call. A thread that sets a
+clip and then draws can still find the paint's clip between the two calls, as
+a handset's threads could. The state lock comes before the render lock that
+guards the pixels, and nothing waits for it while holding the render lock: the
+`Toolkit` class initializer, which asks for the screen Graphics on a title's
+first read of a `Toolkit` field, did, and stopped for good against a draw on
+the screen from another of the title's threads. A park of no length
 (`-park tick:0` in the CLI) leaves one Jlet's earlier timer thread running
 beside the one its `resumeApp` starts; a park the page makes gives that thread
 time to stop. See [the resume rule](history/skt.md#skt-resume-2026-11-10).

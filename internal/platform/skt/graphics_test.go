@@ -284,6 +284,115 @@ func TestTheScreenGraphicsStateIsOneCallersAtATime(t *testing.T) {
 	}
 }
 
+// **The Toolkit's screen Graphics is asked for in the order a draw takes the
+// locks.** A title's first read of a com.xce.lcdui.Toolkit field runs the
+// class initializer, which asks for the screen Graphics, and a thread of the
+// title may be drawing on the screen at that moment: the draw holds the
+// Graphics' state lock and then wants the render lock for the pixels. The
+// initializer took the render lock first and then waited for the state lock,
+// and the two stopped each other for good, with no error. Here the test holds
+// the state lock as the draw does, lets the first read reach its wait, and
+// then asks for the render lock as the draw would.
+func TestTheToolkitScreenGraphicsTakesTheLocksInTheDrawingOrder(t *testing.T) {
+	archive, err := Open(canvasJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Start(archive, Options{Framebuffer: newTestFramebuffer(t, 8, 8)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Destroy(true) })
+	if _, initialized := runtime.VM.StaticFieldValue("com/xce/lcdui/Toolkit", "FONT_HEIGHT", "I"); initialized {
+		t.Fatal("Toolkit was initialized before the title read it")
+	}
+
+	runtime.screenStateMu.Lock()
+	read := make(chan error, 1)
+	go func() {
+		_, err := runtime.VM.StaticField("com/xce/lcdui/Toolkit", "FONT_HEIGHT", "I")
+		read <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	drawable := runtime.renderMu.TryLock()
+	if drawable {
+		runtime.renderMu.Unlock()
+	}
+	runtime.screenStateMu.Unlock()
+	if err := <-read; err != nil {
+		t.Fatal(err)
+	}
+	if !drawable {
+		t.Fatal("the first read of a Toolkit field held the render lock while it waited for the screen Graphics' state lock")
+	}
+	if _, initialized := runtime.VM.StaticFieldValue("com/xce/lcdui/Toolkit", "FONT_HEIGHT", "I"); !initialized {
+		t.Fatal("Toolkit is not initialized after the read")
+	}
+}
+
+// **A Graphics2D made over the screen Graphics takes its state lock too.** It
+// draws at that Graphics' clip and translation, which the paint a resume
+// queues resets, and its natives took no lock: a title drawing through one
+// from its own thread raced the reset as the Graphics' own natives had. It
+// fails under `go test -race` without the lock.
+func TestAGraphics2DOverTheScreenTakesTheScreenGraphicsStateLock(t *testing.T) {
+	archive, err := Open(canvasJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Start(archive, Options{Framebuffer: newTestFramebuffer(t, 8, 8)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Destroy(true) })
+	whole := paintRect{maxX: 8, maxY: 8}
+	graphics := runtime.screenGraphics(whole)
+	value, err := runtime.VM.InvokeStatic("com/skt/m/Graphics2D", "getGraphics2D",
+		"(Ljavax/microedition/lcdui/Graphics;)Lcom/skt/m/Graphics2D;", jvm.ReferenceValue(graphics))
+	if err != nil {
+		t.Fatal(err)
+	}
+	over, _ := value.Reference()
+	if data, ok := over.Native.(*graphics2DData); !ok || data.graphics != graphics {
+		t.Fatalf("getGraphics2D does not draw through the screen Graphics: %#v", over.Native)
+	}
+
+	var group sync.WaitGroup
+	group.Add(2)
+	failures := make(chan error, 2)
+	// The title's thread, drawing and reading through the Graphics2D.
+	go func() {
+		defer group.Done()
+		for round := 0; round < 200; round++ {
+			if _, err := runtime.VM.InvokeVirtual(over, "invertRect", "(IIII)V",
+				jvm.IntValue(0), jvm.IntValue(0), jvm.IntValue(4), jvm.IntValue(4)); err != nil {
+				failures <- err
+				return
+			}
+			if _, err := runtime.VM.InvokeVirtual(over, "setPixel", "(III)V", jvm.IntValue(1), jvm.IntValue(1), jvm.IntValue(0x123456)); err != nil {
+				failures <- err
+				return
+			}
+			if _, err := runtime.VM.InvokeVirtual(over, "getPixel", "(II)I", jvm.IntValue(1), jvm.IntValue(1)); err != nil {
+				failures <- err
+				return
+			}
+		}
+	}()
+	// The runtime's paint: the reset it starts from.
+	go func() {
+		defer group.Done()
+		for round := 0; round < 200; round++ {
+			runtime.screenGraphics(whole)
+		}
+	}()
+	group.Wait()
+	close(failures)
+	for err := range failures {
+		t.Fatal(err)
+	}
+}
+
 // A thread parked on a sound is released when the program ends. A loop has no
 // length of its own, so without this a title whose music nothing ever stops
 // leaves a thread waiting on a program that is gone.

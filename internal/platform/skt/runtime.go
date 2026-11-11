@@ -136,6 +136,11 @@ type Runtime struct {
 	// font — to one caller at a time: a native that is handed it, for the
 	// length of the call, and the reset a paint starts with. Its pixels have
 	// renderMu as well. See lockingScreenGraphics.
+	//
+	// **It is taken before renderMu and never while renderMu is held.** A
+	// native drawing on the screen holds it and then takes renderMu for the
+	// pixels, so a holder of renderMu that waited for it would wait for good
+	// (toolkitScreenGraphics).
 	screenStateMu sync.Mutex
 
 	fontMu sync.Mutex

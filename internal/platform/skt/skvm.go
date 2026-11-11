@@ -409,8 +409,13 @@ func (runtime *Runtime) graphics2DPixel(_ *jvm.VM, arguments []jvm.Value) (jvm.V
 	if !ok {
 		return jvm.IntValue(0), nil
 	}
-	return jvm.IntValue(int32(context.pixels[index])<<16 |
-		int32(context.pixels[index+1])<<8 | int32(context.pixels[index+2])), nil
+	// Read under the lock the pixel's writers take, as getRGBPixels reads:
+	// the screen is drawn from a title's own thread while another reads it.
+	var pixel int32
+	context.withDestinationWrite(func() {
+		pixel = int32(context.pixels[index])<<16 | int32(context.pixels[index+1])<<8 | int32(context.pixels[index+2])
+	})
+	return jvm.IntValue(pixel), nil
 }
 
 func (runtime *Runtime) setGraphics2DPixel(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
@@ -452,7 +457,12 @@ func (runtime *Runtime) graphics2DPixelMask(_ *jvm.VM, arguments []jvm.Value) (j
 		return jvm.VoidValue(), err
 	}
 	index, ok := contextPixelIndexUnclipped(context, x, y)
-	if !ok || context.pixels[index+3] == 0 {
+	if !ok {
+		return jvm.IntValue(0), nil
+	}
+	opaque := false
+	context.withDestinationWrite(func() { opaque = context.pixels[index+3] != 0 })
+	if !opaque {
 		return jvm.IntValue(0), nil
 	}
 	return jvm.IntValue(1), nil
@@ -1707,9 +1717,16 @@ func (runtime *Runtime) toolkitDrawString(_ *jvm.VM, arguments []jvm.Value) (jvm
 // a static field. It is the one screen Graphics a Canvas paint is handed —
 // see screenGraphics for why this vendor has only one — clipped to the whole
 // screen, because a title reading the field is about to draw outside a paint.
+//
+// **It holds no render lock.** screenGraphics takes the Graphics' state lock,
+// which comes before renderMu (screenStateMu): a native drawing on the screen
+// holds the state lock for its call and takes renderMu for the pixels. This
+// used to hold renderMu around screenGraphics, the other order, and a title's
+// first read of a Toolkit field — the class initializer runs this — met a
+// draw on the screen from another of its threads, and the two waited on each
+// other for good, with no error. The frame size it reads is fixed for the
+// runtime's life.
 func (runtime *Runtime) toolkitScreenGraphics(_ *jvm.VM, _ []jvm.Value) (jvm.Value, error) {
-	runtime.renderMu.Lock()
-	defer runtime.renderMu.Unlock()
 	full := paintRect{maxX: runtime.frameWidth, maxY: runtime.frameHeight}
 	return jvm.ReferenceValue(runtime.screenGraphics(full)), nil
 }
