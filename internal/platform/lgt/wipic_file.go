@@ -822,6 +822,12 @@ func (client *Client) seekFile(handle uint32, offset int32, whence uint32) int32
 // A session with no store reads what it wrote from sessionFiles, where its
 // stores went, after an authentication adapter has answered for its own keys.
 func (client *Client) readFile(name string) ([]byte, bool) {
+	return client.readFileThrough(name, client.loadSave)
+}
+
+// readFileThrough is readFile with the store read through load: loadSave,
+// which keeps a read that failed, or measureSave, which does not.
+func (client *Client) readFileThrough(name string, load func(string) ([]byte, bool)) ([]byte, bool) {
 	if content := client.openContent(name); content != nil && content.dirty {
 		return bytes.Clone(content.data), true
 	}
@@ -830,7 +836,7 @@ func (client *Client) readFile(name string) ([]byte, bool) {
 	}
 	if key, err := fileSaveKey(name); err == nil {
 		if client.saveStore != nil {
-			if data, ok := client.loadSave(key); ok {
+			if data, ok := load(key); ok {
 				return data, true
 			}
 		}
@@ -1854,7 +1860,7 @@ func (client *Client) savedSize(path string) (int, bool) {
 	var data []byte
 	saved := false
 	if client.saveStore != nil {
-		data, saved = client.loadSave(key)
+		data, saved = client.measureSave(key)
 	}
 	if !saved {
 		data, saved = client.sessionFiles[key]
@@ -1894,6 +1900,22 @@ func (file *openFile) extend(end int) bool {
 	}
 	file.data = append(file.data, make([]byte, end-len(file.data))...)
 	return true
+}
+
+// measureSave reads a save for the room the title is told it has
+// (storageUsed), which is only reported. A read that fails answers no save,
+// and is not kept as the session's failed save read as loadSave keeps one,
+// which ends the call that met it and holds back every write after it: that is
+// there so nothing a title writes is built on less than its save held, and
+// nothing is built on this read. The lists a write is built on — what was
+// made, what was removed, which databases there are — are still read through
+// loadSave.
+func (client *Client) measureSave(key string) ([]byte, bool) {
+	data, present, err := backend.ReadSave(client.saveStore, key)
+	if err != nil {
+		return nil, false
+	}
+	return data, present
 }
 
 // loadSave records an unrecoverable read failure so a native boundary reports

@@ -76,6 +76,16 @@ name its archive ships, if any, and never less than zero for any one of them. Th
 Nothing is refused for space: the figure is reported, and a save is never
 turned away to keep it true.
 
+Each save is counted once, whatever spelling the title opened it by
+(`./save.dat` is `save.dat`). A save an earlier session wrote that cannot be
+read counts nothing, and the question is still answered: the figure is only
+reported, so its read is not a failed save read, which ends the call that met
+it and holds back every write after it so that nothing is built on less than a
+save held. The platform's lists that a later write is built on — what was
+removed, what was made — are read as before, and one of them that cannot be
+read still ends the call. A save past the 4 MiB bound below counts at least
+that bound.
+
 What is refused is size beyond a bound on untrusted input: one file, or one
 database's records together, holds at most 4 MiB. A write that would pass it
 fails as a write does: `M_E_NOSPACE` in C, `IOException` from a `File` or its

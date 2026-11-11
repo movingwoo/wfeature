@@ -483,3 +483,107 @@ func TestFreeSpaceCountsTheSavesOfEarlierSessions(t *testing.T) {
 		}
 	}
 }
+
+// TestFreeSpaceCountsASaveOnceWhateverItsSpelling holds MC_fsAvailable to one
+// count per save. The store answers a key without its "." and empty segments,
+// and a title's spelling keeps them, so a save an earlier session wrote as
+// save.dat and this one opened as ./save.dat was counted twice: once as the
+// open file and once as a stored save the session held under no such name.
+func TestFreeSpaceCountsASaveOnceWhateverItsSpelling(t *testing.T) {
+	saves := t.TempDir()
+	_, first := wipicrttest.NewRuntime(t)
+	first.Client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
+	for name, size := range map[string]int{"save.dat": 1000, "slot/one.dat": 300} {
+		if handle := int32(wipicrttest.DatabaseCall(t, first, wipicrt.WIPICFileOpen, name, 4)); handle < 0 {
+			t.Fatalf("open %s for creation = %d", name, handle)
+		}
+		first.CFiles[name].Data = make([]byte, size)
+		if err := first.CFiles[name].Persist(first); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const want = wipicrt.WIPICFileStorageLimit - 1000 - 300
+	for _, spellings := range [][]string{{"./save.dat", "slot//one.dat"}, {"save.dat/", "./slot/./one.dat"}} {
+		_, second := wipicrttest.NewRuntime(t)
+		second.Client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
+		if got := wipicrttest.DatabaseCall(t, second, wipicrt.WIPICFileAvailable, ""); got != want {
+			t.Fatalf("free space before the saves are opened = %d, want %d", got, want)
+		}
+		for _, name := range spellings {
+			if handle := int32(wipicrttest.DatabaseCall(t, second, wipicrt.WIPICFileOpen, name, 1)); handle < 0 {
+				t.Fatalf("%s does not open: %d", name, handle)
+			}
+			if got := wipicrttest.DatabaseCall(t, second, wipicrt.WIPICFileAvailable, ""); got != want {
+				t.Fatalf("free space once the save is open as %s = %d, want %d", name, got, want)
+			}
+		}
+	}
+}
+
+// TestFreeSpaceIsAnsweredWhenAnUnopenedSaveCannotBeRead holds MC_fsAvailable to
+// docs/wipi-storage.md when a save the program never opened cannot be read: the
+// figure counts that save as nothing, and the call is answered, as a guest
+// reaches it. The read used to be kept as the session's failed save read,
+// which ended the call, and the program with it, and refused every save after
+// it. A save past the bound on one file counts the bound.
+func TestFreeSpaceIsAnsweredWhenAnUnopenedSaveCannotBeRead(t *testing.T) {
+	saves := t.TempDir()
+	_, first := wipicrttest.NewRuntime(t)
+	first.Client.SaveStore = wipicrt.NewDirectorySaveStore(saves)
+	for name, size := range map[string]int{"save.dat": 1000, "slot3.dat": 500} {
+		if handle := int32(wipicrttest.DatabaseCall(t, first, wipicrt.WIPICFileOpen, name, 4)); handle < 0 {
+			t.Fatalf("open %s for creation = %d", name, handle)
+		}
+		first.CFiles[name].Data = make([]byte, size)
+		if err := first.CFiles[name].Persist(first); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, second := wipicrttest.NewRuntime(t)
+	second.Client.SaveStore = wipicrttest.UnreadableSaves{
+		DirectorySaveStore: wipicrt.NewDirectorySaveStore(saves),
+		Keys:               map[string]bool{"db/slot3.dat": true},
+	}
+	if handle := int32(wipicrttest.DatabaseCall(t, second, wipicrt.WIPICFileOpen, "save.dat", 1)); handle < 0 {
+		t.Fatalf("save.dat does not open: %d", handle)
+	}
+	thread := armcore.NewThread(armcore.Context{})
+	available := uint32(wipicrt.WIPICTableFilesystem<<16 | wipicrt.WIPICFileAvailable)
+	got, err := second.HandleWIPICCall(thread, available)
+	if err != nil {
+		t.Fatalf("MC_fsAvailable = %v: a save it only measures ended the call", err)
+	}
+	if want := uint32(wipicrt.WIPICFileStorageLimit - 1000); got != want {
+		t.Fatalf("MC_fsAvailable = %d, want %d: the save that cannot be read counts nothing", got, want)
+	}
+	if second.SaveReadError != nil {
+		t.Fatalf("the space read was kept as a failed save read: %v", second.SaveReadError)
+	}
+	second.CFiles["save.dat"].Data = make([]byte, 1200)
+	if err := second.CFiles["save.dat"].Persist(second); err != nil {
+		t.Fatalf("a save after the space query is refused: %v", err)
+	}
+
+	if err := wipicrt.NewDirectorySaveStore(saves).StoreSave("db/huge.dat", make([]byte, wipicrt.MaxCFileBytes+1)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := second.HandleWIPICCall(thread, available); err != nil || got != 0 {
+		t.Fatalf("MC_fsAvailable beside a save past the bound on one file = %d, %v; want 0", got, err)
+	}
+
+	// The removal list is what the next removal is written over, so a read of
+	// it that fails is kept, by this question as by any other.
+	_, third := wipicrttest.NewRuntime(t)
+	third.Client.SaveStore = wipicrttest.UnreadableSaves{
+		DirectorySaveStore: wipicrt.NewDirectorySaveStore(saves),
+		Keys:               map[string]bool{wipicrt.DatabaseRemovedKey: true},
+	}
+	if err := wipicrt.NewDirectorySaveStore(saves).StoreSave(wipicrt.DatabaseRemovedKey, []byte("gone.dat\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := third.HandleWIPICCall(thread, available); err == nil {
+		t.Fatal("MC_fsAvailable was answered over a removal list that could not be read")
+	}
+}

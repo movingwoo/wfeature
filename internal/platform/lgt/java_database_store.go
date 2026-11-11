@@ -205,14 +205,20 @@ func (client *Client) moveDatabases(earlier []byte) error {
 // readDatabase answers a database's container and whether the database is
 // there. In its scope an empty entry is one the title deleted.
 func (client *Client) readDatabase(name string) ([]byte, bool) {
+	return client.readDatabaseThrough(name, client.loadSave)
+}
+
+// readDatabaseThrough is readDatabase with the store read through load, as
+// readFileThrough reads a file.
+func (client *Client) readDatabaseThrough(name string, load func(string) ([]byte, bool)) ([]byte, bool) {
 	if client.databasesAmongFiles() {
-		return client.readFile(databaseFileName(name))
+		return client.readFileThrough(databaseFileName(name), load)
 	}
 	key := databaseSaveKey(name)
 	var data []byte
 	stored := false
 	if client.saveStore != nil {
-		data, stored = client.loadSave(key)
+		data, stored = load(key)
 	}
 	if !stored {
 		if kept, ok := client.sessionFiles[key]; ok {

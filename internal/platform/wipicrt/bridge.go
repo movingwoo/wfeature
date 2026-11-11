@@ -362,25 +362,51 @@ func (runtime *Runtime) storageUsed() (int, error) {
 			used += size - packaged
 		}
 	}
-	for _, store := range runtime.CFiles {
+	held := make(map[string]bool, len(runtime.CFiles))
+	for name, store := range runtime.CFiles {
+		held[name] = true
 		add(len(store.Data), store.Packaged)
 	}
-	names, err := runtime.ListSaves(CFileScope)
-	if err != nil {
+	if err := runtime.AddStoredFiles(CFileScope, held, runtime.RemovedDatabases(), add); err != nil {
 		return 0, err
 	}
-	removed := runtime.RemovedDatabases()
+	return used, nil
+}
+
+// AddStoredFiles adds, through add, the saves of one scope that this session
+// holds no copy of, each with its size and the size of the archive's file of
+// the same name. held and removed are the names the session holds and the
+// names it deleted, as titles spelled them. KTF counts its C table and its
+// Java files with it, and the SKT Clet its C table, through storageUsed.
+//
+// **The names are compared as paths** (ListingPath). The store answers a key
+// without its "." and empty segments, and a title's spelling keeps them, so a
+// save opened as "./save.dat" was counted once from the session and again as
+// the stored "save.dat" the session did not hold under that spelling.
+//
+// A save is read for the figure only (ReadSaveForSpace): one that cannot be
+// read counts nothing and ends nothing, and one past the bound on a file
+// counts the bound.
+func (runtime *Runtime) AddStoredFiles(scope string, held, removed map[string]bool, add func(size, packaged int)) error {
+	names, err := runtime.ListSaves(scope)
+	if err != nil {
+		return err
+	}
+	held, removed = ListingPaths(held), ListingPaths(removed)
 	for _, name := range names {
-		if _, open := runtime.CFiles[name]; open || removed[name] || ReservedStorageName(CFileScope, name) {
+		path := ListingPath(name)
+		if held[path] || removed[path] || ReservedStorageName(scope, name) {
 			continue
 		}
-		if data, ok := runtime.LoadSave(CFileScope + "/" + name); ok {
-			// The packaged copy is the one an open would measure against.
-			packaged, _ := runtime.PackagedDatabase(name)
-			add(len(data), len(packaged))
+		data, present, over := runtime.ReadSaveForSpace(scope+"/"+name, MaxCFileBytes)
+		switch {
+		case over:
+			add(MaxCFileBytes, len(runtime.Client.Files[name]))
+		case present:
+			add(len(data), len(runtime.Client.Files[name]))
 		}
 	}
-	return used, nil
+	return nil
 }
 func (runtime *Runtime) GraphicsCharAdvance(character rune) int32 {
 	if character == 0 {

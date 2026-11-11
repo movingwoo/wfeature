@@ -869,7 +869,7 @@ func (client *Client) databaseRecordBytes(name string) int64 {
 		return int64(known.records)
 	}
 	records := 0
-	if data, stored := client.readDatabase(name); stored {
+	if data, stored := client.readDatabaseThrough(name, client.measureSave); stored {
 		decoded := &databaseContent{}
 		if decoded.decode(data) == nil {
 			records = decoded.recordBytes()

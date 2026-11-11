@@ -36,6 +36,10 @@ func TestReadSaveLimitRefusesAnEntryOneByteOver(t *testing.T) {
 	if !errors.Is(err, errSaveLimit) {
 		t.Fatalf("an entry one byte over the limit = %q, %t, %v", data, found, err)
 	}
+	// A caller that only measures tells the refusal from a read that failed.
+	if !SaveOverLimit(err) || SaveOverLimit(os.ErrPermission) || SaveOverLimit(nil) {
+		t.Fatalf("SaveOverLimit does not tell the refusal %v from a failed read", err)
+	}
 	if data != nil || found {
 		t.Fatalf("the refusal came with %d bytes, found=%t: a truncated read", len(data), found)
 	}
