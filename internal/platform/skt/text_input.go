@@ -65,6 +65,17 @@ func (runtime *Runtime) textComponentHandler(vm *jvm.VM, _ []jvm.Value) (jvm.Val
 	return jvm.ReferenceValue(state.textHandler), nil
 }
 
+// textComponentHandlerLoaded answers whether the handset's input method is
+// up. It answers false. One local title asks it in every paint and, when it
+// is true, draws the indicator of the mode the input method types in, from
+// images the platform's Toolkit holds and this runtime has none of; the method
+// was missing, so the first paint that reached it ended the title. With false
+// the title draws no indicator and goes on, and its field still types through
+// the handler as before.
+func (runtime *Runtime) textComponentHandlerLoaded(*jvm.VM, []jvm.Value) (jvm.Value, error) {
+	return jvm.IntValue(0), nil
+}
+
 // setTextComponent attaches the component the input method edits, or detaches
 // it when a title passes null — which is how the local title turns its field
 // off. Attaching starts a fresh composition either way: the cycle belongs to

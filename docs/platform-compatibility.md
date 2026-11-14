@@ -46,13 +46,14 @@ fixes require `native_module`.
 
 ### Registered fixes
 
-The registry holds 19 entries (last changed 2026-11-03). The `evidence` field of
+The registry holds 20 entries (last changed 2026-11-10). The `evidence` field of
 each entry is the authoritative index; this table groups them by fix.
 
 | Fix | Entries | Effect | Evidence |
 | --- | --- | --- | --- |
 | `skt.inclusive_set_clip` | 2 | MIDP `Graphics.setClip` treats extents as inclusive | [below](#skt-skt-original-specific-clip-compatibility), [SKT QA](history/skt.md#skt-qa-2026-09-29-inclusive-tile-clipping) |
 | `skt.resume_without_start` | 2 | Preserves a live game whose start callback would recreate it | [SKT resume](history/skt.md#skt-resume-2026-09-30), [SKT QA](history/skt.md#skt-qa-2026-09-29) |
+| `skt.resume_through_start` | 2 | Resumes through `startApp` again and lets a thread whose run returned start again, for a MIDlet whose `startApp` restarts the thread its `pauseApp` ended | [SKT resume](history/skt.md#skt-resume-2026-11-10) |
 | `skt.tutorial_name_cache` | 1 | Clears a stale item-name cache at a tutorial transition | [tutorial reproduction](history/skt.md#gameplay-qa-2026-09-20-skt-tutorial-reproduction) |
 | `lgt.visible_framebuffer_origin` | 1 | Removes a Clet's 24-row display-strip addition in initialization code | [below](#lgt-lgt-visible-framebuffer-origin-2026-09-15) |
 | `lgt.direct_framebuffer_origin` | 1 | Removes the strip offset used by direct pixel writers | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-direct-framebuffer-origin) |
@@ -129,7 +130,9 @@ was removed. The reporter withdrew the alleged second-platform edition; only the
 reported SKT original is in scope. The exception is the
 [`registry.json`](../internal/platform/compatibility/registry.json) entry
 `skt-inclusive-clip-001`, selected by the `java_class_set`
-[fingerprint](#entry-format). No original class bytes are bundled.
+[fingerprint](#entry-format). No original class bytes are bundled. The same
+entry also resumes this revision through `startApp`
+(`skt.resume_through_start`, [SKT resume](history/skt.md#skt-resume-2026-11-10)).
 
 For this code revision only, MIDP `Graphics.setClip` converts nonnegative
 inclusive extents to pixel counts. A request for 15 by 15 covers 16 by 16 where

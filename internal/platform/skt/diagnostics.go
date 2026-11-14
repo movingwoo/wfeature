@@ -58,6 +58,9 @@ func (runtime *Runtime) registerNative(class, name, descriptor string, method jv
 	runtime.nativeMu.Unlock()
 	return runtime.VM.RegisterNative(class, name, descriptor, func(vm *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
 		counter.calls.Add(1)
+		if runtime.lockingScreenGraphics(arguments) {
+			defer runtime.screenStateMu.Unlock()
+		}
 		return method(vm, arguments)
 	})
 }
@@ -74,6 +77,9 @@ func (runtime *Runtime) registerContextNative(class, name, descriptor string, me
 	runtime.nativeMu.Unlock()
 	return runtime.VM.RegisterContextNative(class, name, descriptor, func(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
 		counter.calls.Add(1)
+		if runtime.lockingScreenGraphics(arguments) {
+			defer runtime.screenStateMu.Unlock()
+		}
 		return method(call, arguments)
 	})
 }

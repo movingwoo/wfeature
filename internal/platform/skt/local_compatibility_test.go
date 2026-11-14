@@ -74,6 +74,35 @@ func TestLocalResumeCompatibilityFingerprints(t *testing.T) {
 	}
 }
 
+// The class sets resumed through startApp, their finished thread started
+// again, are the original archives' and no changed copy of them.
+func TestLocalResumeThroughStartFingerprints(t *testing.T) {
+	paths := testlocal.Value(t, "WFEATURE_SKT_RESUME_THROUGH_START_ARCHIVES", "original local archives")
+	for _, path := range strings.Split(paths, string(os.PathListSeparator)) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		archive, err := Open(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !archive.resumeThroughStart() {
+			t.Fatalf("%s: recognized class set is not resumed through startApp", path)
+		}
+		for name, original := range archive.Entries {
+			if !strings.HasSuffix(name, ".class") {
+				continue
+			}
+			archive.Entries[name] = append(bytes.Clone(original), 0)
+			if archive.resumeThroughStart() {
+				t.Fatalf("%s: changed class set is resumed through startApp", path)
+			}
+			archive.Entries[name] = original
+		}
+	}
+}
+
 func TestLocalTutorialCompatibilityFingerprint(t *testing.T) {
 	path := testlocal.Value(t, "WFEATURE_SKT_TUTORIAL_ARCHIVE", "an original local archive")
 	data, err := os.ReadFile(path)

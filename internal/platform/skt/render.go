@@ -370,9 +370,18 @@ func (runtime *Runtime) paintPendingCanvas() error {
 // forever through an object this runtime used to declare dead — which showed up
 // as a game that started its thread, drew its first logo, and died inside it.
 //
-// What a caller does not get is a second thread's worth of safety: two guest
-// threads drawing at once still race, as they always did.
+// **Its state is one caller's at a time** (lockingScreenGraphics). A title's
+// thread drawing through it and a paint this runtime runs — the one a resume
+// queues among them — used to meet in its clip and translation: the paint
+// reset them while the thread was setting its own, and the race detector
+// reported it on every park of two local titles. Each native handed this
+// object now holds screenStateMu for its call, and the reset below takes it
+// too. That makes each call whole, not a frame: a thread that sets a clip and
+// then draws can still find the paint's clip between the two, as a handset's
+// threads could.
 func (runtime *Runtime) screenGraphics(clip paintRect) *jvm.Object {
+	runtime.screenStateMu.Lock()
+	defer runtime.screenStateMu.Unlock()
 	if runtime.screenGraphicsObject == nil {
 		context := &graphicsContext{
 			pixels: runtime.frameRGBA,
@@ -913,6 +922,27 @@ func (runtime *Runtime) canvasReceiver(vm *jvm.VM, arguments []jvm.Value) (*jvm.
 		return nil, fmt.Errorf("receiver %s is not a Canvas", receiver.ClassName)
 	}
 	return receiver, nil
+}
+
+// lockingScreenGraphics takes screenStateMu when a native is handed the screen
+// Graphics, and reports whether it did; the caller releases it when the call
+// returns. A Graphics native runs no guest code, so no call holding the lock
+// reaches another that wants it.
+func (runtime *Runtime) lockingScreenGraphics(arguments []jvm.Value) bool {
+	for _, argument := range arguments {
+		if argument.Kind() != jvm.ValueReference {
+			continue
+		}
+		object, _ := argument.Reference()
+		if object == nil {
+			continue
+		}
+		if context, ok := object.Native.(*graphicsContext); ok && context.screen != nil {
+			runtime.screenStateMu.Lock()
+			return true
+		}
+	}
+	return false
 }
 
 func graphicsReceiver(arguments []jvm.Value) (*graphicsContext, error) {

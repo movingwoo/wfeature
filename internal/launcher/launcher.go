@@ -95,7 +95,7 @@ func (r Report) URL() string { return fmt.Sprintf("http://127.0.0.1:%d", r.Port)
 // point of running a server rather than a desktop application, and a user who
 // has to find their own address usually does not.
 func (r Report) LANURL() string {
-	address := lanAddress()
+	address := LANAddress()
 	if address == "" {
 		return ""
 	}
@@ -113,16 +113,17 @@ func (r Report) SecureURL() string {
 // SecureLANURL is the HTTPS address for another machine on the local network,
 // the one a phone opens for the secure page, or "" when there is none.
 func (r Report) SecureLANURL() string {
-	address := lanAddress()
+	address := LANAddress()
 	if r.SecurePort == 0 || address == "" {
 		return ""
 	}
 	return fmt.Sprintf("https://%s", net.JoinHostPort(address, strconv.Itoa(r.SecurePort)))
 }
 
-// lanAddress picks this machine's address on the local network: the first
-// routable one, preferring IPv4 because that is what a person can retype.
-func lanAddress() string {
+// LANAddress picks this machine's address on the local network: the first
+// routable one, preferring IPv4 because that is what a person can retype. It is
+// the address LANURL and SecureLANURL name, or "" when there is none.
+func LANAddress() string {
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return ""

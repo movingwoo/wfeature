@@ -474,7 +474,7 @@ output. A reconnect does so after the resumed game's first tick: a parked game's
 guest clock kept time, and a rebuild sent before a tick would anchor the page at
 the pre-park clock, get the next batch refused as early and cut every voice a
 second time. Normal collection is bounded to 4,096 operations and full
-reconstruction to 65,536, including pitch sensitivity, both parameter selectors
+reconstruction to 262,144, including pitch sensitivity, both parameter selectors
 and at most three controls for each of 2,048 PCM groups. PCM controls precede
 remaining wave tails. The page atomically preflights PCM metadata and the group
 bound before applying any events, including an untimed batch or a reset

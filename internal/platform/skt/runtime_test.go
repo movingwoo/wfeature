@@ -827,10 +827,12 @@ func TestRuntimeProcessesPauseResumeAndDestroyEvents(t *testing.T) {
 	}
 	assertLifecycleState(t, runtime, StatePaused, 3)
 
+	// A resume runs no second startApp (resumeStarted), so the guest's last
+	// callback is still its pauseApp.
 	if err := runtime.Resume(); err != nil {
 		t.Fatalf("Resume() error = %v", err)
 	}
-	assertLifecycleState(t, runtime, StateActive, 2)
+	assertLifecycleState(t, runtime, StateActive, 3)
 
 	if err := runtime.Destroy(true); err != nil {
 		t.Fatalf("Destroy() error = %v", err)
@@ -881,29 +883,6 @@ func TestInitialStartRuntimeExceptionForcesCleanupAndDestroysRuntime(t *testing.
 	if summary := runtime.Summary(); summary.State != StateDestroyed || !strings.Contains(err.Error(), summary.Error) {
 		t.Fatalf("Summary() = %+v, want destroyed state and original diagnostic", summary)
 	}
-}
-
-func TestResumeStateChangeExceptionPausesUntilRetry(t *testing.T) {
-	runtime := startLifecycleFixture(t)
-	if _, err := runtime.VM.InvokeStatic("LifecycleMIDlet", "deferNextStart", "()V"); err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.Pause(); err != nil {
-		t.Fatalf("Pause() error = %v", err)
-	}
-
-	if err := runtime.Resume(); err != nil {
-		t.Fatalf("Resume() error = %v", err)
-	}
-	assertLifecycleState(t, runtime, StatePaused, 7)
-	if summary := runtime.Summary(); summary.Error != "" {
-		t.Fatalf("Summary().Error = %q after deferred resume", summary.Error)
-	}
-
-	if err := runtime.Resume(); err != nil {
-		t.Fatalf("retry Resume() error = %v", err)
-	}
-	assertLifecycleState(t, runtime, StateActive, 2)
 }
 
 func TestConditionalDestroyRefusalPreservesStateAndCanRetry(t *testing.T) {
@@ -981,7 +960,8 @@ func TestResumeRequestQueuedDuringPause(t *testing.T) {
 	if err := runtime.Pause(); err != nil {
 		t.Fatalf("Pause() error = %v", err)
 	}
-	assertLifecycleState(t, runtime, StateActive, 2)
+	// The request resumes it, and a resume runs no second startApp.
+	assertLifecycleState(t, runtime, StateActive, 3)
 }
 
 func TestPauseRuntimeExceptionForcesCleanupAndDestroysRuntime(t *testing.T) {
@@ -1001,25 +981,6 @@ func TestPauseRuntimeExceptionForcesCleanupAndDestroysRuntime(t *testing.T) {
 	if err := runtime.Resume(); !errors.Is(err, ErrInvalidLifecycleState) {
 		t.Fatalf("Resume() after failure error = %v, want ErrInvalidLifecycleState", err)
 	}
-}
-
-func TestStartRuntimeExceptionForcesCleanupAndDestroysRuntime(t *testing.T) {
-	runtime := startLifecycleFixture(t)
-	if _, err := runtime.VM.InvokeStatic("LifecycleMIDlet", "failNextStart", "()V"); err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.Pause(); err != nil {
-		t.Fatalf("Pause() error = %v", err)
-	}
-
-	if err := runtime.Resume(); err == nil {
-		t.Fatal("Resume() succeeded despite fixture failure")
-	}
-	summary := runtime.Summary()
-	if summary.State != StateDestroyed || !strings.Contains(summary.Error, "resume MIDlet LifecycleMIDlet") {
-		t.Fatalf("Summary() = %+v, want destroyed state with resume diagnostic", summary)
-	}
-	assertLifecycleState(t, runtime, StateDestroyed, 4)
 }
 
 func TestForcedCleanupIgnoresDestroyRuntimeException(t *testing.T) {

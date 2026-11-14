@@ -118,12 +118,16 @@ func (core *Core) CaptureState() (CoreState, error) {
 	return saved, nil
 }
 
-// NewCoreFromState builds a detached core. Supplied execution limits must match
-// the record: an untrusted checkpoint cannot grant itself a larger step budget.
+// NewCoreFromState builds a detached core. The supplied step limit must match
+// the record: an untrusted checkpoint cannot grant itself a larger step
+// budget. The quantum need not. It is how often the build that saved the
+// record yielded to the Go scheduler, and no guest state, step count or call
+// frame depends on it, so the restored core runs at its own; refusing another
+// would refuse every quick save taken before a platform changed its quantum.
 // The caller reattaches platform callbacks before running any restored thread.
 func NewCoreFromState(saved CoreState, options CoreOptions) (*Core, error) {
 	core := NewCore(options)
-	if saved.Version != coreStateVersion || saved.Quantum != core.quantum || saved.MaxSteps != core.maxSteps {
+	if saved.Version != coreStateVersion || saved.MaxSteps != core.maxSteps {
 		return nil, fmt.Errorf("ARM state version or execution policy is incompatible")
 	}
 	memory, err := memoryFromState(saved.Memory)

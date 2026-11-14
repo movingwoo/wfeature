@@ -259,7 +259,8 @@ others take an absolute path.
 | `TestLocalSKTArchivesAnswerAKey` | `internal/platform/skt` | `WFEATURE_SKT_INTERACTIVE_ACCEPTANCE=1` | rung 3 |
 | `TestLocalSKTArchiveSoundsDecode` | `internal/platform/skt` | `WFEATURE_SKT_ACCEPTANCE=1` | every SMAF resource decodes |
 | `TestLocalClipCompatibilityArchive` | `internal/platform/skt` | `WFEATURE_SKT_CLIP_ARCHIVE` | registry entry `skt.inclusive_set_clip` |
-| `TestLocalResumeCompatibilityFingerprints` | `internal/platform/skt` | `WFEATURE_SKT_RESUME_ARCHIVES` | registry entry `skt.resume_without_start`, over comma-separated archives |
+| `TestLocalResumeCompatibilityFingerprints` | `internal/platform/skt` | `WFEATURE_SKT_RESUME_ARCHIVES` | registry entry `skt.resume_without_start`, over archives separated as `PATH` is |
+| `TestLocalResumeThroughStartFingerprints` | `internal/platform/skt` | `WFEATURE_SKT_RESUME_THROUGH_START_ARCHIVES` | registry fix `skt.resume_through_start`, over archives separated as `PATH` is |
 | `TestLocalTutorialCompatibilityFingerprint` | `internal/platform/skt` | `WFEATURE_SKT_TUTORIAL_ARCHIVE` | registry entry `skt.tutorial_name_cache` |
 | `TestLocalSKTArchiveCost` | `internal/platform/skt` | `WFEATURE_SKT_COST_ARCHIVE` | a run for the Go profiler ([JVM](jvm.md)) |
 | `TestLocalSKTCheckpoint` | `internal/session` | `WFEATURE_SKT_CHECKPOINT_ACCEPTANCE=1` | SKT checkpoints over the local archives ([SKT checkpoints](skt-checkpoints.md)) |
@@ -300,7 +301,11 @@ WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchivesBootAndPaint -v ./int
 | SKT | — | sound | `TestLocalSKTArchiveSoundsDecode` | `WFEATURE_SKT_ACCEPTANCE` |
 
 The sound stage asks whether every SMAF resource decodes; it is not a rung, so
-a title whose sounds fail has not fallen down the ladder. The interactive
+a title whose sounds fail has not fallen down the ladder. The KTF construct
+and start rungs run the constructor and `startApp` under the Host service
+allowance, as `startSession` does. The SKT rungs drive an archive whose
+executable is a native `.daf` program through the session a Host starts it
+with (the SKT Clet engine), and a MIDlet as before. The interactive
 judgment (settle, hold, release, compare, and *unanswerable* when the screen
 never settles) and the rules for settling again and for a second launch live in
 `internal/ladder`, shared by all three platforms.
@@ -3413,6 +3418,112 @@ extracted and started, served its embedded page at shell `v55`, answered
 `/api/status` with its version, refused a forwarded shutdown and stopped on
 `stop`. The ordinary, debug and race suites, `go vet` and the 431 Node tests
 passed on the repaired tree.
+
+<a id="release-check-for-060"></a>
+
+### Release check for 0.6.0
+
+On 2026-11-10 the seven corpora ran again on `main` at `b8de86c`, from a
+separate worktree with absolute paths and the default timeout, and were
+compared with the 0.5.2 record above and with the pre-release one after their
+corpus names were made alike. The KTF interactive rung stopped on its timeout
+again. Against both, one archive got worse: a KTF title whose title screen
+still animated at 240 ticks, so the interactive rung could not tell a key's
+change from its own. Run alone, 0.6.0-pre02 and `main` both stop there for
+that reason, and `fire` on that screen opens the title's menu. Every other
+archive reached the rung it reached before.
+
+The other local corpora, about seventy archives neither record holds, ran under
+0.6.0-pre02 and `main`: seven got further and none got worse. Two native SKT
+archives are SKT to the probes now and stopped at the boot rung, which read a
+MIDlet JAR, and two KTF WIPI 2.0 titles stopped at the start rung on the step
+allowance, because the probe started them outside the service allowance a
+session gives `startApp`; all four run under the CLI and the server. Both
+probes were mended afterwards: the KTF pair passes every rung, and the native
+pair passes boot and sustained, one of them interactive as well.
+
+A 500-tick digest A/B of the 607 local archives against 0.6.0-pre02 ended 558
+on the same digest, and 21 SKT archives moved between runs of either build. Of
+the 28 that moved, nine had failed to start under 0.6.0-pre02, eight KTF
+titles show the same screen at another point of its animation, an LGT title
+shows its notice where 0.6.0-pre02 asked to be started again, and ten SKT
+archives move on every run of either build. Over 6,000 ticks of eleven
+archives across the platforms, peak memory stayed within 2.5 MB and the
+instructions retired within 1% of 0.6.0-pre02.
+
+Three reviews — saves and upgrades; the server, the page and sound; the
+engines over time — and the sweeps after them found these. Each is covered by
+a test that failed before its repair:
+
+- **The SKT Clet answered `MC_fsAvailable` without the saves of earlier
+  sessions** until the program opened them: the engine's own count, which only
+  the Clet uses, counted open files alone
+  ([storage contract](wipi-storage.md#space);
+  `TestFreeSpaceCountsTheSavesOfEarlierSessions`).
+- **The HTTPS certificate was made again whenever any interface address
+  changed** — a temporary IPv6 address every day, a virtual adapter's at each
+  boot — and on every start of a machine with more addresses than a
+  certificate keeps, and each new one is a new warning on every phone. Only the
+  names and the addresses a person opens are now asked of a kept certificate
+  ([running](running.md#from-a-phone-over-https);
+  `TestAnAddressNobodyOpensKeepsTheCertificate`).
+- **A park froze an LGT C title** that does its pausing in its frame timer
+  ([history](history/lgt.md#lgt-paused-timer-2026-11-10)).
+- **A park froze, sped up or ended SKT titles**: a resume ran `startApp` again
+  rather than the title's `resumeApp` ([SKVM](skvm.md),
+  [history](history/skt.md#skt-resume-2026-11-10)). Two MIDlets written for
+  MIDP's reactivation, which start again in `startApp` the thread their
+  `pauseApp` ended, are resumed through `startApp` with a restartable `Thread`
+  (`skt.resume_through_start`). The same sweep found a MIDlet that ended in its
+  name screen on a missing `TextComponentHandler.isLoaded()`.
+- Three figures in the documentation had drifted from the code: the
+  reconstruction bound in [session](session.md) and
+  [audio ownership](audio-ownership.md), and the shell cache's name in
+  `web/README.md`.
+
+The park defects are older than 0.6.0-pre02, which behaves the same way.
+
+The repaired tree then ran these:
+
+- Each of the 96 local SKT MIDlets and Jlets parked for two seconds in the
+  middle of play beside a run never parked: 26 of the 28 that ended, stood
+  still, ran at double rate or answered no key after the park under the old
+  rule play on, and none that played on before stops.
+- The 148 local LGT archives parked after their opening and again after 30
+  keys, under the build before the change and this one: no new freeze, end,
+  refused command or error line, and two archives that stood still after the
+  deeper park answer every key.
+- A quick save 0.6.0-pre02 took of each of 578 archives loaded, and 568 ended
+  on 0.6.0-pre02's own digest 100 ticks later; the other ten are SKT archives,
+  which move on every run. None was refused.
+- A race build played 69 archives across the platforms through two parks
+  each. Two SKT titles that draw through the screen Graphics from their own
+  thread raced the repaint a resume now queues, on every run, where the build
+  before showed no race — the race two threads drawing at once had always had.
+  The Graphics' state took a lock of its own, and the SKT archives of the list
+  ran again with no report
+  ([history](history/skt.md#skt-resume-2026-11-10)). The rest showed none; the
+  heaviest KTF title ran out of the 15 minutes a race build is given.
+- The five `make dist` archives passed `make dist-check`. The darwin/arm64 one,
+  unpacked and started, served its embedded page with shell `v72`, answered
+  `/api/status` with `0.6.0` and HTTPS 100 ports above, kept its certificate
+  over a restart, refused a forwarded shutdown and stopped on `stop`. The
+  release route in [PWA acceptance](pwa-acceptance.md) from a 0.6.0-pre02
+  server to it passed all ten checks in Chromium and WebKit.
+- The ordinary, debug and race suites, `go vet` and the 569 Node tests passed.
+
+After these, KTF took the 16,384-instruction quantum the Clets run at, with a
+restore that runs a quick save at the restoring core's quantum: the five
+native modules ended on the same digests, the quick save the build before took
+of each of the 332 KTF archives that reach one loaded on that build's own
+digest, and the heaviest title used 17% less processor on the profiled release
+build, where it drew 171 frames in ten seconds instead of 181
+([history](history/armcore.md#ktf-quantum-2026-11-10)). Plain HTTP
+reaching the HTTPS port is redirected to the port it reached, wherever
+`-addr`, `-https` or the environment put it ([running](running.md)).
+
+Left for later, with a line in the local `TODO.md`: a check of HTTPS on an
+iPhone, which a headless browser cannot make.
 
 ### Older module implements cells
 

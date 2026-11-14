@@ -59,6 +59,7 @@ This consolidation adds no execution or acceptance evidence.
 - [A Clet's localtime is local time — 2026-10-31](#lgt-localtime-zone-2026-10-31)
 - [A packaged certificate served at the name a title opens — 2026-11-03](#lgt-new-archives-2026-11-03-packaged-certificate)
 - [What the other platforms already answered — 2026-11-05](#lgt-parity-fill-2026-11-05)
+- [A Clet's timer comes due while it is paused — 2026-11-10](#lgt-paused-timer-2026-11-10)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -8679,3 +8680,36 @@ Found and left:
 
 The validation of this pass, corpus and quick-save upgrade included, is with
 [the comparison](coverage.md#cross-platform-parity-2026-11-05).
+
+<a id="lgt-paused-timer-2026-11-10"></a>
+
+## A Clet's timer comes due while it is paused — 2026-11-10
+
+The 0.6.0 release review parked an LGT C title in the middle of play, and it
+never moved again: after the resume no key — soft keys, digits, arrows — drew
+a frame, where the same run unparked answered each with about 31. Both local
+revisions of the title did it, parked after six keys or after fifty, and
+0.6.0-pre02 did it too. A trace of the platform calls showed `pauseClet` and
+`resumeClet` setting flags and nothing else, and the first timer callback after
+the resume taking the pause path — `clipStop`, `clipClearData`,
+`clipFreePlayer`, `clipFree` — without arming itself again; after it nothing
+ran at all.
+
+The title does its pausing in its frame timer. `pauseClet` asks for it, the
+next callback carries it out and stops the timer, and `resumeClet` starts the
+timer again only once it has stopped. On a handset the clock goes on while a
+title is paused, so that callback ran during the pause. A park here moved no
+clock and served no timer between `pauseClet` and `resumeClet`: `resumeClet`
+found the timer still running and left it, and the callback that came after
+stopped it for good.
+
+`PauseClet` now fires, once, the timer that comes due first after an entered
+`pauseClet`, with the clock moved to its deadline when that lies ahead
+(`servePausedTimer`). It is the Clet's half of what `servePausedSerialCalls`
+does for a Java title ([the parity pass](#lgt-parity-fill-2026-11-05)). A
+title with no timer armed is told nothing more and its clock does not move.
+`TestParkingACletServesTheTimerThatComesDueWhilePaused` arms a timer whose
+callback writes the fixture's running mark; on the old code the mark is still
+the paused one after the pause. With the change both revisions of the title
+answer every key after a two-second park as a run that was never parked does.
+

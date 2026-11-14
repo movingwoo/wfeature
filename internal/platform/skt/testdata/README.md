@@ -127,6 +127,36 @@ replacing a Canvas and creating another worker. Package only
 `RESTARTING.MF`. The Go tests enable the selected resume behavior directly; the
 authored class set is not a production compatibility entry.
 
+`src/ResumingMIDlet.java` and `resuming.jar` are a MIDlet that declares a
+`resumeApp` of its own, as most SKT MIDlets do, counts its lifecycle callbacks
+and can make its next `resumeApp` throw. Compile it against the generated
+MIDP signatures and package only `ResumingMIDlet.class` with `RESUMING.MF`.
+
+`src/ResumeJlet.java` and `resume-jlet.jar` are a Jlet that counts its
+lifecycle callbacks; its `resumeApp` clears the flag its `pauseApp` set. It
+needs no generated signatures: compile it against this compile-only one, saved
+as `org/kwis/msp/lcdui/Jlet.java`, and package only `ResumeJlet.class` with
+`RESUME_JLET.MF`:
+
+```java
+package org.kwis.msp.lcdui;
+public abstract class Jlet {
+    protected abstract void startApp(String[] args);
+    protected void pauseApp() {}
+    protected void resumeApp() {}
+    protected abstract void destroyApp(boolean unconditional);
+}
+```
+
+`src/RestartLoopMIDlet.java` and `restart-loop.jar` are a MIDlet written for
+MIDP's reactivation on a handset VM that let a finished thread start again: its
+`pauseApp` ends its loop, and its `startApp` starts that same `Thread` again
+once `isAlive()` says the loop has ended. Compile it against the generated MIDP
+signatures and package only `RestartLoopMIDlet.class` and
+`RestartLoopMIDlet$Screen.class` with `RESTART_LOOP.MF`. The Go test selects
+the resume behavior directly; the authored class set is not a production
+compatibility entry.
+
 `src/SerialInputMIDlet.java` and `serial-input.jar` exercise an animation loop
 whose paint consumes keys and whose serial callback clears them. Package only
 `SerialInputMIDlet.class` and `SerialInputMIDlet$Loop.class` with

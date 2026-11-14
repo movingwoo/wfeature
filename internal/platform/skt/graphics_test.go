@@ -232,6 +232,58 @@ func TestTheScreenContextLocksAgainstTheFrameCopy(t *testing.T) {
 	group.Wait()
 }
 
+// **The screen Graphics' state is one caller's at a time.** A title keeps the
+// screen Graphics and draws through it from its own thread, while a paint the
+// runtime runs — the one a resume queues — resets the same object's clip and
+// translation first. The race detector reported the two on every park of two
+// local titles. This is that pair in miniature: a Graphics native from one
+// goroutine and the reset from another. It fails under `go test -race` without
+// screenStateMu.
+func TestTheScreenGraphicsStateIsOneCallersAtATime(t *testing.T) {
+	archive, err := Open(canvasJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Start(archive, Options{Framebuffer: newTestFramebuffer(t, 8, 8)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Destroy(true) })
+	whole := paintRect{maxX: 8, maxY: 8}
+	graphics := runtime.screenGraphics(whole)
+
+	var group sync.WaitGroup
+	group.Add(2)
+	failures := make(chan error, 2)
+	// The title's thread: state set through the natives it calls.
+	go func() {
+		defer group.Done()
+		for round := int32(0); round < 200; round++ {
+			if _, err := runtime.VM.InvokeVirtual(graphics, "setClip", "(IIII)V",
+				jvm.IntValue(round%4), jvm.IntValue(1), jvm.IntValue(4), jvm.IntValue(4)); err != nil {
+				failures <- err
+				return
+			}
+			if _, err := runtime.VM.InvokeVirtual(graphics, "translate", "(II)V", jvm.IntValue(1), jvm.IntValue(0)); err != nil {
+				failures <- err
+				return
+			}
+		}
+	}()
+	// The runtime's paint: the reset it starts from.
+	go func() {
+		defer group.Done()
+		for round := 0; round < 200; round++ {
+			runtime.screenGraphics(whole)
+		}
+	}()
+	group.Wait()
+	close(failures)
+	for err := range failures {
+		t.Fatal(err)
+	}
+}
+
 // A thread parked on a sound is released when the program ends. A loop has no
 // length of its own, so without this a title whose music nothing ever stops
 // leaves a thread waiting on a program that is gone.

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/launcher"
 	"github.com/movingwoo/wfeature/internal/webhost"
 	"github.com/movingwoo/wfeature/web"
 )
@@ -104,14 +105,15 @@ func TestStatusNamesTheHTTPSAddress(t *testing.T) {
 
 // **One certificate, kept.** Each new certificate is a new warning on every
 // phone, so the one written first is served again while it names every
-// address and has a month to run. A new address makes a new one that still
-// names the old addresses, so a machine moving between two networks settles.
+// address a person opens and has a month to run. A new one of those makes a
+// new certificate that still names the old addresses, so a machine moving
+// between two networks settles.
 // Apple's platforms refuse any server certificate valid longer than 825 days.
 func TestTheSelfSignedCertificateIsMadeOnceAndKept(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "tls")
 	home, office := net.ParseIP("192.168.0.60").To4(), net.ParseIP("10.1.2.3").To4()
 	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
-	first, created, err := secureCertificate(dir, []string{"localhost", "studio.local"}, []net.IP{home}, now)
+	first, created, err := secureCertificate(dir, []string{"localhost", "studio.local"}, []net.IP{home}, nil, now)
 	if err != nil || !created {
 		t.Fatalf("first certificate: created %v, %v", created, err)
 	}
@@ -132,32 +134,106 @@ func TestTheSelfSignedCertificateIsMadeOnceAndKept(t *testing.T) {
 		}
 	}
 
-	again, created, err := secureCertificate(dir, []string{"localhost", "studio.local"}, []net.IP{home}, now.Add(400*24*time.Hour))
+	again, created, err := secureCertificate(dir, []string{"localhost", "studio.local"}, []net.IP{home}, nil, now.Add(400*24*time.Hour))
 	if err != nil || created || !bytes.Equal(again.Certificate[0], first.Certificate[0]) {
 		t.Fatalf("the kept certificate was not served again: created %v, %v", created, err)
 	}
 
-	moved, created, err := secureCertificate(dir, []string{"localhost", "studio.local"}, []net.IP{office}, now.Add(time.Hour))
+	moved, created, err := secureCertificate(dir, []string{"localhost", "studio.local"}, []net.IP{office}, nil, now.Add(time.Hour))
 	if err != nil || !created {
 		t.Fatalf("a new address did not make a new certificate: created %v, %v", created, err)
 	}
 	if !slices.ContainsFunc(moved.Leaf.IPAddresses, office.Equal) || !slices.ContainsFunc(moved.Leaf.IPAddresses, home.Equal) {
 		t.Fatalf("addresses %v, want both networks", moved.Leaf.IPAddresses)
 	}
-	back, created, err := secureCertificate(dir, []string{"localhost", "studio.local"}, []net.IP{home}, now.Add(2*time.Hour))
+	back, created, err := secureCertificate(dir, []string{"localhost", "studio.local"}, []net.IP{home}, nil, now.Add(2*time.Hour))
 	if err != nil || created || !bytes.Equal(back.Certificate[0], moved.Certificate[0]) {
 		t.Fatalf("returning to the first network made yet another certificate: created %v, %v", created, err)
 	}
 
-	_, created, err = secureCertificate(dir, []string{"localhost", "studio.local"}, []net.IP{home}, moved.Leaf.NotAfter.Add(-29*24*time.Hour))
+	_, created, err = secureCertificate(dir, []string{"localhost", "studio.local"}, []net.IP{home}, nil, moved.Leaf.NotAfter.Add(-29*24*time.Hour))
 	if err != nil || !created {
 		t.Fatalf("a certificate with a month to run was not renewed: created %v, %v", created, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, certificateFile), []byte("not a certificate"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, created, err = secureCertificate(dir, []string{"localhost"}, nil, now); err != nil || !created {
+	if _, created, err = secureCertificate(dir, []string{"localhost"}, nil, nil, now); err != nil || !created {
 		t.Fatalf("an unreadable certificate was not replaced: created %v, %v", created, err)
+	}
+}
+
+// **An address nobody opens keeps the certificate.** An operating system
+// replaces a temporary IPv6 address about once a day and gives a virtual
+// adapter a new one at every boot, and a machine can have more addresses than
+// a certificate keeps. None is the address a phone is told to open, so none
+// makes a new certificate, which would be a new warning on every phone. A
+// certificate made anyway names them, the opened ones first and all of them.
+func TestAnAddressNobodyOpensKeepsTheCertificate(t *testing.T) {
+	names := []string{"localhost", "studio.local"}
+	opened := []net.IP{net.IPv4(127, 0, 0, 1).To4(), net.IPv6loopback, net.ParseIP("192.168.0.60").To4()}
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	temporary := func(day int) net.IP { return net.ParseIP("2001:db8:1:2:bbbb:" + strconv.Itoa(day) + ":2:3") }
+
+	dir := filepath.Join(t.TempDir(), "tls")
+	first, _, err := secureCertificate(dir, names, opened, []net.IP{temporary(0)}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(first.Leaf.IPAddresses, temporary(0).Equal) {
+		t.Fatalf("addresses %v leave out the machine's other address", first.Leaf.IPAddresses)
+	}
+	for day := 1; day <= 7; day++ {
+		served, created, err := secureCertificate(dir, names, opened, []net.IP{temporary(day)}, now.Add(time.Duration(day)*24*time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if created || !bytes.Equal(served.Certificate[0], first.Certificate[0]) {
+			t.Fatalf("day %d: a new temporary IPv6 address made a new certificate", day)
+		}
+	}
+
+	crowded := filepath.Join(t.TempDir(), "tls")
+	var adapters []net.IP
+	for index := 1; index <= maxCertificateAddresses+2; index++ {
+		adapters = append(adapters, net.IPv4(172, 17, byte(index), 1).To4())
+	}
+	made, _, err := secureCertificate(crowded, names, opened, adapters, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(made.Leaf.IPAddresses) != maxCertificateAddresses || !slices.EqualFunc(made.Leaf.IPAddresses[:len(opened)], opened, net.IP.Equal) {
+		t.Fatalf("addresses %v, want the opened ones first and %d in all", made.Leaf.IPAddresses, maxCertificateAddresses)
+	}
+	again, created, err := secureCertificate(crowded, names, opened, adapters, now.Add(time.Hour))
+	if err != nil || created || !bytes.Equal(again.Certificate[0], made.Certificate[0]) {
+		t.Fatalf("nothing changed between two starts, yet the second made a new certificate: created %v, %v", created, err)
+	}
+}
+
+// The addresses a kept certificate has to name are loopback, the one the
+// server prints for another device, and the one the HTTPS listener was given.
+func TestTheOpenedAddressesAreTheOnesAPersonIsGiven(t *testing.T) {
+	lan := net.ParseIP(launcher.LANAddress())
+	for _, probe := range []struct {
+		address string
+		given   net.IP
+	}{
+		{"[::]:11641", nil},
+		{"0.0.0.0:11641", nil},
+		{":11641", nil},
+		{"192.168.0.5:11700", net.ParseIP("192.168.0.5").To4()},
+	} {
+		got := openedAddresses(probe.address)
+		want := []net.IP{net.IPv4(127, 0, 0, 1).To4(), net.IPv6loopback}
+		for _, address := range []net.IP{lan, probe.given} {
+			if address != nil && !slices.ContainsFunc(want, address.Equal) {
+				want = append(want, address)
+			}
+		}
+		if !slices.EqualFunc(got, want, net.IP.Equal) {
+			t.Errorf("openedAddresses(%q) = %v, want %v", probe.address, got, want)
+		}
 	}
 }
 
@@ -199,7 +275,7 @@ func TestThePageAndItsSessionAreServedOverHTTPS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	certificate, _, err := secureCertificate(filepath.Join(root, "tls"), []string{"localhost"}, []net.IP{net.IPv4(127, 0, 0, 1).To4()}, time.Now())
+	certificate, _, err := secureCertificate(filepath.Join(root, "tls"), []string{"localhost"}, []net.IP{net.IPv4(127, 0, 0, 1).To4()}, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +283,7 @@ func TestThePageAndItsSessionAreServedOverHTTPS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secure := tls.NewListener(plain, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12})
+	secure := secureListener(plain, certificate)
 	requested := make(chan struct{})
 	served := make(chan error, 1)
 	go func() { served <- serve(listener, secure, handler, logger, requested) }()

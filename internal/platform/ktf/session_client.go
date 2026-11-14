@@ -9,12 +9,24 @@ import (
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
+// ktfQuantum is how many instructions the ARM core retires before it yields
+// to the Go scheduler on this platform, for a WIPI client and a native module
+// alike. A KTF title runs long stretches of guest code between platform calls,
+// and a yield every thousand instructions, the default, cost it a scheduler
+// wakeup each time, which on a machine with more than one processor can wake
+// another operating-system thread. This is the SKT and LGT Clet quantum. No
+// count the guest or a service allowance sees depends on it, since both count
+// steps rather than quanta, and a quick save a build with another quantum took
+// restores at this one (armcore.NewCoreFromState). See
+// docs/history/armcore.md#ktf-quantum-2026-11-10.
+const ktfQuantum = uint32(16384)
+
 func sessionCoreOptions(options SessionOptions) armcore.CoreOptions {
 	steps := options.MaxSteps
 	if steps == 0 {
 		steps = sessionDefaultMaxSteps
 	}
-	return armcore.CoreOptions{MaxSteps: steps}
+	return armcore.CoreOptions{MaxSteps: steps, Quantum: ktfQuantum}
 }
 
 // newSessionClient attaches the archive and Host boundaries without running

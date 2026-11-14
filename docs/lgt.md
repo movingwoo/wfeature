@@ -212,6 +212,18 @@ paused: a frame chain that re-arms itself reads the pause there, rather than
 running beside the chain `resumeApp` queues. A quick save runs none of them
 ([history](history/lgt.md#lgt-parity-fill-2026-11-05)).
 
+### A Clet's pause
+
+A Clet is told through the `pauseClet` and `resumeClet` it registered. Right
+after an entered `pauseClet` the timer that comes due first fires once, with
+the clock moved to its deadline when that lies ahead (`servePausedTimer`), as a
+handset went on keeping time and serving timers while a title was paused. A
+title that does its pausing in its frame timer — stopping its sound there and
+not arming the timer again, for `resumeClet` to start it — reads the pause in
+that callback; without it, one title stood still after every park. A title
+with no timer armed is told nothing more and its clock does not move
+([history](history/lgt.md#lgt-paused-timer-2026-11-10)).
+
 ## Display and input
 
 The LCD is the Host's choice, 240×320 by default (`-screen WxH` in the CLI).

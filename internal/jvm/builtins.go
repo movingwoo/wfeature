@@ -182,11 +182,9 @@ func (vm *VM) registerThreadBuiltins() {
 		if err != nil {
 			return VoidValue(), err
 		}
-		state := vm.threadState(thread)
-		state.mu.Lock()
-		if state.started {
-			state.mu.Unlock()
-			return VoidValue(), guestException("java/lang/IllegalThreadStateException", "thread already started")
+		state, err := vm.startableThreadState(thread)
+		if err != nil {
+			return VoidValue(), err
 		}
 		state.started = true
 		state.alive = true
@@ -885,6 +883,34 @@ func (vm *VM) contextBuiltin(class, name, descriptor string, method contextNativ
 	vm.builtinNatives[key] = true
 }
 
+// startableThreadState is the state Thread.start runs a thread on, returned
+// locked: the thread's own while it was never started, and under
+// RestartableThreads a fresh one put in its place once its run has returned. A
+// fresh one rather than the old one reset, because a join or an interrupt
+// reads the state it loaded without taking its lock, and the old one's done
+// channel is closed for good. The swap is a compare-and-swap, so of two starts
+// of one finished thread only one runs it; the other finds it alive.
+func (vm *VM) startableThreadState(thread *Object) (*guestThread, error) {
+	for {
+		state := vm.threadState(thread)
+		state.mu.Lock()
+		if !state.started {
+			return state, nil
+		}
+		alive := state.alive
+		state.mu.Unlock()
+		if alive || !vm.config.RestartableThreads {
+			return nil, guestException("java/lang/IllegalThreadStateException", "thread already started")
+		}
+		fresh := &guestThread{wake: make(chan struct{}, 1), done: make(chan struct{})}
+		fresh.mu.Lock()
+		if thread.thread.CompareAndSwap(state, fresh) {
+			return fresh, nil
+		}
+		fresh.mu.Unlock()
+	}
+}
+
 func (vm *VM) threadState(thread *Object) *guestThread {
 	state := thread.thread.Load()
 	if state == nil {
@@ -921,14 +947,29 @@ func (vm *VM) EndGuestThread(thread *Object) {
 		return
 	}
 	state := vm.threadState(thread)
+	state.end()
+	vm.unregisterThread(thread, state)
+}
+
+// end marks a run over: no longer alive, and its joins released.
+func (state *guestThread) end() {
 	state.mu.Lock()
 	if state.alive {
 		state.alive = false
 		close(state.done)
 	}
 	state.mu.Unlock()
+}
+
+// unregisterThread takes out the registry entry the run on state made, and
+// not the entry of a run started since: under RestartableThreads a thread may
+// be started again the moment it is no longer alive, before the run that
+// ended has got here.
+func (vm *VM) unregisterThread(thread *Object, state *guestThread) {
 	vm.threadMu.Lock()
-	delete(vm.threads, thread)
+	if registered, ok := vm.threads[thread]; !ok || registered == state {
+		delete(vm.threads, thread)
+	}
 	vm.notifyThreadCheckpoint()
 	vm.threadMu.Unlock()
 }

@@ -137,6 +137,7 @@ func (runtime *Runtime) registerSKVMNatives() error {
 		{skvm.ToolkitClass, "getScreenHeight", "()I", runtime.toolkitScreenHeight},
 
 		{skvm.TextComponentHandlerClass, "getTextComponentHandler", "()L" + skvm.TextComponentHandlerClass + ";", runtime.textComponentHandler},
+		{skvm.TextComponentHandlerClass, "isLoaded", "()Z", runtime.textComponentHandlerLoaded},
 		{skvm.TextComponentHandlerClass, "setTextComponent", "(L" + skvm.TextComponentClass + ";)V", runtime.setTextComponent},
 		{skvm.TextComponentHandlerClass, "getInputMode", "()I", runtime.textComponentInputMode},
 		{skvm.TextComponentHandlerClass, "clear", "()V", runtime.clearTextComponentHandler},

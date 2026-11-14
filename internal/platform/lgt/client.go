@@ -632,7 +632,33 @@ func (client *Client) PauseClet(ctx context.Context) error {
 	if client.clet.Pause == 0 {
 		return nil
 	}
-	return client.callClet(ctx, "pauseClet", client.clet.Pause, nil)
+	if err := client.callClet(ctx, "pauseClet", client.clet.Pause, nil); err != nil {
+		return err
+	}
+	return client.servePausedTimer(ctx)
+}
+
+// servePausedTimer fires, once, the timer that comes due first after a
+// pauseClet, with the clock moved to its deadline when it lies ahead.
+//
+// **A handset kept time while a title was paused**, so the title's own frame
+// timer came due during the pause, and a title can do its pausing there:
+// pauseClet sets a flag, and the next timer callback stops the sound, frees
+// what it holds and does not arm itself again, for resumeClet to start it
+// once more. A park here moved no clock and served no timer before the
+// resume, so that callback first ran after resumeClet, took the pause it
+// found and never armed itself again: the title stood still for good
+// (docs/history/lgt.md#lgt-paused-timer-2026-11-10). It is the Clet's half of
+// what servePausedSerialCalls does for a Java title.
+func (client *Client) servePausedTimer(ctx context.Context) error {
+	wait, armed := client.nextTimerDue()
+	if !armed {
+		return nil
+	}
+	if wait > 0 {
+		client.clock.advance(wait)
+	}
+	return client.serviceTimers(ctx)
 }
 
 func (client *Client) ResumeClet(ctx context.Context) error {

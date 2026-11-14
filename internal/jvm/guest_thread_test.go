@@ -1,8 +1,10 @@
 package jvm
 
 import (
+	_ "embed"
 	"errors"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -263,5 +265,90 @@ func TestInterruptedSleepConsumesTheInterrupt(t *testing.T) {
 	}
 	if got := waitForContract(t, vm, "interrupts", -1); got != 1 {
 		t.Fatalf("InterruptedExceptions from two sleeps after one interrupt = %d, want 1", got)
+	}
+}
+
+//go:embed testdata/ThreadRestart.class
+var threadRestartClass []byte
+
+// **A finished thread starts again only where a platform asks for it.** The
+// language refuses a second Thread.start, and a title written for a handset VM
+// that allowed one, its startApp starting again on the same object the loop
+// its pauseApp ended, stands still under that refusal. RestartableThreads runs
+// the thread again, registered as a live thread while it runs and gone once it
+// ends; a thread still running is refused either way.
+func TestAFinishedThreadStartsAgainOnlyWhenRestartable(t *testing.T) {
+	source := mapClassSource{"ThreadRestart": threadRestartClass}
+	refusing := New(source, Options{})
+	defer refusing.Close()
+	if _, err := refusing.InvokeStatic("ThreadRestart", "startAgain", "()Ljava/lang/Thread;"); !refusing.IsGuestException(err, "java/lang/IllegalThreadStateException") {
+		t.Fatalf("a second start of a finished thread = %v, want IllegalThreadStateException", err)
+	}
+
+	vm := New(source, Options{RestartableThreads: true})
+	defer vm.Close()
+	ints := func(method string) int32 {
+		t.Helper()
+		result, err := vm.InvokeStatic("ThreadRestart", method, "()I")
+		if err != nil {
+			t.Fatalf("%s() = %v", method, err)
+		}
+		value, err := result.Int32()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	for round := 1; round <= 3; round++ {
+		result, err := vm.InvokeStatic("ThreadRestart", "startAgain", "()Ljava/lang/Thread;")
+		if err != nil {
+			t.Fatalf("round %d: a second start of a finished thread = %v", round, err)
+		}
+		thread, err := result.Reference()
+		if err != nil || thread == nil {
+			t.Fatalf("round %d: startAgain() = %v/%v", round, thread, err)
+		}
+		if !vm.GuestThreadAlive(thread) || !slices.Contains(vm.ThreadObjects(), thread) {
+			t.Fatalf("round %d: the restarted thread is alive %v, registered %v", round, vm.GuestThreadAlive(thread), slices.Contains(vm.ThreadObjects(), thread))
+		}
+		if _, err := vm.InvokeStatic("ThreadRestart", "release", "()V"); err != nil {
+			t.Fatal(err)
+		}
+		for deadline := time.Now().Add(5 * time.Second); vm.GuestThreadAlive(thread) || slices.Contains(vm.ThreadObjects(), thread); time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("round %d: the restarted thread did not end", round)
+			}
+		}
+		if got := ints("runs"); got != 2 {
+			t.Fatalf("round %d: runs = %d, want 2", round, got)
+		}
+	}
+	if got := ints("startWhileAlive"); got != -1 {
+		t.Fatalf("a second start of a running thread answered %d, want the refusal (-1)", got)
+	}
+}
+
+// The run that ended unregisters itself after it stops being alive, and a
+// restartable thread can be started again in between: the ended run must leave
+// the new run's entry, or a checkpoint finds a live thread nobody registered
+// and the title's census misses it.
+func TestARunThatEndsLeavesTheNextRunRegistered(t *testing.T) {
+	vm := New(nil, Options{RestartableThreads: true, GuestThreadStarter: func(*Object) error { return nil }})
+	thread := &Object{ClassName: ThreadClass, Fields: map[string]Value{}}
+	if _, err := vm.InvokeVirtual(thread, "start", "()V"); err != nil {
+		t.Fatal(err)
+	}
+	first := vm.threadState(thread)
+	first.end()
+	if _, err := vm.InvokeVirtual(thread, "start", "()V"); err != nil {
+		t.Fatalf("a second start once the first run ended = %v", err)
+	}
+	vm.unregisterThread(thread, first)
+	if !vm.GuestThreadAlive(thread) || !slices.Contains(vm.ThreadObjects(), thread) {
+		t.Fatal("the first run's end took the second run out of the registry")
+	}
+	vm.EndGuestThread(thread)
+	if vm.GuestThreadAlive(thread) || slices.Contains(vm.ThreadObjects(), thread) {
+		t.Fatal("the second run's end left it alive or registered")
 	}
 }

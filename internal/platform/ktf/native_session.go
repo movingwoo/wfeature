@@ -121,7 +121,7 @@ func StartNativeSession(ctx context.Context, data []byte, options NativeSessionO
 	if steps == 0 {
 		steps = nativeSessionDefaultMaxSteps
 	}
-	client, err := LoadNativeClient(archive, armcore.CoreOptions{MaxSteps: steps})
+	client, err := LoadNativeClient(archive, armcore.CoreOptions{MaxSteps: steps, Quantum: ktfQuantum})
 	if err != nil {
 		return nil, err
 	}

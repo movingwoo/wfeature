@@ -21,6 +21,7 @@ no execution or acceptance evidence.
 - [Implemented instruction boundary](#implementation-implemented-instruction-boundary)
 - [The backend seam, and the corpus that guards it](#implementation-the-backend-seam-and-the-corpus-that-guards-it)
 - [Deliberately incomplete](#implementation-deliberately-incomplete)
+- [A larger quantum for KTF (2026-11-10)](#ktf-quantum-2026-11-10)
 
 <a id="implementation-arm-core-implementation-status"></a>
 
@@ -2546,3 +2547,59 @@ timers and persistence all sit on it), so what the subset lacks is found by a ti
 stopping somewhere in a sweep of a whole local set rather than by a probe or this
 list; see [`testing.md`](testing.md#implementation-testing). The list above is what
 stays deliberately absent regardless.
+
+<a id="ktf-quantum-2026-11-10"></a>
+
+## A larger quantum for KTF (2026-11-10)
+
+KTF sessions run at the default quantum of 1,000 instructions, so the core
+yields to the Go scheduler every thousand guest instructions; the SKT Clet and
+LGT run at 16,384 for the cost of that yield. On a machine with more than one
+processor a yield can wake another operating-system thread, and a heavy KTF
+WIPI 2.0 title showed it: its profile under load was nearly all scheduler, and
+200 paced ticks took 26 s, 6.8 s of it system time, where `GOMAXPROCS=1` took
+16 s and 0.06 s.
+
+A build with 16,384 for KTF sessions, measured before it was adopted:
+
+- **Behavior.** 500 ticks of each of the 336 local KTF archives ended on the
+  same digest under both builds, apart from three that move between runs of
+  either one.
+- **Cost.** The heavy title over 200 paced ticks, three rounds on a lightly
+  loaded machine: 8.95 s of user and 0.26 s of system time instead of 9.9 s
+  and 0.88 s — about 15% less processor. Under heavy load the system time fell
+  from 5.2 s and 2.4 s to 0.7 s and 0.5 s. A light title was unchanged.
+- **Quick saves.** The core state records its quantum, and a restore refused
+  another (`ARM state version or execution policy is incompatible`), so every
+  KTF slot taken before such a change would have been refused after it. The
+  quantum is not something the guest sees, so a restore could take the core's
+  own instead; that had to come with the change.
+
+**Adopted** with that restore. `ktfQuantum` sets 16,384 for a WIPI client and a
+native module alike, and `armcore.NewCoreFromState` runs a record at the
+restoring core's quantum while it still refuses another step ceiling
+(`TestACoreStateSavedAtAnotherQuantumRestoresAtTheCoresOwn`). On the build that
+adopted it:
+
+- The five native modules, which the measurement above left at the default,
+  ended 500 ticks on the same digests, and a keyed play of each gave the same
+  digests and frame counts in every window.
+- A quick save the build before took of each KTF archive loaded and ended
+  100 ticks later on that build's own digest: 332 slots. The other four
+  archives never reach a slot, as under 0.6.0-pre02; one more missed its slot
+  in the parallel sweep, under the build before, and took it run alone.
+- **How many frames the heavy title draws depends on the build.** Ten seconds
+  of play entered as the web host enters it, 32 ms an entry, after three
+  seconds of warm-up. Built without a profile: 188 frames against 178, for
+  52.9 ms of processor a frame instead of 56.3 ms. Built with the server's
+  profile, as a release is: 171 frames against 181, for 49.2 ms instead of
+  56.0 ms, and 17% less processor in all. The title paces itself, asking the
+  host to wait after each frame it finishes early. On the profiled build at
+  16,384 it finishes a frame's work sooner, in 47.5 ms against 50.7 ms, and
+  then asks to wait 9.0 ms against 3.7 ms, so it draws fewer frames on less
+  processor; no paint was dropped in any of these runs. The profile was taken
+  at the old quantum. The light title drew the same 98 or 99 frames for the
+  same 0.19 s on either build. The CLI's 200 paced ticks, which took 11.5 s
+  instead of 11.1 s, are the profiled build's longer waits: both builds drew
+  183 frames in them.
+

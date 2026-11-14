@@ -493,6 +493,7 @@ func definitions() []jvm.ClassDefinition {
 				// through the static rather than by making one.
 				{Name: "<init>", Descriptor: "()V", Access: jvm.AccessPrivate, Body: emptyInit},
 				{Name: "getTextComponentHandler", Descriptor: "()L" + TextComponentHandlerClass + ";", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
+				{Name: "isLoaded", Descriptor: "()Z", Access: jvm.AccessPublic | jvm.AccessStatic | jvm.AccessNative},
 				{Name: "setTextComponent", Descriptor: "(L" + TextComponentClass + ";)V", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "getInputMode", Descriptor: "()I", Access: jvm.AccessPublic | jvm.AccessNative},
 				{Name: "clear", Descriptor: "()V", Access: jvm.AccessPublic | jvm.AccessNative},

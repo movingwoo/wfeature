@@ -16,6 +16,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/movingwoo/wfeature/internal/launcher"
 )
 
 // A page opened by the machine's address over plain HTTP is not a secure
@@ -39,16 +41,24 @@ const (
 )
 
 // secureCertificate answers the certificate the HTTPS listener presents: the
-// one kept in dir while it names every given name and address and has more
-// than a month to run, otherwise a new one written there, which keeps the
-// addresses the old one named. created says which.
-func secureCertificate(dir string, names []string, addresses []net.IP, now time.Time) (certificate tls.Certificate, created bool, err error) {
+// one kept in dir while it names every name and every opened address and has
+// more than a month to run, otherwise a new one written there, which names
+// the opened addresses, then the other ones and those the old one named.
+// created says which.
+//
+// Only the addresses a person opens the page by are asked of a kept
+// certificate. The others an operating system adds and replaces on its own: a
+// temporary IPv6 address about once a day, a virtual adapter's at every boot.
+// Asking for those made a new certificate, so a new warning on every phone, at
+// each start after one changed, though no phone opens them; a phone that does
+// has accepted no certificate for that address and is warned once either way.
+func secureCertificate(dir string, names []string, opened, others []net.IP, now time.Time) (certificate tls.Certificate, created bool, err error) {
 	certificatePath, keyPath := filepath.Join(dir, certificateFile), filepath.Join(dir, keyFile)
 	// A missing or unreadable pair is replaced rather than served.
 	var previous []net.IP
 	if kept, err := tls.LoadX509KeyPair(certificatePath, keyPath); err == nil {
 		if leaf, err := x509.ParseCertificate(kept.Certificate[0]); err == nil {
-			if covers(leaf, names, addresses) && leaf.NotAfter.Sub(now) > certificateRenewal && !now.Before(leaf.NotBefore) {
+			if covers(leaf, names, opened) && leaf.NotAfter.Sub(now) > certificateRenewal && !now.Before(leaf.NotBefore) {
 				kept.Leaf = leaf
 				return kept, false, nil
 			}
@@ -56,7 +66,7 @@ func secureCertificate(dir string, names []string, addresses []net.IP, now time.
 		}
 	}
 
-	wanted := mergeAddresses(addresses, previous)
+	wanted := mergeAddresses(opened, others, previous)
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, false, fmt.Errorf("make the HTTPS key: %w", err)
@@ -115,16 +125,26 @@ func covers(leaf *x509.Certificate, names []string, addresses []net.IP) bool {
 	return true
 }
 
-// mergeAddresses answers the current addresses followed by those an older
-// certificate named, without repeats, at most maxCertificateAddresses.
-func mergeAddresses(current, previous []net.IP) []net.IP {
+// mergeAddresses answers the opened addresses, then the others in order,
+// without repeats. The opened ones are all kept, because a certificate that
+// left one out would be made again at every start; the others fill up to
+// maxCertificateAddresses.
+func mergeAddresses(opened []net.IP, others ...[]net.IP) []net.IP {
 	var merged []net.IP
-	for _, address := range append(slices.Clone(current), previous...) {
-		if len(merged) == maxCertificateAddresses {
-			break
-		}
+	add := func(address net.IP) {
 		if !slices.ContainsFunc(merged, address.Equal) {
 			merged = append(merged, address)
+		}
+	}
+	for _, address := range opened {
+		add(address)
+	}
+	for _, list := range others {
+		for _, address := range list {
+			if len(merged) >= maxCertificateAddresses {
+				return merged
+			}
+			add(address)
 		}
 	}
 	return merged
@@ -170,6 +190,29 @@ func reachableNames() []string {
 		names = append(names, host+".local")
 	}
 	return names
+}
+
+// openedAddresses are the addresses a person opens the page by, which a kept
+// certificate has to name: loopback, the one the server prints for another
+// device on the network, and the one the HTTPS listener was given, if any.
+func openedAddresses(secureAddress string) []net.IP {
+	addresses := []net.IP{net.IPv4(127, 0, 0, 1).To4(), net.IPv6loopback}
+	add := func(address net.IP) {
+		if address == nil || address.IsUnspecified() {
+			return
+		}
+		if v4 := address.To4(); v4 != nil {
+			address = v4
+		}
+		if !slices.ContainsFunc(addresses, address.Equal) {
+			addresses = append(addresses, address)
+		}
+	}
+	add(net.ParseIP(launcher.LANAddress()))
+	if host, _, err := net.SplitHostPort(secureAddress); err == nil {
+		add(net.ParseIP(host))
+	}
+	return addresses
 }
 
 // reachableAddresses are the machine's own addresses: loopback and every

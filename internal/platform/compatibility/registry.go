@@ -28,6 +28,12 @@ const SKTTutorialNameCache = "skt.tutorial_name_cache"
 // SKTResumeWithoutStart preserves a live game whose start callback recreates it.
 const SKTResumeWithoutStart = "skt.resume_without_start"
 
+// SKTResumeThroughStart resumes a recognized MIDlet through startApp again and
+// lets it start a thread whose run has returned, as the handset VM it was
+// written for did: its pauseApp ends a loop and its startApp starts that same
+// Thread object again.
+const SKTResumeThroughStart = "skt.resume_through_start"
+
 // LGTVisibleFramebufferOrigin removes a recognized native display-strip offset.
 const LGTVisibleFramebufferOrigin = "lgt.visible_framebuffer_origin"
 
@@ -149,7 +155,7 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		}
 		seen := make(map[string]bool)
 		for _, fix := range entry.Fixes {
-			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache || fix == SKTResumeWithoutStart) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
+			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache || fix == SKTResumeWithoutStart || fix == SKTResumeThroughStart) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
 				(fix == LGTCertificateMessage || fix == LGTPackagedCertificate || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule ||
 				(fix == SKTNativeSaveIdentity || fix == SKTNativeCertSubscriber || fix == SKTNativeDiscardOwnerState) && entry.Platform == "skt" && entry.Match.Kind == NativeModule
 			if !supported {
