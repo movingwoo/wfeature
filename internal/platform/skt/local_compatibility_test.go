@@ -26,11 +26,11 @@ func TestLocalClipCompatibilityArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !archive.legacyClipEndpoints() {
+	if !archive.classSetFixes().inclusiveSetClip {
 		t.Fatalf("unrecognized code digest: %s", archive.clipCodeDigest())
 	}
 	archive.Descriptor.Name = "Renamed Archive"
-	if !archive.legacyClipEndpoints() {
+	if !archive.classSetFixes().inclusiveSetClip {
 		t.Fatal("display name changed compatibility")
 	}
 	for name, data := range archive.Entries {
@@ -40,7 +40,7 @@ func TestLocalClipCompatibilityArchive(t *testing.T) {
 		changed := append([]byte(nil), data...)
 		changed[len(changed)-1] ^= 1
 		archive.Entries[name] = changed
-		if archive.legacyClipEndpoints() {
+		if archive.classSetFixes().inclusiveSetClip {
 			t.Fatalf("changed class %q retained compatibility", name)
 		}
 		archive.Entries[name] = data
@@ -58,7 +58,7 @@ func TestLocalResumeCompatibilityFingerprints(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !archive.resumeWithoutRestart() {
+		if !archive.classSetFixes().resumeWithoutStart {
 			t.Fatal("recognized class set lost its resume correction")
 		}
 		for name, original := range archive.Entries {
@@ -66,7 +66,7 @@ func TestLocalResumeCompatibilityFingerprints(t *testing.T) {
 				continue
 			}
 			archive.Entries[name] = append(bytes.Clone(original), 0)
-			if archive.resumeWithoutRestart() {
+			if archive.classSetFixes().resumeWithoutStart {
 				t.Fatal("changed class set received the resume correction")
 			}
 			archive.Entries[name] = original
@@ -87,7 +87,7 @@ func TestLocalResumeThroughStartFingerprints(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !archive.resumeThroughStart() {
+		if !archive.classSetFixes().resumeThroughStart {
 			t.Fatalf("%s: recognized class set is not resumed through startApp", path)
 		}
 		for name, original := range archive.Entries {
@@ -95,7 +95,7 @@ func TestLocalResumeThroughStartFingerprints(t *testing.T) {
 				continue
 			}
 			archive.Entries[name] = append(bytes.Clone(original), 0)
-			if archive.resumeThroughStart() {
+			if archive.classSetFixes().resumeThroughStart {
 				t.Fatalf("%s: changed class set is resumed through startApp", path)
 			}
 			archive.Entries[name] = original
@@ -114,14 +114,14 @@ func TestLocalTutorialCompatibilityFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := bytes.Clone(archive.Entries["f.class"])
-	if len(prepareTutorialCompatibility(archive)) != 1 {
+	if len(prepareTutorialCompatibility(archive, archive.classSetFixes())) != 1 {
 		t.Fatal("original revision not adapted")
 	}
 	if !bytes.Equal(original, archive.Entries["f.class"]) {
 		t.Fatal("original archive changed")
 	}
 	archive.Entries["extra.class"] = []byte("changed class set")
-	if len(prepareTutorialCompatibility(archive)) != 0 {
+	if len(prepareTutorialCompatibility(archive, archive.classSetFixes())) != 0 {
 		t.Fatal("changed revision adapted")
 	}
 }

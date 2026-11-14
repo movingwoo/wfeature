@@ -17,6 +17,13 @@ func saveLimitError(name string, size, limit int64) error {
 	return fmt.Errorf("%w: %q is %d bytes, the limit is %d", errSaveLimit, name, size, limit)
 }
 
+// SaveOverLimit reports whether an error from ReadSaveLimit is its refusal of
+// an entry larger than the limit, as against a read that failed: the entry is
+// there and holds more than the limit.
+func SaveOverLimit(err error) bool {
+	return errors.Is(err, errSaveLimit)
+}
+
 // SaveLimitReader is the bounded form of SaveReader: a store that knows how
 // large an entry is before it reads it, and so can refuse one that is too
 // large without allocating for it. A store that wraps another can pass the

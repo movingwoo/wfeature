@@ -2,9 +2,11 @@ package lgt
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 )
 
@@ -445,6 +447,47 @@ func TestStorageContractCSpace(t *testing.T) {
 	}
 	if got := callSlot(t, client, slotFsTotalSpace); got != quota {
 		t.Fatalf("MC_fsTotalSpace moved to %d", got)
+	}
+}
+
+// A save the title has not opened that cannot be read counts nothing toward
+// the room it is told, and the question is still answered. The read used to be
+// kept as the session's failed save read, which ended the call that met it and
+// held back every write after it, for a figure that is only reported.
+func TestStorageContractCSpaceSkipsASaveItCannotRead(t *testing.T) {
+	client, store, _ := fileFixture(t, nil)
+	files := newContractFiles(t, client)
+	files.save("save.dat", strings.Repeat("s", 1000))
+	files.save("slot3.dat", strings.Repeat("t", 500))
+
+	next := fixtureClient(t)
+	next.saveStore = store
+	store.unreadable = "fs/slot3.dat"
+	quota := int32(1 << 20)
+	if got := int32(callSlot(t, next, slotFsAvailable)); got != quota-1000 {
+		t.Fatalf("with one save unreadable %d is available, want %d", got, quota-1000)
+	}
+	if next.saveReadError != nil {
+		t.Fatalf("the read for the figure was kept as a failed save read: %v", next.saveReadError)
+	}
+	// Nor is it kept as the save's size: once the store reads the save again,
+	// the next question counts it.
+	store.unreadable = ""
+	if got := int32(callSlot(t, next, slotFsAvailable)); got != quota-1500 {
+		t.Fatalf("once the save reads again %d is available, want %d", got, quota-1500)
+	}
+	newContractFiles(t, next).save("after.dat", "kept")
+	if got := store.held("fs/after.dat"); got != "kept" {
+		t.Fatalf("a save after the question holds %q", got)
+	}
+
+	// The list of what was made is what the next write of it is built on, so
+	// a read of it that fails is kept, by this question as by any other.
+	listed := fixtureClient(t)
+	listed.saveStore = store
+	store.unreadable = fileCreatedKey
+	if err := listed.handleWIPICSVC(context.Background(), armcore.NewThread(armcore.NewContext()), slotFsAvailable); err == nil {
+		t.Fatal("the question was answered over a list of made files that could not be read")
 	}
 }
 

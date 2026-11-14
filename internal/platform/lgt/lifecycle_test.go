@@ -158,3 +158,385 @@ func TestParkingACletServesTheTimerThatComesDueWhilePaused(t *testing.T) {
 		t.Fatalf("a pause with no timer armed moved the clock from %d to %d ms", still, got)
 	}
 }
+
+// **The frame timer of a title doing real work comes due while it is paused
+// too.** The pause used to move the clock by the wait to the deadline, and
+// that fell short by the smaller of the wait and the work of the last frame:
+// a frame of a million and a half instructions is 10 ms of guest time, and
+// after it the timer was still armed when the title was resumed. A deadline
+// between two milliseconds, which a 1/60 s period makes, fell short by the
+// fraction with no work at all. The fixture's frame callback spends the work,
+// counts itself and arms itself again through MC_knlSetTimer, driven by real
+// ticks; the park comes right after a frame.
+func TestParkingACletServesItsFrameTimerAfterRealWork(t *testing.T) {
+	for _, frame := range []struct {
+		loops  uint32 // two instructions each
+		period uint32 // what the callback asks MC_knlSetTimer for, in ms
+	}{
+		{750_000, 50}, // 1.5 million instructions: 10 ms of work
+		{1_000, 1},    // answered at 1/60 s, with next to no work
+		{1_080_000, 1},
+	} {
+		ctx := context.Background()
+		session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{Width: 16, Height: 8, MaxSteps: 1 << 26})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := session.client
+		assembleTimerCallback(t, client, pauseFrameCode, pauseFrames, frame.loops, frame.period)
+		frames := func() uint32 { return fixtureWord(t, client, pauseFrames) }
+		armTimer(client, pauseFrameTimer, pauseFrameCode, time.Duration(client.clock.millis())*time.Millisecond)
+		// Play until a tick has run a frame, and park right after it.
+		before := frames()
+		for tick := 0; tick < 50; tick++ {
+			if err := session.Tick(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if frames() > before+2 {
+				break
+			}
+		}
+		played := frames()
+		if played <= before {
+			t.Fatalf("%d loops a %d ms frame: no frame ran before the park", frame.loops, frame.period)
+		}
+		if err := session.Pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if frames() == played {
+			t.Errorf("%d loops a %d ms frame: the frame timer did not come due while the title was paused", frame.loops, frame.period)
+		}
+		session.Close(ctx)
+	}
+}
+
+// **Every timer armed at the pause has its turn.** With a shorter timer armed
+// beside the frame timer that carries the pause, the pause used to fire the
+// shorter one alone and leave the frame timer armed, so the pause it carries
+// never ran. The fixture's pause entry stands in for the shorter timer and its
+// resume entry, which writes the running mark, for the frame timer.
+func TestParkingACletServesEveryTimerArmedAtThePause(t *testing.T) {
+	ctx := context.Background()
+	session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{Width: 16, Height: 8, MaxSteps: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(ctx)
+	client := session.client
+	const frameTimer, shorter = fixtureDataBase + 0x200, fixtureDataBase + 0x240
+	before := client.clock.millis()
+	client.mu.Lock()
+	client.timers[frameTimer] = &timer{structure: frameTimer, callback: client.clet.Resume,
+		dueAt: time.Duration(before+70) * time.Millisecond, armed: true}
+	client.timers[shorter] = &timer{structure: shorter, callback: client.clet.Pause,
+		dueAt: time.Duration(before+30) * time.Millisecond, armed: true}
+	client.mu.Unlock()
+
+	if err := session.Pause(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := lifecycleMark(t, session); got != fixtureLifecycleRunning {
+		t.Fatalf("the Clet is %d after a pause, want %d: the frame timer did not run while it was paused", got, fixtureLifecycleRunning)
+	}
+	if client.timers[frameTimer].armed || client.timers[shorter].armed {
+		t.Fatal("a timer armed at the pause is still armed after it")
+	}
+}
+
+// **A timer far ahead is left for after the resume.** The pause used to move
+// the clock to the earliest deadline however far off — a timeout is a guest's
+// 64-bit number of milliseconds — and fire it there: ten minutes of guest
+// time, or days, gone in a park. A first timer further than a minute off is
+// not fired, and the clock does not move for it.
+func TestParkingACletLeavesATimerFarAheadForTheResume(t *testing.T) {
+	ctx := context.Background()
+	session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{Width: 16, Height: 8, MaxSteps: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(ctx)
+	client := session.client
+	const structure = fixtureDataBase + 0x200
+	before := client.clock.millis()
+	client.mu.Lock()
+	client.timers[structure] = &timer{structure: structure, callback: client.clet.Resume,
+		dueAt: time.Duration(before+600_000) * time.Millisecond, armed: true}
+	client.mu.Unlock()
+
+	if err := session.Pause(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.clock.millis(); got != before {
+		t.Fatalf("the clock moved from %d to %d ms for a timer ten minutes off", before, got)
+	}
+	if !client.timers[structure].armed || lifecycleMark(t, session) != fixtureLifecyclePaused {
+		t.Fatal("a timer ten minutes off fired in the pause")
+	}
+}
+
+// The pause tests assemble timer callbacks and Clet entries into the fixture's
+// data, past what the fixture uses itself.
+const (
+	pauseFrameTimer = fixtureDataBase + 0x200 // timer structures
+	pauseOtherTimer = fixtureDataBase + 0x240
+	pauseFrames     = fixtureDataBase + 0x400 // what the callbacks count
+	pauseOtherCount = fixtureDataBase + 0x404
+	pauseRequested  = fixtureDataBase + 0x410 // pauseClet asked for a pause
+	pauseCarriedOut = fixtureDataBase + 0x414 // a frame carried it out
+	pauseFrameCode  = fixtureDataBase + 0x800
+	pauseOtherCode  = fixtureDataBase + 0x900
+	pauseEntryCode  = fixtureDataBase + 0xa00
+	resumeEntryCode = fixtureDataBase + 0xa80
+)
+
+// fixtureWord reads one word of the fixture's memory.
+func fixtureWord(t *testing.T, client *Client, address uint32) uint32 {
+	t.Helper()
+	var word [4]byte
+	if err := client.core.Memory().Read(address, word[:]); err != nil {
+		t.Fatal(err)
+	}
+	return binary.LittleEndian.Uint32(word[:])
+}
+
+// armTimer arms a timer the way MC_knlSetTimer leaves one, due at dueAt.
+func armTimer(client *Client, structure, callback uint32, dueAt time.Duration) {
+	client.mu.Lock()
+	client.timers[structure] = &timer{structure: structure, callback: callback, dueAt: dueAt, armed: true}
+	client.mu.Unlock()
+}
+
+// assembleTimerCallback writes at code a timer callback that spends loops (two
+// instructions each), counts itself at counter and, when period is not zero,
+// arms its own structure again through MC_knlSetTimer(structure, period, 0):
+// a frame loop that pays no attention to a pause.
+func assembleTimerCallback(t *testing.T, client *Client, code, counter, loops, period uint32) {
+	t.Helper()
+	setTimer, err := client.importFunction(importTableWIPIC, slotSetTimer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &assembler{base: code}
+	a.emit(armPushLR)
+	a.emit(armMovReg(5, 0)) // r5 = the timer's structure
+	emitWork(a, loops)
+	a.literal(7, counter)
+	a.emit(armLdr(0, 7, 0), armAddImm(0, 0, 1), armStr(0, 7, 0))
+	if period != 0 {
+		// MC_knlSetTimer(structure, period, 0, 0), last: the frame arms the next.
+		a.emit(armMovReg(0, 5))
+		a.literal(1, period)
+		a.emit(armMovImm(2, 0), armMovImm(3, 0))
+		a.literal(6, setTimer)
+		a.call(6)
+	}
+	a.emit(armMovImm(0, 0))
+	a.emit(armPopPC)
+	if err := client.core.Memory().Write(code, a.finish()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// emitWork spends loops, two instructions each, in r4: 150,000 instructions
+// are a millisecond of guest time.
+func emitWork(a *assembler, loops uint32) {
+	if loops == 0 {
+		return
+	}
+	a.literal(4, loops)
+	loop := a.here()
+	a.emit(0xe2544001)                                                           // subs r4, r4, #1
+	a.emit(0x1a000000 | uint32(int32(int64(loop)-int64(a.here()+8))/4)&0xffffff) // bne loop
+}
+
+// assemblePausingClet installs the pause a title does in its frame timer
+// (docs/history/lgt.md#lgt-paused-timer-2026-11-10): pauseClet asks for it, the
+// frame timer's next callback carries it out — it marks it done and does not
+// arm itself again — and resumeClet arms the frame timer again only once it
+// has stopped. A running frame counts itself and arms itself for period ms.
+// The frame timer is pauseFrameTimer, with its callback at pauseFrameCode.
+func assemblePausingClet(t *testing.T, client *Client, period uint32) {
+	t.Helper()
+	setTimer, err := client.importFunction(importTableWIPIC, slotSetTimer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(a *assembler) {
+		if err := client.core.Memory().Write(a.base, a.finish()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	arm := func(a *assembler) {
+		// MC_knlSetTimer(r0, period, 0, 0)
+		a.literal(1, period)
+		a.emit(armMovImm(2, 0), armMovImm(3, 0))
+		a.literal(6, setTimer)
+		a.call(6)
+	}
+
+	frame := &assembler{base: pauseFrameCode}
+	frame.emit(armPushLR)
+	frame.emit(armMovReg(5, 0))
+	frame.literal(7, pauseRequested)
+	frame.emit(armLdr(0, 7, 0), armCmpImm(0, 0))
+	toRun := len(frame.words)
+	frame.emit(0) // beq run
+	// The pause: marked done, the request cleared, and no next frame armed.
+	frame.literal(6, pauseCarriedOut)
+	frame.emit(armMovImm(0, 1), armStr(0, 6, 0))
+	frame.emit(armMovImm(0, 0), armStr(0, 7, 0))
+	frame.emit(armMovImm(0, 0), armPopPC)
+	frame.words[toRun] = armBranchEq(int32(len(frame.words) - toRun - 2))
+	// run: count the frame and arm the next.
+	frame.literal(7, pauseFrames)
+	frame.emit(armLdr(0, 7, 0), armAddImm(0, 0, 1), armStr(0, 7, 0))
+	frame.emit(armMovReg(0, 5))
+	arm(frame)
+	frame.emit(armMovImm(0, 0), armPopPC)
+	write(frame)
+
+	pause := &assembler{base: pauseEntryCode}
+	pause.emit(armPushLR)
+	pause.literal(7, pauseRequested)
+	pause.emit(armMovImm(0, 1), armStr(0, 7, 0))
+	pause.literal(4, fixtureLifecycle)
+	pause.emit(armMovImm(0, fixtureLifecyclePaused), armStr(0, 4, 0))
+	pause.emit(armMovImm(0, 0), armPopPC)
+	write(pause)
+
+	resume := &assembler{base: resumeEntryCode}
+	resume.emit(armPushLR)
+	resume.literal(7, pauseCarriedOut)
+	resume.emit(armLdr(0, 7, 0), armCmpImm(0, 0))
+	skip := len(resume.words)
+	resume.emit(0) // beq done
+	resume.emit(armMovImm(0, 0), armStr(0, 7, 0))
+	resume.literal(0, pauseFrameTimer)
+	arm(resume)
+	resume.words[skip] = armBranchEq(int32(len(resume.words) - skip - 2))
+	// done: the running mark.
+	resume.literal(4, fixtureLifecycle)
+	resume.emit(armMovImm(0, fixtureLifecycleRunning), armStr(0, 4, 0))
+	resume.emit(armMovImm(0, 0), armPopPC)
+	write(resume)
+
+	client.clet.Pause, client.clet.Resume = pauseEntryCode, resumeEntryCode
+}
+
+// framesOver ticks a session through span of guest time and answers how many
+// frames the title counted at counter meanwhile.
+func framesOver(t *testing.T, session *Session, counter uint32, span time.Duration) uint32 {
+	t.Helper()
+	ctx := context.Background()
+	client := session.client
+	frames, from := fixtureWord(t, client, counter), client.clock.millis()
+	for tick := 0; tick < 10_000 && time.Duration(client.clock.millis()-from)*time.Millisecond < span; tick++ {
+		if err := session.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return fixtureWord(t, client, counter) - frames
+}
+
+// **A frame loop that pays no attention to the pause runs one frame of it.**
+// The rounds used to go to whichever timer came due first, so a frame timer
+// that armed itself again was gone back to for as long as a timer armed at the
+// pause — an idle or a demo timer far off — still waited: sixteen frames and
+// 800 ms of guest time in a park that had run one.
+func TestParkingACletRunsOneFrameBesideATimerFarAhead(t *testing.T) {
+	ctx := context.Background()
+	session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{Width: 16, Height: 8, MaxSteps: 1 << 26})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(ctx)
+	client := session.client
+	assembleTimerCallback(t, client, pauseFrameCode, pauseFrames, 0, 50)
+	assembleTimerCallback(t, client, pauseOtherCode, pauseOtherCount, 0, 0)
+	before := client.clock.millis()
+	armTimer(client, pauseFrameTimer, pauseFrameCode, time.Duration(before+50)*time.Millisecond)
+	armTimer(client, pauseOtherTimer, pauseOtherCode, time.Duration(before+5_000)*time.Millisecond)
+
+	if err := session.Pause(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if frames := fixtureWord(t, client, pauseFrames); frames != 1 {
+		t.Errorf("the pause ran %d frames, want 1", frames)
+	}
+	if moved := client.clock.millis() - before; moved != 50 {
+		t.Errorf("the pause moved the clock %d ms, want 50", moved)
+	}
+	if fixtureWord(t, client, pauseOtherCount) != 0 || !client.timers[pauseOtherTimer].armed {
+		t.Error("the timer five seconds off fired in the pause")
+	}
+}
+
+// **A slow timer that carries the pause is served.** The pause served the
+// timers due within a second of it and nothing else, so a title whose frame
+// timer was a second and a half or three seconds off when its page was hidden
+// — a splash, a blink — carried the pause out after the resume instead, took
+// it for good and stood still.
+func TestParkingACletServesASlowTimerThatCarriesThePause(t *testing.T) {
+	for _, period := range []uint32{1_500, 3_000} {
+		ctx := context.Background()
+		session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{Width: 16, Height: 8, MaxSteps: 1 << 26})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := session.client
+		assemblePausingClet(t, client, period)
+		before := client.clock.millis()
+		armTimer(client, pauseFrameTimer, pauseFrameCode, time.Duration(before+int64(period))*time.Millisecond)
+
+		if err := session.Pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if fixtureWord(t, client, pauseCarriedOut) != 1 {
+			t.Errorf("a %d ms frame: the pause was not carried out while the title was paused", period)
+		}
+		if moved := client.clock.millis() - before; moved != int64(period) {
+			t.Errorf("a %d ms frame: the pause moved the clock %d ms", period, moved)
+		}
+		if err := session.Resume(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if frames := framesOver(t, session, pauseFrames, 3*time.Duration(period)*time.Millisecond); frames == 0 {
+			t.Errorf("a %d ms frame: the title stood still after the resume", period)
+		}
+		session.Close(ctx)
+	}
+}
+
+// **The pause is carried out beside a fast timer.** A title that also keeps a
+// timer at the 1/60 s floor had that one fired round after round until the
+// rounds ran out, 272 ms in, and a frame timer that carries the pause and came
+// due later than that was left armed.
+func TestParkingACletServesThePauseBesideAFastTimer(t *testing.T) {
+	for _, due := range []int64{300, 900} {
+		ctx := context.Background()
+		session, err := StartSession(ctx, fixtureArchive(t), SessionOptions{Width: 16, Height: 8, MaxSteps: 1 << 26})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := session.client
+		assemblePausingClet(t, client, 1_000)
+		assembleTimerCallback(t, client, pauseOtherCode, pauseOtherCount, 0, 1)
+		before := client.clock.millis()
+		armTimer(client, pauseOtherTimer, pauseOtherCode, time.Duration(before)*time.Millisecond+minTimerPeriod)
+		armTimer(client, pauseFrameTimer, pauseFrameCode, time.Duration(before+due)*time.Millisecond)
+
+		if err := session.Pause(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if fixtureWord(t, client, pauseCarriedOut) != 1 {
+			t.Errorf("a frame timer %d ms off: the pause was not carried out beside the fast timer", due)
+		}
+		if err := session.Resume(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if frames := framesOver(t, session, pauseFrames, 3*time.Second); frames == 0 {
+			t.Errorf("a frame timer %d ms off: the title stood still after the resume", due)
+		}
+		session.Close(ctx)
+	}
+}

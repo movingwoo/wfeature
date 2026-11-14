@@ -125,7 +125,11 @@ A connection the program asks for fails the way a KTF
 title's does, through the callback it registered, which the next round delivers
 before its timers: one title waits on that answer behind its "checking your data
 on the server" screen and shows nothing else until it comes. Pause, resume and
-destroy run the program's own entries, and destroy is one-way. Keys reach the program through its event handler — press 2 and release
+destroy run the program's own entries, and destroy is one-way. A pause runs
+`pauseClet` and serves none of the program's timers: an LGT Clet's pause also
+serves the timers armed at it, because a title there does its pausing in its
+frame timer ([LGT](lgt.md#a-clets-pause)), and no SKT Clet title is known to.
+Keys reach the program through its event handler — press 2 and release
 3, no repeat — which is what both titles compare against. The semihosting
 `svc #0xab` one title's C runtime carries is answered as a semihosting host that
 took it would, and dropped.

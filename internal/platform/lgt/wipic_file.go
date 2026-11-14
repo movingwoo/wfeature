@@ -822,6 +822,12 @@ func (client *Client) seekFile(handle uint32, offset int32, whence uint32) int32
 // A session with no store reads what it wrote from sessionFiles, where its
 // stores went, after an authentication adapter has answered for its own keys.
 func (client *Client) readFile(name string) ([]byte, bool) {
+	return client.readFileThrough(name, client.loadSave)
+}
+
+// readFileThrough is readFile with the store read through load: loadSave,
+// which keeps a read that failed, or measureSave, which does not.
+func (client *Client) readFileThrough(name string, load func(string) ([]byte, bool)) ([]byte, bool) {
 	if content := client.openContent(name); content != nil && content.dirty {
 		return bytes.Clone(content.data), true
 	}
@@ -830,7 +836,7 @@ func (client *Client) readFile(name string) ([]byte, bool) {
 	}
 	if key, err := fileSaveKey(name); err == nil {
 		if client.saveStore != nil {
-			if data, ok := client.loadSave(key); ok {
+			if data, ok := load(key); ok {
 				return data, true
 			}
 		}
@@ -1852,12 +1858,16 @@ func (client *Client) savedSize(path string) (int, bool) {
 		return known.size, known.saved
 	}
 	var data []byte
-	saved := false
+	saved, measured := false, true
 	if client.saveStore != nil {
-		data, saved = client.loadSave(key)
+		data, saved, measured = client.measureSave(key)
 	}
 	if !saved {
 		data, saved = client.sessionFiles[key]
+	}
+	if !measured {
+		// A read that failed is no answer to keep (measureSave).
+		return len(data), saved
 	}
 	if !ok || known.epoch != epoch {
 		known = storedSize{epoch: epoch}
@@ -1894,6 +1904,31 @@ func (file *openFile) extend(end int) bool {
 	}
 	file.data = append(file.data, make([]byte, end-len(file.data))...)
 	return true
+}
+
+// measureSave reads a save for the room the title is told it has
+// (storageUsed), which is only reported. A read that fails answers no save,
+// and is not kept as the session's failed save read as loadSave keeps one,
+// which ends the call that met it and holds back every write after it: that is
+// there so nothing a title writes is built on less than its save held, and
+// nothing is built on this read. The lists a write is built on — what was
+// made, what was removed, which databases there are — are still read through
+// loadSave.
+//
+// It answers ok false for a read that failed, which its callers do not keep
+// with the path's epoch as they keep an answer: kept, one read that failed
+// once left the save out of the figure for the rest of the session, after the
+// store had recovered and the title had read the save back. The failure is
+// logged, since nothing else reports it.
+func (client *Client) measureSave(key string) (data []byte, present, ok bool) {
+	data, present, err := backend.ReadSave(client.saveStore, key)
+	if err != nil {
+		if client.logger != nil {
+			client.logger.Debug("LGT space read failed", "key", key, "error", err)
+		}
+		return nil, false, false
+	}
+	return data, present, true
 }
 
 // loadSave records an unrecoverable read failure so a native boundary reports

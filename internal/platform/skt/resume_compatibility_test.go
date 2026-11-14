@@ -91,6 +91,119 @@ func TestRecognizedResumePreservesCanvasProgressAndWorkers(t *testing.T) {
 	}
 }
 
+// **skt.resume_without_start calls nothing on a resume.** Its class sets were
+// found to play on with a resume that ran no callback, before the general rule
+// (resumeStarted) gave every other title its resumeApp and a repaint, and they
+// keep that resume: here a declared resumeApp is not called, and a Canvas is
+// not painted again. A deferred initial start is still retried
+// (TestResumeCompatibilityDoesNotSkipDeferredInitialStart).
+func TestTheResumeWithoutStartRuleRunsNoCallbackAndNoRepaint(t *testing.T) {
+	archive, err := Open(resumingJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Start(archive, testRuntimeOptions(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Destroy(true) })
+	runtime.resumeWithoutStart = true
+	if err := runtime.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.State() != StateActive {
+		t.Fatalf("the MIDlet is %s after its resume", runtime.State())
+	}
+	if got := invokeFixtureInt(t, runtime, "ResumingMIDlet", "resumes"); got != 0 {
+		t.Fatalf("resumeApp ran %d times under the rule that calls nothing", got)
+	}
+	if got := invokeFixtureInt(t, runtime, "ResumingMIDlet", "starts"); got != 1 {
+		t.Fatalf("startApp ran %d times, want only the first", got)
+	}
+
+	archive, err = Open(canvasJAR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	painted, err := Start(archive, Options{Framebuffer: newTestFramebuffer(t, 4, 3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = painted.Destroy(true) })
+	painted.resumeWithoutStart = true
+	before := invokeFixtureInt(t, painted, "CanvasMIDlet", "paintCount")
+	if err := painted.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	if err := painted.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	if err := painted.RunPending(); err != nil {
+		t.Fatal(err)
+	}
+	if got := invokeFixtureInt(t, painted, "CanvasMIDlet", "paintCount"); got != before {
+		t.Fatalf("paintCount() = %d after a resume under the rule that calls nothing, want %d", got, before)
+	}
+}
+
+// **A title that pauses itself and asks to come back is resumed as a Host
+// resume is.** MIDP has the application manager answer resumeRequest by moving
+// the MIDlet to the active state through startApp; here the request resumes it
+// the way every resume does (resumeStarted), through the resumeApp it
+// declares and with no second startApp, and notifyPaused calls no pauseApp. No
+// local title calls resumeRequest (docs/skvm.md), so one that needs MIDP's
+// answer would get the registry's skt.resume_through_start, which answers this
+// request through startApp as it answers a Host resume.
+func TestAMIDletThatPausesItselfIsResumedByItsRequestWithoutASecondStart(t *testing.T) {
+	for _, throughStart := range []bool{false, true} {
+		archive, err := Open(resumingJAR)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime, err := Start(archive, testRuntimeOptions(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime.resumeThroughStart = throughStart
+		// The title's own calls, as its code makes them.
+		if _, err := runtime.VM.InvokeVirtual(runtime.MIDlet, "notifyPaused", "()V"); err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.RunPending(); err != nil {
+			t.Fatal(err)
+		}
+		if runtime.State() != StatePaused {
+			t.Fatalf("through start %v: the MIDlet is %s after notifyPaused", throughStart, runtime.State())
+		}
+		if _, err := runtime.VM.InvokeVirtual(runtime.MIDlet, "resumeRequest", "()V"); err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.RunPending(); err != nil {
+			t.Fatal(err)
+		}
+		if runtime.State() != StateActive {
+			t.Fatalf("through start %v: the MIDlet is %s after resumeRequest", throughStart, runtime.State())
+		}
+		starts, resumes := int32(1), int32(1)
+		if throughStart {
+			starts, resumes = 2, 0
+		}
+		if got := invokeFixtureInt(t, runtime, "ResumingMIDlet", "starts"); got != starts {
+			t.Fatalf("through start %v: startApp ran %d times, want %d", throughStart, got, starts)
+		}
+		if got := invokeFixtureInt(t, runtime, "ResumingMIDlet", "resumes"); got != resumes {
+			t.Fatalf("through start %v: resumeApp ran %d times, want %d", throughStart, got, resumes)
+		}
+		if got := invokeFixtureInt(t, runtime, "ResumingMIDlet", "pauses"); got != 0 {
+			t.Fatalf("through start %v: notifyPaused ran pauseApp %d times", throughStart, got)
+		}
+		_ = runtime.Destroy(true)
+	}
+}
+
 // **An SKT MIDlet is resumed, not started again.** The fixture's startApp
 // replaces its Canvas and starts another worker every time it runs, as SKT
 // titles do; under MIDP's reactivation through startApp a park left it with a
@@ -178,8 +291,8 @@ func TestAMIDletThatDeclaresResumeAppIsResumedThroughIt(t *testing.T) {
 		t.Fatalf("the MIDlet is %s after a resumeApp that threw", runtime.State())
 	}
 	count, first := runtime.UncaughtCallbacks()
-	if count != 1 || !strings.Contains(first, "java/lang/ArithmeticException") {
-		t.Fatalf("UncaughtCallbacks() = %d, %q; want the one resumeApp exception", count, first)
+	if count != 1 || !strings.Contains(first, "java/lang/ArithmeticException") || !strings.Contains(first, "ResumingMIDlet.resumeApp") {
+		t.Fatalf("UncaughtCallbacks() = %d, %q; want the one resumeApp exception, with the class that threw it", count, first)
 	}
 }
 

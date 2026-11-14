@@ -46,8 +46,25 @@ draw anyway — a paint already queued, or a serial call its frame loop hands
 itself back through — where a second paint would start a second frame loop.
 Two recognized class sets that recreate their Canvas and workers on every
 `startApp` keep their earlier correction (`skt.resume_without_start`), which
-calls nothing on a resume
+calls nothing on a resume — neither their `resumeApp` nor the repaint
 ([first investigation](history/skt.md#skt-resume-2026-09-30)).
+
+**A title's own `resumeRequest` is answered by the same rule.** MIDP has the
+application manager answer it by moving the MIDlet to the active state, which
+it does through `startApp`; here the request resumes a paused MIDlet as a Host
+resume does, through its `resumeApp` and without a second `startApp`, and a
+`notifyPaused` before it calls no `pauseApp`. This differs from the
+specification on purpose and has nothing local to check it against: of the 642
+local archives, none of the 634 that could be read holds the string
+`resumeRequest` (the eight that could not are KTF and LGT ones), and none of
+the 2,327 classes of the 96 SKT titles parked in the 0.6.0 review refers to
+`resumeRequest` or `notifyPaused`, where the same scan of the class files'
+constant pools and code finds `notifyDestroyed`, a title ending itself, in 58
+classes of 51 of the titles (the ignored `build/_review-273/lifecycle_scan.py`,
+which prints these counts). A title found to pause
+itself and ask to come back through `startApp` would get the registry's
+`skt.resume_through_start`, which answers its request through `startApp` as it
+answers a Host resume.
 
 Two local MIDlets are written for MIDP's reactivation: a park ends a thread
 of theirs, and their `startApp` starts that same `Thread` object again once
@@ -66,10 +83,15 @@ park the page makes lasts at least a reconnect.
 
 The repaint after a resume resets the one screen Graphics while a title that
 draws through it from its own thread, pushing frames with `XDisplay.refresh`,
-can be drawing: each native handed that Graphics holds its state lock for the
-call, and the reset takes it too (`screenStateMu`), so the two take turns call
-by call. A thread that sets a clip and then draws can still find the paint's
-clip between the two calls, as a handset's threads could. A park of no length
+can be drawing: each native handed that Graphics, or a `com.skt.m.Graphics2D`
+made over it, holds its state lock for the call, and the reset takes it too
+(`screenStateMu`), so the two take turns call by call. A thread that sets a
+clip and then draws can still find the paint's clip between the two calls, as
+a handset's threads could. The state lock comes before the render lock that
+guards the pixels, and nothing waits for it while holding the render lock: the
+`Toolkit` class initializer, which asks for the screen Graphics on a title's
+first read of a `Toolkit` field, did, and stopped for good against a draw on
+the screen from another of the title's threads. A park of no length
 (`-park tick:0` in the CLI) leaves one Jlet's earlier timer thread running
 beside the one its `resumeApp` starts; a park the page makes gives that thread
 time to stop. See [the resume rule](history/skt.md#skt-resume-2026-11-10).

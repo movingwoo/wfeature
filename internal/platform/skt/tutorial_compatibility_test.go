@@ -17,7 +17,7 @@ func TestTutorialCacheTransitionJAR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(prepareTutorialCompatibility(archive)) != 0 {
+	if len(prepareTutorialCompatibility(archive, archive.classSetFixes())) != 0 {
 		t.Fatal("unregistered fixture selected original compatibility")
 	}
 	original := bytes.Clone(archive.Entries["TutorialCacheMIDlet.class"])

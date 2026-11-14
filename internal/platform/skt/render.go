@@ -925,9 +925,15 @@ func (runtime *Runtime) canvasReceiver(vm *jvm.VM, arguments []jvm.Value) (*jvm.
 }
 
 // lockingScreenGraphics takes screenStateMu when a native is handed the screen
-// Graphics, and reports whether it did; the caller releases it when the call
-// returns. A Graphics native runs no guest code, so no call holding the lock
-// reaches another that wants it.
+// Graphics, or a com.skt.m.Graphics2D made over it, and reports whether it
+// did; the caller releases it when the call returns. A Graphics native runs no
+// guest code, so no call holding the lock reaches another that wants it.
+//
+// A Graphics2D draws through the Graphics it was made over, at that
+// Graphics' clip and translation, so one made over the screen's has the
+// screen's state as much as the Graphics does. Its natives used to take no
+// lock, and a title drawing through one from its own thread raced the reset a
+// paint starts with, as the Graphics' own natives had.
 func (runtime *Runtime) lockingScreenGraphics(arguments []jvm.Value) bool {
 	for _, argument := range arguments {
 		if argument.Kind() != jvm.ValueReference {
@@ -937,10 +943,26 @@ func (runtime *Runtime) lockingScreenGraphics(arguments []jvm.Value) bool {
 		if object == nil {
 			continue
 		}
-		if context, ok := object.Native.(*graphicsContext); ok && context.screen != nil {
+		if drawsOnTheScreen(object) {
 			runtime.screenStateMu.Lock()
 			return true
 		}
+	}
+	return false
+}
+
+// drawsOnTheScreen reports whether an object is the screen Graphics or a
+// Graphics2D made over it.
+func drawsOnTheScreen(object *jvm.Object) bool {
+	switch native := object.Native.(type) {
+	case *graphicsContext:
+		return native.screen != nil
+	case *graphics2DData:
+		if native == nil || native.graphics == nil {
+			return false
+		}
+		context, ok := native.graphics.Native.(*graphicsContext)
+		return ok && context.screen != nil
 	}
 	return false
 }

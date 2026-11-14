@@ -885,6 +885,35 @@ func TestInitialStartRuntimeExceptionForcesCleanupAndDestroysRuntime(t *testing.
 	}
 }
 
+// A resume through startApp is what a class set selecting
+// skt.resume_through_start gets, and it keeps MIDP's answer to a startApp that
+// refuses with MIDletStateChangeException: the MIDlet stays paused until the
+// next resume tries again. Every other title is resumed without a second
+// startApp (resumeStarted), so the fixture selects the rule here.
+func TestResumeStateChangeExceptionPausesUntilRetry(t *testing.T) {
+	runtime := startLifecycleFixture(t)
+	runtime.resumeThroughStart = true
+	if _, err := runtime.VM.InvokeStatic("LifecycleMIDlet", "deferNextStart", "()V"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Pause(); err != nil {
+		t.Fatalf("Pause() error = %v", err)
+	}
+
+	if err := runtime.Resume(); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	assertLifecycleState(t, runtime, StatePaused, 7)
+	if summary := runtime.Summary(); summary.Error != "" {
+		t.Fatalf("Summary().Error = %q after deferred resume", summary.Error)
+	}
+
+	if err := runtime.Resume(); err != nil {
+		t.Fatalf("retry Resume() error = %v", err)
+	}
+	assertLifecycleState(t, runtime, StateActive, 2)
+}
+
 func TestConditionalDestroyRefusalPreservesStateAndCanRetry(t *testing.T) {
 	runtime := startLifecycleFixture(t)
 
@@ -981,6 +1010,30 @@ func TestPauseRuntimeExceptionForcesCleanupAndDestroysRuntime(t *testing.T) {
 	if err := runtime.Resume(); !errors.Is(err, ErrInvalidLifecycleState) {
 		t.Fatalf("Resume() after failure error = %v, want ErrInvalidLifecycleState", err)
 	}
+}
+
+// A runtime exception from a startApp a resume runs — under
+// skt.resume_through_start, the one rule that still runs it — is MIDP's failed
+// start: the runtime is cleaned up and destroyed with the resume named in the
+// diagnostic.
+func TestStartRuntimeExceptionForcesCleanupAndDestroysRuntime(t *testing.T) {
+	runtime := startLifecycleFixture(t)
+	runtime.resumeThroughStart = true
+	if _, err := runtime.VM.InvokeStatic("LifecycleMIDlet", "failNextStart", "()V"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Pause(); err != nil {
+		t.Fatalf("Pause() error = %v", err)
+	}
+
+	if err := runtime.Resume(); err == nil {
+		t.Fatal("Resume() succeeded despite fixture failure")
+	}
+	summary := runtime.Summary()
+	if summary.State != StateDestroyed || !strings.Contains(summary.Error, "resume MIDlet LifecycleMIDlet") {
+		t.Fatalf("Summary() = %+v, want destroyed state with resume diagnostic", summary)
+	}
+	assertLifecycleState(t, runtime, StateDestroyed, 4)
 }
 
 func TestForcedCleanupIgnoresDestroyRuntimeException(t *testing.T) {

@@ -3525,6 +3525,41 @@ reaching the HTTPS port is redirected to the port it reached, wherever
 Left for later, with a line in the local `TODO.md`: a check of HTTPS on an
 iPhone, which a headless browser cannot make.
 
+A review of the repairs then found these, each now covered by a test that
+fails on the repair it follows:
+
+- **A title's first read of a `Toolkit` field could stop for good against a
+  draw on the screen** from another of its threads: the class initializer held
+  the render lock while it waited for the screen Graphics' state lock, which a
+  drawing native takes first ([SKVM](skvm.md);
+  `TestTheToolkitScreenGraphicsTakesTheLocksInTheDrawingOrder`). A
+  `com.skt.m.Graphics2D` made over the screen Graphics took no state lock at
+  all (`TestAGraphics2DOverTheScreenTakesTheScreenGraphicsStateLock`).
+- **The LGT pause timer fell short of its deadline** after a frame of real
+  work, fired the first timer alone and moved the clock to a timer however far
+  ahead ([history](history/lgt.md#lgt-paused-timer-2026-11-10)).
+- **Asking how much room is left ended the game** when a save it had not
+  opened could not be read, on all three platforms, and KTF and the SKT Clet
+  counted a save opened under another spelling twice
+  ([storage contract](wipi-storage.md#space);
+  `TestFreeSpaceIsAnsweredWhenAnUnopenedSaveCannotBeRead`,
+  `TestFreeSpaceCountsASaveOnceWhateverItsSpelling`,
+  `TestSpaceCountsASaveOnceAndSkipsOneItCannotRead`,
+  `TestStorageContractCSpaceSkipsASaveItCannotRead`). Neither local native SKT
+  title asks for the figure in its opening and menus, so it is read from the
+  store on each question, as KTF's is.
+- **HTTPS**: the redirect from plain HTTP was permanent and is temporary now; a
+  `-https` address the machine does not have made a new certificate before the
+  start failed; a new host name made a new one; and the address printed for
+  another device was the first interface's, a virtual adapter's on Windows,
+  where it is now the one the route leaves by
+  ([running](running.md#from-a-phone-over-https)).
+- A title's own `resumeRequest` is answered by the resume rule, which the
+  [SKVM](skvm.md) page now says, with what was scanned for it; the registry
+  refuses an entry that selects both resume rules; and the two lifecycle
+  tests deleted with the rule run again, on `skt.resume_through_start`, the
+  one rule under which a resume still runs `startApp`.
+
 ### Older module implements cells
 
 An older relocatable module leaves each implements-list entry as a reference

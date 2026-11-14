@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 )
 
@@ -19,6 +20,12 @@ import (
 // bound on what a title's numbers may make the Host hold, not a quota: no
 // save comes near it.
 const maxStoredBytes = 4 << 20
+
+// maxStoredDatabaseForm bounds a database's stored form as the space count
+// reads it: maxStoredBytes of records, each after the four bytes of length the
+// form gives it, behind its four-byte count. A form past it holds more than a
+// write could have put there, and counts as maxStoredBytes.
+const maxStoredDatabaseForm = 4 + 4*backend.MaxSaveRecords + maxStoredBytes
 
 // storageUsed counts each file and database the title has written at its size
 // less the size of the archive's file of the same name, never below zero. A
@@ -41,7 +48,7 @@ func (runtime *initializationRuntime) platformStorageUsed() (int, error) {
 		seen[name] = true
 		add(len(store.Data), store.Packaged)
 	}
-	if err := runtime.addStoredFiles(wipicrt.CFileScope, seen, runtime.RemovedDatabases(), add); err != nil {
+	if err := runtime.AddStoredFiles(wipicrt.CFileScope, seen, runtime.RemovedDatabases(), add); err != nil {
 		return 0, err
 	}
 	seen = make(map[string]bool)
@@ -50,7 +57,7 @@ func (runtime *initializationRuntime) platformStorageUsed() (int, error) {
 		seen[name] = true
 		add(len(data), len(runtime.client.Files[name]))
 	}
-	if err := runtime.addStoredFiles(wipicrt.GuestFileScope, seen, runtime.RemovedGuestFiles(), add); err != nil {
+	if err := runtime.AddStoredFiles(wipicrt.GuestFileScope, seen, runtime.RemovedGuestFiles(), add); err != nil {
 		return 0, err
 	}
 
@@ -67,19 +74,26 @@ func (runtime *initializationRuntime) platformStorageUsed() (int, error) {
 	// file as a database record — one keeps 1.4 MB of its own data so — had
 	// that whole file counted, was told it had no room left, and refused to
 	// start (docs/history/ktf.md#ktf-storage-review-2026-10-22).
+	//
+	// Its files are read for the figure only (GuestFileForSpace), as the saves
+	// below are: a Java file of the database's name that an earlier session
+	// wrote and that cannot be read ended the question, through GuestFile,
+	// after the saves themselves had stopped ending it.
 	packagedBytes := func(name string) int {
-		if records, ok := runtime.packagedRecordDatabase(name, 0); ok {
+		if records, ok := runtime.packagedRecordDatabaseThrough(name, 0, runtime.GuestFileForSpace); ok {
 			return recordBytes(records)
 		}
 		return len(runtime.client.Files[strings.TrimPrefix(name, "/")])
 	}
+	// The names are compared as paths, as AddStoredFiles compares them: the
+	// store answers a database opened as "./scores" by "scores".
 	seen = make(map[string]bool)
 	for name, store := range runtime.recordDatabases {
-		seen[name] = true
+		seen[wipicrt.ListingPath(name)] = true
 		add(recordBytes(store.records), packagedBytes(name))
 	}
 	for name, store := range runtime.databases {
-		seen["\x00"+name] = true
+		seen["\x00"+wipicrt.ListingPath(name)] = true
 		add(recordBytes(store.records), packagedBytes(name))
 	}
 	for _, scope := range []struct {
@@ -89,13 +103,20 @@ func (runtime *initializationRuntime) platformStorageUsed() (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		removed := runtime.recordDatabaseRemovals(scope.removedKey)
+		removed := wipicrt.ListingPaths(runtime.recordDatabaseRemovals(scope.removedKey))
 		for _, name := range names {
-			if seen[scope.prefix+name] || removed[name] || wipicrt.ReservedStorageName(scope.name, name) {
+			path := wipicrt.ListingPath(name)
+			if seen[scope.prefix+path] || removed[path] || wipicrt.ReservedStorageName(scope.name, name) {
 				continue
 			}
-			data, ok := runtime.LoadSave(scope.name + "/" + name)
-			if !ok {
+			// Read for the figure only, as a file is (ReadSaveForSpace).
+			data, present, over := runtime.ReadSaveForSpace(scope.name+"/"+name, maxStoredDatabaseForm)
+			if over {
+				// At least the bound, which nothing shipped is taken from.
+				add(maxStoredBytes, 0)
+				continue
+			}
+			if !present {
 				continue
 			}
 			records, err := wipicrt.DecodeSaveRecords(data)
@@ -106,24 +127,6 @@ func (runtime *initializationRuntime) platformStorageUsed() (int, error) {
 		}
 	}
 	return used, nil
-}
-
-// addStoredFiles counts the saved files of one scope that this session holds
-// no copy of.
-func (runtime *initializationRuntime) addStoredFiles(scope string, seen, removed map[string]bool, add func(size, packaged int)) error {
-	names, err := runtime.ListSaves(scope)
-	if err != nil {
-		return err
-	}
-	for _, name := range names {
-		if seen[name] || removed[name] || wipicrt.ReservedStorageName(scope, name) {
-			continue
-		}
-		if data, ok := runtime.LoadSave(scope + "/" + name); ok {
-			add(len(data), len(runtime.client.Files[name]))
-		}
-	}
-	return nil
 }
 
 // guestDirectoryListKey holds the directories FileSystem.mkdir made, which

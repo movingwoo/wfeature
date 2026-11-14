@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"syscall"
 	"time"
@@ -120,37 +121,99 @@ func (r Report) SecureLANURL() string {
 	return fmt.Sprintf("https://%s", net.JoinHostPort(address, strconv.Itoa(r.SecurePort)))
 }
 
-// LANAddress picks this machine's address on the local network: the first
-// routable one, preferring IPv4 because that is what a person can retype. It is
-// the address LANURL and SecureLANURL name, or "" when there is none.
+// LANAddress picks this machine's address on the local network: the one its
+// traffic leaves by, preferring IPv4 because that is what a person can retype.
+// It is the address LANURL and SecureLANURL name, or "" when there is none.
+//
+// **The routing table decides, not the order the interfaces are listed in.**
+// The first routable address of the listing was the answer, and on Windows a
+// virtual adapter's — WSL's, Hyper-V's — often comes first: an address no
+// phone reaches, and a new one at every boot, which made the HTTPS certificate
+// again at every start, since the address printed for another device is one
+// it has to name. A tunnel's address (a VPN's point-to-point interface) is not
+// on the local network either and is passed over. Without a route the
+// listing decides, as it did.
 func LANAddress() string {
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return ""
 	}
-	fallback := ""
+	var candidates []net.IP
 	for _, candidate := range interfaces {
-		if candidate.Flags&net.FlagUp == 0 || candidate.Flags&net.FlagLoopback != 0 {
-			continue
-		}
 		addresses, err := candidate.Addrs()
 		if err != nil {
 			continue
 		}
-		for _, entry := range addresses {
-			network, ok := entry.(*net.IPNet)
-			if !ok || network.IP.IsLoopback() || network.IP.IsLinkLocalUnicast() {
-				continue
-			}
-			if four := network.IP.To4(); four != nil {
-				return four.String()
-			}
-			if fallback == "" {
-				fallback = network.IP.String()
-			}
+		candidates = append(candidates, lanAddresses(candidate.Flags, addresses)...)
+	}
+	return pickLANAddress(candidates, routedAddress("udp4", lanRouteProbe4), routedAddress("udp6", lanRouteProbe6))
+}
+
+// The destinations the routing table is asked about. They are documentation
+// addresses (RFC 5737, RFC 3849), which no host has, and asking sends
+// nothing: connecting a UDP socket only chooses its route and the address it
+// would leave from.
+const (
+	lanRouteProbe4 = "192.0.2.1:9"
+	lanRouteProbe6 = "[2001:db8::1]:9"
+)
+
+// routedAddress is the address this machine would send from to reach probe,
+// or nil when it has no route there.
+func routedAddress(network, probe string) net.IP {
+	connection, err := net.Dial(network, probe)
+	if err != nil {
+		return nil
+	}
+	defer connection.Close()
+	local, ok := connection.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		return nil
+	}
+	return local.IP
+}
+
+// lanAddresses are the addresses of one interface another device on the
+// local network could reach: none of a down, loopback or point-to-point
+// interface, and of the rest the routable ones, loopback and link-local left
+// out.
+func lanAddresses(flags net.Flags, addresses []net.Addr) []net.IP {
+	if flags&net.FlagUp == 0 || flags&(net.FlagLoopback|net.FlagPointToPoint) != 0 {
+		return nil
+	}
+	var reachable []net.IP
+	for _, entry := range addresses {
+		network, ok := entry.(*net.IPNet)
+		if !ok || network.IP.IsLoopback() || network.IP.IsLinkLocalUnicast() {
+			continue
+		}
+		reachable = append(reachable, network.IP)
+	}
+	return reachable
+}
+
+// pickLANAddress is LANAddress's choice among the candidates, in the order
+// they were listed: the IPv4 address the route leaves from if it is one of
+// them, else the first IPv4 one, else the same for IPv6.
+func pickLANAddress(candidates []net.IP, routed4, routed6 net.IP) string {
+	among := func(address net.IP) bool {
+		return address != nil && slices.ContainsFunc(candidates, address.Equal)
+	}
+	if among(routed4) && routed4.To4() != nil {
+		return routed4.To4().String()
+	}
+	for _, address := range candidates {
+		if four := address.To4(); four != nil {
+			return four.String()
 		}
 	}
-	return fallback
+	if among(routed6) {
+		return routed6.String()
+	}
+	if len(candidates) > 0 {
+		return candidates[0].String()
+	}
+	return ""
 }
 
 // statusPayload is what /api/status answers with.

@@ -18,8 +18,9 @@ import (
 // `http://` in front of an address typed without a scheme, and the standard
 // library answered that on the HTTPS port with a 400 and an English line. The
 // port now answers with a redirect to the same host, port, path and query over
-// HTTPS, keeps a method other than GET and HEAD through 308, and still serves
-// TLS to a browser that asked for it.
+// HTTPS, keeps a method other than GET and HEAD through 307, and still serves
+// TLS to a browser that asked for it. The redirect is temporary (302, 307): a
+// browser keeps a permanent one for good, past the server turning HTTPS off.
 func TestPlainHTTPOnTheHTTPSPortIsSentToHTTPS(t *testing.T) {
 	certificate, _, err := secureCertificate(filepath.Join(t.TempDir(), "tls"), []string{"localhost"},
 		[]net.IP{net.IPv4(127, 0, 0, 1).To4()}, nil, time.Now())
@@ -65,16 +66,16 @@ func TestPlainHTTPOnTheHTTPSPortIsSentToHTTPS(t *testing.T) {
 		return response.Status, response.Header.Get("Location")
 	}
 	for _, probe := range []struct{ request, status, location string }{
-		{"GET /index.html?game=a HTTP/1.1\r\nHost: studio.local:11641\r\n\r\n", "301 Moved Permanently", "https://studio.local:11641/index.html?game=a"},
-		{"GET / HTTP/1.1\r\nHost: 192.168.0.60:11641\r\nUser-Agent: phone\r\n\r\n", "301 Moved Permanently", "https://192.168.0.60:11641/"},
-		{"POST /api/saves HTTP/1.1\r\nHost: [fd00::5]:11641\r\nContent-Length: 0\r\n\r\n", "308 Permanent Redirect", "https://[fd00::5]:11641/api/saves"},
+		{"GET /index.html?game=a HTTP/1.1\r\nHost: studio.local:11641\r\n\r\n", "302 Found", "https://studio.local:11641/index.html?game=a"},
+		{"GET / HTTP/1.1\r\nHost: 192.168.0.60:11641\r\nUser-Agent: phone\r\n\r\n", "302 Found", "https://192.168.0.60:11641/"},
+		{"POST /api/saves HTTP/1.1\r\nHost: [fd00::5]:11641\r\nContent-Length: 0\r\n\r\n", "307 Temporary Redirect", "https://[fd00::5]:11641/api/saves"},
 		// A host no URL can carry is replaced by the address the request
 		// reached, rather than copied into the Location.
-		{"GET /x HTTP/1.1\r\nHost: evil.example/path\r\n\r\n", "301 Moved Permanently", "https://" + address + "/x"},
+		{"GET /x HTTP/1.1\r\nHost: evil.example/path\r\n\r\n", "302 Found", "https://" + address + "/x"},
 		// A browser leaves 80 out of an http:// address; the redirect names
 		// the port the request reached rather than letting https:// mean 443.
-		{"GET /a HTTP/1.1\r\nHost: studio.local\r\n\r\n", "301 Moved Permanently", "https://studio.local:" + port + "/a"},
-		{"GET / HTTP/1.1\r\nHost: [fd00::5]\r\n\r\n", "301 Moved Permanently", "https://[fd00::5]:" + port + "/"},
+		{"GET /a HTTP/1.1\r\nHost: studio.local\r\n\r\n", "302 Found", "https://studio.local:" + port + "/a"},
+		{"GET / HTTP/1.1\r\nHost: [fd00::5]\r\n\r\n", "302 Found", "https://[fd00::5]:" + port + "/"},
 	} {
 		status, location := ask(probe.request)
 		if status != probe.status || location != probe.location {

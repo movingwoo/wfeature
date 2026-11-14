@@ -47,7 +47,10 @@ type nativeCounter struct {
 // counter is an atomic add on a per-method value the closure already holds, so
 // what it costs a call is one increment — cheap enough to leave on in both
 // build profiles, and worth that because the report is only honest if it
-// reflects an ordinary run rather than a specially built one.
+// reflects an ordinary run rather than a specially built one. The same wrapper
+// looks through the call's reference arguments for the screen Graphics and
+// holds its state lock for a call handed it (lockingScreenGraphics), which is
+// the rest of what it costs.
 func (runtime *Runtime) registerNative(class, name, descriptor string, method jvm.NativeMethod) error {
 	counter := &nativeCounter{key: nativeKey(class, name, descriptor)}
 	runtime.nativeMu.Lock()
@@ -65,8 +68,14 @@ func (runtime *Runtime) registerNative(class, name, descriptor string, method jv
 	})
 }
 
-// registerContextNative is registerNative for the one implementation that needs
+// registerContextNative is registerNative for an implementation that needs
 // the execution it was entered on, and it is counted the same way.
+//
+// It takes no screen Graphics lock. The implementations that need their
+// execution are the ones that run guest code or block — a database sort calls
+// the title's comparator, a clip's play waits for the sound — and the lock held
+// across either would be one the title's own drawing waits on. None of them is
+// handed a Graphics.
 func (runtime *Runtime) registerContextNative(class, name, descriptor string, method jvm.ContextMethod) error {
 	counter := &nativeCounter{key: nativeKey(class, name, descriptor)}
 	runtime.nativeMu.Lock()
@@ -77,9 +86,6 @@ func (runtime *Runtime) registerContextNative(class, name, descriptor string, me
 	runtime.nativeMu.Unlock()
 	return runtime.VM.RegisterContextNative(class, name, descriptor, func(call *jvm.Invocation, arguments []jvm.Value) (jvm.Value, error) {
 		counter.calls.Add(1)
-		if runtime.lockingScreenGraphics(arguments) {
-			defer runtime.screenStateMu.Unlock()
-		}
 		return method(call, arguments)
 	})
 }

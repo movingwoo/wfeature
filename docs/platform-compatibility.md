@@ -97,7 +97,10 @@ exception unnecessary, remove the entry or its obsolete fix.
 
 The parser rejects an unsupported schema version, unknown fields, a second JSON
 document, invalid fingerprints, missing metadata, duplicate IDs or
-platform/kind/digest targets, and unknown or repeated fix names. Embedded-data
+platform/kind/digest targets, unknown or repeated fix names, and an entry that
+selects both SKT resume rules (`skt.resume_without_start`, which calls nothing on
+a resume, and `skt.resume_through_start`, which runs `startApp` again): they
+answer the same question two ways. Embedded-data
 errors fail initialization and are caught by the registry tests, which also check
 that every evidence document exists.
 

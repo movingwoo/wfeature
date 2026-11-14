@@ -345,3 +345,44 @@ func GuestBytes(t testing.TB, runtime *wipicrt.Runtime, data []byte) uint32 {
 	}
 	return address
 }
+
+// UnreadableSaves is a directory save store whose named keys cannot be read:
+// what a save the operating system will not hand over answers — its
+// permissions, a failing disk — on every system and for any user. Everything
+// else is the directory store's.
+type UnreadableSaves struct {
+	*wipicrt.DirectorySaveStore
+	// Keys are the save keys, scope included ("db/slot3.dat"), whose reads
+	// fail.
+	Keys map[string]bool
+	// Whole are the keys whose whole read fails while a read bounded by a
+	// limit (ReadSaveLimit) does not: what pins a read that may only go as
+	// far as the limit.
+	Whole map[string]bool
+}
+
+func (store UnreadableSaves) refuse(name string) error {
+	return fmt.Errorf("open %s: permission denied", name)
+}
+
+// LoadSave is ReadSave without its error, as the directory store's is.
+func (store UnreadableSaves) LoadSave(name string) ([]byte, bool) {
+	data, found, err := store.ReadSave(name)
+	return data, found && err == nil
+}
+
+// ReadSave fails for a named key, and for one only a bounded read may reach.
+func (store UnreadableSaves) ReadSave(name string) ([]byte, bool, error) {
+	if store.Keys[name] || store.Whole[name] {
+		return nil, false, store.refuse(name)
+	}
+	return store.DirectorySaveStore.ReadSave(name)
+}
+
+// ReadSaveLimit fails for a named key, as ReadSave does.
+func (store UnreadableSaves) ReadSaveLimit(name string, limit int64) ([]byte, bool, error) {
+	if store.Keys[name] {
+		return nil, false, store.refuse(name)
+	}
+	return store.DirectorySaveStore.ReadSaveLimit(name, limit)
+}

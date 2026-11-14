@@ -38,31 +38,45 @@ const (
 	// that moves between two networks settles on one certificate for both;
 	// this bounds how many it keeps.
 	maxCertificateAddresses = 32
+	// Names it already has stay too, for the same laptop taking another host
+	// name on each network, as macOS takes the one a network's DHCP gives it;
+	// this bounds how many it keeps.
+	maxCertificateNames = 16
+	// openedName is the one name asked of a kept certificate. The page is
+	// opened by localhost or by an address (openedAddresses); the host name,
+	// and that name on .local, go in every new certificate but are the
+	// system's to change, and asking for them made a new certificate, a new
+	// warning on every phone, at every move between two networks that named
+	// the machine differently.
+	openedName = "localhost"
 )
 
 // secureCertificate answers the certificate the HTTPS listener presents: the
-// one kept in dir while it names every name and every opened address and has
+// one kept in dir while it names localhost and every opened address and has
 // more than a month to run, otherwise a new one written there, which names
-// the opened addresses, then the other ones and those the old one named.
-// created says which.
+// the names, then those the old one named, and the opened addresses, then the
+// other ones and those the old one named. created says which.
 //
-// Only the addresses a person opens the page by are asked of a kept
+// Only the names and addresses a person opens the page by are asked of a kept
 // certificate. The others an operating system adds and replaces on its own: a
-// temporary IPv6 address about once a day, a virtual adapter's at every boot.
-// Asking for those made a new certificate, so a new warning on every phone, at
-// each start after one changed, though no phone opens them; a phone that does
-// has accepted no certificate for that address and is warned once either way.
+// temporary IPv6 address about once a day, a virtual adapter's at every boot,
+// a host name at every change of network. Asking for those made a new
+// certificate, so a new warning on every phone, at each start after one
+// changed, though no phone opens them; a phone that does has accepted no
+// certificate for that address and is warned once either way.
 func secureCertificate(dir string, names []string, opened, others []net.IP, now time.Time) (certificate tls.Certificate, created bool, err error) {
 	certificatePath, keyPath := filepath.Join(dir, certificateFile), filepath.Join(dir, keyFile)
+	openedNames := slices.DeleteFunc(slices.Clone(names), func(name string) bool { return name != openedName })
 	// A missing or unreadable pair is replaced rather than served.
 	var previous []net.IP
+	var previousNames []string
 	if kept, err := tls.LoadX509KeyPair(certificatePath, keyPath); err == nil {
 		if leaf, err := x509.ParseCertificate(kept.Certificate[0]); err == nil {
-			if covers(leaf, names, opened) && leaf.NotAfter.Sub(now) > certificateRenewal && !now.Before(leaf.NotBefore) {
+			if covers(leaf, openedNames, opened) && leaf.NotAfter.Sub(now) > certificateRenewal && !now.Before(leaf.NotBefore) {
 				kept.Leaf = leaf
 				return kept, false, nil
 			}
-			previous = leaf.IPAddresses
+			previous, previousNames = leaf.IPAddresses, leaf.DNSNames
 		}
 	}
 
@@ -83,7 +97,7 @@ func secureCertificate(dir string, names []string, opened, others []net.IP, now 
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		DNSNames:              names,
+		DNSNames:              mergeNames(names, previousNames),
 		IPAddresses:           wanted,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
@@ -145,6 +159,22 @@ func mergeAddresses(opened []net.IP, others ...[]net.IP) []net.IP {
 				return merged
 			}
 			add(address)
+		}
+	}
+	return merged
+}
+
+// mergeNames answers the names, then the earlier ones in order, without
+// repeats. The names are all kept, as the opened addresses are; the earlier
+// ones fill up to maxCertificateNames.
+func mergeNames(names, earlier []string) []string {
+	merged := slices.Clone(names)
+	for _, name := range earlier {
+		if len(merged) >= maxCertificateNames {
+			break
+		}
+		if !slices.Contains(merged, name) {
+			merged = append(merged, name)
 		}
 	}
 	return merged

@@ -198,6 +198,26 @@ func (clock *guestClock) advance(delta time.Duration) time.Duration {
 	return applied
 }
 
+// advanceTo moves the clock on until now reads at least target, and answers
+// how far it moved. The work since the last tick is charged as advance charges
+// it and the rest of the way is idle time; a target the clock has passed moves
+// it by the work alone, never back.
+//
+// It is what reaching a deadline takes. A wait measured from now and handed to
+// advance falls short of the deadline: now is elapsed plus the work, and
+// advance adds the larger of the wait and the work rather than their sum, so
+// the clock lands short by the smaller of the two.
+func (clock *guestClock) advanceTo(target time.Duration) time.Duration {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	before := clock.elapsed
+	clock.elapsed = max(target, clock.elapsed+clock.workSince())
+	if clock.steps != nil {
+		clock.baseline = clock.steps()
+	}
+	return clock.elapsed - before
+}
+
 // workSince is how much time the instructions retired since the last tick
 // stand for. The caller holds the lock.
 func (clock *guestClock) workSince() time.Duration {

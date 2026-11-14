@@ -868,12 +868,22 @@ func (client *Client) databaseRecordBytes(name string) int64 {
 	if ok && known.epoch == epoch && known.recordsKnown {
 		return int64(known.records)
 	}
+	measured := true
+	measure := func(key string) ([]byte, bool) {
+		data, present, read := client.measureSave(key)
+		measured = measured && read
+		return data, present
+	}
 	records := 0
-	if data, stored := client.readDatabase(name); stored {
+	if data, stored := client.readDatabaseThrough(name, measure); stored {
 		decoded := &databaseContent{}
 		if decoded.decode(data) == nil {
 			records = decoded.recordBytes()
 		}
+	}
+	if !measured {
+		// A read that failed is no answer to keep (measureSave).
+		return int64(records)
 	}
 	if !ok || known.epoch != epoch {
 		known = storedSize{epoch: epoch}

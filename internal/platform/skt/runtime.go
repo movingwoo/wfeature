@@ -64,8 +64,8 @@ type Runtime struct {
 	// Canvas and leaves its previous workers running on every resume.
 	resumeWithoutStart bool
 	// Selected only for original revisions whose startApp starts again the
-	// thread their pauseApp ended (Archive.resumeThroughStart). It comes from
-	// the archive, so a checkpoint does not carry it.
+	// thread their pauseApp ended (classSetFixes.resumeThroughStart). It comes
+	// from the archive, so a checkpoint does not carry it.
 	resumeThroughStart bool
 	startCompleted     bool
 
@@ -136,6 +136,11 @@ type Runtime struct {
 	// font — to one caller at a time: a native that is handed it, for the
 	// length of the call, and the reset a paint starts with. Its pixels have
 	// renderMu as well. See lockingScreenGraphics.
+	//
+	// **It is taken before renderMu and never while renderMu is held.** A
+	// native drawing on the screen holds it and then takes renderMu for the
+	// pixels, so a holder of renderMu that waited for it would wait for good
+	// (toolkitScreenGraphics).
 	screenStateMu sync.Mutex
 
 	fontMu sync.Mutex
@@ -391,7 +396,8 @@ func newRuntime(archive *Archive, options Options) (*Runtime, error) {
 			options.JVM.Logger.Debug("authentication compatibility", "status", authentication, "classes", len(adapted))
 		}
 	}
-	if adapted := prepareTutorialCompatibility(archive); len(adapted) != 0 {
+	fixes := archive.classSetFixes()
+	if adapted := prepareTutorialCompatibility(archive, fixes); len(adapted) != 0 {
 		source = append(jvm.ClassSources{adapted}, source...)
 	}
 	runtime := &Runtime{}
@@ -419,8 +425,7 @@ func newRuntime(archive *Archive, options Options) (*Runtime, error) {
 	// The class sets resumed through startApp start again there the thread
 	// their pauseApp ended, which the handset VM they were written for
 	// allowed; every other title gets the language's refusal.
-	throughStart := archive.resumeThroughStart()
-	if throughStart {
+	if fixes.resumeThroughStart {
 		options.JVM.RestartableThreads = true
 	}
 	// These handsets' default charset is EUC-KR, and a title finds out through
@@ -481,9 +486,9 @@ func newRuntime(archive *Archive, options Options) (*Runtime, error) {
 		framebuffer:        options.Framebuffer,
 		frameWidth:         frameWidth,
 		frameHeight:        frameHeight,
-		legacyClip:         archive.legacyClipEndpoints(),
-		resumeWithoutStart: archive.resumeWithoutRestart(),
-		resumeThroughStart: throughStart,
+		legacyClip:         fixes.inclusiveSetClip,
+		resumeWithoutStart: fixes.resumeWithoutStart,
+		resumeThroughStart: fixes.resumeThroughStart,
 		frameRGBA:          make([]byte, frameLength),
 		fullScreen:         make(map[*jvm.Object]bool),
 		fonts:              make(map[fontKey]*jvm.Object),
@@ -697,10 +702,15 @@ func (runtime *Runtime) resume(requirePaused bool) error {
 	if !requirePaused && state != StateCreated {
 		return runtime.invalidState("start", state)
 	}
-	// Standard MIDP resumes through startApp. These recognized revisions
-	// unconditionally create another Canvas and worker there, while pauseApp
-	// leaves the old ones alive. Preserve the successful first start instead.
-	// A deferred initial start must still be retried through the real callback.
+	// The class sets that select skt.resume_without_start are made active
+	// with no callback at all. A second startApp would build another Canvas
+	// and worker beside the ones their pauseApp leaves alive, which is why the
+	// rule was made; every title but those of skt.resume_through_start is
+	// resumed without one now (resumeStarted), and what still sets these
+	// apart is that they get neither the resumeApp nor the repaint
+	// resumeStarted adds: calling nothing is the resume they were found to
+	// play on with. A deferred initial start is still retried through the
+	// real callback.
 	if requirePaused && runtime.startCompleted && runtime.resumeWithoutStart && !runtime.jlet {
 		if runtime.logger != nil {
 			runtime.logger.Debug("preserving MIDlet instance on resume")
@@ -779,10 +789,8 @@ func (runtime *Runtime) resumeStarted() error {
 		// resumeApp does on LGT (absorbUncaughtCallback). One title's
 		// resumeApp does what it has to and then calls notify without
 		// holding the monitor.
-		if _, err := runtime.VM.InvokeVirtual(runtime.MIDlet, "resumeApp", "()V"); err != nil {
-			if err := runtime.absorbUncaughtCallback("resumeApp", err); err != nil {
-				return runtime.fail("resume", err)
-			}
+		if err := runtime.guestCallback("resume", runtime.MIDlet, "resumeApp", "()V"); err != nil {
+			return runtime.fail("resume", err)
 		}
 	}
 	runtime.displayMu.RLock()

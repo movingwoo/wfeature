@@ -280,6 +280,12 @@ func automaticHTTPSAddress(address string) string {
 // listenSecurely opens the HTTPS listener, presenting the certificate kept in
 // dir. One that "auto" chose and cannot open is left out with a warning; the
 // page still answers over plain HTTP. One given by address is required.
+//
+// **The port is opened before the certificate is looked at.** An address given
+// to -https is one the kept certificate has to name, so an address this
+// machine does not have — a typing slip, or a WFEATURE_HTTPS_ADDR from another
+// network — used to make a new certificate, a new warning on every phone, for a
+// listener that then could not open and a server that did not start.
 func listenSecurely(value, address, dir string, logger *slog.Logger) (net.Listener, error) {
 	secureAddress, err := httpsAddress(value, address)
 	if err != nil || secureAddress == "" {
@@ -293,17 +299,18 @@ func listenSecurely(value, address, dir string, logger *slog.Logger) (net.Listen
 		logger.Warn("serving without HTTPS", "error", err)
 		return nil, nil
 	}
+	plain, err := listen(secureAddress)
+	if err != nil {
+		return fail(err)
+	}
 	certificate, created, err := secureCertificate(dir, reachableNames(), openedAddresses(secureAddress), reachableAddresses(), time.Now())
 	if err != nil {
+		_ = plain.Close()
 		return fail(err)
 	}
 	if created {
 		logger.Info("made a self-signed certificate for HTTPS; a browser warns once before it is accepted",
 			"dir", dir, "names", certificate.Leaf.DNSNames, "addresses", certificate.Leaf.IPAddresses)
-	}
-	plain, err := listen(secureAddress)
-	if err != nil {
-		return fail(err)
 	}
 	return secureListener(plain, certificate), nil
 }

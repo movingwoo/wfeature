@@ -10,12 +10,42 @@ import (
 	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
-// Only this observed original code revision uses inclusive setClip extents.
-// Profile declarations do not establish this behavior. Hash every class so
-// another revision, even one sharing the clipping helper, stays unaffected.
-// Container filenames, ZIP ordering and timestamps do not identify code.
-func (archive *Archive) legacyClipEndpoints() bool {
-	return compatibility.HasFix("skt", compatibility.JavaClassSet, archive.clipCodeDigest(), compatibility.SKTInclusiveSetClip)
+// classSetFixes are the registry fixes an archive's class set selects. Every
+// one is keyed by the same digest of all the archive's classes, so a runtime
+// reads them together and hashes the classes once, where asking fix by fix
+// hashed them four times for every runtime.
+type classSetFixes struct {
+	// inclusiveSetClip: only this observed original code revision uses
+	// inclusive setClip extents. Profile declarations do not establish this
+	// behavior. Hash every class so another revision, even one sharing the
+	// clipping helper, stays unaffected. Container filenames, ZIP ordering
+	// and timestamps do not identify code.
+	inclusiveSetClip bool
+	// tutorialNameCache: see prepareTutorialCompatibility.
+	tutorialNameCache bool
+	// resumeWithoutStart: a resume calls nothing (see resume).
+	resumeWithoutStart bool
+	// resumeThroughStart: this class set was written for MIDP's reactivation
+	// on a handset VM that let a finished thread start again: its pauseApp
+	// ends a loop, and its startApp checks isAlive and starts that same Thread
+	// object again. Such a title is resumed through startApp and its VM
+	// restarts a finished thread; every other title is resumed without a
+	// second start (resumeStarted) and gets the language's refusal. See
+	// docs/history/skt.md#skt-resume-2026-11-10.
+	resumeThroughStart bool
+}
+
+func (archive *Archive) classSetFixes() classSetFixes {
+	digest := archive.clipCodeDigest()
+	selects := func(fix string) bool {
+		return compatibility.HasFix("skt", compatibility.JavaClassSet, digest, fix)
+	}
+	return classSetFixes{
+		inclusiveSetClip:   selects(compatibility.SKTInclusiveSetClip),
+		tutorialNameCache:  selects(compatibility.SKTTutorialNameCache),
+		resumeWithoutStart: selects(compatibility.SKTResumeWithoutStart),
+		resumeThroughStart: selects(compatibility.SKTResumeThroughStart),
+	}
 }
 
 func (archive *Archive) clipCodeDigest() string {

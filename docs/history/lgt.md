@@ -8713,3 +8713,51 @@ callback writes the fixture's running mark; on the old code the mark is still
 the paused one after the pause. With the change both revisions of the title
 answer every key after a two-second park as a run that was never parked does.
 
+A review of the change the next day found it short in three ways, none of
+which its fixture reached. The clock was moved by the wait to the deadline,
+and `advance` takes the larger of that wait and the work since the last tick
+rather than their sum, so the clock landed short by the smaller of the two:
+after a frame of 1.5 million instructions, 10 ms of guest time, the timer was
+still armed at the resume, on about half of the parks at the title's real
+rate; the fixture's callback was 141 instructions. A deadline between two
+milliseconds, which the 1/60 s floor on a period makes, was short by the
+fraction. Only the first timer fired, so a title with a shorter timer beside
+its frame timer had the shorter one served and the pause left unread. And the
+clock went to the earliest deadline however far off: a timer armed ten
+minutes ahead took ten minutes of guest time in a park, and a timeout is a
+64-bit number of milliseconds. The pause now moves the clock to each deadline
+itself (`advanceTo`, to the first whole millisecond at or after it) and serves
+the timers armed at the pause until each has had its turn, within sixteen
+rounds and a second of guest time; a timer further off is left for after the
+resume. `TestParkingACletServesItsFrameTimerAfterRealWork` drives a frame
+callback that spends 1.5 and 2.2 million instructions and arms itself again
+through `MC_knlSetTimer`, `TestParkingACletServesEveryTimerArmedAtThePause` a
+shorter timer beside the frame timer, and
+`TestParkingACletLeavesATimerFarAheadForTheResume` one ten minutes off; all
+three fail on the change they follow.
+
+A second review the same day found the rounds aimed at the wrong timers, and
+probes run on both builds confirmed it. Each round went to whichever timer was
+armed first, not to one armed at the pause, so a frame timer that armed itself
+again was gone back to for as long as a timer armed at the pause still waited:
+beside a timer five seconds off, a 50 ms frame ran sixteen times in a park and
+moved the clock 800 ms, where the first change had run it once. A timer at the
+1/60 s floor used the sixteen rounds up 272 ms in, so a frame timer carrying
+the pause due later than that was still left armed, as on the first change for
+any such timer. And the one-second bound applied to the first timer too: a
+title whose frame timer was a second and a half or three seconds off when it
+was parked, which the first change had served, stood still after the resume.
+The rounds now go to the earliest of the timers armed at the pause that have
+not had their turn; the first is served within a minute of guest time and each
+later one within a second. A timeout is an `M_Int64`, and the conversion of
+one near its largest value overflowed into a deadline due at once or before
+the clock began, which the pause then took for the earliest; a timeout past a
+year is now armed for a year. The commit of a text whose carrier a title reads
+in a timer of its own ran the same short rounds and failed beside a busy frame
+timer, and now moves the clock to each deadline as the pause does.
+`TestParkingACletRunsOneFrameBesideATimerFarAhead`,
+`TestParkingACletServesASlowTimerThatCarriesThePause`,
+`TestParkingACletServesThePauseBesideAFastTimer`,
+`TestTimerTimeoutsPastAYearAndBelowZero` and
+`TestCTextInputReachesAWidgetThatReadsItsKeysInATimer` fail without it.
+

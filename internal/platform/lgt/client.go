@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -638,8 +639,23 @@ func (client *Client) PauseClet(ctx context.Context) error {
 	return client.servePausedTimer(ctx)
 }
 
-// servePausedTimer fires, once, the timer that comes due first after a
-// pauseClet, with the clock moved to its deadline when it lies ahead.
+// Bounds on serving a Clet's timers while it is paused (servePausedTimer).
+const (
+	// maxPausedTimerRounds bounds the rounds a pause runs. Every round serves
+	// one of the timers armed at the pause, so it bounds how many of those a
+	// title can have served, not how long the pause runs.
+	maxPausedTimerRounds = 16
+	// maxPausedTimerReach is how far ahead the first timer a pause serves may
+	// lie. A pause of a minute is an ordinary one on a handset, and the timer
+	// that carries a pause can be a slow one, a splash or a blink.
+	maxPausedTimerReach = time.Minute
+	// maxPausedTimerWait is how far ahead every later one may lie.
+	maxPausedTimerWait = time.Second
+)
+
+// servePausedTimer fires, after a pauseClet, the timers armed at that point
+// that come due in the moments after it, the clock moved on to each one's
+// deadline in turn.
 //
 // **A handset kept time while a title was paused**, so the title's own frame
 // timer came due during the pause, and a title can do its pausing there:
@@ -650,15 +666,77 @@ func (client *Client) PauseClet(ctx context.Context) error {
 // found and never armed itself again: the title stood still for good
 // (docs/history/lgt.md#lgt-paused-timer-2026-11-10). It is the Clet's half of
 // what servePausedSerialCalls does for a Java title.
+//
+// **The clock is moved to the deadline itself** (timerTarget, advanceTo),
+// because a timer is due when the millisecond clock has reached its deadline.
+// A wait measured from now and handed to advance fell short by the smaller of
+// the wait and the work since the last tick — so after any frame of real work,
+// a millisecond being 150,000 instructions, the timer was still not due and
+// the title stood still as before — and a deadline between two milliseconds,
+// which a 1/60 s period makes, was short by the fraction even with no work.
+//
+// **The rounds are the timers armed at the pause, and nothing else.** Each
+// one goes to the earliest deadline among those that have not had their turn
+// (fired, been cancelled or been armed again), and the timers already due
+// there fire with it, each once and in their own order, as a tick fires them.
+// A title with a shorter timer beside the frame timer that carries its pause
+// had the shorter one fired and the frame timer left armed; a frame timer that
+// arms itself again, which a round aimed at whatever was armed went back to,
+// ran a frame a round for as long as a timer far off was still waiting.
+//
+// **The first of them is served wherever it lies within maxPausedTimerReach**,
+// because it may be the one that carries the pause; each one after it only
+// within maxPausedTimerWait of the pause. A timer further off is left for after
+// the resume, rather than the clock jumping to it: a timeout is a guest's
+// 64-bit number of milliseconds, and an idle or a demo timer a minute off
+// would otherwise fire every time the page was hidden.
 func (client *Client) servePausedTimer(ctx context.Context) error {
-	wait, armed := client.nextTimerDue()
-	if !armed {
-		return nil
+	waiting := client.armedTimers()
+	start := client.clock.now()
+	for round := 0; round < maxPausedTimerRounds && len(waiting) != 0; round++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		deadline := earliestDeadline(waiting)
+		reach := maxPausedTimerWait
+		if round == 0 {
+			reach = maxPausedTimerReach
+		}
+		target := timerTarget(deadline)
+		if target-start > reach {
+			return nil
+		}
+		client.clock.advanceTo(target)
+		if err := client.serviceTimers(ctx); err != nil {
+			return err
+		}
+		client.forgetServedTimers(waiting)
 	}
-	if wait > 0 {
-		client.clock.advance(wait)
+	return nil
+}
+
+// earliestDeadline is the earliest deadline among timers taken by armedTimers.
+// It is only asked of a set that is not empty.
+func earliestDeadline(timers map[uint32]time.Duration) time.Duration {
+	first := true
+	var earliest time.Duration
+	for _, dueAt := range timers {
+		if first || dueAt < earliest {
+			earliest, first = dueAt, false
+		}
 	}
-	return client.serviceTimers(ctx)
+	return earliest
+}
+
+// timerTarget is the clock reading a deadline is reached at: the first whole
+// millisecond at or after it, because a timer is due when the millisecond
+// clock has reached its deadline (serviceTimers).
+func timerTarget(deadline time.Duration) time.Duration {
+	target := deadline.Truncate(time.Millisecond)
+	if target < deadline {
+		target += time.Millisecond
+	}
+	return target
 }
 
 func (client *Client) ResumeClet(ctx context.Context) error {

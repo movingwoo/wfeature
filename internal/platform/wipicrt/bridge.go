@@ -279,6 +279,22 @@ func (runtime *Runtime) InvalidateClip(state *ClipState) {
 // names may carry a leading slash that the mounted names do not. A removed
 // path resolves to none of the three.
 func (runtime *Runtime) GuestFile(name string) ([]byte, bool) {
+	return runtime.guestFileThrough(name, runtime.LoadSave)
+}
+
+// GuestFileForSpace is GuestFile for the space a title is told it has: the
+// save is read through ReadSaveForSpace, so one that cannot be read, or that
+// is past the bound on a file, is no file here and ends nothing. The removal
+// list it consults is still read through LoadSave, as every list a later write
+// is built on is (docs/wipi-storage.md, Space).
+func (runtime *Runtime) GuestFileForSpace(name string) ([]byte, bool) {
+	return runtime.guestFileThrough(name, func(key string) ([]byte, bool) {
+		data, present, over := runtime.ReadSaveForSpace(key, MaxCFileBytes)
+		return data, present && !over
+	})
+}
+
+func (runtime *Runtime) guestFileThrough(name string, load func(string) ([]byte, bool)) ([]byte, bool) {
 	if runtime.RemovedGuestFiles()[strings.TrimPrefix(name, "/")] {
 		return nil, false
 	}
@@ -287,7 +303,7 @@ func (runtime *Runtime) GuestFile(name string) ([]byte, bool) {
 			return data, true
 		}
 	}
-	if data, exists := runtime.LoadSave("fs/" + strings.TrimPrefix(name, "/")); exists {
+	if data, exists := load("fs/" + strings.TrimPrefix(name, "/")); exists {
 		return data, true
 	}
 	for _, candidate := range []string{name, strings.TrimPrefix(name, "/")} {
@@ -362,25 +378,52 @@ func (runtime *Runtime) storageUsed() (int, error) {
 			used += size - packaged
 		}
 	}
-	for _, store := range runtime.CFiles {
+	held := make(map[string]bool, len(runtime.CFiles))
+	for name, store := range runtime.CFiles {
+		held[name] = true
 		add(len(store.Data), store.Packaged)
 	}
-	names, err := runtime.ListSaves(CFileScope)
-	if err != nil {
+	if err := runtime.AddStoredFiles(CFileScope, held, runtime.RemovedDatabases(), add); err != nil {
 		return 0, err
 	}
-	removed := runtime.RemovedDatabases()
+	return used, nil
+}
+
+// AddStoredFiles adds, through add, the saves of one scope that this session
+// holds no copy of, each with its size and the size of the archive's file of
+// the same name. held and removed are the names the session holds and the
+// names it deleted, as titles spelled them. KTF counts its C table and its
+// Java files with it, and the SKT Clet its C table, through storageUsed.
+//
+// **The names are compared as paths** (ListingPath). The store answers a key
+// without its "." and empty segments, and a title's spelling keeps them, so a
+// save opened as "./save.dat" was counted once from the session and again as
+// the stored "save.dat" the session did not hold under that spelling.
+//
+// A save is read for the figure only (ReadSaveForSpace): one that cannot be
+// read counts nothing and ends nothing, and one past the bound on a file
+// counts the whole bound, with nothing the archive ships taken from it.
+func (runtime *Runtime) AddStoredFiles(scope string, held, removed map[string]bool, add func(size, packaged int)) error {
+	names, err := runtime.ListSaves(scope)
+	if err != nil {
+		return err
+	}
+	held, removed = ListingPaths(held), ListingPaths(removed)
 	for _, name := range names {
-		if _, open := runtime.CFiles[name]; open || removed[name] || ReservedStorageName(CFileScope, name) {
+		path := ListingPath(name)
+		if held[path] || removed[path] || ReservedStorageName(scope, name) {
 			continue
 		}
-		if data, ok := runtime.LoadSave(CFileScope + "/" + name); ok {
-			// The packaged copy is the one an open would measure against.
-			packaged, _ := runtime.PackagedDatabase(name)
-			add(len(data), len(packaged))
+		data, present, over := runtime.ReadSaveForSpace(scope+"/"+name, MaxCFileBytes)
+		switch {
+		case over:
+			// At least the bound, which nothing shipped is taken from.
+			add(MaxCFileBytes, 0)
+		case present:
+			add(len(data), len(runtime.Client.Files[name]))
 		}
 	}
-	return used, nil
+	return nil
 }
 func (runtime *Runtime) GraphicsCharAdvance(character rune) int32 {
 	if character == 0 {

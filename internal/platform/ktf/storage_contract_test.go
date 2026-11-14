@@ -223,6 +223,50 @@ func TestContractSpace(t *testing.T) {
 	}
 }
 
+// A save is counted once, whatever spelling the title opened it by, and one
+// it never opened that cannot be read counts nothing rather than ending the
+// call. The store answers a key without its "." segments, so a save opened as
+// ./save.dat was counted again as the stored save.dat; and the read of a save
+// only measured was kept as the session's failed save read, which ended the
+// call and refused every save after it. Databases are counted by the same
+// rules.
+func TestSpaceCountsASaveOnceAndSkipsOneItCannotRead(t *testing.T) {
+	_, runtime := newTestRuntime(t)
+	store := wipicrt.NewDirectorySaveStore(t.TempDir())
+	// An earlier session's saves.
+	for key, data := range map[string][]byte{
+		"db/save.dat":  make([]byte, 1000),
+		"db/slot3.dat": make([]byte, 500),
+		"rdb/scores":   wipicrt.EncodeSaveRecords([][]byte{make([]byte, 200)}),
+		"rdb/broken":   wipicrt.EncodeSaveRecords([][]byte{make([]byte, 300)}),
+		// A Java file named as the database's data file, which is where its
+		// packaged copy is looked for.
+		"fs/scores.db": make([]byte, 50),
+	} {
+		if err := store.StoreSave(key, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.client.SaveStore = wipicrttest.UnreadableSaves{
+		DirectorySaveStore: store,
+		Keys:               map[string]bool{"db/slot3.dat": true, "rdb/broken": true, "fs/scores.db": true},
+	}
+	if handle := int32(wipicrttest.DatabaseCall(t, runtime.Runtime, wipicrt.WIPICFileOpen, "./save.dat", 1)); handle < 0 {
+		t.Fatalf("./save.dat does not open: %d", handle)
+	}
+	thread := armcore.NewThread(armcore.Context{})
+	got, err := runtime.HandleWIPICCall(thread, wipicrt.WIPICTableFilesystem<<16|wipicrt.WIPICFileAvailable)
+	if err != nil {
+		t.Fatalf("MC_fsAvailable = %v: a save it only measures ended the call", err)
+	}
+	if want := uint32(wipicrt.StorageBudget - 1000 - 200); got != want {
+		t.Fatalf("MC_fsAvailable = %d, want %d: save.dat once, the readable database, and nothing of the three that cannot be read", got, want)
+	}
+	if runtime.SaveReadError != nil {
+		t.Fatalf("the space read was kept as a failed save read: %v", runtime.SaveReadError)
+	}
+}
+
 func must(value jvm.Value, err error) jvm.Value {
 	if err != nil {
 		panic(err)

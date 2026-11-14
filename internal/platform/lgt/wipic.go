@@ -1353,6 +1353,12 @@ func (client *Client) defineTimer(thread *armcore.Thread) error {
 	return answerCode(thread, wipiSuccess)
 }
 
+// maxTimerTimeout is the longest timeout a timer is armed for. A year is longer
+// than any session runs, so a timer armed for longer comes due no sooner than
+// one armed for a year: never, for the session. It keeps a deadline, the clock
+// plus the timeout, inside a time.Duration.
+const maxTimerTimeout = 365 * 24 * time.Hour
+
 // setTimer arms a timer: `M_Int32 MC_knlSetTimer(MCTimer *tm, M_Int64 timeout,
 // void *parm)`. The 64-bit timeout occupies r1 and r2 without the even-register
 // alignment a modern ABI would give it, so the parameter lands in r3 — which is
@@ -1388,12 +1394,22 @@ func (client *Client) setTimer(thread *armcore.Thread) int32 {
 			entry.callback = callback
 		}
 	}
-	timeout := uint64(high)<<32 | uint64(low)
-	period := time.Duration(timeout) * time.Millisecond
+	timeout := int64(uint64(high)<<32 | uint64(low))
+	var period time.Duration
+	switch {
+	case timeout >= int64(maxTimerTimeout/time.Millisecond):
+		// Converted as it stood, a timeout this long overflowed: one a title
+		// meant as "not for a long time" came due at once, or wrapped into a
+		// deadline before the clock began, which the pause took for the
+		// earliest of all and stopped at (servePausedTimer).
+		period = maxTimerTimeout
+	case timeout > 0:
+		period = time.Duration(timeout) * time.Millisecond
+	}
 	if period < minTimerPeriod {
 		// See minTimerPeriod: a timer shorter than the display can show is
 		// answered at the resolution the specification says a handset's own
-		// timer has.
+		// timer has. A timeout below zero, a deadline already passed, is one.
 		period = minTimerPeriod
 	}
 	entry.param = param
@@ -1415,19 +1431,52 @@ func (client *Client) setTimer(thread *armcore.Thread) int32 {
 // for 1ms, meaning "as soon as you can", and gets 50.
 func (client *Client) nextTimerDue() (time.Duration, bool) {
 	now := time.Duration(client.clock.millis()) * time.Millisecond
+	deadline, found := client.earliestTimerDeadline()
+	if !found {
+		return 0, false
+	}
+	return deadline - now, true
+}
+
+// earliestTimerDeadline is the deadline of the armed timer that comes due
+// first, and whether one is armed.
+func (client *Client) earliestTimerDeadline() (time.Duration, bool) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	var earliest time.Duration
 	found := false
 	for _, entry := range client.timers {
-		if !entry.armed {
-			continue
-		}
-		if wait := entry.dueAt - now; !found || wait < earliest {
-			earliest, found = wait, true
+		if entry.armed && (!found || entry.dueAt < earliest) {
+			earliest, found = entry.dueAt, true
 		}
 	}
 	return earliest, found
+}
+
+// armedTimers are the armed timers by structure, each with its deadline.
+func (client *Client) armedTimers() map[uint32]time.Duration {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	armed := make(map[uint32]time.Duration)
+	for structure, entry := range client.timers {
+		if entry.armed {
+			armed[structure] = entry.dueAt
+		}
+	}
+	return armed
+}
+
+// forgetServedTimers drops from waiting each timer that has had its turn since
+// waiting was taken: one that fired, was cancelled, or was armed again for
+// another deadline.
+func (client *Client) forgetServedTimers(waiting map[uint32]time.Duration) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	for structure, dueAt := range waiting {
+		if entry := client.timers[structure]; entry == nil || !entry.armed || entry.dueAt != dueAt {
+			delete(waiting, structure)
+		}
+	}
 }
 
 // serviceTimers fires the timers that are due. It runs between guest calls,

@@ -89,6 +89,37 @@ func (runtime *Runtime) LoadSave(name string) ([]byte, bool) {
 	return data, present
 }
 
+// ReadSaveForSpace reads one save for the space a title is told it has
+// (docs/wipi-storage.md, Space), which is a figure the platform only reports.
+// Two things set it apart from LoadSave.
+//
+// A read that fails is answered as no save, and is not the failure LoadSave
+// keeps (SaveReadError), which ends the call that met it and refuses every
+// save after it. That refusal is there so that nothing a title writes is built
+// on less than its save held; nothing is built on this read, because the
+// session has not opened the save. Kept, it ended an SKT Clet program that
+// asked how much room it had while one save it never opened could not be read.
+// The lists a later write is built on, such as the removal list, are still
+// read through LoadSave.
+//
+// And it reads at most limit bytes from a store that can bound a read
+// (backend.SaveLimitReader, as DirectorySaveStore is). A store that cannot,
+// such as one that wraps another to decode what it holds, is read whole and
+// measured after, as backend.ReadSaveLimit reads it. A save past the limit is
+// answered as over, with no bytes, for the caller to count at the limit, which
+// is past the budget already.
+func (runtime *Runtime) ReadSaveForSpace(key string, limit int) (data []byte, present, over bool) {
+	data, present, err := backend.ReadSaveLimit(runtime.Client.SaveStore, key, int64(limit))
+	switch {
+	case backend.SaveOverLimit(err):
+		return nil, true, true
+	case err != nil:
+		runtime.CountDiagnostic(fmt.Sprintf("space read %s: %v", key, err))
+		return nil, false, false
+	}
+	return data, present, false
+}
+
 const saveRecordTombstone = backend.SaveRecordTombstone
 
 // EncodeSaveRecords serializes Java DataBase records as a count followed by
