@@ -226,15 +226,18 @@ without.
 
 ### Fresh start (`skt.native_discard_owner_state`)
 
-One title finds the previous owner's packaged saves, validates them against the
-handset, and stops with a data error when they do not match — it does not fall
-back to a new game on its own. For a recognized device dump, the loader does not
-present the install directory's files, so the game finds no save and starts
-fresh, writing its own saves from there (`internal/platform/skt/native.go`,
-`ProgramFiles`). The embedded resource archive — the game's read-only content —
-is unaffected, and no file is changed. This is the loader withholding another
-handset's state, not a code change, so the session reports no authentication
-status for it.
+Four titles find the previous owner's packaged saves, validate them against the
+handset, and stop when they do not match — with a data error, an error number,
+or a halt that draws its message and never returns — and none falls back to a
+new game on its own. Three of them, which share one engine, check their saves
+against the subscriber number: without the dump's files they start fresh, show
+their own server dialogs, fail to reach the server and play on. For a
+recognized device dump, the loader does not present the install directory's
+files, so the game finds no save and starts fresh, writing its own saves from
+there (`internal/platform/skt/native.go`, `ProgramFiles`). The embedded resource
+archive — the game's read-only content — is unaffected, and no file is changed.
+This is the loader withholding another handset's state, not a code change, so
+the session reports no authentication status for it.
 
 <a id="skt-native-identity-save"></a>
 
@@ -262,6 +265,20 @@ different executable. The certificate decodes to three fields compared in a row
 executable accepts only the subscriber comparison, so the other two still run,
 and reports `skt-native-certificate`. No certificate is minted and no file is
 changed.
+
+Two other executables check a certificate the same way and are adapted the same
+way, each by its own registered fix on its own window of code:
+
+- `skt.native_usim_subscriber` — a `usimcert.c2s` certificate whose subscriber
+  field, compared with the handset's number, reports error 1004 on a mismatch
+  and stops the title on its first screen. The decode runs; the one comparison's
+  rejection becomes an acceptance.
+- `skt.native_certdata_subscriber` — an ARM title's `CERTIDATA` record, read out
+  of its packaged container at start-up and compared with the handset's number;
+  a mismatch leaves the title on a blank screen. The record's presence and the
+  two checks ahead of the subscriber comparison still run; only that comparison
+  is accepted. Both report `skt-native-certificate`, mint no certificate and
+  change no file.
 
 <a id="skt-native-quick-save"></a>
 
@@ -353,3 +370,12 @@ an executable built with another toolchain may lay its header or its
 relocation table out differently. One example is an online game: offline it is
 told its server cannot be reached, reports that and plays on, and the content
 that needs the server stays out of reach.
+
+One local title reaches its first stage and then stops, with its certificate
+accepted and the dumping handset's saves loaded: the stage load runs more than
+the five hundred million ARM steps a single Host service call is given, in one
+timer callback that neither returns to the Host nor polls the clock, so it is
+refused as a runaway would be. Raising the allowance for every title to let one
+title's load through would weaken the bound that stops a real runaway, so the
+step allowance is left where it is, and this title reaches its slot screen and
+the first moments of its stage but not beyond its first heavy load.
