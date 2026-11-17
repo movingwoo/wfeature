@@ -2,9 +2,11 @@ package skt
 
 import (
 	"bytes"
+	"compress/zlib"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"io"
 )
 
 // The `.daf` executable, as both local titles lay it out (2026-10-30; see
@@ -15,8 +17,13 @@ import (
 //	0x20  a second block, 0x50 bytes (its length is at 0x28); 0x3c..0x50 are
 //	      five sizes: code with its read-only data, initialised data, BSS
 //	      (not in the file), the relocation table and the resource archive
-//	0x58  six Thumb entry offsets into the code
+//	0x58  six entry offsets into the code: odd for Thumb, word-aligned for ARM
 //	0x70  code, data, relocation table and resources, back to back
+//
+// A later toolchain's second block is 0x6c bytes (2026-11-18, two local
+// titles): the same sizes and entries, then at 0x70 the sizes the regions
+// are stored at, and the regions from 0x8c. A region stored smaller than its
+// size is zlib-compressed; both titles compress only their code.
 //
 // Code is linked at zero and data at NativeDataLink; the first data word is
 // the marker the loader overwrites with the platform's root table. Every
@@ -28,6 +35,11 @@ const (
 	nativeHeaderSize  = nativeFirstBlock + nativeSecondBlock
 	nativeSizesOffset = 0x3c
 	nativeEntryOffset = 0x58
+	// nativeStoredBlock is the longer second block, whose stored sizes start
+	// where the shorter block's regions do.
+	nativeStoredBlock      = 0x6c
+	nativeStoredHeaderSize = nativeFirstBlock + nativeStoredBlock
+	nativeStoredOffset     = nativeHeaderSize
 
 	// NativeDataLink is where data and BSS are linked. Every data address
 	// the code holds is this plus an offset into data or BSS.
@@ -49,11 +61,12 @@ const (
 )
 
 // NativeEntries are the six entry points a `.daf` header lists, as offsets
-// into the code with the Thumb bit kept. Their order is not the
-// specification's startClet, pauseClet, resumeClet, destroyClet order:
-// the second entry is the teardown, the third and fourth post the title's own
-// pause and resume events, and the fifth is the paint entry, empty in both
-// local titles.
+// into the code: an odd offset is Thumb code with the Thumb bit kept, a
+// word-aligned one ARM code (one local title is built entirely as ARM).
+// Their order is not the specification's startClet, pauseClet, resumeClet,
+// destroyClet order: the second entry is the teardown, the third and fourth
+// post the title's own pause and resume events, and the fifth is the paint
+// entry, empty in every local title.
 type NativeEntries struct {
 	Start, Destroy, Pause, Resume, Paint, Event uint32
 }
@@ -69,6 +82,10 @@ type NativeExecutable struct {
 	Entries NativeEntries
 	// Resources are the files of the embedded resource archive, by name.
 	Resources map[string][]byte
+	// ResourceOrder names the same files in the order the archive's directory
+	// lists them. A resource's position here is the identifier the handset
+	// answers MC_knlGetResourceID with; see docs/skt-native.md.
+	ResourceOrder []string
 	// Digest is the SHA-256 of the executable as shipped, which is what the
 	// compatibility registry names a revision by.
 	Digest [32]byte
@@ -87,8 +104,16 @@ func ParseNativeExecutable(image []byte) (*NativeExecutable, error) {
 		return nil, fmt.Errorf("executable is %d bytes, shorter than its %d-byte header", len(image), nativeHeaderSize)
 	}
 	word := func(offset int) uint32 { return binary.LittleEndian.Uint32(image[offset:]) }
-	if word(0) != nativeFirstBlock || word(nativeFirstBlock+8) != nativeSecondBlock {
-		return nil, fmt.Errorf("executable header blocks are %#x and %#x, want %#x and %#x", word(0), word(nativeFirstBlock+8), nativeFirstBlock, nativeSecondBlock)
+	second := word(nativeFirstBlock + 8)
+	if word(0) != nativeFirstBlock || (second != nativeSecondBlock && second != nativeStoredBlock) {
+		return nil, fmt.Errorf("executable header blocks are %#x and %#x, want %#x and %#x or %#x", word(0), second, nativeFirstBlock, nativeSecondBlock, nativeStoredBlock)
+	}
+	headerSize := uint64(nativeHeaderSize)
+	if second == nativeStoredBlock {
+		headerSize = nativeStoredHeaderSize
+		if uint64(len(image)) < headerSize {
+			return nil, fmt.Errorf("executable is %d bytes, shorter than its %d-byte header", len(image), headerSize)
+		}
 	}
 	codeSize := uint64(word(nativeSizesOffset))
 	dataSize := uint64(word(nativeSizesOffset + 4))
@@ -104,18 +129,41 @@ func ParseNativeExecutable(image []byte) (*NativeExecutable, error) {
 	if resourceSize > maxNativeResource {
 		return nil, fmt.Errorf("executable resources are %d bytes, limit %d", resourceSize, maxNativeResource)
 	}
-	if total := uint64(nativeHeaderSize) + codeSize + dataSize + relocationSize + resourceSize; total != uint64(len(image)) {
+	// The stored sizes are the sizes themselves unless the longer block gives
+	// its own. Only the code may be stored compressed: data, relocations and
+	// resources stored at another size are a layout no title has shown.
+	storedCode := codeSize
+	if second == nativeStoredBlock {
+		storedCode = uint64(word(nativeStoredOffset))
+		for index, size := range []uint64{dataSize, bssSize, relocationSize, uint64(word(nativeSizesOffset + 16)), resourceSize} {
+			if stored := uint64(word(nativeStoredOffset + 4 + 4*index)); stored != size {
+				return nil, fmt.Errorf("executable region %d is stored at %d bytes rather than its %d", index+1, stored, size)
+			}
+		}
+		if storedCode == 0 || storedCode > codeSize {
+			return nil, fmt.Errorf("executable code is stored at %d bytes for %d", storedCode, codeSize)
+		}
+	}
+	if total := headerSize + storedCode + dataSize + relocationSize + resourceSize; total != uint64(len(image)) {
 		return nil, fmt.Errorf("executable regions add up to %d bytes, the file is %d", total, len(image))
 	}
-	codeStart := uint64(nativeHeaderSize)
-	dataStart := codeStart + codeSize
+	codeStart := headerSize
+	dataStart := codeStart + storedCode
 	relocationStart := dataStart + dataSize
 	resourceStart := relocationStart + relocationSize
 	executable := &NativeExecutable{
-		Code:    bytes.Clone(image[codeStart:dataStart]),
 		Data:    bytes.Clone(image[dataStart:relocationStart]),
 		BSSSize: uint32(bssSize),
 		Digest:  sha256.Sum256(image),
+	}
+	if storedCode == codeSize {
+		executable.Code = bytes.Clone(image[codeStart:dataStart])
+	} else {
+		code, err := inflateNativeRegion(image[codeStart:dataStart], codeSize)
+		if err != nil {
+			return nil, fmt.Errorf("executable code: %w", err)
+		}
+		executable.Code = code
 	}
 	if marker := binary.LittleEndian.Uint32(executable.Data); marker != nativeRootMarker {
 		return nil, fmt.Errorf("executable data starts with %#x rather than the root marker %#x", marker, nativeRootMarker)
@@ -123,10 +171,11 @@ func ParseNativeExecutable(image []byte) (*NativeExecutable, error) {
 	var entries [6]uint32
 	for index := range entries {
 		entry := word(nativeEntryOffset + 4*index)
-		// An absent entry is zero; a present one is a Thumb address inside
-		// the code. The start is the one a title cannot do without.
-		if entry != 0 && (entry&1 == 0 || uint64(entry) >= codeSize) {
-			return nil, fmt.Errorf("executable entry %d is %#x, not a Thumb address inside %d bytes of code", index, entry, codeSize)
+		// An absent entry is zero; a present one is a Thumb address (odd) or
+		// an ARM one (word-aligned) inside the code. The start is the one a
+		// title cannot do without.
+		if entry != 0 && ((entry&1 == 0 && entry&3 != 0) || uint64(entry) >= codeSize) {
+			return nil, fmt.Errorf("executable entry %d is %#x, not a Thumb or ARM address inside %d bytes of code", index, entry, codeSize)
 		}
 		entries[index] = entry
 	}
@@ -139,11 +188,31 @@ func ParseNativeExecutable(image []byte) (*NativeExecutable, error) {
 	if err != nil {
 		return nil, err
 	}
-	executable.Resources, err = parseNativeResources(image[resourceStart:])
+	executable.Resources, executable.ResourceOrder, err = parseNativeResources(image[resourceStart:])
 	if err != nil {
 		return nil, err
 	}
 	return executable, nil
+}
+
+// inflateNativeRegion decompresses a zlib-stored region that must come out at
+// exactly size bytes; a stream that ends short, runs long or carries anything
+// after its end is refused.
+func inflateNativeRegion(stored []byte, size uint64) ([]byte, error) {
+	reader, err := zlib.NewReader(bytes.NewReader(stored))
+	if err != nil {
+		return nil, fmt.Errorf("open compressed region: %w", err)
+	}
+	defer reader.Close()
+	region := make([]byte, size)
+	if _, err := io.ReadFull(reader, region); err != nil {
+		return nil, fmt.Errorf("inflate %d bytes: %w", size, err)
+	}
+	var extra [1]byte
+	if count, err := reader.Read(extra[:]); count != 0 || err != io.EOF {
+		return nil, fmt.Errorf("compressed region inflates past its %d bytes", size)
+	}
+	return region, nil
 }
 
 // parseNativeRelocations reads the relocation table: a byte count for the code
@@ -228,51 +297,72 @@ func decodeNativeRelocations(list []byte, regionSize uint64, region string) ([]u
 // `{0x10, 1, 0x10, "KO", directory size, 0, count}`, then count pairs of
 // offset and size, then count NUL-terminated names. The files follow the
 // directory at 16 plus the directory size, and the offsets count from there.
-// An executable without resources has an empty archive region.
-func parseNativeResources(archive []byte) (map[string][]byte, error) {
+// An executable without resources has an empty archive region. The names
+// come back in directory order as well.
+func parseNativeResources(archive []byte) (map[string][]byte, []string, error) {
 	resources := make(map[string][]byte)
 	if len(archive) == 0 {
-		return resources, nil
+		return resources, nil, nil
 	}
 	const header = 28
 	if len(archive) < header {
-		return nil, fmt.Errorf("executable resource archive is %d bytes, shorter than its header", len(archive))
+		return nil, nil, fmt.Errorf("executable resource archive is %d bytes, shorter than its header", len(archive))
 	}
 	word := func(offset int) uint32 { return binary.LittleEndian.Uint32(archive[offset:]) }
 	if word(0) != 0x10 || word(4) != 1 || word(8) != 0x10 || !bytes.Equal(archive[12:16], []byte{'K', 'O', 0, 0}) {
-		return nil, fmt.Errorf("executable resource archive header % x is not the one this format uses", archive[:16])
+		return nil, nil, fmt.Errorf("executable resource archive header % x is not the one this format uses", archive[:16])
 	}
 	directory := uint64(word(16))
 	count := uint64(word(24))
 	if count > maxNativeResources {
-		return nil, fmt.Errorf("executable resource archive lists %d files, limit %d", count, maxNativeResources)
+		return nil, nil, fmt.Errorf("executable resource archive lists %d files, limit %d", count, maxNativeResources)
 	}
 	base := 16 + directory
 	if header+8*count > uint64(len(archive)) || base > uint64(len(archive)) || header+8*count > base {
-		return nil, fmt.Errorf("executable resource directory of %d files and %d bytes overruns a %d-byte archive", count, directory, len(archive))
+		return nil, nil, fmt.Errorf("executable resource directory of %d files and %d bytes overruns a %d-byte archive", count, directory, len(archive))
 	}
 	names := archive[header+8*count : base]
+	order := make([]string, 0, count)
 	for index := uint64(0); index < count; index++ {
+		offset := uint64(word(header + 8*int(index)))
+		size := uint64(word(header + 8*int(index) + 4))
+		// A directory may list more slots than files (one local title lists
+		// 350 for 246): the unused ones, all at the end, have no offset, no
+		// size and no name left in the name area.
+		if offset == 0 && size == 0 && (len(names) == 0 || names[0] == 0) && nativeSlotsUnused(archive, header, index, count) {
+			break
+		}
 		end := bytes.IndexByte(names, 0)
 		if end < 0 {
-			return nil, fmt.Errorf("executable resource name %d is not terminated inside the directory", index)
+			return nil, nil, fmt.Errorf("executable resource name %d is not terminated inside the directory", index)
 		}
 		name := string(names[:end])
 		names = names[end+1:]
-		offset := uint64(word(header + 8*int(index)))
-		size := uint64(word(header + 8*int(index) + 4))
 		if offset+size > uint64(len(archive))-base {
-			return nil, fmt.Errorf("executable resource %q at %d of %d bytes overruns the archive", name, offset, size)
+			return nil, nil, fmt.Errorf("executable resource %q at %d of %d bytes overruns the archive", name, offset, size)
 		}
 		if name == "" {
-			return nil, fmt.Errorf("executable resource %d has no name", index)
+			return nil, nil, fmt.Errorf("executable resource %d has no name", index)
 		}
 		if _, duplicate := resources[name]; duplicate {
-			return nil, fmt.Errorf("executable resource archive names %q twice", name)
+			return nil, nil, fmt.Errorf("executable resource archive names %q twice", name)
 		}
 		resources[name] = archive[base+offset : base+offset+size : base+offset+size]
+		order = append(order, name)
 	}
-	return resources, nil
+	return resources, order, nil
+}
+
+// nativeSlotsUnused reports whether directory slots first through count-1
+// all hold a zero offset and size.
+func nativeSlotsUnused(archive []byte, header int, first, count uint64) bool {
+	for index := first; index < count; index++ {
+		at := header + 8*int(index)
+		if binary.LittleEndian.Uint64(archive[at:]) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // Load lays the executable out for a base address: the code at base and the

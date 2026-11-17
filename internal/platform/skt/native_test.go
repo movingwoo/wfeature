@@ -3,7 +3,9 @@ package skt
 import (
 	"archive/zip"
 	"bytes"
+	"compress/zlib"
 	"encoding/binary"
+	"slices"
 	"testing"
 )
 
@@ -118,7 +120,7 @@ func TestParseNativeExecutableRefusals(t *testing.T) {
 		{"wrong first block", func(p dafParts) dafParts { p.firstBlock = 0x30; return p }},
 		{"wrong second block", func(p dafParts) dafParts { p.secondBlock = 0x40; return p }},
 		{"no start entry", func(p dafParts) dafParts { p.entries[0] = 0; return p }},
-		{"even start entry", func(p dafParts) dafParts { p.entries[0] = 0x10; return p }},
+		{"halfword-aligned even start entry", func(p dafParts) dafParts { p.entries[0] = 0x12; return p }},
 		{"start past code", func(p dafParts) dafParts { p.entries[0] = 0x1001; return p }},
 		{"no marker", func(p dafParts) dafParts {
 			p.data = append([]byte(nil), p.data...)
@@ -182,6 +184,149 @@ func TestNativeResources(t *testing.T) {
 	got, ok := executable.Resources["a.dat"]
 	if !ok || !bytes.Equal(got, payload) {
 		t.Fatalf("resource a.dat = %v (%v), want %v", got, ok, payload)
+	}
+}
+
+// storedDAF lays parts out with the longer second block: the sizes, the
+// entries, then the sizes the regions are stored at, with the code stored as
+// the given bytes (compressed or not) and the other regions as they are.
+func storedDAF(parts dafParts, storedCode []byte) []byte {
+	plain := parts.bytes()
+	codeSize := uint32(len(parts.code))
+	relocationSize := binary.LittleEndian.Uint32(plain[nativeSizesOffset+12:])
+	header := make([]byte, nativeStoredHeaderSize)
+	copy(header, plain[:nativeHeaderSize])
+	binary.LittleEndian.PutUint32(header[nativeFirstBlock+8:], nativeStoredBlock)
+	stored := []uint32{uint32(len(storedCode)), uint32(len(parts.data)), parts.bss, relocationSize, 0, uint32(len(parts.resource))}
+	for index, size := range stored {
+		binary.LittleEndian.PutUint32(header[nativeStoredOffset+4*index:], size)
+	}
+	image := append(header, storedCode...)
+	return append(image, plain[nativeHeaderSize+int(codeSize):]...)
+}
+
+func deflate(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer := zlib.NewWriter(&buffer)
+	if _, err := writer.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
+}
+
+// TestParseNativeExecutableStoredCode reads the longer header two local titles
+// have, whose code is stored compressed, and refuses one whose stream does
+// not come out at the size the header gives, or whose other regions are
+// stored at another size.
+func TestParseNativeExecutableStoredCode(t *testing.T) {
+	// Code long and repetitive enough to compress below its own size, which
+	// is the only way a region is stored compressed.
+	parts := validParts()
+	code := bytes.Repeat([]byte{0x70, 0x47, 0xc0, 0x46}, 64)
+	copy(code, parts.code)
+	parts.code = code
+	executable, err := ParseNativeExecutable(storedDAF(parts, deflate(t, parts.code)))
+	if err != nil {
+		t.Fatalf("ParseNativeExecutable: %v", err)
+	}
+	if !bytes.Equal(executable.Code, parts.code) {
+		t.Fatalf("code = % x, want % x", executable.Code, parts.code)
+	}
+	if executable.Entries.Start != 0x11 || !bytes.Equal(executable.Data, parts.data) {
+		t.Fatalf("entries %+v data % x", executable.Entries, executable.Data)
+	}
+	loaded, _, err := executable.Load(0x00100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := binary.LittleEndian.Uint32(loaded[0x08:]); got != 0x00100000+NativeDataLink {
+		t.Fatalf("relocated word = %#x", got)
+	}
+	// Stored as it is, the longer block reads the same.
+	if executable, err := ParseNativeExecutable(storedDAF(parts, parts.code)); err != nil || !bytes.Equal(executable.Code, parts.code) {
+		t.Fatalf("uncompressed longer block: %v", err)
+	}
+
+	short := deflate(t, parts.code[:len(parts.code)-1])
+	if _, err := ParseNativeExecutable(storedDAF(parts, short)); err == nil {
+		t.Fatal("accepted code that inflates short of its size")
+	}
+	long := deflate(t, append(slices.Clone(parts.code), 0))
+	if _, err := ParseNativeExecutable(storedDAF(parts, long)); err == nil {
+		t.Fatal("accepted code that inflates past its size")
+	}
+	image := storedDAF(parts, deflate(t, parts.code))
+	binary.LittleEndian.PutUint32(image[nativeStoredOffset+4:], uint32(len(parts.data))+4)
+	if _, err := ParseNativeExecutable(image); err == nil {
+		t.Fatal("accepted data stored at another size")
+	}
+}
+
+// TestParseNativeExecutableARMEntry accepts the word-aligned entries one local
+// title, built as ARM code, lists.
+func TestParseNativeExecutableARMEntry(t *testing.T) {
+	parts := validParts()
+	parts.entries = [6]uint32{0x10, 0x14}
+	executable, err := ParseNativeExecutable(parts.bytes())
+	if err != nil {
+		t.Fatalf("ParseNativeExecutable: %v", err)
+	}
+	if executable.Entries.Start != 0x10 || executable.Entries.Destroy != 0x14 {
+		t.Fatalf("entries = %+v", executable.Entries)
+	}
+}
+
+// resourceArchive builds an embedded resource archive whose directory lists
+// slots entries: the named files first, in order, then unused slots with no
+// offset, no size and no name.
+func resourceArchive(files [][2]string, slots int) []byte {
+	header := make([]byte, 28)
+	binary.LittleEndian.PutUint32(header[0:], 0x10)
+	binary.LittleEndian.PutUint32(header[4:], 1)
+	binary.LittleEndian.PutUint32(header[8:], 0x10)
+	copy(header[12:], []byte{'K', 'O'})
+	entries := make([]byte, 8*slots)
+	var names, payload []byte
+	for index, file := range files {
+		binary.LittleEndian.PutUint32(entries[8*index:], uint32(len(payload)))
+		binary.LittleEndian.PutUint32(entries[8*index+4:], uint32(len(file[1])))
+		names = append(append(names, file[0]...), 0)
+		payload = append(payload, file[1]...)
+	}
+	names = append(names, 0, 0xcc)
+	directory := append(append(header, entries...), names...)
+	binary.LittleEndian.PutUint32(directory[16:], uint32(len(directory)-16))
+	binary.LittleEndian.PutUint32(directory[24:], uint32(slots))
+	return append(directory, payload...)
+}
+
+// TestNativeResourcesUnusedSlots reads a directory that lists more slots than
+// files, as one local title's does, and keeps the files' order.
+func TestNativeResourcesUnusedSlots(t *testing.T) {
+	files := [][2]string{{"b.dat", "bb"}, {"a.dat", "aaaa"}, {"c.dat", "c"}}
+	parts := validParts()
+	parts.resource = resourceArchive(files, 7)
+	executable, err := ParseNativeExecutable(parts.bytes())
+	if err != nil {
+		t.Fatalf("ParseNativeExecutable: %v", err)
+	}
+	if want := []string{"b.dat", "a.dat", "c.dat"}; !slices.Equal(executable.ResourceOrder, want) {
+		t.Fatalf("order = %q, want %q", executable.ResourceOrder, want)
+	}
+	for _, file := range files {
+		if got := string(executable.Resources[file[0]]); got != file[1] {
+			t.Fatalf("resource %s = %q, want %q", file[0], got, file[1])
+		}
+	}
+	// An unused slot ahead of a used one is not the layout: the directory is
+	// refused rather than read past the gap.
+	parts.resource = resourceArchive([][2]string{{"", ""}, {"a.dat", "aaaa"}}, 3)
+	if _, err := ParseNativeExecutable(parts.bytes()); err == nil {
+		t.Fatal("accepted an unused slot ahead of a named file")
 	}
 }
 
