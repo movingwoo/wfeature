@@ -61,7 +61,6 @@ This consolidation adds no execution or acceptance evidence.
 - [What the other platforms already answered — 2026-11-05](#lgt-parity-fill-2026-11-05)
 - [A Clet's timer comes due while it is paused — 2026-11-10](#lgt-paused-timer-2026-11-10)
 - [Five more Clets built for a strip above the screen — 2026-11-17](#lgt-new-archives-2026-11-17)
-- [Five more Clets built for a strip above the screen — 2026-11-17](#lgt-new-archives-2026-11-17)
 
 <a id="implementation-the-lgt-platform"></a>
 

@@ -44,7 +44,8 @@ KTF · LGT · SKT 피쳐폰 게임 지원
 <img src="docs/images/main.webp" width="300" alt="게임 선택 화면">
 
 폴더에 직접 파일을 넣거나 **＋ 게임 추가** 버튼을 통해 파일을 넣을 수 있습니다.
-운영체제별 안내는 각 압축파일 내 `README.txt`를 확인해주세요.
+웹 환경에서 이용 시 사설 인증서를 이용한 https 접속을 권장합니다. `https://<PC IP>:11641` 
+운영체제 별 자세한 안내는 각 압축 파일 내 `README.txt`를 확인해주세요.
 
 소스코드를 다운받아 구동하려면 Go 1.26 이상이 필요하며 자세한 내용은 [`docs/running.md`](docs/running.md)에 있습니다.
 
