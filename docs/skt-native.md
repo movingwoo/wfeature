@@ -132,6 +132,20 @@ An SKT handset answers these calls its own way too:
   which the engine answers a KTF title with, wrote far outside the table.
   `MC_knlGetResource` still reads an address it is handed, which a quick save
   from before can hold.
+- `MC_grpDrawImage` leaves out the source pixels equal to the context's
+  transparent pixel (`Platform.ContextTransparentPixel`). One title sets it to
+  magenta before every image and has no other transparency. Zero, which
+  `MC_grpInitContext` leaves, is no transparent pixel: another title draws every
+  image through a cleared context.
+- `MC_grpCreateImage` writes `0xFFF7` where the decoded picture is transparent
+  (`Platform.TransparentImagePixel`). One title reads its pictures' pixels
+  itself and skips `0xFFF7` in both its blitters, whatever colour a picture
+  declared transparent.
+
+Setting a context's alpha installs the platform's own blend as the pixel
+operation, with the alpha as its parameter, on both platforms
+(`WIPICBuiltinAlphaOp`): one title fills its card slots through an alpha of
+100 and no operation of its own.
 
 The C library at slot 14 is served in `clet_clib.go`: the string, memory,
 conversion and time functions the specification lists, each named where that

@@ -880,11 +880,13 @@ func (runtime *Runtime) WIPICAccessGraphicsContext(thread *armcore.Thread, set b
 			// out, their operations were handed zero: one drew its sprites
 			// with their magenta backdrops, the other its fades not at all.
 			//
-			// The operation the specification has the alpha install is not
-			// installed: every local title that sets the alpha replaces it
-			// straight away, so what the handset's own blend did is not
-			// something any of them shows.
+			// The operation the specification has the alpha install is
+			// installed too, as WIPICBuiltinAlphaOp: the titles above replace
+			// it straight away, and one that does not draws translucent.
 			accessErr = runtime.WriteWord(contextAddress+wipicContextPixelParamOffset, value)
+			if accessErr == nil {
+				accessErr = runtime.WriteWord(contextAddress+WIPICContextPixelOpOffset, WIPICBuiltinAlphaOp)
+			}
 		}
 	case 5:
 		accessErr = transfer(WIPICContextPixelOpOffset, 4, false) // pixel-op function

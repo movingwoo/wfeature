@@ -199,10 +199,11 @@ text retains its own metrics.
 A WIPI-C graphics context is the handset's `0x40`-byte record of words —
 clip, colours, alpha, origin, pixel operation and its parameter, font and style,
 the origin ahead of where its index number would put it — because titles read
-it directly, and setting its alpha sets the pixel operation's parameter, as the
-specification says. A pixel operation's answers are cached by the pixel pair;
-an operation whose code reads the title's memory has them dropped at every
-published frame. A session restored from a checkpoint taken before 2026-11-17
+it directly, and setting its alpha installs the platform's own blend as the
+pixel operation and the alpha as its parameter, as the specification says; a
+title's own operation set after it replaces the blend. A pixel operation's
+answers are cached by the pixel pair; an operation whose code reads the title's
+memory has them dropped at every published frame. A session restored from a checkpoint taken before 2026-11-17
 keeps the earlier 52-byte record its contexts were written in
 ([history](history/ktf.md#ktf-new-archives-2026-11-17-graphics-context)).
 
@@ -416,9 +417,11 @@ opened and the resource requests nobody answered keep their first 4096 entries,
 as its ordered call log keeps its first calls. A second listener registration on
 one of its event sources replaces the first, since only one is ever called.
 
-Known limits include animated image playback, unapplied graphics alpha and
-WIPI-C context transparency and origin fields, unpainted LWC components
-(deliberately: no record of the original runtime's components exists),
+Known limits include animated image playback, unapplied Java graphics alpha,
+the WIPI-C context's transparent pixel and origin fields, which KTF draws do not
+apply (an SKT Clet's image draws apply the transparent pixel), unpainted LWC
+components (deliberately: no record of the original runtime's components
+exists),
 dialogs answered without being shown, the native archive that stops on its
 loading screen, a later native archive drawn for a 128x160 handset that has to
 have that screen chosen
