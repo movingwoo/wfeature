@@ -123,7 +123,8 @@ where a KTF title's take them the other way round
 [history](history/skt.md#skt-pixel-operation-order-2026-11-17)). The graphics
 context record itself is the same word record on both.
 
-An SKT handset answers these calls its own way too:
+An SKT handset answers these calls its own way too
+([history](history/skt.md#skt-new-archives-2026-11-18)):
 
 - `MC_knlGetResourceID` answers a resource's position in the executable's
   resource directory, from zero (`Client.ResourceOrder`). One title sizes a
@@ -267,7 +268,8 @@ and reports `skt-native-certificate`. No certificate is minted and no file is
 changed.
 
 Two other executables check a certificate the same way and are adapted the same
-way, each by its own registered fix on its own window of code:
+way, each by its own registered fix on its own window of code
+([history](history/skt.md#skt-new-archives-2026-11-18-certificates)):
 
 - `skt.native_usim_subscriber` — a `usimcert.c2s` certificate whose subscriber
   field, compared with the handset's number, reports error 1004 on a mismatch
@@ -378,4 +380,5 @@ timer callback that neither returns to the Host nor polls the clock, so it is
 refused as a runaway would be. Raising the allowance for every title to let one
 title's load through would weaken the bound that stops a real runaway, so the
 step allowance is left where it is, and this title reaches its slot screen and
-the first moments of its stage but not beyond its first heavy load.
+the first moments of its stage but not beyond its first heavy load
+([history](history/skt.md#skt-new-archives-2026-11-18-load-allowance)).
