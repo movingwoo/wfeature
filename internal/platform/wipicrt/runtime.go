@@ -71,6 +71,11 @@ type Runtime struct {
 	ScreenFramebuffer  uint32
 	FramebufferOpacity map[uint32]*ImageOpacity
 	PixelOps           *PixelOpCache
+	// pixelOpPurity is what reading each pixel operation's code found:
+	// whether its answers depend on its arguments alone. It is derived from
+	// the code, so it is read again rather than recorded. See
+	// pixelop_purity.go.
+	pixelOpPurity map[uint32]bool
 	// LegacyGraphicsContext keeps the 52-byte graphics context this engine
 	// laid out before it followed the handset's, for a session restored from
 	// a checkpoint that predates the change: the contexts in its guest memory

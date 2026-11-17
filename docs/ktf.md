@@ -197,11 +197,13 @@ rendering agree. NUL padding draws nothing and advances zero. Native WIPI-C
 text retains its own metrics.
 
 A WIPI-C graphics context is the handset's `0x40`-byte record of words —
-clip, colours, alpha, origin, pixel operation and its parameter, font and style
-in the order of their index numbers — because titles read it directly, and
-setting its alpha sets the pixel operation's parameter, as the specification
-says. A session restored from a checkpoint taken before 2026-11-17 keeps the
-earlier 52-byte record its contexts were written in
+clip, colours, alpha, origin, pixel operation and its parameter, font and style,
+the origin ahead of where its index number would put it — because titles read
+it directly, and setting its alpha sets the pixel operation's parameter, as the
+specification says. A pixel operation's answers are cached by the pixel pair;
+an operation whose code reads the title's memory has them dropped at every
+published frame. A session restored from a checkpoint taken before 2026-11-17
+keeps the earlier 52-byte record its contexts were written in
 ([history](history/ktf.md#ktf-new-archives-2026-11-17-graphics-context)).
 
 Image draws, `MC_grpCopyArea` and `MC_grpCopyFrameBuffer` copy a row at a time:

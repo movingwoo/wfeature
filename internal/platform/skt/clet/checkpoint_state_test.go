@@ -116,7 +116,7 @@ func TestCheckpointAccountsForEveryField(t *testing.T) {
 			"InputModeTableAddress": recorded, "CInput": recorded, "Events": recorded, "GuestEventLoop": recorded,
 			"Leds": recorded, "AOTCallDepth": boundary, "DetachedCFiles": rebuilt, "PendingNetCallbacks": recorded,
 			"RepaintPending": recorded, "RepaintServicing": boundary, "GuestFlushedOwnFrame": recorded, "CollectAt": rebuilt,
-			"LegacyGraphicsContext": recorded,
+			"LegacyGraphicsContext": recorded, "pixelOpPurity": rebuilt,
 		},
 		reflect.TypeFor[cletState](): {
 			"program": rebuilt, "root": recorded, "destroyStarted": boundary, "repaint": recorded,

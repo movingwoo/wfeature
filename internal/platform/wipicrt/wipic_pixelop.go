@@ -38,8 +38,9 @@ type WIPICPixelOp struct {
 	// because both are answers to the same question — what a draw must write
 	// given what the surface already holds. The C context has a field of its
 	// own for it, `MC_GRP_CONTEXT_XOR_MODE_IDX`, at an offset no local title
-	// has settled the way the four below were settled — so that half stays
-	// unread rather than guessed, and nothing sets this from the C side.
+	// has settled the way the record's other fields were (graphics_context.go)
+	// — so that half stays unread rather than guessed, and nothing sets this
+	// from the C side.
 	Xor bool
 }
 
@@ -75,10 +76,10 @@ func (runtime *Runtime) WIPICReadContextPixelOp(contextAddress uint32) (WIPICPix
 // PixelOpCache remembers what one operation answered. A blit asks it once per
 // pixel, so without this a sprite sheet's worth of guest calls happens every
 // frame. The cache is keyed by the pair of pixels and thrown away when the
-// operation or its parameter changes, and at every published frame: an
-// operation can read the title's own state as well as its arguments — one
-// steps a fade level in a global once a frame — so an answer is only reused
-// within the frame it was asked in. See recordScreenFlush.
+// operation or its parameter changes, and, for an operation that reads the
+// title's own state as well as its arguments — one steps a fade level in a
+// global once a frame — at every published frame. See recordScreenFlush and
+// pixelop_purity.go.
 type PixelOpCache struct {
 	Function uint32
 	Param    uint32

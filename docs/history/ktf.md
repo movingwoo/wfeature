@@ -1400,8 +1400,9 @@ appears nowhere else in the record, not at the offset the documented
 index). The two pairs trade places with the font and style, which no local title
 reads back.
 
-(2026-11-17: no trade is needed. With every field a word in the index order the
-operation falls at `0x2c` and its parameter at `0x30` of a `0x40`-byte record;
+(2026-11-17: no trade is needed. With every field a word and the origin straight
+after the alpha, the operation falls at `0x2c` and its parameter at `0x30` of a
+`0x40`-byte record;
 see [the handset's record](#ktf-new-archives-2026-11-17-graphics-context).)
 
 Every drawing call that takes a context runs its pixels through the operation:
@@ -1411,8 +1412,10 @@ both blits, the fills and outline, the line, the pixel and both string forms.
   and a blit would otherwise call the guest per pixel; keyed by the pixel pair,
   one title's dialogue-heavy run makes 7,600 guest calls against 24,000
   `MC_grpDrawImage` calls covering millions of pixels. The cache is dropped when
-  the function or parameter changes. (2026-11-17: and at every published frame;
-  see [the fade an operation reads](#ktf-new-archives-2026-11-17-fade).)
+  the function or parameter changes. (2026-11-17: not every operation is pure;
+  one whose code reads the title's memory has its answers dropped at every
+  published frame as well. See
+  [the fade an operation reads](#ktf-new-archives-2026-11-17-fade).)
 - **A field this platform did not write is not trusted as a function.** A title
   that sets a font through the slot this handset uses for the operation leaves a
   small integer there. Only a Thumb address inside the loaded module counts,
@@ -10337,11 +10340,11 @@ The validation of this pass, corpus and quick-save upgrade included, is with
 ## Newly added archives — 2026-11-17
 
 A batch of KTF, LGT and SKT archives launched by hand, among them repackaged
-and locally patched ones. Seven reports came back; four were this engine's and
-are fixed here and in the
-[LGT](lgt.md#lgt-new-archives-2026-11-17) and
-[SKT](skt.md#skt-pixel-operation-order-2026-11-17) records, and one was the
-archive's.
+and locally patched ones. Seven reports came back: three were this engine's
+and are fixed here and in the
+[SKT](skt.md#skt-pixel-operation-order-2026-11-17) record, three were LGT
+Clets' and are fixed in the [LGT](lgt.md#lgt-new-archives-2026-11-17) record,
+and one was the archive's.
 
 <a id="ktf-new-archives-2026-11-17-water-mark"></a>
 
@@ -10378,15 +10381,17 @@ routine read the right and bottom edges packed together as its top edge,
 somewhere past the screen, and drew nothing — a 1×320 gradient 240 times a
 frame among it.
 
-Laid out as words in the order of the `MC_GRP_CONTEXT_*_IDX` numbers after a
-leading word for "a clip is set" — clip, foreground, background, transparent
-pixel, alpha, origin, pixel operation, its parameter, font, style — the record
+Laid out as words after a leading word for "a clip is set" — clip, foreground,
+background, transparent pixel, alpha, origin, pixel operation, its parameter,
+font, style: the order of the `MC_GRP_CONTEXT_*_IDX` numbers but for the
+origin, index 10, which this title reads straight after the alpha — the record
 puts the pixel operation at `0x2c` and its parameter at `0x30` and is `0x40`
 bytes long. Those are exactly where the title that writes its context itself
 keeps them
 ([the pixel operation](#implementation-the-transparency-a-title-brings-with-it-the-contexts-pixel-operation)),
 which the 16-bit record could only explain by having the operation trade places
-with the font and style; and `0x40` is what this title copies. The engine now
+with the font and style; and `0x40` is what this title copies. No local title
+settles the last word, at `0x3c`. The engine now
 uses that record (`graphics_context.go`): `MC_grpInitContext` clears `0x40`
 bytes, `MC_grpSetContext` and `MC_grpGetContext` copy the clip and the origin
 as words, and every drawing call reads the foreground from `+0x14` and the clip
@@ -10446,9 +10451,27 @@ otherwise darkens or lightens the drawn pixel by a level from −4 to 4 that it
 keeps in a global and steps once a frame. The engine kept every answer for the
 life of the operation, so whichever level the first frame drew at was the
 level of the title screen for good; before the record changed, the first
-frame happened to be drawn at full brightness. The answers now last one
-published frame (`recordScreenFlush`), and the logo fades in and stays bright.
-A pure operation answers the same either way and only asks again once a frame.
+frame happened to be drawn at full brightness. The answers of an operation like
+this one now last one published frame (`recordScreenFlush`), and the logo fades
+in and stays bright.
+
+Dropping every operation's answers at every frame, as this was first done,
+cost the titles whose operations read nothing but their arguments the guest
+calls the cache is there to save: over 3,000 ticks from an empty save one ran
+in 3.63 s against 2.08 s, another in 7.74 s against 6.74 s. So an operation's
+code is read once, the first time a frame ends with its answers cached
+(`pixelop_purity.go`): every instruction a call can reach, both ways of each
+branch and into what it calls with `BL`. One that touches nothing but its
+stack and its literal pool keeps its answers as before; a load or store
+anywhere else, a platform call, a jump through a register, an instruction the
+reading does not know or more than 256 instructions drop them at every frame.
+Eight local titles were seen running operations: five read only their
+arguments, one of them through a division helper it calls, and three read
+memory, the fade among them. Every frame the seven KTF titles among them draw
+over 2,500 ticks, and the SKT Clet's digest at five points to 3,000 ticks, are
+the same as with every answer dropped, and the two titles above run in 2.08 s
+and 6.66 s. `TestPixelOperationThatReadsMemoryAnswersForOneFrame`,
+`TestPixelOperationReadingOnlyItsArgumentsKeepsItsAnswers`.
 
 <a id="ktf-new-archives-2026-11-17-archive"></a>
 
@@ -10474,10 +10497,11 @@ The 647 local archives at 500 ticks from an empty save, under the build before
 these changes and with them, rerun three more times under each wherever the
 digests differed: 614 end on the same digest and 12 more vary between runs of
 either build. Of the 21 that moved, 10 are SKT Java titles whose four runs under
-one build give four digests, which this change does not reach; 7 are the titles
-above; 4 are earlier KTF titles that read their contexts the same way, and each
-moved for the better — a title logo and a dialogue's text that now draw, a
-title whose own clipping now reads the clip it set, and the fade above.
+one build give four digests, which this change does not reach; 6 are the
+reported titles; 5 are earlier KTF titles that read their contexts the same
+way, and each moved for the better — a title logo and a dialogue's text that
+now draw, a window's text that no longer sits in black boxes, a title whose own
+clipping now reads the clip it set, and the fade above.
 
 A checkpoint each of three titles took under the earlier build loads under this
 one and goes on with the earlier record; one taken under this build loads and

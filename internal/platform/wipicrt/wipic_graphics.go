@@ -1844,14 +1844,17 @@ func (runtime *Runtime) recordScreenFlush() {
 	runtime.Client.FramePending = true
 	runtime.Client.PartialFrame = false
 	runtime.Client.FlushCount++
-	// A pixel operation's cached answers last one frame. An operation is not
-	// always a function of its three arguments alone: one title's reads a
-	// fade level from a global and darkens or lightens every pixel by it, and
-	// steps the level once a frame, so answers kept across frames froze its
-	// title screen at the first step it drew. Within a frame the answers are
-	// still reused, which is where a blit asks for the same pair thousands of
-	// times.
-	runtime.PixelOps = nil
+	// The cached answers of an operation that reads more than its arguments
+	// last one frame: one title's reads a fade level from a global and
+	// darkens or lightens every pixel by it, stepping the level once a frame,
+	// so answers kept across frames froze its title screen at the first step
+	// it drew. Within a frame they are still reused, which is where a blit
+	// asks for the same pair thousands of times, and an operation that reads
+	// only its arguments keeps them, since asking it again every frame only
+	// costs time. See pixelop_purity.go.
+	if cache := runtime.PixelOps; cache != nil && !runtime.pixelOpPure(cache.Function) {
+		runtime.PixelOps = nil
+	}
 	// A flush from outside the card paint is the title publishing a frame of
 	// its own. Which of the two paths owns the screen is decided in
 	// paintTopCard, and this is the half of the evidence it cannot see.

@@ -6,9 +6,8 @@ package wipicrt
 // structure. So where each field lives is part of the contract, not a choice
 // this platform gets to make.
 //
-// **On this handset every field is a 32-bit word, in the order of the
-// MC_GRP_CONTEXT_*_IDX numbers**, after a leading word that says whether a
-// clip is set:
+// **On this handset every field is a 32-bit word**, after a leading word that
+// says whether a clip is set:
 //
 //	0x00 clip set              0x24 offset x
 //	0x04 clip x1               0x28 offset y
@@ -16,20 +15,25 @@ package wipicrt
 //	0x0c clip x2               0x30 pixel operation parameter
 //	0x10 clip y2               0x34 font
 //	0x14 foreground pixel      0x38 style
-//	0x18 background pixel      0x3c XOR mode
+//	0x18 background pixel      0x3c not known
 //	0x1c transparent pixel
 //	0x20 alpha
 //
-// (0x3c follows from the order; no local title reads it, and nothing here
-// sets it.)
+// That is not the order of the MC_GRP_CONTEXT_*_IDX numbers: the origin,
+// index 10, comes straight after the alpha, ahead of the pixel operation and
+// its parameter, 5 and 6.
 //
-// Two titles read it directly, and between them they fix every offset that
-// matters. One writes its context itself: the pixel operation it also hands
-// the API is at 0x2c and the colour the operation keys on at 0x30. The other
-// copies 0x40 bytes of its own record into a context to call MC_grpDrawImage,
-// and when it has no pixel operation it draws the image itself, reading the
-// clip as four words from 0x04, the transparent pixel from 0x1c and the
-// origin from 0x24 and 0x28 — with the clip MC_grpSetContext stored for it.
+// Two titles read it directly, and between them they fix the offsets the
+// drawing calls depend on. One writes its context itself: the pixel operation
+// it also hands the API is at 0x2c and the colour the operation keys on at
+// 0x30. The other copies 0x40 bytes of its own record into a context to call
+// MC_grpDrawImage, and when it has no pixel operation it draws the image
+// itself, reading the clip as four words from 0x04, the transparent pixel from
+// 0x1c and the origin from 0x24 and 0x28 — with the clip MC_grpSetContext
+// stored for it. The font and the style are placed after the parameter, as
+// their numbers, 7 and 8, follow its; what the two titles do with the record
+// does not settle them, nor the word at 0x3c, which nothing here writes but
+// MC_grpInitContext's clearing.
 //
 // The engine used a 52-byte record before it knew this, with the clip and the
 // origin as 16-bit pairs and the font and style where the operation would
