@@ -36,16 +36,23 @@ opens them by.
 
 ## The executable
 
-The `.daf` lays out as both local examples do:
+The `.daf` lays out as every local example does:
 
-- A 0x20-byte block whose word 0 is `0x20`, then a 0x50-byte second block at
-  0x20 whose length is at `0x28`. Offsets `0x3c` to `0x50` hold five sizes:
-  the code with its read-only data, the initialised data, the BSS (which is not
-  in the file), the relocation table, and an embedded resource archive. Offsets
-  `0x58` to `0x6c` are six odd offsets into the code — the Thumb entry points.
-- The regions follow the header back to back from `0x70`, BSS aside, and in
-  both examples the four sizes add up to the file length exactly. A layout that
-  does not is refused.
+- A 0x20-byte block whose word 0 is `0x20`, then a second block at 0x20 whose
+  length is at `0x28`. Offsets `0x3c` to `0x50` hold the sizes of the code
+  with its read-only data, the initialised data, the BSS (which is not in the
+  file) and the relocation table, a word that is zero in every example, and the
+  size of an embedded resource archive. Offsets `0x58` to `0x6c` are six
+  offsets into the code — the entry points, odd for Thumb code and
+  word-aligned for ARM code: one local title is built entirely as ARM.
+- The second block is 0x50 bytes in most examples, and the regions follow the
+  header back to back from `0x70`, BSS aside. Two examples have a 0x6c-byte
+  block: the same sizes and entries, then at `0x70` the sizes the regions are
+  stored at, and the regions from `0x8c`. Their code is stored
+  zlib-compressed — stored smaller than its size — and must inflate to exactly
+  that size; every other region is stored at its own size, and a layout that
+  stores one otherwise is refused. In every example the stored sizes add up to
+  the file length exactly. A layout that does not is refused.
 - Code and read-only data are linked at zero; data and BSS at `0x01001000`. The
   first data word is a marker (`0xCAFECAFE`) the loader overwrites with the
   platform's root table pointer.
@@ -58,7 +65,7 @@ code region and one for the data region. Each entry advances an offset from its
 region's start to the next word holding an address, and its first byte's bits
 say how far (a low nibble, or a 12-, 20- or 28-bit delta) and what the word
 points into (a data address, a code address, or a target less its own address).
-Decoded this way every entry in both examples lands on a word pointing where the
+Decoded this way every entry in every example lands on a word pointing where the
 entry says, so both regions are relocatable and a loader can place them
 anywhere. `Load` places the code at the KTF image base and the data at the same
 distance from it they were linked at, adding the base to every code and data
@@ -67,7 +74,10 @@ the BSS after the data. Out-of-range or misaligned entries are refused.
 
 The resource archive opens `{0x10, 1, 0x10, "KO", directory size, 0, count}`,
 then `count` pairs of offset and size, then `count` NUL-terminated names; the
-files follow the directory, and the offsets count from there.
+files follow the directory, and the offsets count from there. One example's
+directory lists 350 slots for 246 files: the slots after the last file have no
+offset, no size and nothing left in the name area, and are read as unused. An
+unused slot ahead of a named one is refused.
 
 ## Calling the platform
 
@@ -313,8 +323,8 @@ engine is checked against both platforms' archives. Where an SKT handset is
 observed to answer differently from a KTF one, the difference becomes a
 platform value or hook rather than a second copy of the handler.
 
-The two local examples are both GCC-built, so an executable built with another
-toolchain may lay its header or its relocation table out differently. One
-example is an online game: offline it is told its server cannot be reached,
-reports that and plays on, and the content that needs the server stays out of
-reach.
+The local examples are GCC-built, and three header layouts are known (above);
+an executable built with another toolchain may lay its header or its
+relocation table out differently. One example is an online game: offline it is
+told its server cannot be reached, reports that and plays on, and the content
+that needs the server stays out of reach.

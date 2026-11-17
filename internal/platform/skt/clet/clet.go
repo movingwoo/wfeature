@@ -59,8 +59,9 @@ type CletProgram struct {
 	Authentication backend.AuthenticationStatus
 }
 
-// CletEntries are the program's entry points, absolute Thumb addresses. Zero
-// is an entry the program does not have; only Start is required.
+// CletEntries are the program's entry points, absolute Thumb addresses (odd)
+// or ARM ones (word-aligned). Zero is an entry the program does not have;
+// only Start is required.
 type CletEntries struct {
 	Start, Pause, Resume, Destroy, Paint, Event uint32
 }
@@ -165,8 +166,9 @@ func (program CletProgram) validate() error {
 		if entry == 0 {
 			continue
 		}
-		if entry&1 == 0 || uint64(entry) < uint64(ImageBase) || uint64(entry) >= codeEnd {
-			return fmt.Errorf("Clet %q entry %#x is not a Thumb address in its code", program.Name, entry)
+		// Odd is Thumb; a word-aligned even entry is ARM code.
+		if (entry&1 == 0 && entry&3 != 0) || uint64(entry) < uint64(ImageBase) || uint64(entry) >= codeEnd {
+			return fmt.Errorf("Clet %q entry %#x is not a Thumb or ARM address in its code", program.Name, entry)
 		}
 	}
 	if program.Entries.Start == 0 {
