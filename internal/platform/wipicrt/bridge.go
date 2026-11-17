@@ -276,8 +276,10 @@ func (runtime *Runtime) InvalidateClip(state *ClipState) {
 // callbacks from different owners have deterministic observation order.
 // guestFile resolves a File path against in-memory writes first, persisted
 // save writes second, and the mounted outer-archive filesystem last. Guest
-// names may carry a leading slash that the mounted names do not. A removed
-// path resolves to none of the three.
+// names may carry a leading slash, or "." and empty segments, that the
+// mounted names do not: docs/wipi-storage.md drops both, so "./save.dat" is
+// the "save.dat" an archive ships. A removed path resolves to none of the
+// three.
 func (runtime *Runtime) GuestFile(name string) ([]byte, bool) {
 	return runtime.guestFileThrough(name, runtime.LoadSave)
 }
@@ -295,10 +297,13 @@ func (runtime *Runtime) GuestFileForSpace(name string) ([]byte, bool) {
 }
 
 func (runtime *Runtime) guestFileThrough(name string, load func(string) ([]byte, bool)) ([]byte, bool) {
-	if runtime.RemovedGuestFiles()[strings.TrimPrefix(name, "/")] {
+	clean := cleanGuestFileName(name)
+	removed := runtime.RemovedGuestFiles()
+	if removed[strings.TrimPrefix(name, "/")] || removed[clean] {
 		return nil, false
 	}
-	for _, candidate := range []string{name, strings.TrimPrefix(name, "/")} {
+	candidates := []string{name, strings.TrimPrefix(name, "/"), clean}
+	for _, candidate := range candidates {
 		if data, exists := runtime.GuestFiles[candidate]; exists {
 			return data, true
 		}
@@ -306,12 +311,26 @@ func (runtime *Runtime) guestFileThrough(name string, load func(string) ([]byte,
 	if data, exists := load("fs/" + strings.TrimPrefix(name, "/")); exists {
 		return data, true
 	}
-	for _, candidate := range []string{name, strings.TrimPrefix(name, "/")} {
+	for _, candidate := range candidates {
 		if data, exists := runtime.Client.Files[candidate]; exists {
 			return data, true
 		}
 	}
 	return nil, false
+}
+
+// cleanGuestFileName drops the empty and "." segments of a name, the way
+// docs/wipi-storage.md reads one, and leaves every other segment as it is: a
+// ".." stays and matches nothing an archive ships.
+func cleanGuestFileName(name string) string {
+	parts := strings.Split(strings.ReplaceAll(name, "\\", "/"), "/")
+	kept := parts[:0]
+	for _, part := range parts {
+		if part != "" && part != "." {
+			kept = append(kept, part)
+		}
+	}
+	return strings.Join(kept, "/")
 }
 
 // RemovedGuestFiles is the set of deleted paths, read from the store once per

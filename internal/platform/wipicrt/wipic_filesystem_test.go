@@ -595,3 +595,30 @@ func TestFreeSpaceIsAnsweredWhenAnUnopenedSaveCannotBeRead(t *testing.T) {
 		t.Fatal("MC_fsAvailable was answered over a removal list that could not be read")
 	}
 }
+
+// TestPackagedFileAnswersADotSpelling pins a packaged file's lookup under a
+// name with "." and empty segments, which docs/wipi-storage.md drops: one SKT
+// title opens every one of its files as "./name", was told its packaged sound
+// list and saves were not there, and wrote new ones over them.
+func TestPackagedFileAnswersADotSpelling(t *testing.T) {
+	_, runtime := wipicrttest.NewRuntime(t)
+	runtime.Client.SaveStore = wipicrt.NewDirectorySaveStore(t.TempDir())
+	runtime.Client.AttachFilesystem(map[string][]byte{"sound.lst": []byte("list"), "data/a.dat": []byte("a")})
+	for name, want := range map[string]string{"./sound.lst": "list", "/./sound.lst": "list", "data//a.dat": "a", "./data/./a.dat": "a"} {
+		if data, ok := runtime.GuestFile(name); !ok || string(data) != want {
+			t.Errorf("GuestFile(%q) = %q, %v, want %q", name, data, ok, want)
+		}
+	}
+	if _, ok := runtime.GuestFile("../sound.lst"); ok {
+		t.Error(`GuestFile("../sound.lst") found the packaged file`)
+	}
+	handle := wipicrttest.DatabaseCall(t, runtime, wipicrt.WIPICFileOpen, "./sound.lst", 1)
+	if int32(handle) < 0 {
+		t.Fatalf(`read-open of "./sound.lst" = %d, want the packaged file`, int32(handle))
+	}
+	// A removal under one spelling is a removal under the other.
+	runtime.RemovedFiles = map[string]bool{"sound.lst": true}
+	if _, ok := runtime.GuestFile("./sound.lst"); ok {
+		t.Error(`GuestFile("./sound.lst") found a removed file`)
+	}
+}

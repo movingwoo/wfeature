@@ -146,10 +146,13 @@ func (opacity *ImageOpacity) MarkOpaque(x, y int) {
 
 // BlitOpacity carries the transparency of the two framebuffers a blit joins:
 // the source's absent pixels are skipped, and the destination's own mask
-// records the pixels the blit drew.
+// records the pixels the blit drew. Keyed adds a transparent colour: a source
+// pixel whose value is Key is skipped as an absent one is.
 type BlitOpacity struct {
 	Source      *ImageOpacity
 	Destination *ImageOpacity
+	Key         uint16
+	Keyed       bool
 }
 
 // ImagePixel565 answers a decoded pixel in the guest's 16-bit colour, keeping
