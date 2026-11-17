@@ -2603,3 +2603,16 @@ adopted it:
   instead of 11.1 s, are the profiled build's longer waits: both builds drew
   183 frames in them.
 
+**Kept for 0.6.0, on the committed profile (2026-11-14).** The release ships
+16,384 with the profile measured above rather than a profile re-taken first.
+The quantum changes how often `Engine.Run` returns to yield, not the
+instruction paths inside it that carry the profile's weight: 61% of its
+samples fall under `Engine.Run`. What has aged the profile is the move of the
+WIPI-C engine to `internal/platform/wipicrt` on 2026-10-31. Thirty-eight
+functions holding 1.1% of its samples no longer exist under the names it
+records, most of them the KTF framebuffer copy, region flush and pixel blend
+that now live in `wipicrt`, and those build as they would without a profile.
+A re-take would change the inlining across every hot path, and with it the
+frame count above, so it waits for a `make pgo` after the release, measured
+against this build.
+

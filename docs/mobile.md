@@ -10,7 +10,7 @@ the page draws what it sends. With the server on the phone, "the network" is
 
 | | Over a network | In the app |
 |---|---|---|
-| Finding the address | `ipconfig`, four numbers, a port | none |
+| Finding the address | the one the server prints in its log and `status`: four numbers and a port | none |
 | Secure context | `http://192.168.x.x` is not one, so **no service worker** | `127.0.0.1` is one |
 | Reaching it from outside | a router, a tunnel, or a name | none needed |
 | Who else can reach it | anyone on the Wi-Fi | nobody |
@@ -30,7 +30,7 @@ Android                              iOS
 from its extracted library directory, so the phone runs the same server binary
 a desktop does, as a child process. **iOS does not let an app start a process**,
 so there the Go code is compiled to a static archive (`-buildmode=c-archive`,
-the one place cgo is used), linked into the app and called through three
+the one shipped build that uses cgo), linked into the app and called through three
 exports — `WfeatureStart`, `WfeatureStop` and `WfeatureLastError` in
 `mobile/ios/lib`. `internal/appserver` is the server without a `main`: no
 flags, no signal handler, no exit, because those belong to the embedding app.
@@ -192,15 +192,18 @@ Needs an Android SDK (`ANDROID_HOME`, default
 platform, and a JDK 17 or newer (`JAVA_HOME`, default
 `/opt/homebrew/opt/openjdk@17`). Command-line tools are enough; Android Studio
 is only wanted for the emulator and logcat. `BUILD_TOOLS` and `PLATFORM` pick a
-directory other than the newest, `VERSION_CODE` overrides the version code, and
-`KEYSTORE` names another signing key. The APK targets SDK 35 with a minimum of
+directory other than the newest, `VERSION_CODE` overrides the version code,
+`KEYSTORE` names another signing key, and `ANDROID_ABI` picks the server's
+architecture: `arm64-v8a`, the default and the only one a release ships, or
+`x86_64` for an emulator, linked with the NDK's clang (`ANDROID_NDK_HOME`, by
+default the newest NDK under `ANDROID_HOME`; no C is compiled). The APK targets SDK 35 with a minimum of
 26 (Android 8.0). It requests `INTERNET` and `VIBRATE`, and its network
 security configuration allows cleartext to `127.0.0.1` and `localhost` only.
 
-The server is bundled as `lib/arm64-v8a/libwfeature.so`, stored uncompressed.
+The server is bundled as `lib/<abi>/libwfeature.so`, stored uncompressed.
 **Since Android 10 an app may not execute a file it wrote into its data
 directory**, and the extracted library directory is the one place execution is
-allowed. The build is arm64 only, which every phone since about 2017 is.
+allowed. A release is arm64 only, which every phone since about 2017 is.
 
 The APK is signed with a debug key at `mobile/android/debug.keystore`, made on
 first build. **It is not in the repository**: Android accepts an update only
@@ -301,9 +304,11 @@ launching it, on iOS 26.5 and 27.0 simulators: `UTType(filenameExtension:
 has not been looked at on a phone or in a simulator.
 
 The icons are resized from `web/icon-512.png` at build time.
-`mobile/ios/acceptance/` holds a simulator-only controller driver
-(`load.c`, `PadDriver.swift`) that `web/acceptance/ios-gamepad.mjs` links beside
-the unchanged `App.swift`; the app's own build compiles neither file.
+`mobile/ios/acceptance/` holds two simulator-only drivers, each linked beside
+the unchanged `App.swift`: a controller driver (`load.c`, `PadDriver.swift`)
+for `web/acceptance/ios-gamepad.mjs` and a lifecycle driver
+(`lifecycle-load.c`, `LifecycleDriver.swift`) for
+`web/acceptance/ios-lifecycle.mjs`; the app's own build compiles none of them.
 
 ## Adding a game, and removing it
 

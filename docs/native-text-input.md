@@ -323,9 +323,10 @@ Java field limits count UTF-16 units in both Host composition and the keypad
 editor. Host text never holds a supplementary character (see
 [the handset's encoding](#the-handsets-encoding)), but a title's own text can,
 and such a character consumes two units. Keypad caret movement, backspace and
-truncation keep complete characters. Beyond the routes above — a KTF field a
-card reads while painting, a KTF title's own `InputMethodHandler`, and WIPI-C
-input-method widgets — native entry does not infer fields drawn by game code.
+truncation keep complete characters. Beyond the routes above — a KTF or LGT
+field a card reads while painting, a KTF title's own `InputMethodHandler`, and
+WIPI-C input-method widgets — native entry does not infer fields drawn by game
+code.
 
 ## The keypad editor
 

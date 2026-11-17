@@ -21,17 +21,18 @@ seconds and starts again from one second after any answer from the server. A
 page that finds its game controlled by another page shows
 `다른 화면에서 게임을 진행 중입니다.` with **이 화면에서 이어하기**, an explicit
 takeover. **🔄 재시작** asks first ("게임을 처음부터 다시 시작할까요? 저장하지 않은
-진행은 사라집니다.", **다시 시작**), then stops the game and returns to the
+데이터는 사라집니다.", **다시 시작**), then stops the game and returns to the
 picker.
 
 ## Page
 
-- **Layout** — one column on a phone, three on a window at least 1180px wide.
-  The screen and the keypad are a 3:4 shape in the middle either way; a wide
-  window spends the margins on the run log (left) and on settings and cheats
-  (right), read beside the game rather than over it. Narrower, the same panels
-  are centred modals over a dimmed page, because the body cannot scroll and
-  anything anchored below the keypad would be unreachable. The rails hold the
+- **Layout** — one column below 900px wide. From 900px the settings and cheat
+  panels are docked in a column right of the game, read beside it rather than
+  over it, and from 1180px a debug build adds the run log in a column on its
+  left; a release, which has no run log, keeps two columns at every width. The
+  screen and the keypad are a 3:4 shape in the middle either way. Below 900px
+  the same panels are centred modals over a dimmed page, because the body
+  cannot scroll and anything anchored below the keypad would be unreachable. The rails hold the
   panels in both cases; no node moves at runtime, and `display: contents` takes
   the rails out of the layout when they are not wanted. The page is dark
   throughout, because a lit game screen on white is not what a dark room wants;
@@ -58,16 +59,18 @@ picker.
   (`save-backup.js`). Under `에뮬레이터 설정 (.json)`, the same two buttons
   write this browser's settings to one `.json` and read them back, then open
   the page again (`settings-file.js`). The server's refusals are shown as it words them; a
-  request that never reaches the server says `서버에 연결하지 못했습니다.`
-  rather than the browser's own English error (`reach.js`, also used by the
+  request that never reaches the server says
+  `서버에 연결하지 못했습니다. 연결을 확인한 뒤 다시 시도하세요.` rather than the browser's own English error (`reach.js`, also used by the
   game list and the upload and delete buttons). The buttons sit on the picker
   because an import replaces a save or reopens the page, and the game is not
   running there.
 - **Screen** — the game's own screen size, chosen per game under `📱 화면`:
   `자동` (the default), 128×160, 176×220, 240×320, 240×400 or 320×480.
   `자동` sends no size and the server asks the archive: a KTF descriptor's
-  `DisplaySize` names the handset the title was packaged for, an SKT archive's
-  resource names sometimes do, and anything else starts on 240×320. Once a
+  `DisplaySize` names the handset the title was packaged for, and one of the
+  earlier revision, with neither `DisplaySize` nor `ResizeType`, is a 176×220
+  package; an SKT archive's resource names sometimes name one, and anything
+  else starts on 240×320. Once a
   game has run on the page the option reads `자동 176×220`: every started
   message says what a start without a size takes (`auto_width`,
   `auto_height`), a start on a chosen size and a quick load included. A size
@@ -222,7 +225,9 @@ picker.
     decides whether to vibrate (`vibrate.js`); the row is removed on a browser
     with neither.
   - Browsers offer controllers only to a secure context: `localhost`,
-    `127.0.0.1`, the phone apps and an HTTPS proxy, not `http://192.168.x.x`.
+    `127.0.0.1`, the server's own HTTPS port (`https://192.168.x.x:11641`,
+    once its certificate is accepted), the phone apps and an HTTPS proxy, not
+    `http://192.168.x.x`.
 - **전체화면** — the keypad and the rails put away, and the game screen as large
   as the window allows: the same 3:4 hole, centred, at the largest width that
   leaves room by its top-right corner for the way back, a `[ ]`-cornered button
@@ -272,7 +277,7 @@ picker.
   the screen during a run and the report afterwards cannot disagree. Wide
   windows and debug builds only.
 - **Settings (`설정`)** — `🎵 배경음` and `🔊 효과음` (MIDI and sampled-sound
-  volume), `🎬 화면·소리 맞춤` (−500 to +1000 ms: holds the picture or the sound
+  volume), `🎬 사운드 싱크` (−500 to +1000 ms: holds the picture or the sound
   back, `av-sync.js`), `🔍 화질` (원본, hq2x, hq3x or hq4x magnification), `📱 화면`,
   `📳 진동`, `⏩ 속도` (0.25배 to 4배, per game), `🎮 키패드 타입` and
   `🎮 키패드 세부 조정`, `⛶ 전체화면`, `⌨️ 키보드 매핑 변경`, `🕹️ 게임패드 매핑 변경`,
@@ -291,11 +296,12 @@ picker.
   class and the write watch is not offered. Whether a session has a panel is the
   session's answer rather than the platform's, and the page removes the toggle
   where the answer is no.
-- **Sound** — the engine's MIDI and PCM events are synthesised in the page by an
-  FM synthesizer (`fm-synth.js`, hosted by `fm-host.js`) rather than a
-  soundfont; the head of `audio.js` says why. It plays the voices a score
+- **Sound** — the engine's MIDI events are synthesised in the page by an FM
+  synthesizer (`fm-synth.js`, hosted by `fm-host.js`) rather than a soundfont,
+  and its PCM samples play as Web Audio buffers; the head of `audio.js` says
+  why. It plays the voices a score
   defines for itself and stand-ins for the rest. The page negotiates
-  `sound=resume&timing=1&pcm=1&phase=1&voice=1`: MIDI channels and PCM belong
+  `sound=resume&timing=1&pcm=1&phase=1&voice=1&wavevelocity=1`: MIDI channels and PCM belong
   to individual clips, and stopping one cancels its voices and tails
   independently. Queue recovery, reconnect and quick load reconstruct current
   output and held-note envelope ages and fractional PCM positions within the
@@ -336,7 +342,7 @@ picker.
   | `wfeature:screen:<game>` | the screen an earlier page kept, read for a game with no `screen-choice` entry; that page wrote it only when a player changed the menu, so every size it holds, 240x320 included, stays a choice |
   | `wfeature:frameScale` | `🔍 화질` |
   | `wfeature:volume:midi`, `wfeature:volume:pcm` | the two volumes |
-  | `wfeature:avSync` | `🎬 화면·소리 맞춤`, in milliseconds: positive holds the picture back, negative the sound |
+  | `wfeature:avSync` | `🎬 사운드 싱크`, in milliseconds: positive holds the picture back, negative the sound |
   | `wfeature:vibrate` | `📳 진동` |
   | `wfeature:keypadLayout`, `wfeature:keypadGridV2` (and the older grid keys) | keypad type and grid arrangements ([Grid keypad](#grid-keypad)) |
   | `wfeature:fullscreen` | `전체화면` |
@@ -357,13 +363,14 @@ picture for a scrolling field — decodes them with `createImageBitmap`, and
 composes them in order on a retained canvas (`frame-stream.js`). The newest
 picture is drawn on the next animation frame, magnified here with hqx at the
 scale the server names (`magnify.js`, `hqx.js`, and `hqx-patterns.js`, which is
-generated from the Go tables). With a positive `🎬 화면·소리 맞춤` each picture
+generated from the Go tables). With a positive `🎬 사운드 싱크` each picture
 is instead copied as it arrives and drawn on the first animation frame after it
 falls due, joined with what every picture it skipped changed (`av-sync.js`). Keys go up as JSON; sound arrives as compact
 binary MIDI and PCM events, each sample carried once (`audio-stream.js`), and
 is played here: samples as Web Audio buffers, notes by the FM synthesizer
-(`fm-synth.js`), which runs in an AudioWorklet or, on a plain-HTTP page, a
-ScriptProcessor (`fm-host.js`); the cheat panel's operations are a request and
+(`fm-synth.js`), which runs in an AudioWorklet or, on a page that is not a
+secure context (the machine's address over plain HTTP), a ScriptProcessor
+(`fm-host.js`); the cheat panel's operations are a request and
 an answer.
 
 ## Grid keypad
@@ -528,7 +535,9 @@ service is answered with stay with the platform that produces them.
 
 `go run ./cmd/server` serves this directory, the game archives and the save API
 on `-addr` (`:11541` by default, every interface, so a phone on the same
-network can reach it); its flags and the data root are in
+network can reach it) and, when that address is reachable from the network,
+the same over HTTPS 100 ports above it (`:11641`) unless `-https` moves or
+turns off that listener; its flags and the data root are in
 [`../docs/running.md`](../docs/running.md#the-local-server). It is Go because
 the emulator is Go and the server hosts emulation sessions in the same process;
 `internal/webhost` holds the routes. A released binary carries the files in
@@ -560,7 +569,7 @@ running, not a flag.
 - `PUT /api/saves/<owner>/<key>` (or `/api/saves/<platform>/<owner>/<key>`) —
   persists one entry from the raw request body.
 - `GET /api/status` — what this server is (`server`, `profile`, `version`,
-  `pid`); `POST /api/shutdown` stops it, from this machine only. See
+  `pid`, and `https_port` when it also serves HTTPS); `POST /api/shutdown` stops it, from this machine only. See
   [`../docs/running.md`](../docs/running.md#apistatus).
 - `GET /licenses` — this project's licence and the bundled notices.
 - `POST /api/debug-log` — the page's own log, written under `-logs`
@@ -604,9 +613,12 @@ PWA checklist are in [PWA acceptance](../docs/pwa-acceptance.md).
 ## Known gaps
 
 - **Which titles run is not this page's question.** Every platform starts games
-  here over the same shared layer the CLI uses, so the page has no per-platform
-  limitation of its own: a title that runs under `wfeature runktf`/`runlgt`/
-  `runskt` runs here, and one that does not, does not.
+  here over the same shared layer the CLI's `run` command uses
+  (`internal/session`), so the page has no per-platform limitation of its own:
+  a title that runs under `wfeature run` runs here, and one that does not, does
+  not. The platform commands `runktf`, `runlgt` and `runskt` add their own
+  diagnostics; `runskt` does not open an SKT native package, which only `run`
+  starts.
 - Game controllers are checked against a stand-in for `navigator.getGamepads`
   in Chromium and WebKit, in the Android app on an emulator with a virtual HID
   controller, and in the iOS app in the simulator with a virtual controller —

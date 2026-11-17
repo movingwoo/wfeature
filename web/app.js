@@ -1287,28 +1287,19 @@ const initSettings = () => {
 
   // Picture against sound: one setting, held for this browser, since what it
   // makes up for is the browser's output — a headset, a display — rather
-  // than any game. The slider's label says which of the two waits and how
-  // long while it moves; the delay itself changes when it is let go, because
-  // a sound delay rebuilds the sound that is playing.
+  // than any game. The slider shows no figure: the player moves it until
+  // the two agree. The delay changes when it is let go, because a sound
+  // delay rebuilds the sound that is playing.
   const avSync = document.getElementById("av-sync");
-  const avSyncValue = document.getElementById("av-sync-value");
-  const describeAVSync = value => {
-    if (!avSyncValue) return;
-    if (value > 0) avSyncValue.textContent = phrase("settings.av-sync.picture", { ms: value });
-    else if (value < 0) avSyncValue.textContent = phrase("settings.av-sync.sound", { ms: -value });
-    else avSyncValue.textContent = phrase("settings.av-sync.none");
-  };
   const applyAVSync = value => {
     heldPictures.setDelay(pictureDelay(value));
     pageAudio?.setExtraDelay(soundDelay(value));
-    describeAVSync(value);
   };
   if (avSync) {
     avSync.min = String(AV_SYNC_MIN);
     avSync.max = String(AV_SYNC_MAX);
     avSync.step = String(AV_SYNC_STEP);
     avSync.value = String(storedAVSync(localStore));
-    avSync.addEventListener("input", () => describeAVSync(Number(avSync.value)));
     avSync.addEventListener("change", () => {
       rememberAVSync(avSync.value, localStore);
       applyAVSync(Number(avSync.value));

@@ -39,7 +39,7 @@ the page screenshots the root `README.md` shows.
 | [JVM](jvm.md) | Java execution, class library, and semantic limits. |
 | [ARM](armcore.md) | Instruction boundary, threads, memory, profiling, and backend conformance. |
 | [KTF](ktf.md), [LGT](lgt.md), [SKT Java](skvm.md), [SKT native](skt-native.md) | Platform loading, behavior, and remaining limitations. |
-| [SKT checkpoints](skt-checkpoints.md) | The SKT Java and SGS quick save/load contract; KTF and LGT are in [architecture](architecture.md#quick-load-and-ordinary-saves) and their platform pages. |
+| [SKT checkpoints](skt-checkpoints.md) | The SKT Java, SGS and native Clet quick save/load contract; KTF and LGT are in [architecture](architecture.md#quick-load-and-ordinary-saves) and their platform pages. |
 | [LCDUI](lcdui.md), [native text input](native-text-input.md) | Screens, widgets, Host keyboard/IME, and input ownership. |
 | [Rapid fire](rapid-fire.md) | The keypad's rapid-fire switch, its timing and measured cost. |
 | [WIPI storage](wipi-storage.md) | The one contract KTF, LGT and SKT keep for WIPI files, directories, space and databases. |
@@ -52,7 +52,7 @@ the page screenshots the root `README.md` shows.
 
 | Record | Contents |
 | --- | --- |
-| [KTF](history/ktf.md), [LGT](history/lgt.md), [SKT](history/skt.md) | Detailed layouts, original investigations, routes, compatibility follow-up, and the dated QA records of 2026-09-19 to 2026-09-30. |
+| [KTF](history/ktf.md), [LGT](history/lgt.md), [SKT](history/skt.md) | Detailed layouts, original investigations, routes, compatibility follow-up, and the dated QA and new-archive records from 2026-09-19 on. |
 | [ARM](history/armcore.md) | Interpreter optimizations, benchmarks, and profile evidence. |
 | [Sessions](history/session.md) | Protocol and retention decisions, previous measurements, and the 2026-09-23 CPU saturation investigation. |
 | [Testing](history/testing.md) | Detailed probe instructions, dated acceptance, runtime regressions, settling, WebKit observations, and the 2026-09-23 text input audit. |

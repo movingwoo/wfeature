@@ -41,6 +41,11 @@ its executable; see `docs/running.md`, "A release build".
   them, named `<UTC timestamp>[-<label>].log`. A report is at most 2 MiB, at
   most ten are accepted a minute, and reports older than 14 days or beyond
   64 MiB in total are dropped oldest first. A release server writes none.
+- `tls/`: the HTTPS listener's self-signed certificate, `cert.pem` and
+  `key.pem` (the key readable by its owner only), made at the first start that
+  opens HTTPS and presented again after it. Deleting the folder makes a new
+  certificate at the next start, and every browser that accepted the old one
+  warns again. `-tls` or `WFEATURE_TLS_ROOT` moves it.
 - `acceptance/<date>.md` and `<date>.ndjson`: what `make acceptance` found when
   it ran every local archive probe, as a report and one record per archive.
   One pair per day it is run, because the answer is only true of a date and of

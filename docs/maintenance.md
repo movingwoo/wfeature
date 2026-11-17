@@ -139,7 +139,9 @@ Remeasure before changing ownership, scheduling or interpreter strategy:
 - A native-code backend needs conformance, interpreter fallback, pure-Go core
   compatibility and a demonstrated improvement; see [ARM execution](armcore.md).
 - Keypad JSON preset sharing and external-access add-ons need a product scope.
-  Local keypad storage exists. The server has no access key or other
+  Local keypad storage exists, and the settings file (`wfeature-settings.json`)
+  carries a browser's keypad type and arrangement, with its other settings, to
+  another browser; a keypad on its own is not shared. The server has no access key or other
   authentication, so external access needs one before it is offered.
 
 Historical counts, benchmark names and rejected approaches are in
@@ -149,8 +151,8 @@ measurements.
 ## Paused work and provenance
 
 Quick save/load is implemented for KTF (Java/AOT, older modules and native
-packages), LGT (Clets and AOT Java) and SKT (Java and SGS) through the shared
-session, CLI and browser hosts.
+packages), LGT (Clets and AOT Java) and SKT (Java, SGS and native Clet
+packages) through the shared session, CLI and browser hosts.
 [Architecture](architecture.md#quick-load-and-ordinary-saves) defines the state
 and save-ownership contracts and [testing](testing.md) records the supported
 variants and evidence. Real native package validation still needs a matching

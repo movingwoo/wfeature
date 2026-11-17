@@ -31,7 +31,7 @@ titles, which want opposite things from it — see [`network.md`](network.md).
 ```
 wfeature inspect <game.jar>                     read the archive, print its summary as JSON
 wfeature run <archive> [flags]                 use the shared Host session and checkpoints
-wfeature runskt  <game.jar|game.zip> [flags]    run an SKT title
+wfeature runskt  <game.jar|game.zip> [flags]    run an SKT Java or SGS title
 wfeature runlgt  <game.zip> [flags]             run an LGT title
 wfeature runktf  <game.zip> [flags]             run a KTF title
 wfeature invoke  <game.jar> <method> <descriptor> [arguments...]
@@ -127,6 +127,10 @@ On SKT a title's frame loop is a thread that sleeps: scaling only the sleep
 leaves it stepping less each time it wakes, and scaling only the clock leaves
 it stepping further at the same rate. Scaling both makes it run faster.
 
+An SKT native (Clet) title runs on the WIPI-C engine KTF titles run on, so its
+clock and the waits between its callbacks scale as a KTF title's do; the SKT
+row is the Java runtime.
+
 ## run: shared sessions and checkpoints
 
 ```sh
@@ -138,9 +142,11 @@ wfeature run var/games/ktf/game.zip -serve
 
 `run` calls the same `internal/session` API as the server. Its checkpoint
 support covers supported KTF Java, older module and native package states, LGT
-Clets and AOT Java titles, and SKT Java/MIDP/WIPI and SGS titles. Unsupported
-runtime state is refused explicitly. The platform commands `runktf`, `runlgt`
-and `runskt` keep the profiling, routes and platform diagnostics.
+Clets and AOT Java titles, and SKT Java/MIDP/WIPI, SGS and native (Clet)
+titles. Unsupported runtime state is refused explicitly. The platform commands
+`runktf`, `runlgt` and `runskt` keep the profiling, routes and platform
+diagnostics; an SKT native package has no platform command and runs only under
+`run`.
 
 | Flag | Behavior |
 | --- | --- |
@@ -150,7 +156,7 @@ and `runskt` keep the profiling, routes and platform diagnostics.
 | `-quickload` | Restore execution state from the archive's quick save before any tick, without rerunning guest startup. Ordinary saves are left as they are. A missing or invalid slot, or one written in an earlier format, fails startup with status 1 and a reason that names the file. |
 | `-serve` | Read one JSON command per line; use `step` and `quicksave` commands instead of `-ticks` and `-quicksave`, which are refused beside it. Can combine with `-quickload`. |
 | `-frame path` | Write the final screen to a PNG. |
-| `-play` | Pace the game using wall time. Without it KTF uses a manual clock and advances to scheduled deadlines, and LGT, whose guest clock only a tick moves, runs its ticks back to back: the run is the one a paced Host would have had, without the waiting. SKT is paced either way. |
+| `-play` | Pace the game using wall time. Without it KTF and an SKT native (Clet) title use a manual clock and advance to scheduled deadlines, and LGT, whose guest clock only a tick moves, runs its ticks back to back: the run is the one a paced Host would have had, without the waiting. SKT Java and SGS titles are paced either way. |
 | `-speed N` | Guest speed, 0.1 through 16; default 1. This flag does not imply `-play` for this command. |
 | `-screen WxH` | Handset dimensions for a newly started session. Without it the archive decides as it does for `runktf` and `runskt`, and LGT starts on 240x320. Restoration uses saved runtime settings. |
 

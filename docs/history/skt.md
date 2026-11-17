@@ -38,6 +38,11 @@ This consolidation adds no execution or acceptance evidence.
 - [Text input offered when no strict route names a field (2026-10-20)](#skt-text-input-2026-10-20)
 - [WIPI FileSystem and DataBase (2026-10-22)](#skt-wipi-storage-2026-10-22)
 - [Storage contract review (2026-10-22)](#skt-storage-review-2026-10-22)
+- [A native SKT package (2026-10-30)](#skt-native-package-2026-10-30)
+- [Native quick save and text entry (2026-10-30)](#skt-native-quicksave-text-2026-10-30)
+- [One WIPI-C engine for KTF and SKT (2026-10-31)](#skt-wipic-engine-2026-10-31)
+- [Resumed, not started again (2026-11-10)](#skt-resume-2026-11-10)
+- [A Clet's pixel operation takes the screen's pixel first (2026-11-17)](#skt-pixel-operation-order-2026-11-17)
 
 <a id="implementation-skvm-and-the-skt-platform"></a>
 
@@ -3371,6 +3376,422 @@ What it found and left, because no local save or title reaches it:
 - No test throws from a title's filter or comparator through `sortRecord` into
   a handler in the title's bytecode; the native's part of that path is held,
   the interpreter's catch is not.
+
+<a id="skt-native-package-2026-10-30"></a>
+
+## A native SKT package (2026-10-30)
+
+Two newly added SKT archives are refused as `no-marker` — the page says the
+file format is not valid — because neither carries the `.msd` descriptor or a
+JAR. Each holds one directory named by the title's ten-digit id with
+`<id>.daf`, `<id>.mod`, `<id>.wmr` and the title's own data and save files.
+
+- The `.mod` is a binary descriptor: a build date, the media type
+  `application/x-wipi-app`, the package type `daf`, version `1.0.0`, download
+  and key URLs, and `EXECUTABLE` / `SKT-GAME`.
+- The `.daf` is that executable, 2.3 and 4.0 MB. Both files carry the
+  same sixteen bytes at offset 8, and its body is plaintext
+  Thumb code — C++ class names, format strings and save names read straight
+  out of it — so it is not a locked package of the kind `drm-wrapped` names.
+- The `.wmr` holds the title's icons as BMP records.
+
+This is SKT's native WIPI C, an execution variant beside SKT Java and the SGS
+script runtime. Nothing in this project runs it, and both local examples are
+this shape. It is recorded here rather than started because it is a platform
+rather than a defect; whether to take it on is the user's decision. It was
+taken on the same day, and [SKT native](../skt-native.md) describes what runs
+it now. What the two executables show, read statically:
+
+<a id="skt-native-package-2026-10-30-layout"></a>
+
+### The executable's layout
+
+- A 0x20-byte block (word 0 is 0x20, the shared identifier at 8), then a
+  0x50-byte block at 0x20: a word that differs between the titles, the block's
+  length at 0x28, a version-like word at 0x2c, and at 0x3c to 0x50 five sizes —
+  code with its read-only data, initialised data, BSS (not in the file), a
+  fourth region, and an embedded resource archive. Words 0x58 to 0x6c are six
+  odd offsets into the code: Thumb entry points.
+- The regions follow the header back to back from 0x70 in that order, BSS
+  aside; in both titles the four sizes add up to the file's length exactly.
+- The fourth region is the relocation table: two counts, then that many
+  bytes of a list for the code region and one for the data region (3,383 and
+  692; 11,355 and 722). Each entry advances an offset from the region's start
+  and names the section the word there points into:
+  - bit 6 of the first byte set means the word holds a data address
+    (`0x01001000`-based), clear means a code or read-only address (0-based);
+  - bit 5 clear: the delta is the low nibble plus 16 when bit 4 is set
+    (`0x44` is a data word four bytes on);
+  - bit 5 set: a 12-bit delta from the low nibble and the next byte, or with
+    bit 4 a 20-bit one from the low nibble and the next two;
+  - bit 7 set: a 28-bit delta from the low nibble and the next three, seen
+    twice in one title on words holding a target less their own address.
+
+  Decoded this way, every one of 9,910 code and 715 data entries in one title
+  and 2,652 of 2,654 code and all 688 data entries in the other land on a word
+  pointing where the entry says; the two left are those self-relative words.
+  So both regions are relocatable, and a loader can place them anywhere.
+- Code and read-only data are linked at 0, data and BSS at `0x01001000`: every
+  data reference in the code is `0x01001000` plus an offset inside data and
+  BSS, and strings sit in the read-only data at their file offset less 0x70.
+  The first data word is `0xCAFECAFE`.
+- The six entries, in both titles: the start, a teardown, two that post the
+  title's own pause and resume events, an empty paint, and the event handler
+  taking `(type, param1, param2)`.
+- Thumb code with `bx` veneers for calls through pointers; one title's data
+  carries the version string of GCC 3.2.
+
+<a id="skt-native-package-2026-10-30-calls"></a>
+
+### How it calls the platform
+
+There is no SVC and no imported name. Every call loads the word at
+`0x01001000` — the root — then a table pointer at `root + 4*i`, then a
+function at `table + 4*f`, and branches through a veneer. The loader therefore
+writes the root's address over `0xCAFECAFE`. Across both titles:
+
+- Root 0 is the kernel, numbered as KTF's kernel interface is on every slot
+  either title calls (0, 1, 7, 9, 14, 20 to 31): slot 25 takes a timer record
+  and a callback, slot 26 the record and a 64-bit timeout.
+- Root 1 is graphics, numbered as KTF's graphics table: 21 is called with six
+  arguments, `(0, framebuffer, 0, 0, w, h)`, as `MC_grpFlushLcd` is, and 4
+  returns a framebuffer the caller dereferences once before reading width and
+  height.
+- Root 3 is the file calls (2 reads, 4 seeks), root 4 a call shaped like
+  `MC_miscBackLight` at 0, root 5 network (`MC_netConnect(callback, param)` at
+  0) and root 7 media (`MC_mdaClipCreate(type, size, callback)` at 0) — the
+  function numbers inside each are KTF's, the order of the tables in the root
+  is not.
+- Root 14 is the C string library in the order the specification lists
+  `string.h`: `strcpy` 0, `strcmp` 4, `strlen` 12, `memcpy` 14, `memset` 18.
+- Root 6 is the utility calls (a 16-bit conversion at 1 sized for a network
+  write), root 9 serial (0 opens `"SERIALDSPORT"` with a baud-rate string), root
+  10 the phone calls (1 takes `"SHORTMSG"`), and root 11 the terminal
+  resource calls: 0 takes a buffer and 1,024, the phonebook groups appear
+  beside it, and the functions called (0, 1, 2, 4, 5, 7, 19) are the ones a
+  phonebook read needs in the specification's order. Roots 2, 8, 12 and 13 are
+  not called.
+- Root 14 runs on past `string.h` through the specification's whole C library
+  list: `atoi` 20 and the like, `time` 26 and `localtime` 29 called with a
+  pointer to a stack word.
+- An allocation is dereferenced once before use, as KTF's indirect handles
+  are.
+
+<a id="skt-native-package-2026-10-30-start"></a>
+
+### Start-up, events and keys
+
+- Neither title clears its BSS (no code names the end of it), so the loader
+  does. One title's start constructs its global objects itself, a run of
+  direct calls each handing a constructor a fixed data address, so nothing on
+  the platform side runs constructors. The other first
+  asks the kernel for free memory (24) and allocates about 3 MB with one
+  `MC_knlCalloc` (21) for a heap of its own.
+- The event handler of one title branches on types 2 and 3 (keys), `0x4001`
+  and `0x4002` (handled as its own `0x5001` pause and `0x5002` resume), and
+  the other's skips 2, 3 and 4 before its own dispatch. Key events are 2-based
+  as on KTF, not LGT's 500 range.
+- One title names its keys in a switch over the code plus 16: up −1, down −2,
+  left −3, right −4, select −5, soft keys −6 to −8, send −10, end −11, side
+  up/down/select −13 to −15, clear −16, and ASCII for the digits, `*` and `#`.
+- One title's code holds a Thumb `svc #0xab` with `r0 = 3` (semihosting write
+  character), the runtime library's; no other SVC sits in code.
+
+<a id="skt-native-package-2026-10-30-resources"></a>
+
+### Resources
+
+The embedded archive opens `{0x10, 1, 0x10, "KO", directory size, 0, count,
+0}`, then `(size, end offset)` pairs, then the names — `…_res_wc.dat` and
+`/sprite/…` paths; 391 and 2,545 entries. One title asks the kernel for a
+resource id (slot 31), so resources are read from here.
+
+<a id="skt-native-quicksave-text-2026-10-30"></a>
+
+## Native quick save and text entry (2026-10-30)
+
+The Clet engine had neither a checkpoint codec nor the Host half of the input
+method. Both are now there ([SKT checkpoints](../skt-checkpoints.md#native-clet-state),
+[native text input](../native-text-input.md#skt)); this records what was found
+on the way and how the two were accepted.
+
+**A network failure the engine never delivered.** With the engine as it was,
+one title sat on its "checking your data on the server" screen for as long as
+it was run. It registers a callback with `MC_netConnect`, the engine answers 0
+and queues the failure for that callback, and the queue was never served: the
+engine's service round had been rebuilt without the call the KTF round makes
+before its timers. Delivering it there, first, as the KTF round does, gave the
+title its answer — an error dialog, a second notice, an authentication-failed
+notice — after which it reaches its title menu, character selection and story
+scenes. The comparison below needed those screens.
+
+**The local titles' fields are online-only.** Neither title called its input
+method on any screen reached offline: one along its menu, the world map, the
+mask screen, the ranking screen and the gift dialog, the other through its
+start, title menu, ranking menu, character selection and story. One title's input-mode routine looks its four
+modes up by the specification's names, and its field labels — a nickname, a
+mask's name and description, a gift recipient's number, a search term — belong
+to features that connect first; the connection fails and returns to the menu.
+So the text path was accepted against an authored native package instead
+(`internal/testfixture.SKTCletArchive`, Thumb code laid out as a `.daf`), with a
+field that takes keys in its event entry and one that takes them on its frame
+timer, and the local titles were checked for the opposite failure: asked for
+text on every tick of those routes, neither was ever offered it.
+
+**The carrier's release.** The KTF C route hands the field a carrier press and
+no release. A Clet's event entry is handed presses and releases alike, and a
+program that keeps its own key state — repeating a held key on its frame, say —
+would hold the carrier down after the text, so the Clet route follows each
+carrier with its release.
+
+**Continuation.** A probe on the CLI's manual clock captured one run at a fixed
+interval, restored each capture into a fresh session and into a running one over
+a copy of the saves as they were at that capture, replayed the same keys and
+compared every later tick with the uninterrupted run: 29 captures of one title
+every 47 ticks, 150 ticks each, and 27 of the other every 83 ticks, 120 ticks
+each. Every compared tick had the same frame, flush count and guest clock, and
+the saves matched at the end. A first run that differed by a microsecond of
+guest time after a key turned out to be the probe releasing that key twice.
+
+What remains: no browser check of the page's buttons and text box on a native
+title (the socket test covers the protocol), and the engine's batch-clock
+advance still asserts the engine's own manual clock type, so a Host that hands
+it another platform's manual clock does not advance it from guest execution
+inside a call.
+
+
+<a id="skt-wipic-engine-2026-10-31"></a>
+
+## One WIPI-C engine for KTF and SKT (2026-10-31)
+
+The Clet engine began as a copy of the KTF C runtime's files, adapted so that it
+imported neither `internal/platform/ktf` nor `internal/jvm`. A function-by-function
+comparison on 2026-10-30 put the size of that copy: of the engine's 9,019
+non-blank declaration lines, 3,484 were identical to KTF's and 2,884 differed
+only in the platform name their messages carried or in where a memory
+identifier's data starts. Thirty-nine functions differed in anything else, and
+every difference was one of a short list: KTF's Java clips, cards, worker
+threads, `java/util/Timer` tasks in the timer queue, its record-database table,
+its collector, its AOT symbolization and class-read recording. KTF's copied
+files had changed in 14 commits and about 1,800 lines in the month before, so
+every later fix to one side would have had to be carried to the other by hand.
+
+The copy is gone. The handlers live once, in `internal/platform/wipicrt`, and
+both platforms embed its client and runtime
+([architecture](../architecture.md#the-wipi-c-engine)). The shared code is KTF's
+behavior, and each of the differences above became a `Platform` value or a hook
+whose nil default is what the Clet engine did: the message names, the
+identifier layout (`HandleFirstWord` 4 and `HandleData` 8 on KTF, the data
+twelve bytes in and no offset on SKT), the exit sentinel, the reserved kernel
+slot, and the KTF calls listed. The two manual-clock checks now ask for any clock
+that can be set or advanced, so a Host's clock moves either platform; there is
+one `ManualClock` type, and the engine's batch-clock advance moves it from a
+Clet's execution as from a KTF title's. The engine's state is exported so the
+two checkpoint codecs read and write it; neither record changed shape.
+
+After the change the KTF and Clet packages share about 70 lines, all of them
+platform session wrappers and checkpoint-codec helpers, which stay with each
+platform. The Clet package went from 13,088 source lines to 3,502, KTF from
+48,826 to 39,626, and the engine holds 10,026.
+
+**Verification.** Every package's tests passed in both build profiles and under
+the race detector. 535 local archives ran 500 ticks on a fresh save before and
+after: every KTF title (298), every LGT title (119) and both Clets ended on the
+same digest; the SKT Java titles, which are paced by the wall clock, differ
+between two runs of the same build too, and the ones that differed matched when
+run again without load. A quick save taken by the earlier build on seven KTF
+titles and both Clets loaded in the new one and ran on to the same digest as the
+earlier build's own load.
+
+**What the engine fixed for Clets.** The Clet engine built its runtime with the
+C file table's removal list and directory list already made, and empty, so it
+never read them from the store: a packaged file the program had deleted came
+back the next time it ran, and a directory it had made was gone. The engine
+builds them on first use from the store, as KTF always did
+(`TestASessionReadsTheRemovalsAnEarlierOneStored`).
+
+**What the review of that fix found.** Reading the list back is right for a
+save the shared engine writes and wrong for one the Clet engine wrote before
+it. That engine stored the list at every removal and never read it, so a
+program that deleted a file in one session and wrote it again in a later one
+left the name listed over the new bytes, and the engine answered the file from
+them. The shared engine hid that file — `MC_fsIsExist` and a read open answered
+`M_E_NOENT` — and a program that then made its save afresh emptied it. A
+removal stores the file empty in the write that lists the name, and every
+later write of the file takes the name off in its own write, so a name over
+bytes comes only from the earlier engine; a Clet now reads such a name as its
+file (`Platform.StaleRemovals`,
+`TestASessionKeepsASaveTheEarlierEngineLeftListed`). Two sessions of the
+earlier engine on a directory store — one file deleted and written again, one
+deleted, one packaged file deleted — left all three names on the list; the
+shared engine reads the first as its bytes and the other two as missing. KTF's
+list is read as it always was. The directory list needed nothing: a directory
+holds no bytes, and `MC_fsMkDir` now answers `M_E_EXIST` for one the earlier
+engine recorded, as a handset that kept it does.
+
+**What the merge cost.** `readCString` handed the bytes it read to a hook the
+compiler cannot see through, which made every string escape to the heap; the
+engine hands the hook a copy instead, and KTF's allocation test holds it to one
+allocation. The committed PGO profile names the functions that moved by their
+old package, so those few functions build without its guidance until `make pgo`
+is run again.
+
+<a id="skt-resume-2026-11-10"></a>
+
+## Resumed, not started again (2026-11-10)
+
+The 0.6.0 release review parked SKT titles in the middle of play, after about
+1,300 ticks, where the park at tick 150 of earlier checks had reached only
+opening screens. Of three local Jlets two stood still after any park, their
+keys ignored, and three MIDlets sampled each failed in a way of its own: one
+ended, one drew twice as fast, one lost a thread. 0.6.0-pre02 did the same.
+
+**A Jlet was resumed through its startApp.** `resume` ran `startApp()V`, which
+the WIPI layer maps to the title's `startApp(String[])`, and never
+`resumeApp`, the method the WIPI lifecycle and the KTF and LGT runtimes resume
+a Jlet through. One Jlet's `pauseApp` sets the flag its frame timer stops on
+and only its `resumeApp` clears it, and its `startApp` returns at once when its
+game already exists, so after a park its frames stopped for good.
+
+**A MIDlet was reactivated through startApp, as MIDP has it, and the SKT titles
+were not written for that.** 56 of the 93 local MIDlets declare a `resumeApp`
+of their own, which MIDP does not have, six of them answering `pauseApp`'s
+`hideNotify` with a `showNotify` there. Under the second `startApp` one title
+built a second game beside the first and ran at double rate while its own
+`resumeApp` only resets flags; others started again a thread they had already
+started and ended on `IllegalThreadStateException`, or ended in a thread of
+their own.
+
+A title whose start completed is now resumed and not started again
+(`resumeStarted`): a Jlet through its `resumeApp`, a MIDlet through a
+`resumeApp` it declares, and a MIDlet without one with no callback. An
+exception its `resumeApp` lets out ends that callback, as one from any other
+callback does, not the title: one title's `resumeApp` does all it has to and
+then calls `notify` without holding the monitor. A deferred initial start is
+still tried again through `startApp`, and the two class sets of the
+[first correction](#skt-resume-2026-09-30) keep it.
+
+**The screen is drawn again once the title is back**, as a handset redrew it
+after whatever covered it. The second `startApp` had brought a paint by
+setting its Canvas current again, and two titles depend on it: one's
+`resumeApp` marks its screen for a redraw that only a paint carries out, and
+without one it counts down for about ten seconds before it draws and answers
+keys again; another's game thread waits for the `notify` its paint ends with
+and never moves without it. Both had played on after a park under the old
+rule. The repaint is left out when the title is about to draw anyway — a
+paint already queued, or a serial call waiting — because one title's frame
+loop is a paint that hands a Runnable to `callSerially`, whose `run` sleeps
+and asks for the next paint: a handset's repaint joined the pending one, but
+a second paint here started a second loop, and the title ran at double rate.
+
+**The repaint raced, and the screen Graphics' state now has a lock.** A race
+build showed it, on every park, in two titles that keep the screen Graphics
+and draw through it from their own thread, pushing frames with
+`XDisplay.refresh`: the paint reset that Graphics' clip and translation while
+the thread set its own, where the build before showed no race in three runs of
+each. This runtime locked the screen's pixels and not a Graphics' state, which
+is plain fields, so two threads drawing at once had always raced the same way.
+Each native handed the screen Graphics now holds `screenStateMu` for its call,
+and the reset a paint starts with takes it as well; a Graphics native runs no
+guest code, so no call holding it reaches another that wants it. Both titles
+then ran three parks each under the race detector with no report.
+`TestTheScreenGraphicsStateIsOneCallersAtATime` races a native against the
+reset and fails under `go test -race` without the lock.
+
+`TestAParkedJletIsResumedThroughResumeApp`,
+`TestAMIDletThatDeclaresResumeAppIsResumedThroughIt`,
+`TestAnSKTMIDletIsResumedWithoutASecondStart`,
+`TestAResumedMIDletPaintsItsScreenAgain` and
+`TestAResumedFrameLoopIsNotPaintedTwice` fail on the code before each step.
+Two checkpoint tests that ran their probe from the second `startApp` call it
+directly now, and the tests of a `MIDletStateChangeException` or a runtime
+exception from that second `startApp` went with it.
+
+Each of the 96 local MIDlets and Jlets was parked for two seconds after about
+900 ticks of play and offered keys after it, beside a run never parked. Under
+the old rule 28 of them ended, stood still, ran at double rate or answered no
+key after the park. Under this one 26 of those play on as the unparked run
+does, and none that played on before stops.
+
+Two MIDlets still stood still after a park, as they had failed before: they
+are written for MIDP's reactivation. Their `pauseApp` ends a thread — one stops
+its sound thread and turns its game loop's flag off — and their `startApp`
+checks `isAlive()` and calls `start()` on that same `Thread` object again, which
+the language refuses and this runtime refused with it. Two titles written that
+way independently suggest a handset VM that let a finished thread start again.
+A build that allowed it, and resumed a MIDlet without a `resumeApp` through
+`startApp` as before, brought both back after a park, their frame rate and keys
+as before it; across the 96 archives, though, it left 91 playing on where the
+rule above leaves 94: four titles the rule mends broke again under the second
+`startApp`, and one ran out of time in that sweep. So it is not a rule.
+
+**The two class sets have a compatibility exception instead**,
+`skt.resume_through_start`: a new registry entry for one, and a second fix on
+the other's existing clip entry. Their resume runs `startApp` again, as MIDP
+has it, and their VM is built with `jvm.Options.RestartableThreads`, under
+which `Thread.start` runs a thread whose run has returned again, on a fresh
+thread state; a thread still running is refused as before. The run that ended
+unregisters only itself, because the restart can land between its end and its
+unregistering (`TestARunThatEndsLeavesTheNextRunRegistered`). Parked for two
+seconds after 400 ticks of play, both now present frames at the unparked run's
+rate in every window — 10/10/10/10 against 11/10/11/11, and 21/21/21/20
+against 22/20/21/21 — and answer as many keys with a new screen, 8 and 6,
+where the build before stood still and answered one. A quick save taken after
+such a park loads, plays at the same rate and comes back from a second park;
+one the build before took loads. `TestAResumeThroughStartRunsTheEndedLoopAgain`
+resumes an authored MIDlet of the same shape both ways,
+`TestAFinishedThreadStartsAgainOnlyWhenRestartable` holds the JVM's side, and
+`TestLocalResumeThroughStartFingerprints` that the two originals select it and
+no changed copy does. A park shorter than one of the two's loop takes to stop,
+one of no length in the CLI, lets its `startApp` turn the loop's flag back on
+before the old loop has seen it go off, and the old loop runs beside the new
+one at double rate; a 100 ms park already plays on as unparked.
+
+A park of no length, `-park tick:0` in the CLI, leaves one Jlet's earlier timer
+thread running beside the one its `resumeApp` starts; a park the page makes
+gives it time to stop.
+
+The same sweep found a MIDlet that ended in its name screen, parked or not:
+its paint asks `TextComponentHandler.isLoaded()` before drawing the indicator
+of the input method's mode, and the method was missing. It answers false, so
+the title draws no indicator, from images the handset's `Toolkit` held and this
+runtime has none of, and its field types as before
+(`TestTheTextComponentHandlerSaysItIsNotLoaded`).
+
+A review of these changes the next day found four things in them. The screen
+Graphics' state lock gave two paths opposite orders: a native drawing on the
+screen takes the state lock and then the render lock for the pixels, and the
+`Toolkit` class initializer, which a title's first read of a `Toolkit` field
+runs, held the render lock while it asked for the screen Graphics and so for
+the state lock. With a draw in flight on another thread the two waited on each
+other for good, with no error: twenty times in twenty during continuous draws,
+and about three times in a hundred against a 60 Hz paint, where the build
+before never stopped. The initializer now takes no render lock, and the order
+is written beside the lock (`TestTheToolkitScreenGraphicsTakesTheLocksInTheDrawingOrder`).
+A `com.skt.m.Graphics2D` made over the screen Graphics took no state lock at
+all; its natives draw at that Graphics' clip and translation and raced the
+paint's reset under the race detector, four to ten times in two hundred, as
+they had before the lock existed. They take it now, and its pixel reads take
+the render lock as `getRGBPixels`'s do
+(`TestAGraphics2DOverTheScreenTakesTheScreenGraphicsStateLock`).
+
+A title's own `notifyPaused` and `resumeRequest` take the same path as a Host
+resume, without a second `startApp`. MIDP answers `resumeRequest` through
+`startApp`, so this was put to the corpus: of the 642 local archives, none of
+the 634 that could be read holds the string `resumeRequest`, and none of the
+2,327 classes of the 96 SKT titles of the sweep refers to it or to
+`notifyPaused`, where the same scan of their constant pools and code finds
+`notifyDestroyed` in 51. The rule stays as it is, written down in
+[SKVM](../skvm.md), and a title that turns out to need MIDP's answer would
+get `skt.resume_through_start`, which answers the request through `startApp`
+(`TestAMIDletThatPausesItselfIsResumedByItsRequestWithoutASecondStart`). The
+registry refuses an entry that selects both resume rules. The two class sets
+of `skt.resume_without_start` keep a resume that calls nothing — neither a
+`resumeApp` nor the repaint — which no test held until
+`TestTheResumeWithoutStartRuleRunsNoCallbackAndNoRepaint`; and the two
+lifecycle tests the rule had deleted, a `startApp` that defers and one that
+throws on a resume, run again on `skt.resume_through_start`, the one rule
+under which a resume still runs `startApp`.
 
 <a id="skt-pixel-operation-order-2026-11-17"></a>
 

@@ -80,7 +80,7 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
 ### Exceptions
 
 - Java exception tables and `athrow`. The runtime-owned throwables have no class
-  file: the 27-class hierarchy in `runtimeClassParents` (`exception.go`) is what
+  file: the 29-class hierarchy in `runtimeClassParents` (`exception.go`) is what
   a `catch` resolves through, and the declared exception classes are generated
   from the same table, so the class a `catch` resolves and the class a `new`
   resolves cannot disagree. Bytecode may `new` one because the code that raises
@@ -112,7 +112,7 @@ leaves out is listed under [Deliberately incomplete](#deliberately-incomplete).
 | `GuestThreadStarter` | one goroutine per thread | replaces `Thread.start` for a platform whose guest threads share one cooperative core |
 | `RestartableThreads` | off | lets `Thread.start` run a thread again once it is no longer alive — its run returned, or its start failed — on a fresh state; a live thread is still refused. SKT turns it on for the class sets of `skt.resume_through_start` ([SKVM](skvm.md)) |
 | `ThreadYield` | unset (no-op) | what `Thread.yield` does |
-| `ByteDecoder`, `ByteEncoder` | UTF-8 with replacement | the platform's default charset; KTF installs EUC-KR |
+| `ByteDecoder`, `ByteEncoder` | UTF-8 with replacement | the platform's default charset; KTF and SKT install EUC-KR |
 | `Exit` | unset | what `System.exit` does |
 | `AsyncError` | logger | receives a guest thread's failure |
 | `TraceInstructions` | off | one debug log line per bytecode instruction (`runskt -trace`) |

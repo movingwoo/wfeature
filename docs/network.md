@@ -5,9 +5,10 @@ every platform; this document owns the decision and its surface, and each
 platform document links here rather than restating it.
 
 Offline authentication compatibility (requested 2026-09-11) adds recognized
-certificate, identity and license adapters, and answers three recognized
-exchanges in process: an LGT notification/empty-save responder, an LGT
-two-stage certificate message and a KTF slot service. External networking stays
+certificate, identity and license adapters, and answers four recognized
+exchanges in process: an LGT notification/empty-save responder, an LGT binary
+authentication request, an LGT two-stage certificate message and a KTF slot
+service. External networking stays
 disabled. [authentication.md](authentication.md) separates the recognized
 schemes and their boundaries;
 [authentication case history](history/authentication.md#cases-authentication-case-inventory)
@@ -17,8 +18,8 @@ records the corpus inventory, controlled experiments and unresolved cases.
 
 Every connection a game asks for is **refused**, through a return value, guest
 exception or deferred callback. With authentication compatibility (the default),
-the recognized LGT notification and certificate-message contracts use the
-bounded in-process responder described below. A KTF title built on the
+the recognized LGT notification, binary-authentication and certificate-message
+contracts use the bounded in-process responder described below. A KTF title built on the
 recognized relay middleware reaches the local slot service regardless of that
 setting. All other connections reach the guest's failure path.
 
@@ -56,6 +57,9 @@ something the game handles.
 | SKT | `SMS.send`, `Call.call` | `false` |
 | SKT | `PhoneBook` reads | empty, null or zero |
 | SKT | the WAP browser entry point | accepted and discarded |
+| SKT native | WIPI C net table | as KTF's: `connect` with a callback fails through it, `close` succeeds, everything else `0xffffffff` |
+| SKT native | serial, phone and terminal-resource tables | `M_E_ERROR` for every call, an SMS send and phonebook reads among them |
+| SKT native | kernel 50, a browser launch | `M_E_INVALID` |
 | MIDP | `Connector.open` and the four stream helpers | `ConnectionNotFoundException` |
 | MIDP | a network locator in `Manager.createPlayer` | `MediaException` |
 
@@ -106,7 +110,7 @@ operation itself supplies the refusal. Withholding the network and serial bits
 was tried and ended one title at its own startup error screen: it requires
 `& 0xbc` to equal `0xbc` and never reaches a call that could be refused. With
 every group granted, every other local title drew the same frames and made no
-new network call (`wipicAccessLevel` in `internal/platform/ktf/initialization.go`).
+new network call (`wipicAccessLevel` in `internal/platform/wipicrt/consts.go`).
 
 **A BREW socket is created, then refused.** The earlier KTF native package is
 BREW ([ktf.md](ktf.md)). One later title opens a socket through BREW's network

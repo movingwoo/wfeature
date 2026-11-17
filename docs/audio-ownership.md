@@ -63,8 +63,8 @@ events. Late sink attachment also supplies current gains before future
 playback.
 
 Connected guest controls are KTF Java Clip and Volume, KTF C device and clip
-volume, LGT Java/C clip and device volume, SKVM device volume and SKT WIPI Clip
-volume. SKT MIDP `VolumeControl` uses the same per-clip level and mute state.
+volume, LGT Java/C clip and device volume, SKVM device volume, SKT WIPI Clip
+volume and SKT native C clip volume. SKT MIDP `VolumeControl` uses the same per-clip level and mute state.
 All clamp to 0..100 and read back their stored setting. SKT accepts WIPI's
 boolean `Clip.setVolume` signature and keeps the existing void extension.
 
@@ -130,10 +130,11 @@ gates, keeping one-shot or repeating mode. `SetRepeat` can change the next
 score-end action without resetting the cursor. Repeated backend pause or resume
 calls are idempotent; explicit Stop, Close or Play discards the cursor.
 
-KTF Java/C, LGT Java/C, SKT WIPI Java and SKVM use this path. LGT C and KTF C
-resume read only their clip argument and keep the repeat mode. LGT C keeps its
-PAUSED/RESUMED callbacks; KTF C, which has never delivered a C media callback,
-delivers none. WIPI pause and resume reject invalid transitions. WIPI Stop is
+KTF Java/C, LGT Java/C, SKT WIPI Java, SKVM and SKT native C programs use this
+path. LGT C and the WIPI-C engine that runs KTF C and SKT native C resume read
+only their clip argument and keep the repeat mode. LGT C keeps its
+PAUSED/RESUMED callbacks; that engine, which has never delivered a C media
+callback, delivers none. WIPI pause and resume reject invalid transitions. WIPI Stop is
 cancellation and WIPI Play starts a new pass. MIDP stop/start and deallocate
 keep position; setting media time to zero rewinds the current pass without
 replenishing its remaining loop budget. MIDP finite counts, media time,
@@ -219,9 +220,10 @@ buffer. Maintained tests cover:
 
 `web/acceptance/audio-ownership.mjs` renders the graph in Chromium and WebKit.
 Two simultaneous equal-pitch MIDI clips and two PCM clips are separated in
-stereo; after one is stopped, both rendered channels match the surviving clip
-rendered alone within RMS tolerance 0.000001. Surviving-channel RMS is 0.076715
-for MIDI and 0.113137 for PCM in both engines. The twelve-short-note
+stereo; after one is stopped, the output matches an independent render of the
+surviving clip alone within 0.000001 per sample. With the oscillator
+synthesizer of 2026-10-08, surviving-channel RMS was 0.076715 for MIDI and
+0.113137 for PCM in both engines. The twelve-short-note
 90 ms-clock acceptance route also passes in both engines.
 
 ```sh
@@ -277,8 +279,11 @@ extended tail after channel gain was separated from the velocity envelope. The
 independent references use a fresh melodic oscillator phase, so these
 measurements establish envelope and sample-position behavior, not phase
 continuity. They were taken with the oscillator synthesizer the FM synthesizer
-replaced on 2026-11-01 and have not been repeated since. Gain, ownership and twelve-note coarse-clock render checks also
-pass in both engines: eight browser runs in total.
+replaced on 2026-11-01. On 2026-11-05 the resume, gain, ownership and
+twelve-note coarse-clock harnesses were rebuilt on the FM synthesizer with
+independent references and passed in Chromium and WebKit on both the
+AudioWorklet and ScriptProcessor paths
+([native rendering](testing.md#native-audio-rendering-acceptance)).
 
 The repair slices recorded passing `make test`, `make test-debug`,
 `go test -race ./internal/...`, `go vet ./...` and both `CGO_ENABLED=0` server

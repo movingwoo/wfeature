@@ -80,7 +80,12 @@ class set.
 KTF has no registered fixes. The parser accepts `ktf` as a platform, but no fix
 name is valid for it. Add a fingerprint algorithm and an evidence-backed fix
 together when an actual exception needs them; do not hash an empty Java class
-set to identify a native archive, and do not add placeholder exceptions.
+set to identify a native archive, and do not add placeholder exceptions. Two
+older KTF corrections are revision-specific all the same: a camera bound and a
+dialog text position (`camera_bounds.go`, `menu_text.go` in
+`internal/platform/ktf`) are selected in Go by the client image's SHA-256 and
+the replaced routine's digest, outside this registry; moving them in needs a
+KTF fingerprint algorithm first.
 
 ## Adding or removing an exception
 

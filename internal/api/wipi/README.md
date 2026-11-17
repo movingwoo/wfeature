@@ -8,6 +8,10 @@ because every class here names a MIDP class as its superclass. `IsJlet` tells a
 Host whether an archive's main class is a WIPI application rather than a MIDlet,
 since the two are packaged identically.
 
+Two files are shared beyond SKT: KTF's and LGT's own WIPI Java runtimes answer
+`getGameAction` and `getKeyCode` from the one game-action table in
+`game_action.go`, and use the `PlayListener` event codes in `media.go`.
+
 It exists because this vendor's container carries two kinds of program: most
 archives hold a MIDlet, and a few hold a Jlet, the same packaging with a WIPI
 application class inside. Rather than a second runtime, each class here is its

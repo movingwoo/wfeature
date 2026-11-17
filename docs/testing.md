@@ -57,10 +57,11 @@ remains. If the sandbox blocks the default Go cache, point `GOCACHE` and
 ### Continuous integration
 
 `.github/workflows/verify.yml` calls `checks.yml` on every pull request and
-every push to `main`, and `release.yml` calls the same file before it builds
-anything. A push to another branch runs nothing on its own: its pull request
-runs the same commit merged with `main`, and running both doubled the wait for
-nothing. The `suite` job (Ubuntu, newest stable Go) is three suites on three
+every push to `main`, and `release.yml` calls the same file alongside its
+builds and app runs; none of them waits for it, and only its `publish` job
+waits for the checks and every build to pass. A push to another branch runs
+nothing on its own: its pull request runs the same commit merged with `main`,
+and running both doubled the wait for nothing. The `suite` job (Ubuntu, newest stable Go) is three suites on three
 runners at once: `release` runs the `gofmt` check above, `go vet ./...`,
 `govulncheck ./...` and `make test` (with Node 22); `debug` runs
 `make test-debug`; `race` runs `go test -race ./internal/...`. The `test` job
@@ -119,7 +120,9 @@ lower bounds, not a complete inventory of executed methods.
 ### Fuzz targets
 
 Everything that reads untrusted bytes before a game has proved to be a game has
-a fuzz target. Each target holds two rules: it may not panic, and what it
+a fuzz target, except the two native-package loaders, `ktf.OpenNative` and
+`skt.OpenNative` (with `skt.ParseNativeExecutable`), which have refusal tests
+only. Each target holds two rules: it may not panic, and what it
 accepts must be usable (an opener that returns no error and a nil module has
 moved the crash into its caller). Their seeds run in every `go test`; each
 target seeds one input of every shape its parser branches on, because a fuzzer
@@ -207,12 +210,13 @@ brought the tree to.
 Every local test, with the variable a run needs. A test that reads further
 variables lists them where it is documented: the [CLI reference](cli.md) for
 the diagnostic probes, [`armcore.md`](armcore.md) for the profile runs, the
-[ladder table](#local-acceptance) for the rungs. `=1` marks a switch; the
-others take an absolute path.
+[ladder table](#local-acceptance) for the rungs. `=1` marks a switch;
+`WFEATURE_DISASSEMBLE_RANGES` and `WFEATURE_NATIVE_WATCH_OFFSETS` take
+comma-separated guest addresses, and the others an absolute path.
 
 | Test | Package | Run with | What it is |
 | --- | --- | --- | --- |
-| `TestLocalArchiveSMAFFilesPlay` | `internal/audio/smaf` | `WFEATURE_SMAF_ACCEPTANCE=1` | every SMAF file in the local archives decodes and plays |
+| `TestLocalArchiveSMAFFilesPlay` | `internal/audio/smaf` | `WFEATURE_SMAF_ACCEPTANCE=1` | every SMAF file in the local KTF archives decodes and plays |
 | `TestLocalADPCMMatchesAnExternalVectorPair` | `internal/audio/smaf` | `WFEATURE_ADPCM_VECTOR` | MA ADPCM against an external sample pair ([audio](audio.md)) |
 | `TestLocalMatchesReferenceImplementation` | `internal/filter/hqx` | `WFEATURE_HQX_REFERENCE` | the scaler against the reference binary, pixel for pixel ([hqx](hqx.md)) |
 | `TestLocalKTFArchivesParse` | `internal/platform/ktf` | `WFEATURE_KTF_ACCEPTANCE=1` | rung 1 |
@@ -885,7 +889,7 @@ serving tests cover gzip, validators and 304 answers for the shell and the game
 list. `internal/wsproto` checks that each message, and each batch, is one
 transport write.
 
-`web/av-sync.test.mjs` covers the picture delay of the 화면·소리 맞춤 setting
+`web/av-sync.test.mjs` covers the picture delay of the 🎬 사운드 싱크 setting
 with a mocked clock and canvases: a held picture is a copy shown when due, the
 pictures due together show the newest with every skipped dirty area, the byte
 bound drops the oldest copy and keeps its change, a changed delay shows what
