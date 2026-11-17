@@ -54,13 +54,17 @@ type CletProgram struct {
 	// the program's own files, which its storage held on the handset.
 	Resources map[string][]byte
 	Files     map[string][]byte
+	// ResourceOrder lists Resources in the executable's directory order; a
+	// resource's identifier is its position in it.
+	ResourceOrder []string
 	// Authentication is the compatibility the loader applied to the code,
 	// which the session reports as its authentication status.
 	Authentication backend.AuthenticationStatus
 }
 
-// CletEntries are the program's entry points, absolute Thumb addresses. Zero
-// is an entry the program does not have; only Start is required.
+// CletEntries are the program's entry points, absolute Thumb addresses (odd)
+// or ARM ones (word-aligned). Zero is an entry the program does not have;
+// only Start is required.
 type CletEntries struct {
 	Start, Pause, Resume, Destroy, Paint, Event uint32
 }
@@ -165,8 +169,9 @@ func (program CletProgram) validate() error {
 		if entry == 0 {
 			continue
 		}
-		if entry&1 == 0 || uint64(entry) < uint64(ImageBase) || uint64(entry) >= codeEnd {
-			return fmt.Errorf("Clet %q entry %#x is not a Thumb address in its code", program.Name, entry)
+		// Odd is Thumb; a word-aligned even entry is ARM code.
+		if (entry&1 == 0 && entry&3 != 0) || uint64(entry) < uint64(ImageBase) || uint64(entry) >= codeEnd {
+			return fmt.Errorf("Clet %q entry %#x is not a Thumb or ARM address in its code", program.Name, entry)
 		}
 	}
 	if program.Entries.Start == 0 {
@@ -206,6 +211,7 @@ func newCletSessionClient(program CletProgram, options SessionOptions) (*Client,
 	client.SetProgramName(program.ProgramName)
 	client.authentication = program.Authentication
 	client.AttachResources(program.Resources)
+	client.ResourceOrder = program.ResourceOrder
 	client.AttachFilesystem(program.Files)
 	if options.SaveStore != nil {
 		client.AttachSaveStore(options.SaveStore)

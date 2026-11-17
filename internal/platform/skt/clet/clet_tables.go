@@ -77,6 +77,13 @@ var sktKernelFunctions = map[uint32]bool{
 //	                                     to the screen: the screen
 //	                                     framebuffer, handed back through a
 //	                                     pointer
+//	54 (buf, 1024)                       a third title's list of the
+//	                                     handset's font faces, comma
+//	                                     separated, each name then handed
+//	                                     to 53 until one is answered; on a
+//	                                     failure the title keeps the font it
+//	                                     has. There is one face here and no
+//	                                     name for it, so it is refused
 //	78, 79                               a property getter's and setter's
 //	                                     cases that turn M_E_INVALID into the
 //	                                     title's own "not supported"
@@ -92,6 +99,7 @@ const (
 	sktGraphicsHandsetHeight = 45
 	sktGraphicsScreenSurface = 52
 	sktGraphicsNamedFont     = 53
+	sktGraphicsFontFaces     = 54
 	sktGraphicsPropertyGet   = 78
 	sktGraphicsPropertySet   = 79
 )
@@ -103,9 +111,17 @@ const (
 // sktKernelSetting is handed ("EXITONEND", 0) by the other title at start-up,
 // a setting by name for how the program ends. Nothing here ends differently,
 // so it is accepted, and the title ignores the answer as well.
+//
+// sktKernelVersionText is handed (buf, 150) by a third title, after it has read
+// the TERMSVCOPT property, and the digits of the text it gets back are read as
+// one number compared with 11000. The title starts that flag at 1 and keeps it
+// when the call fails, so failing leaves the title on its own default; what the
+// text names is not known, and a value made up for it is one the title would
+// believe.
 const (
-	sktKernelSetting = 37
-	sktKernelLaunch  = 50
+	sktKernelSetting     = 37
+	sktKernelLaunch      = 50
+	sktKernelVersionText = 63
 )
 
 // sktFilesystemFunction maps an SKT filesystem slot to this runtime's. The
@@ -130,9 +146,15 @@ func sktFilesystemFunction(function uint32) uint32 {
 //
 //	0  (type, size, callback)  MC_mdaClipCreate, the type a string
 //	1  (clip)                  the last call on a clip: MC_mdaClipFree
+//	2  (clip, 100)             between a clip's data and its play, in one
+//	                           title: the percentage the KTF table's 21 is
+//	                           handed at the same point, MC_mdaSetWaterMark
 //	4  (clip, buf, size)       right after the create, and its answer is
 //	                           compared with the size: MC_mdaClipPutData
 //	10 (clip)                  between 17 and 1: MC_mdaClipClearData
+//	12 (clip)                  on a clip created only to be asked and then
+//	                           freed, the answer handed to 13 on the title's
+//	                           four clips as their level: MC_mdaClipGetVolume
 //	13 (clip, level)           a level scaled to 0..100: MC_mdaClipSetVolume
 //	14 (clip, repeat)          after the volume, a flag: MC_mdaPlay
 //	15, 16 (clip)              the pair a title's pause and resume make:
@@ -144,12 +166,22 @@ func sktFilesystemFunction(function uint32) uint32 {
 //	                           MC_mdaSetMuteState
 //	25 (source)                beside 24 and compared with 1: MC_mdaGetMuteState
 //
-// A slot neither title reaches is refused with its caller named.
+// A slot no title reaches is refused with its caller named.
+//
+// 31 is handed a category's name, "GENERAL" in three titles that share one
+// engine, and its answer is clamped to 0..100 and kept as the title's volume,
+// zero turning the sound off: MC_mdaGetDefaultVolume, with the category named
+// by text rather than by number. The application category is the device
+// volume here.
+const sktMediaDefaultVolume = 31
+
 var sktMediaFunctions = map[uint32]uint32{
 	0:  wipicrt.WIPICMediaClipCreate,
 	1:  wipicrt.WIPICMediaClipFree,
+	2:  wipicrt.WIPICMediaSetWaterMark,
 	4:  wipicrt.WIPICMediaClipPutData,
 	10: wipicrt.WIPICMediaClipClearData,
+	12: wipicrt.WIPICMediaClipGetVolume,
 	13: wipicrt.WIPICMediaClipSetVolume,
 	14: wipicrt.WIPICMediaPlay,
 	15: wipicrt.WIPICMediaPause,
@@ -177,6 +209,10 @@ func (runtime *initializationRuntime) handleCletCall(thread *armcore.Thread, id 
 			runtime.CountDiagnostic("SKT launch refused" + runtime.CallerMark(thread))
 			return wipicrt.WIPICErrorInvalid, nil
 		}
+		if function == sktKernelVersionText {
+			runtime.CountDiagnostic("SKT kernel version text refused" + runtime.CallerMark(thread))
+			return wipicrt.WIPICErrorInvalid, nil
+		}
 	case sktRootGraphics:
 		return runtime.handleCletGraphicsCall(thread, function)
 	case sktRootFilesystem:
@@ -201,6 +237,9 @@ func (runtime *initializationRuntime) handleCletCall(thread *armcore.Thread, id 
 	case sktRootMedia:
 		if mapped, ok := sktMediaFunctions[function]; ok {
 			return runtime.HandleWIPICCall(thread, wipicrt.WIPICTableMedia<<16|mapped)
+		}
+		if function == sktMediaDefaultVolume {
+			return runtime.cletDefaultVolume(thread)
 		}
 	case sktRootSerial, sktRootPhone, sktRootTerminal:
 		return runtime.handleCletDeviceCall(thread, slot, function)
@@ -247,7 +286,7 @@ func (runtime *initializationRuntime) handleCletGraphicsCall(thread *armcore.Thr
 	case function == sktGraphicsNamedFont:
 		// MC_grpGetFont reads its size from the second argument too.
 		return runtime.HandleWIPICCall(thread, wipicrt.WIPICTableGraphics<<16|26)
-	case function == sktGraphicsPropertyGet || function == sktGraphicsPropertySet:
+	case function == sktGraphicsFontFaces || function == sktGraphicsPropertyGet || function == sktGraphicsPropertySet:
 		runtime.CountDiagnostic(fmt.Sprintf("SKT graphics function %d refused%s", function, runtime.CallerMark(thread)))
 		return wipicrt.WIPICErrorInvalid, nil
 	}
@@ -282,6 +321,26 @@ func (runtime *initializationRuntime) cletHandsetBarProperty(thread *armcore.Thr
 		return 0, fmt.Errorf("write SKT handset property: %w", err)
 	}
 	return 0, nil
+}
+
+// cletDefaultVolume answers media function 31, the handset's default volume
+// for a category named by text. The application category is the device
+// volume, as MC_mdaGetVolume reads it; another name is a category this
+// handset does not have.
+func (runtime *initializationRuntime) cletDefaultVolume(thread *armcore.Thread) (uint32, error) {
+	address, err := thread.Register(0)
+	if err != nil {
+		return 0, err
+	}
+	name, err := runtime.ReadCString(address, 32)
+	if err != nil {
+		return 0, fmt.Errorf("read SKT volume category: %w", err)
+	}
+	if name != "GENERAL" {
+		runtime.CountDiagnostic("SKT volume category " + name + " refused" + runtime.CallerMark(thread))
+		return wipicrt.WIPICErrorInvalid, nil
+	}
+	return runtime.HandleWIPICCall(thread, wipicrt.WIPICTableMedia<<16|wipicrt.WIPICMediaGetVolume)
 }
 
 // handleCletDeviceCall answers the serial port, the phone and the handset's
