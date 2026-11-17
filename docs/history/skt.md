@@ -3842,16 +3842,18 @@ Thirteen SKT archives arrived together, most of which failed to start: two GNEX
 script packages, three SKVM MIDlets and eight native packages. Before this
 record two native executables had been read; the eight new ones showed three
 more header layouts and ten platform answers the engine did not have. Eleven
-of the thirteen now start, and nine of the native and MIDlet titles reach play
+of the thirteen now start, and ten of the native and MIDlet titles reach play
 (title screen, menus, a new game, and its first scene or level, driven by
-scripted keys on the manual clock); a tenth reaches its title screen and stops
-at a later authentication check when a game is started. Three had a certificate
-or license that named the handset the dump was taken from, adapted the way the
-platform's other offline-authentication fixes are, at the user's decision that
-this is the same class the project has always supported
-([certificates](#skt-new-archives-2026-11-18-certificates)). The rest, and why,
-are in [the load that is left](#skt-new-archives-2026-11-18-load-allowance) and
-[what was left as it was](#skt-new-archives-2026-11-18-unchanged).
+scripted keys on the manual clock) — the last of them the ARM title, which
+reaches its stage once it runs under its own service allowance
+([the heavy load](#skt-new-archives-2026-11-18-load-allowance)). An eleventh
+reaches its title screen and stops at a second certificate when a game is
+started. Three had a certificate or license that named the handset the dump was
+taken from, adapted the way the platform's other offline-authentication fixes
+are, at the user's decision that this is the same class the project has always
+supported ([certificates](#skt-new-archives-2026-11-18-certificates)). The rest,
+and why, are in [the heavy load](#skt-new-archives-2026-11-18-load-allowance)
+and [what was left as it was](#skt-new-archives-2026-11-18-unchanged).
 
 <a id="skt-new-archives-2026-11-18-layout"></a>
 
@@ -3996,30 +3998,40 @@ adapted all along.
   the rejection into a no-op (`mov r0, r0`, which the ARM core runs where the
   UAL `nop` encoding is refused), so the mismatch falls through to the acceptance
   the match reaches. The record's presence and the two checks ahead of this one
-  still run. It then loads the dump's saves, reaches its slot screen and the
-  start of its first stage (see [the load that is left](#skt-new-archives-2026-11-18-load-allowance)).
+  still run. It then loads the dump's saves, reaches its slot screen and, under
+  its own service allowance, its first stage and a fight
+  (see [the heavy load](#skt-new-archives-2026-11-18-load-allowance)).
 
 Both native cert fixes report `skt-native-certificate`; neither mints a
 certificate or changes a file.
 
 <a id="skt-new-archives-2026-11-18-load-allowance"></a>
 
-### The load that is left
+### The load it runs under its own allowance
 
 The ARM title above, past its certificate and with the dump's saves loaded,
 chooses a save slot and begins loading its first stage — its tiles, NPCs, event
 scripts, in-game UI and item icons, in sequence — and the load runs more than
 the five hundred million ARM steps a single Host service call is allowed, in one
-timer callback that neither returns to the Host nor polls the clock. It is
+timer callback that neither returns to the Host nor polls the clock. It was
 refused the way a runaway guest is, by `ErrServiceStepLimit`, at the same place a
-title that busy-waits forever is stopped. Given a service allowance of 1.5
-billion steps it loads the stage and reaches its character, dialogue and a fight.
-The allowance is one bound for every title, and the bound is what stops a real
-runaway from hanging the session, so it is left at five hundred million rather
-than raised to let one title's heavy load through; the load would exceed it on
-the wall clock too, since it polls nothing to renew its window. A title that
-split such a load across frames would not meet this, and no other local native
-title does.
+title that busy-waits forever is stopped.
+
+A profile of that callback is 84% one of the title's own routines: a bit-serial
+block cipher — eight 1-bit permutation passes per byte over its tables, the kind
+a handset ran in a hardware block the emulator runs as instructions — with its
+palette blits making up most of the rest. The whole load is about 1.26 billion
+steps, the engine not idling in it. So the default allowance is not raised for
+every title, which would weaken the bound that stops a real runaway; the
+registry raises it for this one recognized executable
+(`skt.native_service_allowance`, `NativeHeavyLoadAllowance` = 2 billion in
+`internal/platform/skt/native_identity.go`), and every other title keeps the
+default. Under it the title loads its stage and reaches its character, dialogue
+and a fight; the load is about twenty seconds of the debug build, less on the
+release build. The raised allowance is part of the title's run at save and at
+restore alike, so a checkpoint of it stays compatible
+(`TestProgramServiceAllowanceOverridesAndRoundTrips`). The LGT edition of the
+same title decodes its tables the same way, from a packaged `_DAT_DES` resource.
 
 <a id="skt-new-archives-2026-11-18-unchanged"></a>
 
@@ -4030,10 +4042,21 @@ title does.
   on the batch CLI against 17 ms for other MIDlets, which is its own
   `Thread.sleep` on the event thread between `callSerially` frames. There is no
   server to reach.
-- **The `usimcert.c2s` title's next check.** Past the accepted comparison it
-  shows its title screen, and starting a game from there shows an
-  authentication error, 3003, and returns to the title. What that check
-  compares has not been read yet.
+- **The `usimcert.c2s` title's second certificate.** Past the accepted
+  comparison it shows its title screen, and starting a game shows an
+  authentication error, 3003, and returns to the title. That error is a second
+  check, on a packaged `cert.c2s` (31 bytes, high entropy): the title reads it,
+  runs a routine that both verifies an embedded checksum and lays the record's
+  bytes out as a structure, and reports 3003 when the checksum does not match.
+  Flipping the checksum branch to accept, the way the subscriber comparisons are
+  accepted, is not enough here: the record is keyed to the dumping handset, so on
+  another handset the bytes decode wrong, and the title, let past the checksum,
+  then faults following a pointer the decoded record no longer holds (a probe
+  that forces the branch reaches a read of unmapped memory). Accepting this one
+  needs the record decoded under its original handset, which the subscriber
+  comparison does not supply, so it is left as it was pending more reading of
+  how the record keys itself. The title plays through its own offline dialog to
+  its title screen; a new game is what 3003 stops.
 - **The two GNEX packages** are a later script format than the SGS runtime
   reads: after a 32-byte block carrying a digest comes a version-4 header with
   32-bit region offsets, in scripts of about 400 KB, where the runtime reads

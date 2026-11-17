@@ -71,6 +71,7 @@ each entry is the authoritative index; this table groups them by fix.
 | `skt.native_cert_subscriber` | 1 | Lets a recognized native executable accept its cert.c2s subscriber field (error 5001) | [SKT native](skt-native.md#skt-native-identity-cert) |
 | `skt.native_usim_subscriber` | 1 | Lets a recognized native executable accept its usimcert.c2s subscriber comparison (error 1004) | [SKT native](skt-native.md#skt-native-identity-cert) |
 | `skt.native_certdata_subscriber` | 1 | Lets a recognized ARM native executable accept its CERTIDATA record subscriber comparison | [SKT native](skt-native.md#skt-native-identity-cert) |
+| `skt.native_service_allowance` | 1 | Raises a recognized native executable's Host service step allowance for a one-shot load past the default ceiling | [SKT native](skt-native.md#skt-native-identity-load-allowance) |
 
 `skt.tutorial_name_cache` replaces a redundant phase assignment in an in-memory
 class copy when one verified code revision returns from its tutorial equipment

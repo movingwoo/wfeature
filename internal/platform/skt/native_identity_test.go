@@ -1,6 +1,27 @@
 package skt
 
-import "testing"
+import (
+	"encoding/hex"
+	"testing"
+)
+
+// ServiceAllowance raises an executable's Host service step allowance only for
+// a digest the registry names, and leaves every other title on the default.
+func TestServiceAllowanceFollowsTheRegistry(t *testing.T) {
+	var unregistered NativeExecutable
+	if got := unregistered.ServiceAllowance(); got != 0 {
+		t.Errorf("unregistered allowance = %d, want 0 (the default)", got)
+	}
+	registered := NativeExecutable{}
+	digest, err := hex.DecodeString("a3d70df6a56b18053c1734462373f95150102b536a3fcf01c5ed81e815aefc34")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(registered.Digest[:], digest)
+	if got := registered.ServiceAllowance(); got != NativeHeavyLoadAllowance {
+		t.Errorf("registered allowance = %d, want %d", got, NativeHeavyLoadAllowance)
+	}
+}
 
 // An executable the registry does not name gets no fix and is not touched,
 // which is what keeps identity compatibility to the exact recognized

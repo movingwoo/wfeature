@@ -62,5 +62,6 @@ func sktNativeProgram(archive []byte, disableAuthentication bool) (clet.CletProg
 		ResourceOrder:  executable.ResourceOrder,
 		Files:          opened.ProgramFiles(),
 		Authentication: authentication,
+		ServiceSteps:   executable.ServiceAllowance(),
 	}, opened, nil
 }

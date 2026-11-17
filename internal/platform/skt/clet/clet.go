@@ -60,6 +60,11 @@ type CletProgram struct {
 	// Authentication is the compatibility the loader applied to the code,
 	// which the session reports as its authentication status.
 	Authentication backend.AuthenticationStatus
+	// ServiceSteps, when it is not zero, is this program's own Host service
+	// step allowance, in place of the session's. The registry raises it for a
+	// title whose own one-shot load runs past the default ceiling; see
+	// skt.NativeExecutable.ServiceAllowance.
+	ServiceSteps uint64
 }
 
 // CletEntries are the program's entry points, absolute Thumb addresses (odd)
@@ -208,6 +213,13 @@ func newCletSessionClient(program CletProgram, options SessionOptions) (*Client,
 	client.FrameSink = options.FrameSink
 	client.ThreadSliceSteps = options.ThreadSliceSteps
 	client.ServiceSteps, client.ServiceWait = options.ServiceSteps, options.ServiceWait
+	if program.ServiceSteps != 0 {
+		// A program the registry gives its own allowance runs under it rather
+		// than the session default, at save and at restore alike, so a
+		// checkpoint of it stays compatible (validate compares the effective
+		// allowance).
+		client.ServiceSteps = program.ServiceSteps
+	}
 	client.SetProgramName(program.ProgramName)
 	client.authentication = program.Authentication
 	client.AttachResources(program.Resources)

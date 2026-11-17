@@ -157,6 +157,31 @@ func (executable *NativeExecutable) DiscardsOwnerState() bool {
 	return compatibility.HasFix("skt", compatibility.NativeModule, digest, compatibility.SKTNativeDiscardOwnerState)
 }
 
+// NativeHeavyLoadAllowance is the Host service step allowance a title the
+// registry marks with skt.native_service_allowance is given, in place of the
+// engine's default. One local title's first stage load — its own bit-serial
+// decryption of its tables, which the handset ran in hardware — takes about
+// 1.26 billion ARM steps in a single timer callback that neither returns to the
+// Host nor polls the clock, past the default ceiling that stops a runaway. This
+// is a ceiling for that one load, not a figure it approaches every call.
+const NativeHeavyLoadAllowance = 2_000_000_000
+
+// ServiceAllowance reports the Host service step allowance this executable is to
+// run under, or zero for the engine's default. The registry raises it for a
+// title whose own one-shot load legitimately runs past the default ceiling; the
+// default still bounds every other title, so one title's heavy load does not
+// weaken what stops a real runaway. See docs/skt-native.md.
+func (executable *NativeExecutable) ServiceAllowance() uint64 {
+	if executable == nil {
+		return 0
+	}
+	digest := hex.EncodeToString(executable.Digest[:])
+	if compatibility.HasFix("skt", compatibility.NativeModule, digest, compatibility.SKTNativeServiceAllowance) {
+		return NativeHeavyLoadAllowance
+	}
+	return 0
+}
+
 func mustHex(text string) []byte {
 	data, err := hex.DecodeString(string(bytes.ReplaceAll([]byte(text), []byte(" "), nil)))
 	if err != nil {

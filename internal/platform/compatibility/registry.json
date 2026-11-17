@@ -336,7 +336,8 @@
         "sha256": "a3d70df6a56b18053c1734462373f95150102b536a3fcf01c5ed81e815aefc34"
       },
       "fixes": [
-        "skt.native_certdata_subscriber"
+        "skt.native_certdata_subscriber",
+        "skt.native_service_allowance"
       ],
       "evidence": "docs/skt-native.md#skt-native-identity-cert"
     },

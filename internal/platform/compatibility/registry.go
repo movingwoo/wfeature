@@ -94,6 +94,11 @@ const SKTNativeCertDataSubscriber = "skt.native_certdata_subscriber"
 // owner's device-bound saves.
 const SKTNativeDiscardOwnerState = "skt.native_discard_owner_state"
 
+// SKTNativeServiceAllowance raises a recognized native executable's Host
+// service step allowance, for a title whose own one-shot load legitimately
+// runs past the default ceiling. The raised figure is in the skt package.
+const SKTNativeServiceAllowance = "skt.native_service_allowance"
+
 type target struct {
 	Platform string
 	Kind     string
@@ -171,7 +176,7 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		for _, fix := range entry.Fixes {
 			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache || fix == SKTResumeWithoutStart || fix == SKTResumeThroughStart) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
 				(fix == LGTCertificateMessage || fix == LGTPackagedCertificate || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTScreenStripConstant || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule ||
-				(fix == SKTNativeSaveIdentity || fix == SKTNativeCertSubscriber || fix == SKTNativeUSIMSubscriber || fix == SKTNativeCertDataSubscriber || fix == SKTNativeDiscardOwnerState) && entry.Platform == "skt" && entry.Match.Kind == NativeModule
+				(fix == SKTNativeSaveIdentity || fix == SKTNativeCertSubscriber || fix == SKTNativeUSIMSubscriber || fix == SKTNativeCertDataSubscriber || fix == SKTNativeDiscardOwnerState || fix == SKTNativeServiceAllowance) && entry.Platform == "skt" && entry.Match.Kind == NativeModule
 			if !supported {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)
 			}

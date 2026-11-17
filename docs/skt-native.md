@@ -373,12 +373,20 @@ relocation table out differently. One example is an online game: offline it is
 told its server cannot be reached, reports that and plays on, and the content
 that needs the server stays out of reach.
 
-One local title reaches its first stage and then stops, with its certificate
-accepted and the dumping handset's saves loaded: the stage load runs more than
-the five hundred million ARM steps a single Host service call is given, in one
-timer callback that neither returns to the Host nor polls the clock, so it is
-refused as a runaway would be. Raising the allowance for every title to let one
-title's load through would weaken the bound that stops a real runaway, so the
-step allowance is left where it is, and this title reaches its slot screen and
-the first moments of its stage but not beyond its first heavy load
+<a id="skt-native-identity-load-allowance"></a>
+
+### Service step allowance (`skt.native_service_allowance`)
+
+One local title reaches its first stage, with its certificate accepted and the
+dumping handset's saves loaded, and then builds the stage in one timer callback
+that neither returns to the Host nor polls the clock: it decodes its own tables
+with a bit-serial routine the handset ran in hardware, which takes about 1.26
+billion ARM steps, more than the five hundred million a single Host service call
+is given, and so is refused as a runaway would be. Raising the allowance for
+every title would weaken the bound that stops a real runaway, so the registry
+raises it for this one recognized executable instead
+(`NativeHeavyLoadAllowance`, in `internal/platform/skt/native_identity.go`); the
+default still bounds every other title. Under the raised allowance the title
+loads its stage and reaches its character, dialogue and a fight. A checkpoint of
+a title given its own allowance restores under the same one
 ([history](history/skt.md#skt-new-archives-2026-11-18-load-allowance)).
