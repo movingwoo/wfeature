@@ -1347,6 +1347,17 @@ func (runtime *Runtime) wipicGetResourceID(thread *armcore.Thread) (uint32, erro
 		}
 		return WIPICErrorNotFound, nil
 	}
+	// A program whose resources come in a directory of its own is answered
+	// with the resource's position in it. One SKT title keeps a table indexed
+	// by these identifiers, sized by a resource that lists every other
+	// resource, and steps over that resource's own position: the identifier
+	// is the directory position, from zero, and nothing else fits the table.
+	if index, ordered := runtime.Client.resourcePosition(name); ordered {
+		if err := writeSize(uint32(len(data))); err != nil {
+			return 0, fmt.Errorf("write %s resource size: %w", runtime.platformName(), err)
+		}
+		return index, nil
+	}
 	handle, err := runtime.AllocateBytes(append([]byte(name), 0))
 	if err != nil {
 		return 0, err
@@ -1355,6 +1366,27 @@ func (runtime *Runtime) wipicGetResourceID(thread *armcore.Thread) (uint32, erro
 		return 0, fmt.Errorf("write %s resource size: %w", runtime.platformName(), err)
 	}
 	return handle, nil
+}
+
+// resourcePosition answers a resource's position in the program's ordered
+// resource directory, under the name a title asked for or that name without
+// its leading slash, the two spellings wipicResource reads. ordered is false
+// for a program without such a directory.
+func (client *Client) resourcePosition(name string) (uint32, bool) {
+	if len(client.ResourceOrder) == 0 {
+		return 0, false
+	}
+	if client.resourceIndex == nil {
+		client.resourceIndex = make(map[string]uint32, len(client.ResourceOrder))
+		for index, entry := range client.ResourceOrder {
+			client.resourceIndex[entry] = uint32(index)
+		}
+	}
+	if index, ok := client.resourceIndex[name]; ok {
+		return index, true
+	}
+	index, ok := client.resourceIndex[strings.TrimPrefix(name, "/")]
+	return index, ok
 }
 
 func (runtime *Runtime) WIPICGetResource(thread *armcore.Thread) (uint32, error) {
@@ -1379,9 +1411,17 @@ func (runtime *Runtime) WIPICGetResource(thread *armcore.Thread) (uint32, error)
 	if handle&(1<<31) != 0 {
 		return WIPICErrorGeneric, nil
 	}
-	name, err := runtime.ReadCString(handle, 512)
-	if err != nil {
-		return 0, fmt.Errorf("read %s resource handle: %w", runtime.platformName(), err)
+	var name string
+	if order := runtime.Client.ResourceOrder; len(order) > 0 && uint64(handle) < uint64(len(order)) {
+		name = order[handle]
+	} else {
+		// An identifier past the directory is the name's address this
+		// runtime used to answer with, which a quick save taken before
+		// directory positions can still hold.
+		name, err = runtime.ReadCString(handle, 512)
+		if err != nil {
+			return 0, fmt.Errorf("read %s resource handle: %w", runtime.platformName(), err)
+		}
 	}
 	data, ok := runtime.wipicResource(name)
 	if !ok {

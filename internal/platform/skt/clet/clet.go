@@ -54,6 +54,9 @@ type CletProgram struct {
 	// the program's own files, which its storage held on the handset.
 	Resources map[string][]byte
 	Files     map[string][]byte
+	// ResourceOrder lists Resources in the executable's directory order; a
+	// resource's identifier is its position in it.
+	ResourceOrder []string
 	// Authentication is the compatibility the loader applied to the code,
 	// which the session reports as its authentication status.
 	Authentication backend.AuthenticationStatus
@@ -208,6 +211,7 @@ func newCletSessionClient(program CletProgram, options SessionOptions) (*Client,
 	client.SetProgramName(program.ProgramName)
 	client.authentication = program.Authentication
 	client.AttachResources(program.Resources)
+	client.ResourceOrder = program.ResourceOrder
 	client.AttachFilesystem(program.Files)
 	if options.SaveStore != nil {
 		client.AttachSaveStore(options.SaveStore)

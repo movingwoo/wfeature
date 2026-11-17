@@ -77,30 +77,31 @@ then `count` pairs of offset and size, then `count` NUL-terminated names; the
 files follow the directory, and the offsets count from there. One example's
 directory lists 350 slots for 246 files: the slots after the last file have no
 offset, no size and nothing left in the name area, and are read as unused. An
-unused slot ahead of a named one is refused.
+unused slot ahead of a named one is refused. The directory's order is kept,
+because a resource's identifier is its position in it (below).
 
 ## Calling the platform
 
 There is no SVC and no imported name. Every call loads the word at `0x01001000`
 (the root table the loader wrote), a table pointer at `root + 4*slot`, a
 function at `table + 4*function`, and branches through a `bx` veneer. The root's
-slots and their meaning, read off the two examples' call sites:
+slots and their meaning, read off the local examples' call sites:
 
 | slot | table | notes |
 |---|---|---|
-| 0 | kernel | numbered as the KTF kernel interface on every slot through 31 either title calls; 37 (a setting by name, accepted) and 50 (a browser launch, refused) are the handset's own |
-| 1 | graphics | the KTF graphics table through `MC_grpPostEvent` at 36, then the input-method functions and the handset's own additions |
+| 0 | kernel | numbered as the KTF kernel interface on every slot through 31 a title calls; 37 (a setting by name, accepted), 50 (a browser launch, refused) and 63 (a text whose digits one title compares with 11000, refused, which leaves that title on its own default) are the handset's own |
+| 1 | graphics | the KTF graphics table through `MC_grpPostEvent` at 36, then the input-method functions and the handset's own additions, among them 54, a title's list of font faces, refused: there is one face and no name for it, and the title keeps the font it has |
 | 3 | filesystem | the specification's `MC_fs*` order, with `MC_fsIsExist` and `MC_fsTell` at 15 and 16 exchanged from the KTF table |
 | 4 | misc | `MC_miscBackLight` at 0 |
 | 5 | network | the specification's order, refused the way a KTF title's is |
 | 6 | utility | byte-order and address conversion |
-| 7 | media | named by its callers, a different numbering from both the specification and the KTF table |
+| 7 | media | named by its callers, a different numbering from both the specification and the KTF table; 31 is the default volume of a category named by text (`"GENERAL"`), answered with the device volume |
 | 9 | serial | refused |
 | 10 | phone | refused |
 | 11 | terminal resources | the phonebook; refused |
 | 14 | C library | `string.h` 0–18, `stdlib.h` 19–24, `time.h` 25–30, in the specification's list order |
 
-Slots 2, 8, 12 and 13 are not reached by either title. The function numbers
+Slots 2, 8, 12 and 13 are not reached by any local title. The function numbers
 inside a table are the specification's, which the KTF C runtime follows too;
 only the order of the tables in the root and the few exceptions above differ, so
 `handleCletCall` routes a call to the handler the engine serves for it
@@ -121,6 +122,16 @@ where a KTF title's take them the other way round
 (`Platform.PixelOpDestinationFirst`;
 [history](history/skt.md#skt-pixel-operation-order-2026-11-17)). The graphics
 context record itself is the same word record on both.
+
+An SKT handset answers these calls its own way too:
+
+- `MC_knlGetResourceID` answers a resource's position in the executable's
+  resource directory, from zero (`Client.ResourceOrder`). One title sizes a
+  table by a resource that lists every other resource and indexes it with these
+  identifiers, stepping over that resource's own position; the name's address,
+  which the engine answers a KTF title with, wrote far outside the table.
+  `MC_knlGetResource` still reads an address it is handed, which a quick save
+  from before can hold.
 
 The C library at slot 14 is served in `clet_clib.go`: the string, memory,
 conversion and time functions the specification lists, each named where that

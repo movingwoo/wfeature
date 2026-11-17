@@ -87,7 +87,7 @@ func TestCheckpointAccountsForEveryField(t *testing.T) {
 		},
 		reflect.TypeFor[wipicrt.Client](): {
 			"Platform": rebuilt, "Hooks": rebuilt, "Runtime": recorded, "Prepared": boundary, "SubscriberNumber": recorded, "core": recorded, "Thread": recorded,
-			"Run": host, "Resources": rebuilt, "Files": rebuilt, "SaveStore": store, "ProgramName": rebuilt,
+			"Run": host, "Resources": rebuilt, "ResourceOrder": rebuilt, "resourceIndex": rebuilt, "Files": rebuilt, "SaveStore": store, "ProgramName": rebuilt,
 			"FrameRGBA": recorded, "FrameWidth": recorded, "FrameHeight": recorded, "FlushCount": recorded,
 			"FramePending": recorded, "PartialFrame": recorded, "FrameSink": host, "FrameSampleAt": host,
 			"FrameSampleClock": host, "LastSample": host, "ScreenWidth": recorded, "ScreenHeight": recorded,
