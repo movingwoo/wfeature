@@ -55,6 +55,28 @@ var nativeIdentityFixes = []nativeIdentityFix{
 		fix: compatibility.SKTNativeCertSubscriber, status: backend.AuthenticationSKTNativeCertificate,
 		offset: 0x1774e, window: "00 28 06 d0 36 4b 52 46 13 60", relax: 2, replacement: "06 e0",
 	},
+	{
+		// A `usimcert.c2s` subscriber comparison on another executable, which
+		// reports error 1004. The certificate's field is decoded and compared
+		// with the handset's number through the misc string compare; a match
+		// returns 1 and a mismatch returns 0, which stops the title on its
+		// first screen. The mismatch's `movs r0, #0` becomes `movs r0, #1`, so
+		// the one comparison is accepted while the certificate's presence and
+		// its decode still run.
+		fix: compatibility.SKTNativeUSIMSubscriber, status: backend.AuthenticationSKTNativeCertificate,
+		offset: 0x14fc6, window: "00 28 01 d1 01 20 00 e0 00 20", relax: 8, replacement: "01 20",
+	},
+	{
+		// An ARM title's CERTIDATA record comparison, run at start-up: the
+		// record is read out of the title's packaged container, its field is
+		// compared with the handset's number through the misc string compare,
+		// and a mismatch stops the title on a blank screen. The comparison's
+		// `bne` to the rejection becomes a no-op, so the mismatch falls through
+		// to the acceptance the match reaches; the record's presence and the
+		// two checks ahead of this one still run.
+		fix: compatibility.SKTNativeCertDataSubscriber, status: backend.AuthenticationSKTNativeCertificate,
+		offset: 0x48134, window: "10 20 90 e5 0d 00 a0 e1 12 ff 2f e1 00 00 50 e3 03 00 00 1a 01 00 a0 e3", relax: 16, replacement: "00 00 a0 e1",
+	},
 }
 
 // registeredFixes answers the fixes the registry selects for this executable's
