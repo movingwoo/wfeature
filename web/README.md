@@ -42,7 +42,12 @@ picker.
   `var/games/` are grouped as `기타`, and page-added ones as 추가한 게임. The
   last game played is preselected from `localStorage`. The directory is a label
   for the reader; the engine decides the platform from the bytes, so a title in
-  the wrong folder still runs. Below the list, **＋ 게임 추가** uploads one or more
+  the wrong folder still runs. A tap on the picker opens the game browser
+  (`game-browser.js`) instead of the select's own list: the folders on the
+  left with their counts, the games of the chosen folder on the right, opened
+  on the chosen game. Picking one sets the select and fires its `change`, so
+  the picker still shows the chosen game and everything that follows it is
+  unchanged; the keyboard still reaches the select itself. Below the list, **＋ 게임 추가** uploads one or more
   `.zip`/`.jar` files (each reported separately) and **게임 삭제**, enabled only
   for page-added games, removes one after a confirmation (`add-game.js`; the
   route is in [Server](#server)). Under them a divider, **▾ 백업**, opens two

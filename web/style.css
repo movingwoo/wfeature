@@ -417,6 +417,167 @@ body {
   opacity: 0.65;
 }
 
+/* The picker keeps its look, its name of the chosen game and its disabled
+   state; an unseen button lies over it and opens the game browser instead of
+   the select's own list. */
+.game-pick {
+  position: relative;
+  display: flex;
+  width: min(100%, 300px);
+}
+
+.game-pick .game-select {
+  width: 100%;
+}
+
+.game-browse {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  /* Not a keyboard stop (the select is), so the ring a browser draws when
+     the window hands the focus back would only frame the picker for nothing. */
+  outline: none;
+}
+
+.game-pick:has(.game-select:disabled) .game-browse {
+  cursor: wait;
+}
+
+/* The game browser: a window over the page, folders in the narrow column and
+   the games of the chosen one in the wide one. Each column scrolls on its own,
+   so a folder of hundreds of games leaves the folders where they are. */
+#game-browser {
+  width: min(94vw, 640px);
+  height: min(82dvh, 620px);
+  max-height: none;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  color: #e8e6e3;
+  background: #2b2b2b;
+}
+
+#game-browser::backdrop {
+  background: #0009;
+}
+
+.game-browser-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.game-browser-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.game-browser-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.game-browser-close {
+  font: inherit;
+  background: #4a4a4a;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 7px 16px;
+  cursor: pointer;
+}
+
+.game-browser-columns {
+  display: grid;
+  grid-template-columns: minmax(96px, 36%) 1fr;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+
+.game-browser-folders,
+.game-browser-games {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* Positioned, so a button's offsetTop is its place in the list. */
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  background: #232323;
+  border-radius: 6px;
+}
+
+.game-browser-folders button,
+.game-browser-games button {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 11px 10px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid #333;
+  cursor: pointer;
+  /* Between words where it can, anywhere where a name has no spaces. */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.game-browser-folders button:hover,
+.game-browser-games button:hover {
+  background: #3a3a3a;
+}
+
+.game-browser-folders button[aria-current="true"] {
+  background: #3d4a5c;
+}
+
+.game-browser-games button[aria-current="true"] {
+  color: #8ab4f8;
+  font-weight: 600;
+}
+
+.game-browser-count {
+  margin-left: auto;
+  color: #999;
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+/* A phone's folder column is too narrow for a name and its count side by
+   side: the count goes under the name, which then has the column's width. */
+@media (max-width: 599px) {
+  .game-browser-columns {
+    grid-template-columns: minmax(96px, 38%) 1fr;
+  }
+
+  .game-browser-folders button {
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0.9em;
+  }
+
+  .game-browser-count {
+    margin-left: 0;
+  }
+}
+
 /* The settings key (설정) is a keypad cell like the rest, so nothing here
    positions it: the grid places it wherever the person put it. What sets it
    apart is its colour — see the rule by its key below. */

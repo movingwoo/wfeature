@@ -51,9 +51,17 @@
           <div id="checkpoint-status" class="checkpoint-status" role="status" aria-live="polite" hidden></div>
           <div class="prestart" id="prestart">
             <div class="prestart-row">
-              <select id="game-select" class="game-select" disabled>
-                <option value="">{{picker.loading}}</option>
-              </select>
+              <!-- The select shows the chosen game and holds it; the button
+                   lying over it opens the game browser (game-browser.js), a
+                   folder at a time, because the select's own list of every
+                   archive is one long sheet nobody finds a game in. The
+                   keyboard still reaches the select itself. -->
+              <span class="game-pick">
+                <select id="game-select" class="game-select" disabled>
+                  <option value="">{{picker.loading}}</option>
+                </select>
+                <button id="game-browse" class="game-browse" type="button" tabindex="-1" aria-label="{{picker.browse}}"></button>
+              </span>
               <button id="game-start" class="game-start" disabled>{{picker.start}}</button>
             </div>
             <!-- A title packaged for another phone shows it as a picture cut
@@ -170,6 +178,22 @@
           <div class="confirm-actions">
             <button id="text-input-cancel" class="confirm-button">{{textinput.cancel}}</button>
             <button id="text-input-apply" class="confirm-button">{{textinput.apply}}</button>
+          </div>
+        </dialog>
+
+        <!-- The game browser: folders on the left, the games of the chosen
+             one on the right. Its body fills the dialog, so a click on the
+             dialog itself is a click on the dimmed page around it. -->
+        <dialog id="game-browser" class="game-browser" aria-labelledby="game-browser-title">
+          <div class="game-browser-body">
+            <div class="game-browser-head">
+              <h2 id="game-browser-title">{{picker.browse.title}}</h2>
+              <button id="game-browser-close" type="button" class="game-browser-close">{{picker.browse.close}}</button>
+            </div>
+            <div class="game-browser-columns">
+              <ul id="game-browser-folders" class="game-browser-folders" aria-label="{{picker.browse.folders}}"></ul>
+              <ul id="game-browser-games" class="game-browser-games" aria-label="{{picker.browse.games}}"></ul>
+            </div>
           </div>
         </dialog>
 

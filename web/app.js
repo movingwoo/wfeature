@@ -14,6 +14,7 @@ import { browserToken, createSessionLink } from "./session-link.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
 import { groupLabel, initAddGame, initRemoveGame, syncRemoveButton } from "./add-game.js";
+import { initGameBrowser } from "./game-browser.js";
 import { initCheckpoints, isCheckpointKey } from "./checkpoint.js";
 import { createTextInputDialog } from "./text-input.js";
 import { askToConfirm } from "./confirm.js";
@@ -1010,6 +1011,10 @@ const initGameSelect = async () => {
       onStatus: setStatus,
     });
     initSettingsFile({ document, onStatus: setStatus });
+    // A tap on the picker opens the folders rather than the select's own
+    // list of every archive; choosing a game sets the select and fires its
+    // change event, so everything bound above follows it unchanged.
+    initGameBrowser({ document });
     initBackupFold();
   }
 
