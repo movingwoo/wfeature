@@ -105,6 +105,13 @@ framebuffer's fields at `**id`. The engine reads the layout from the platform's
 twelve bytes in on both and only the first word differs
 (`internal/platform/skt/clet/engine.go`).
 
+A context's pixel operation is the other difference: an SKT Clet's operations
+take the pixel already on the surface first and the one being drawn second,
+where a KTF title's take them the other way round
+(`Platform.PixelOpDestinationFirst`;
+[history](history/skt.md#skt-pixel-operation-order-2026-11-17)). The graphics
+context record itself is the same word record on both.
+
 The C library at slot 14 is served in `clet_clib.go`: the string, memory,
 conversion and time functions the specification lists, each named where that
 list puts it and confirmed by the arguments the callers pass. A `double` comes

@@ -203,6 +203,36 @@ func (walk *checkpointRecordWalk) estimate(value reflect.Value, depth int) error
 	return nil
 }
 
+// CheckpointRecordVersion reads the Version a platform record begins with,
+// without decoding the rest, so a platform can choose which of its record
+// layouts to decode the record as. EncodeCheckpointRecord writes a struct's
+// fields in order, and every platform record leads with its Version.
+func CheckpointRecordVersion(data []byte) (uint32, error) {
+	if uint64(len(data)) > defaultCheckpointRecordLimits().encoded {
+		return 0, fmt.Errorf("%w: checkpoint record byte count is invalid", ErrCheckpointDamaged)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	open, err := decoder.Token()
+	if err != nil || open != json.Delim('{') {
+		return 0, fmt.Errorf("%w: checkpoint record does not begin with an object", ErrCheckpointDamaged)
+	}
+	key, err := decoder.Token()
+	if err != nil || key != "Version" {
+		return 0, fmt.Errorf("%w: checkpoint record does not begin with its version", ErrCheckpointDamaged)
+	}
+	value, err := decoder.Token()
+	number, ok := value.(json.Number)
+	if err != nil || !ok {
+		return 0, fmt.Errorf("%w: checkpoint record version is not a number", ErrCheckpointDamaged)
+	}
+	version, err := strconv.ParseUint(string(number), 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("%w: checkpoint record version is invalid", ErrCheckpointDamaged)
+	}
+	return uint32(version), nil
+}
+
 // DecodeCheckpointRecord performs a schema-aware token pass before allocating
 // typed slices. A short array of empty objects must not allocate a huge backing
 // array merely because each destination struct is large. Failed decoding leaves

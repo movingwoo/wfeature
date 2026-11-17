@@ -20,7 +20,7 @@ import (
 // It runs on this runtime rather than beside it because the functions behind
 // those tables are the ones this runtime already serves the KTF titles that
 // call into C: allocations are the same indirect handles, a framebuffer is the
-// same record, the graphics context is the same 52 bytes, and nearly every
+// same record, the graphics context is the same record, and nearly every
 // function sits at the same number. What differs is small and lives in this
 // file and clet_tables.go: the order of the tables in the root, the few
 // function numbers that moved, the six entry points that replace a Jlet, and

@@ -8,11 +8,13 @@ import "fmt"
 //
 //	M_Int32 op(M_Int32 srcpxl, M_Int32 orgpxl, M_Int32 param1)
 //
-// The specification's prose for those parameters is the wrong way round —
-// it describes the first as the pixel already in the framebuffer — but the
-// names in the prototype are right, and the guest code settles it: both local
-// operations return their **first** argument in the ordinary case, which for a
-// blit that draws anything at all has to be the source pixel.
+// On KTF the specification's prose for those parameters is the wrong way
+// round — it describes the first as the pixel already in the framebuffer — but
+// the names in the prototype are right, and the guest code settles it: the
+// local KTF operations return their **first** argument in the ordinary case,
+// which for a blit that draws anything at all has to be the source pixel. An
+// SKT Clet's operations are written for the prose's order; see
+// pixelOpArguments.
 //
 // This is how one title does transparency. Its images are 8-bit BMPs that
 // declare none, and every sprite sheet holds its subject on a flat green
@@ -36,8 +38,9 @@ type WIPICPixelOp struct {
 	// because both are answers to the same question — what a draw must write
 	// given what the surface already holds. The C context has a field of its
 	// own for it, `MC_GRP_CONTEXT_XOR_MODE_IDX`, at an offset no local title
-	// has settled the way the four below were settled — so that half stays
-	// unread rather than guessed, and nothing sets this from the C side.
+	// has settled the way the record's other fields were (graphics_context.go)
+	// — so that half stays unread rather than guessed, and nothing sets this
+	// from the C side.
 	Xor bool
 }
 
@@ -45,22 +48,6 @@ type WIPICPixelOp struct {
 // guest operation and XOR need what is already there; a context with neither
 // writes the source pixel.
 func (op WIPICPixelOp) Active() bool { return op.Function != 0 || op.Xor }
-
-// The pixel operation and its parameter are the last two words of the record.
-// The specification's field order puts them earlier, before the font and the
-// style, and the original runtime's structure follows it — but this handset
-// disagrees and the title that settles it is the one that writes its context
-// **directly** rather than through MC_grpSetContext: the function pointer it
-// hands to the API also appears at 0x2c, with the green its operation keys on
-// at 0x30, and that green appears nowhere else in the record. So the two pairs
-// trade places: the font and style take the words the specification's order
-// would have given the operation.
-const (
-	WIPICContextPixelOpOffset    = 44
-	wipicContextPixelParamOffset = 48
-	wipicContextFontOffset       = 32
-	wipicContextStyleOffset      = 36
-)
 
 // WIPICReadContextPixelOp reads the operation a draw call has to run its pixels
 // through. A field this platform did not write is not trusted to be a function:
@@ -86,11 +73,13 @@ func (runtime *Runtime) WIPICReadContextPixelOp(contextAddress uint32) (WIPICPix
 	return WIPICPixelOp{Function: function, Param: words[1]}, nil
 }
 
-// PixelOpCache remembers what one operation answered. The operation is a pure
-// function of its three arguments — both local ones are — and a blit asks it
-// once per pixel, so without this a sprite sheet's worth of guest calls happens
-// every frame. The cache is keyed by the pair of pixels and thrown away when
-// the operation or its parameter changes.
+// PixelOpCache remembers what one operation answered. A blit asks it once per
+// pixel, so without this a sprite sheet's worth of guest calls happens every
+// frame. The cache is keyed by the pair of pixels and thrown away when the
+// operation or its parameter changes, and, for an operation that reads the
+// title's own state as well as its arguments — one steps a fade level in a
+// global once a frame — at every published frame. See recordScreenFlush and
+// pixelop_purity.go.
 type PixelOpCache struct {
 	Function uint32
 	Param    uint32
@@ -142,7 +131,7 @@ func (runtime *Runtime) ApplyPixelOp(op WIPICPixelOp, source, destination uint16
 		thread,
 		op.Function,
 		ReturnAddress,
-		[]uint32{uint32(source), uint32(destination), op.Param},
+		runtime.pixelOpArguments(source, destination, op.Param),
 		runtime.supervisor,
 	)
 	if err != nil {
@@ -200,4 +189,26 @@ func (runtime *Runtime) blendPixel(op WIPICPixelOp, address uint32, source uint1
 	data[0] = byte(value)
 	data[1] = byte(value >> 8)
 	return memory.Write(address, data[:])
+}
+
+// pixelOpArguments orders a pixel operation's three arguments the way the
+// platform's handset calls it.
+//
+// The two platforms disagree, and each title's own operations say so. A KTF
+// title's alpha operation returns its first argument when the alpha is opaque
+// and its keyed one returns its second when the first is the backdrop: the
+// first is the pixel being drawn, as the prototype's names have it. An SKT
+// Clet's two operations are the mirror image. One compares only its second
+// argument with the key colour and keeps the first when they match; the other
+// returns its second argument outright unless it is the one colour it blends,
+// and blends from the first towards the second by an opacity that a title
+// screen raises from zero to fade its logo in. Called in KTF's order, the
+// first kept every magenta backdrop and the fades ran backwards, which left
+// the selected entry of a menu invisible; in this order both draw their
+// sprites cut out and their fades the right way round.
+func (runtime *Runtime) pixelOpArguments(source, destination uint16, param uint32) []uint32 {
+	if runtime.Client.Platform.PixelOpDestinationFirst {
+		return []uint32{uint32(destination), uint32(source), param}
+	}
+	return []uint32{uint32(source), uint32(destination), param}
 }

@@ -37,6 +37,12 @@ type Platform struct {
 	// written there may still be named on the list over bytes a later session
 	// wrote. RemovedDatabases reads such a name as the file it holds.
 	StaleRemovals bool
+	// PixelOpDestinationFirst says the platform calls a context's pixel
+	// operation with the pixel already on the surface first and the one being
+	// drawn second, the order the specification's prose gives. KTF passes the
+	// drawn pixel first, the order of the prototype's parameter names. See
+	// wipic_pixelop.go.
+	PixelOpDestinationFirst bool
 }
 
 // ClientHooks are the platform's parts of a service round. A hook left nil is

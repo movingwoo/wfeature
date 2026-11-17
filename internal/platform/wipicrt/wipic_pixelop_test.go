@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
@@ -118,5 +119,222 @@ func TestBlitRunsTheGuestPixelOperation(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint16(drawn[2:]); got != 0xf800 {
 		t.Errorf("the opaque pixel drew %#x, want the source's %#x", got, 0xf800)
+	}
+}
+
+// TestPixelOperationArgumentOrderIsThePlatforms pins which pixel a platform
+// hands its operation first: KTF the one being drawn, an SKT Clet the one
+// already there. The operation here is `bx lr`, which answers its first
+// argument.
+func TestPixelOperationArgumentOrderIsThePlatforms(t *testing.T) {
+	for _, destinationFirst := range []bool{false, true} {
+		client, runtime := wipicrttest.NewRuntimeWith(t, armcore.CoreOptions{}, func(client *wipicrt.Client) {
+			client.Platform.PixelOpDestinationFirst = destinationFirst
+		})
+		runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
+		if err := runtime.Client.Core().Memory().Write(wipicrt.ImageBase+0x40, []byte{0x70, 0x47}); err != nil {
+			t.Fatal(err)
+		}
+		op := wipicrt.WIPICPixelOp{Function: (wipicrt.ImageBase + 0x40) | 1, Param: 7}
+		got, err := runtime.ApplyPixelOp(op, 0xf800, 0x001f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := uint16(0xf800)
+		if destinationFirst {
+			want = 0x001f
+		}
+		if got != want {
+			t.Fatalf("destination first %v: operation answered %#x, want %#x", destinationFirst, got, want)
+		}
+	}
+}
+
+// TestPixelOperationThatReadsMemoryAnswersForOneFrame pins how long a cached
+// answer of an operation that reads the title's memory is trusted. One title's
+// operation reads a fade level from a global and steps it once a frame; an
+// answer kept past the frame it was asked in froze its title screen at the
+// first level. The operation here answers a global word.
+func TestPixelOperationThatReadsMemoryAnswersForOneFrame(t *testing.T) {
+	client, runtime := wipicrttest.NewRuntime(t)
+	runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
+	global, err := runtime.AllocateWords([]uint32{0x1111})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := make([]byte, 12)
+	for index, instruction := range []uint16{
+		0x4801, // ldr r0, [pc, #4]
+		0x6800, // ldr r0, [r0]
+		0x4770, // bx lr
+		0x46c0, // nop
+	} {
+		binary.LittleEndian.PutUint16(code[index*2:], instruction)
+	}
+	binary.LittleEndian.PutUint32(code[8:], global)
+	if err := runtime.Client.Core().Memory().Write(wipicrt.ImageBase+0x40, code); err != nil {
+		t.Fatal(err)
+	}
+	op := wipicrt.WIPICPixelOp{Function: (wipicrt.ImageBase + 0x40) | 1}
+	ask := func() uint16 {
+		t.Helper()
+		got, err := runtime.ApplyPixelOp(op, 0xf800, 0x001f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := ask(); got != 0x1111 {
+		t.Fatalf("first answer %#x", got)
+	}
+	wipicrttest.WriteGuestWords(t, runtime, global, 0x2222)
+	if got := ask(); got != 0x1111 {
+		t.Fatalf("an answer within the frame was asked again: %#x", got)
+	}
+	publishFrame(t, runtime)
+	if got := ask(); got != 0x2222 {
+		t.Fatalf("the next frame kept the earlier answer %#x", got)
+	}
+}
+
+// TestPixelOperationReadingOnlyItsArgumentsKeepsItsAnswers pins which
+// operations keep their answers past a frame: those whose code touches
+// nothing but their arguments, their stack and their literal pool, following
+// both ways of every branch and into what they call. Each operation here
+// answers 1 from an instruction that is rewritten after the frame to answer
+// 2, so one that is asked again answers 2.
+func TestPixelOperationReadingOnlyItsArgumentsKeepsItsAnswers(t *testing.T) {
+	long := make([]uint16, 300)
+	for index := range long {
+		long[index] = 0x46c0 // nop
+	}
+	long = append(long, 0x2001, 0x4770)
+	tests := []struct {
+		name string
+		code []uint16
+		// answer is the halfword of the movs r0, #1; literal, when not
+		// zero, the one a global's address is put at.
+		answer, literal int
+		kept            bool
+	}{
+		{name: "leaf", code: []uint16{
+			0x2001, // movs r0, #1
+			0x4770, // bx lr
+		}, answer: 0, kept: true},
+		{name: "stack", code: []uint16{
+			0xb082, // sub sp, #8
+			0x9000, // str r0, [sp]
+			0x9800, // ldr r0, [sp]
+			0xb002, // add sp, #8
+			0x2001, // movs r0, #1
+			0x4770, // bx lr
+		}, answer: 4, kept: true},
+		{name: "loop", code: []uint16{
+			0x2103, // movs r1, #3
+			0x3901, // subs r1, #1
+			0xd1fd, // bne back to the subs
+			0x2001, // movs r0, #1
+			0x4770, // bx lr
+		}, answer: 3, kept: true},
+		{name: "call", code: []uint16{
+			0xb500,         // push {lr}
+			0xf000, 0xf802, // bl to the bx lr
+			0x2001, // movs r0, #1
+			0xbd00, // pop {pc}
+			0x4770, // bx lr
+		}, answer: 3, kept: true},
+		{name: "call that reads memory", code: []uint16{
+			0xb500,         // push {lr}
+			0xf000, 0xf802, // bl to the ldr
+			0x2001, // movs r0, #1
+			0xbd00, // pop {pc}
+			0x4b01, // ldr r3, [pc, #4]
+			0x681b, // ldr r3, [r3]
+			0x4770, // bx lr
+			0, 0,   // the global's address
+		}, answer: 3, literal: 8},
+		{name: "untaken platform call", code: []uint16{
+			0x2100, // movs r1, #0
+			0x2900, // cmp r1, #0
+			0xd000, // beq past the svc
+			0xdf00, // svc #0
+			0x2001, // movs r0, #1
+			0x4770, // bx lr
+		}, answer: 4},
+		{name: "jump through a register", code: []uint16{
+			0xa301, // add r3, pc, #4
+			0x3301, // adds r3, #1
+			0x4718, // bx r3
+			0x46c0, // nop
+			0x2001, // movs r0, #1
+			0x4770, // bx lr
+		}, answer: 4},
+		{name: "longer than the reading", code: long, answer: 300},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, runtime := wipicrttest.NewRuntime(t)
+			runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
+			code := make([]byte, 2*len(test.code))
+			for index, instruction := range test.code {
+				binary.LittleEndian.PutUint16(code[index*2:], instruction)
+			}
+			if test.literal != 0 {
+				global, err := runtime.AllocateWords([]uint32{0x1111})
+				if err != nil {
+					t.Fatal(err)
+				}
+				binary.LittleEndian.PutUint32(code[test.literal*2:], global)
+			}
+			// The test image is too small for the longest, so the code
+			// gets a page of its own.
+			const at = 0x00200000
+			memory := runtime.Client.Core().Memory()
+			if err := memory.Map(at, 0x1000, armcore.PermissionReadWriteExecute); err != nil {
+				t.Fatal(err)
+			}
+			if err := memory.Write(at, code); err != nil {
+				t.Fatal(err)
+			}
+			op := wipicrt.WIPICPixelOp{Function: at | 1}
+			ask := func() uint16 {
+				t.Helper()
+				got, err := runtime.ApplyPixelOp(op, 0xf800, 0x001f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return got
+			}
+			if got := ask(); got != 1 {
+				t.Fatalf("first answer %#x", got)
+			}
+			publishFrame(t, runtime)
+			if err := memory.Write(at+uint32(test.answer)*2, []byte{0x02, 0x20}); err != nil {
+				t.Fatal(err)
+			}
+			want := uint16(2)
+			if test.kept {
+				want = 1
+			}
+			if got := ask(); got != want {
+				t.Fatalf("after the frame the operation answered %#x, want %#x", got, want)
+			}
+		})
+	}
+}
+
+// publishFrame flushes the screen as a title does at the end of a frame.
+func publishFrame(t *testing.T, runtime *wipicrt.Runtime) {
+	t.Helper()
+	screen, err := runtime.WIPICGetScreenFramebuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	framebuffer, err := runtime.ReadWIPICFramebuffer(screen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.FlushLCDRegion(framebuffer, 0, 0, 1, 1); err != nil {
+		t.Fatal(err)
 	}
 }

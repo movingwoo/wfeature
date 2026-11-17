@@ -348,3 +348,60 @@ func TestCheckpointPrunesADroppedImageSurface(t *testing.T) {
 		t.Fatal("the capture left the dropped image's surface registered")
 	}
 }
+
+// A version 2 record, taken before the engine followed the handset's graphics
+// context, restores a session that keeps the earlier record, because the
+// contexts in its memory were written that way; the record is otherwise the
+// same and loads whole. A version 3 record says which it holds, and an
+// unknown layout or version is refused.
+func TestSessionCheckpointKeepsTheGraphicsContextItWasTakenWith(t *testing.T) {
+	fixture := newContinuationFixture(t, 1700000000, continuationFixtureOptions{Runnable: true})
+	fixture.start(t)
+	store := backend.NewDirectorySaveStore(filepath.Join(t.TempDir(), "owner"))
+	source := checkpointFixtureSession(t, fixture, store)
+	checkpoint, err := source.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := decodeSessionCheckpoint(checkpoint.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Version != sessionCheckpointVersion || saved.GraphicsContext != graphicsContextHandset {
+		t.Fatalf("a new session's record is version %d with layout %d", saved.Version, saved.GraphicsContext)
+	}
+	earlier, err := backend.EncodeCheckpointRecord(sessionCheckpointStateV2{Version: 2, TimerLimit: saved.TimerLimit,
+		DisableAuthentication: saved.DisableAuthentication, Client: saved.Client, Adapters: saved.Adapters})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		record []byte
+		legacy bool
+	}{"version 2": {earlier, true}, "version 3": {checkpoint.Runtime, false}} {
+		changed := checkpoint
+		changed.Runtime = test.record
+		prepared, err := prepareSessionCheckpoint(source.Archive, source.archiveIdentity, changed, source.options)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := prepared.session.Client.runtime.LegacyGraphicsContext; got != test.legacy {
+			t.Errorf("%s: legacy graphics context %v", name, got)
+		}
+		prepared.Discard()
+	}
+	for name, mutate := range map[string]func(*sessionCheckpointState){
+		"layout":  func(state *sessionCheckpointState) { state.GraphicsContext = graphicsContextHandset + 1 },
+		"version": func(state *sessionCheckpointState) { state.Version++ },
+	} {
+		state := saved
+		mutate(&state)
+		record, err := backend.EncodeCheckpointRecord(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := decodeSessionCheckpoint(record); err == nil {
+			t.Errorf("%s: an unknown record was read", name)
+		}
+	}
+}

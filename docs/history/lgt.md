@@ -8761,3 +8761,102 @@ timer, and now moves the clock to each deadline as the pause does.
 `TestTimerTimeoutsPastAYearAndBelowZero` and
 `TestCTextInputReachesAWidgetThatReadsItsKeysInATimer` fail without it.
 
+
+<a id="lgt-new-archives-2026-11-17"></a>
+
+## Five more Clets built for a strip above the screen — 2026-11-17
+
+Three newly added Clets, and two local ones found after them, drew their
+screens 24 rows low: a black band across the top, the last 24 rows of every
+screen below the LCD, and — because each wrote those rows anyway — the memory
+after the screen framebuffer overwritten with them. In one, the bottom line of its title screen (its copyright) came back as
+a stale strip across the top of every later screen; in another, the rows landed
+on the font images the platform had allocated next, so a set of initial
+consonants drew as boxes of the background puzzle pattern.
+
+They are the convention the earlier records describe
+([visible origin](../platform-compatibility.md#lgt-lgt-visible-framebuffer-origin-2026-09-15),
+[direct origin](#lgt-qa-2026-09-21-direct-framebuffer-origin),
+[image origin](#lgt-qa-2026-09-21-image-path-origin)): a build that expects the
+framebuffer it is handed to start 24 rows above the visible LCD, where a
+handset kept its status strip. A sweep of the 80 local LGT archives finds most
+drawing their first row into row 0, so the platform cannot adopt the strip; as
+before, each build is corrected where it adds it. Each keeps the strip in a
+different place, so the fix, `lgt.screen_strip_constant`, carries the verified
+instructions for each module digest (`screenStripSites`): every site is checked
+before any is written, the immediate `24` of a `movs` becomes `0`, and a module
+whose code differs fails loading. The archives are unchanged.
+
+<a id="lgt-new-archives-2026-11-17-screen-rectangle"></a>
+
+### The y of its screen rectangle
+
+Module `2d3ba68d…` keeps its screen as a rectangle `{x, y, width, height}`
+and sets it up right after `MC_grpGetDisplayInfo`: the width and height from
+the framebuffer, and `movs r3,#24; str r3,[r4,#4]` for the y (`0x436fe`). Its
+clip setter adds that y to every rectangle it is handed and its whole-screen
+fill runs from row 0 to `y + height`, 344 rows. With the y zero its notice,
+story and dialogue screens fill the LCD and show their `#:SKIP` hint, and its
+title screen keeps its copyright line at the bottom. A byte patch applied
+before the first tick changed nothing, because the setup runs during start;
+patching the y itself confirmed the reading, and the fix changes the
+instruction before the module runs.
+
+<a id="lgt-new-archives-2026-11-17-screen-pointer"></a>
+
+### The pointer it writes its frame through
+
+Module `de22b7a1…` draws into offscreen buffers as tall as the framebuffer and
+publishes each frame with `memcpy` into the screen through one helper
+(`0x53180`), which answers the screen's pixel pointer plus `width × 2 × 24`
+— 20 rows instead on a screen at most 239 wide (`movs r3,#20` / `movs r3,#24`
+at `0x5319c`/`0x531a6`). The copy of 320 rows therefore ran 24 rows past the
+screen framebuffer. With the 24 cleared, the soft-key captions and the bottom
+of its HUD appear and nothing is written past the screen. The 176-wide branch
+is left as it is.
+
+<a id="lgt-new-archives-2026-11-17-screen-height"></a>
+
+### The strip it adds to the screen height
+
+Module `3fb3d20a…` stores 24 in a word of its own (`movs r3,#24; str r3,[r4]`
+at `0x29812`) and adds it to the screen height its blitter clips to, so its
+own blits reached row 343. The first screen it draws, during start, already
+overwrote the font strips, which are loaded once: that is why the boxes never
+went away. Its start code has an identical copy of the initialization at
+`0x25304` that no local run reaches; both are cleared. With them cleared its
+notice text is whole and its menus show their bottom line.
+
+<a id="lgt-new-archives-2026-11-17-every-pointer"></a>
+
+### A strip in every routine that takes the pointer
+
+Two local archives were found the reliable way: a watch on the words just past
+the screen framebuffer (`0x31025800` to `0x31028400`, rows 320 to 343) catches
+each of them writing there. A first pass that took any archive whose frame at
+600 ticks left the top 24 rows empty also picked a third, which turned out to
+be a menu with a black background: over 4,000 ticks it draws into the top rows
+in 3,825 frames.
+
+Neither keeps the strip in one place. Module `272c5633…` adds it in every
+routine that takes the screen's pixel pointer: the 16-bit fill and one blit
+scale the screen width by 48 (`movs r3,#48`, beside the fill's 176-wide `#40`),
+and four more scale the row stride by 24, three of them for a pointer the
+module caches between calls. Clearing the fill's constant alone moved its
+captions and translucent panels up while its pictures stayed down. Module
+`eb92c694…` has seven routines that each scale the row stride by 24 right after
+taking the pointer. All of the sites are listed for each digest — six and
+seven — and, cleared together, the two titles fill the LCD with their soft-key
+lines and bottom credits showing, and the watch catches nothing past the
+screen. The branches for a 32-bit screen (`#96`) are not reached on this
+platform's 16-bit screen and are left as they are, as is the 176-wide one.
+With the fix selected by the registry, both titles draw byte for byte what the
+patched copies did, over 3,000 ticks each. The second title shows a "restart
+the handset" notice on its first run from an empty save and goes on from the
+second; that is its own.
+
+Authored tests check each site, that it names the immediate of a `movs`, the
+refusal of changed code with nothing written, the `movs` executing as the zero
+the module stores, and that every module with sites is registered
+(`screen_strip_test.go`). Each title was run 3,000 ticks with and without the
+fix.

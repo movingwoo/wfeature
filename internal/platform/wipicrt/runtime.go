@@ -71,6 +71,16 @@ type Runtime struct {
 	ScreenFramebuffer  uint32
 	FramebufferOpacity map[uint32]*ImageOpacity
 	PixelOps           *PixelOpCache
+	// pixelOpPurity is what reading each pixel operation's code found:
+	// whether its answers depend on its arguments alone. It is derived from
+	// the code, so it is read again rather than recorded. See
+	// pixelop_purity.go.
+	pixelOpPurity map[uint32]bool
+	// LegacyGraphicsContext keeps the 52-byte graphics context this engine
+	// laid out before it followed the handset's, for a session restored from
+	// a checkpoint that predates the change: the contexts in its guest memory
+	// were written that way. See graphics_context.go.
+	LegacyGraphicsContext bool
 
 	// PendingTimers is the live timer set a program arms its frames from, and
 	// RoundTimers the part of a service round's batch not reached yet.
@@ -737,7 +747,7 @@ func (runtime *Runtime) wipicInitGraphicsContext(thread *armcore.Thread) (uint32
 	if err != nil {
 		return 0, err
 	}
-	if err := runtime.Client.core.Memory().Write(address, make([]byte, WIPICGraphicsContextSize)); err != nil {
+	if err := runtime.Client.core.Memory().Write(address, make([]byte, runtime.graphicsContext().size)); err != nil {
 		return 0, fmt.Errorf("initialize %s graphics context at %#x: %w", runtime.platformName(), address, err)
 	}
 	return 0, nil
@@ -760,6 +770,7 @@ func (runtime *Runtime) WIPICAccessGraphicsContext(thread *armcore.Thread, set b
 		return 0, err
 	}
 	memory := runtime.Client.core.Memory()
+	layout := runtime.graphicsContext()
 	// Single-word fields set from the immediate value and get through a
 	// pointer.
 	transfer := func(fieldOffset, size uint32, indirect bool) error {
@@ -781,13 +792,18 @@ func (runtime *Runtime) WIPICAccessGraphicsContext(thread *armcore.Thread, set b
 		return memory.Write(value, data)
 	}
 	// The clip and the offset are arrays of `M_Int32` in the caller's memory
-	// and pairs of 16-bit fields in the record, so they are widened and
-	// narrowed rather than copied. Copying them verbatim reads a four-int clip
-	// as two of them — which is what this did, and it left `MC_grpDrawImage`
-	// with a rectangle whose bottom-right corner was whatever the record had
-	// been zeroed to.
+	// and words in the handset's record, so they are copied as they are. The
+	// earlier record kept them as 16-bit pairs, which are widened and narrowed
+	// instead: copying those verbatim read a four-int clip as two of them —
+	// which is what this once did, and it left `MC_grpDrawImage` with a
+	// rectangle whose bottom-right corner was whatever the record had been
+	// zeroed to.
 	transferInts := func(fieldOffset uint32, count int) error {
-		data := make([]byte, count*2)
+		width := 4
+		if layout.halfwords {
+			width = 2
+		}
+		data := make([]byte, count*width)
 		if set {
 			// **A null array clears the field**, and one title's own code is
 			// what says so. Its clip setter computes the rectangle it wants,
@@ -808,6 +824,9 @@ func (runtime *Runtime) WIPICAccessGraphicsContext(thread *armcore.Thread, set b
 			if err := memory.Read(value, words); err != nil {
 				return err
 			}
+			if !layout.halfwords {
+				return memory.Write(contextAddress+fieldOffset, words)
+			}
 			for index := 0; index < count; index++ {
 				word := int32(binary.LittleEndian.Uint32(words[index*4:]))
 				binary.LittleEndian.PutUint16(data[index*2:], uint16(int16(word)))
@@ -816,6 +835,9 @@ func (runtime *Runtime) WIPICAccessGraphicsContext(thread *armcore.Thread, set b
 		}
 		if err := memory.Read(contextAddress+fieldOffset, data); err != nil {
 			return err
+		}
+		if !layout.halfwords {
+			return memory.Write(value, data)
 		}
 		words := make([]byte, count*4)
 		for index := 0; index < count; index++ {
@@ -827,7 +849,7 @@ func (runtime *Runtime) WIPICAccessGraphicsContext(thread *armcore.Thread, set b
 	var accessErr error
 	switch operation {
 	case 0:
-		accessErr = transferInts(4, 4) // clip bounds
+		accessErr = transferInts(layout.clip, 4) // clip bounds
 		if set && accessErr == nil {
 			// The SDK checks this word before reading the clip through
 			// GetContext. Leaving it zero makes nested drawing restore the
@@ -839,23 +861,41 @@ func (runtime *Runtime) WIPICAccessGraphicsContext(thread *armcore.Thread, set b
 			accessErr = runtime.WriteWord(contextAddress, enabled)
 		}
 	case 1:
-		accessErr = transfer(12, 4, false) // foreground pixel
+		accessErr = transfer(layout.foreground, 4, false) // foreground pixel
 	case 2:
-		accessErr = transfer(16, 4, false) // background pixel
+		accessErr = transfer(layout.background, 4, false) // background pixel
 	case 3:
-		accessErr = transfer(20, 4, false) // transparent pixel
+		accessErr = transfer(layout.transparent, 4, false) // transparent pixel
 	case 4:
-		accessErr = transfer(24, 4, false) // alpha
+		accessErr = transfer(layout.alpha, 4, false) // alpha
+		if set && accessErr == nil {
+			// "Setting the alpha sets MC_GRP_CONTEXT_PIXELOP_IDX and
+			// MC_GRP_CONTEXT_PIXEL_PARAM1_IDX with it", the specification
+			// says: the value becomes the third argument of the operation a
+			// draw runs. Titles rely on exactly that. Two set the alpha and
+			// then their own operation, every time and in that order, and
+			// pass through the alpha what their operation reads as its
+			// parameter — an opacity, or an opacity in the top byte over the
+			// key colour 0xF81F — and never set the parameter otherwise. Left
+			// out, their operations were handed zero: one drew its sprites
+			// with their magenta backdrops, the other its fades not at all.
+			//
+			// The operation the specification has the alpha install is not
+			// installed: every local title that sets the alpha replaces it
+			// straight away, so what the handset's own blend did is not
+			// something any of them shows.
+			accessErr = runtime.WriteWord(contextAddress+wipicContextPixelParamOffset, value)
+		}
 	case 5:
 		accessErr = transfer(WIPICContextPixelOpOffset, 4, false) // pixel-op function
 	case 6:
 		accessErr = transfer(wipicContextPixelParamOffset, 4, false) // pixel-op parameter
 	case 7:
-		accessErr = transfer(wipicContextFontOffset, 4, false) // font
+		accessErr = transfer(layout.font, 4, false) // font
 	case 8:
-		accessErr = transfer(wipicContextStyleOffset, 4, false) // style
+		accessErr = transfer(layout.style, 4, false) // style
 	case 10:
-		accessErr = transferInts(28, 2) // offset pair
+		accessErr = transferInts(layout.offset, 2) // offset pair
 	default:
 		return 0, nil
 	}

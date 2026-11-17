@@ -55,8 +55,8 @@ func arcFixture(t *testing.T, runtime *wipicrt.Runtime, colour uint16) (uint32, 
 		t.Fatal(err)
 	}
 	contextAddress := wipicrt.PlatformDataBase + 0x9000
-	record := make([]byte, 32)
-	binary.LittleEndian.PutUint32(record[12:], uint32(colour))
+	record := make([]byte, wipicrt.WIPICGraphicsContextSize)
+	binary.LittleEndian.PutUint32(record[runtime.WIPICForegroundOffset():], uint32(colour))
 	if err := runtime.Client.Core().Memory().Write(contextAddress, record); err != nil {
 		t.Fatal(err)
 	}
