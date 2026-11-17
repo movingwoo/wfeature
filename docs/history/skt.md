@@ -3371,3 +3371,43 @@ What it found and left, because no local save or title reaches it:
 - No test throws from a title's filter or comparator through `sortRecord` into
   a handler in the title's bytecode; the native's part of that path is held,
   the interpreter's catch is not.
+
+<a id="skt-pixel-operation-order-2026-11-17"></a>
+
+## A Clet's pixel operation takes the screen's pixel first (2026-11-17)
+
+A newly added native title showed a magenta box behind its logo pieces, its
+selected menu entry and its "PRESS ANY KEY!" line. Its images are 4- and 8-bit
+BMPs with magenta at palette entry zero and no declared transparency; it cuts
+them out with two pixel operations of its own, set on a fresh context before
+every `MC_grpDrawImage` — the alpha first, then the operation, as a KTF title
+does ([KTF](ktf.md#ktf-new-archives-2026-11-17-alpha)).
+
+Three things were wrong, and the operations' own code settles each:
+
+- **The parameter.** What the title passes as the alpha, `(opacity << 24) |
+  0xF81F`, is what both operations read as their third argument: the low 24
+  bits are the key, the top five the opacity. The engine now copies the alpha
+  into the parameter, as the specification says it does.
+- **The argument order.** One operation compares only its *second* argument
+  with the key and answers its first when they match; the other answers its
+  second argument outright unless it is the one colour it blends, and blends
+  from its first towards its second. Both are written for
+  `op(pixel already there, pixel being drawn, param)` — the order the
+  specification's prose gives, and the opposite of KTF's (whose titles'
+  operations answer their first argument when opaque). Called in KTF's order,
+  the keyed one kept every magenta backdrop and the fades ran backwards: a menu
+  that fades its entries out from the selected one hid the selected one. The
+  platform now says which order it calls in (`Platform.PixelOpDestinationFirst`,
+  set for SKT; see `pixelOpArguments`).
+- **The context record.** The magenta left around the logo was not written by
+  any platform draw (a probe on every blit row found none); the logo reaches
+  the screen through the title's own blit, which reads its context as the
+  handset's word record, the same one a KTF title reads
+  ([KTF](ktf.md#ktf-new-archives-2026-11-17-graphics-context)). With the
+  record fixed the logo is cut out.
+
+The title's logo, menu fade and selection and its tutorial prompt now draw as
+intended. Neither of the two other local native titles sets a pixel operation
+or creates an image, so the order changes nothing for them.
+`TestPixelOperationArgumentOrderIsThePlatforms`.

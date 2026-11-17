@@ -255,14 +255,14 @@ func (framebuffer WIPICFramebuffer) ClipRect(clip WIPICClip, x, y, width, height
 }
 
 func (runtime *Runtime) wipicReadContextForeground(contextAddress uint32) (uint32, error) {
-	words, err := runtime.ReadAOTWords(contextAddress+12, 1, "graphics context foreground")
+	words, err := runtime.ReadAOTWords(contextAddress+runtime.graphicsContext().foreground, 1, "graphics context foreground")
 	if err != nil {
 		return 0, err
 	}
 	return words[0], nil
 }
 
-// WIPICReadContextClip reads the four 16-bit clip bounds out of the record.
+// WIPICReadContextClip reads the four clip bounds out of the record.
 // Every drawing call that takes a graphics context is clipped by it: one title
 // draws a tile by blitting its whole 320x128 tile sheet at an offset and
 // letting the clip cut the one cell out, so ignoring the clip painted the
@@ -270,6 +270,19 @@ func (runtime *Runtime) wipicReadContextForeground(contextAddress uint32) (uint3
 func (runtime *Runtime) WIPICReadContextClip(contextAddress uint32) (WIPICClip, error) {
 	if contextAddress == 0 {
 		return WIPICClip{}, nil
+	}
+	if !runtime.graphicsContext().halfwords {
+		words, err := runtime.ReadAOTWords(contextAddress, 5, "graphics context clip")
+		if err != nil {
+			return WIPICClip{}, err
+		}
+		return WIPICClip{
+			Enabled: words[0] != 0,
+			Left:    int32(words[1]),
+			Top:     int32(words[2]),
+			Right:   int32(words[3]),
+			Bottom:  int32(words[4]),
+		}, nil
 	}
 	words, err := runtime.ReadAOTWords(contextAddress, 3, "graphics context clip")
 	if err != nil {
@@ -1831,6 +1844,14 @@ func (runtime *Runtime) recordScreenFlush() {
 	runtime.Client.FramePending = true
 	runtime.Client.PartialFrame = false
 	runtime.Client.FlushCount++
+	// A pixel operation's cached answers last one frame. An operation is not
+	// always a function of its three arguments alone: one title's reads a
+	// fade level from a global and darkens or lightens every pixel by it, and
+	// steps the level once a frame, so answers kept across frames froze its
+	// title screen at the first step it drew. Within a frame the answers are
+	// still reused, which is where a blit asks for the same pair thousands of
+	// times.
+	runtime.PixelOps = nil
 	// A flush from outside the card paint is the title publishing a frame of
 	// its own. Which of the two paths owns the screen is decided in
 	// paintTopCard, and this is the half of the evidence it cannot see.

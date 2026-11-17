@@ -161,8 +161,6 @@ const (
 	MaxWIPIFileName = 255
 	// SVCStubSize is how many bytes one supervisor-call stub occupies.
 	SVCStubSize = 16
-	// WIPICGraphicsContextSize is the size of the guest's graphics context.
-	WIPICGraphicsContextSize = 52
 	// MaxTimerDelayMillis caps a timer delay at an hour of guest time.
 	MaxTimerDelayMillis = 60 * 60 * 1000
 	// MaxAOTCallDepth bounds how deeply guest calls nest on one thread.

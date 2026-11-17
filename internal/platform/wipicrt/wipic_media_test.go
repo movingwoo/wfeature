@@ -194,6 +194,27 @@ func TestWIPICMediaSourceVolumeChangesNothing(t *testing.T) {
 	}
 }
 
+// TestWIPICMediaWaterMarkIsAccepted pins 21 as MC_mdaSetWaterMark. One title
+// calls it with (clip, 100) right after creating the clip and could not start
+// while it was refused; the default the specification gives is 100, so the
+// clip plays as it would have without the call.
+func TestWIPICMediaWaterMarkIsAccepted(t *testing.T) {
+	client, runtime := wipicrttest.NewRuntime(t)
+	sink := &wipicrttest.CountingSink{}
+	client.Audio = backend.NewAudio(sink)
+	sound := wipicrttest.OneNoteSMAF()
+	clip := wipicrttest.MediaCall(t, runtime, wipicrt.WIPICMediaClipCreate, 0, uint32(len(sound)), 0)
+	if result := wipicrttest.MediaCall(t, runtime, wipicrt.WIPICMediaSetWaterMark, clip, 100); result != 0 {
+		t.Fatalf("water mark answered %#x", result)
+	}
+	wipicrttest.MediaCall(t, runtime, wipicrt.WIPICMediaClipPutData, clip, wipicrttest.GuestBytes(t, runtime, sound), uint32(len(sound)))
+	wipicrttest.MediaCall(t, runtime, wipicrt.WIPICMediaPlay, clip, 0)
+	client.Audio.Advance(100 * time.Millisecond)
+	if sink.NoteOns == 0 {
+		t.Fatal("a clip given a water mark did not play")
+	}
+}
+
 // TestWIPICMediaClipVolumeIsTheTitlesOwn pins 14, 25 and 26. A title reads the
 // device level or a clip's level and hands it to every clip it fills, and one
 // title's own volume setting arrives as that level in steps of twenty. The

@@ -90,8 +90,12 @@ func (session *Session) CaptureCheckpointWithSession(ctx context.Context, captur
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
+	layout := uint32(graphicsContextHandset)
+	if session.Client.runtime != nil && session.Client.runtime.LegacyGraphicsContext {
+		layout = 0
+	}
 	record, err := backend.EncodeCheckpointRecord(checkpointState{Version: checkpointVersion, TimerLimit: checkpointTimerLimit(session.options),
-		DisableAuthentication: session.options.DisableAuthentication, Client: saved, Runtime: runtime, Storage: storage})
+		DisableAuthentication: session.options.DisableAuthentication, Client: saved, Runtime: runtime, Storage: storage, GraphicsContext: layout})
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
@@ -146,12 +150,9 @@ func PrepareCheckpoint(program CletProgram, checkpoint backend.Checkpoint, optio
 	if checkpoint.Variant != backend.CheckpointSKTClet {
 		return nil, backend.ErrCheckpointVersion
 	}
-	var saved checkpointState
-	if err := backend.DecodeCheckpointRecord(checkpoint.Runtime, &saved); err != nil {
+	saved, err := decodeCheckpointState(checkpoint.Runtime)
+	if err != nil {
 		return nil, err
-	}
-	if saved.Version != checkpointVersion {
-		return nil, fmt.Errorf("SKT Clet checkpoint record is version %d and this build reads %d: %w", saved.Version, checkpointVersion, backend.ErrCheckpointVersion)
 	}
 	if saved.TimerLimit != checkpointTimerLimit(options) || saved.DisableAuthentication != options.DisableAuthentication {
 		return nil, fmt.Errorf("SKT Clet checkpoint was taken under another timer limit or authentication setting: %w", backend.ErrCheckpointVersion)
@@ -197,6 +198,13 @@ func PrepareCheckpoint(program CletProgram, checkpoint backend.Checkpoint, optio
 	runtime, err := restoreRuntimeState(client, saved.Runtime, saved.Client.Audio, constructed)
 	if err != nil {
 		return nil, err
+	}
+	// The contexts in an earlier record's memory keep the layout they were
+	// written in. Its cached pixel-operation answers do not: they were asked
+	// in KTF's argument order, and a cache is only ever a shortcut.
+	runtime.LegacyGraphicsContext = saved.GraphicsContext != graphicsContextHandset
+	if runtime.LegacyGraphicsContext {
+		runtime.PixelOps = nil
 	}
 	storage, err := runtime.restoreStorageState(saved.Storage)
 	if err != nil {

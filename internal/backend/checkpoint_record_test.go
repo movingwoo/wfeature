@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -127,4 +128,23 @@ func FuzzCheckpointRecord(f *testing.F) {
 			t.Fatalf("accepted record does not round-trip: %v", err)
 		}
 	})
+}
+
+func TestCheckpointRecordVersionReadsOnlyTheLeadingVersion(t *testing.T) {
+	type record struct {
+		Version uint32
+		Rest    []byte
+	}
+	data, err := EncodeCheckpointRecord(record{Version: 7, Rest: []byte("x")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version, err := CheckpointRecordVersion(data); err != nil || version != 7 {
+		t.Fatalf("version = %d, %v", version, err)
+	}
+	for _, bad := range []string{``, `[]`, `{"Rest":1,"Version":7}`, `{"Version":"7"}`, `{"Version":-1}`, `{"Version":4294967296}`} {
+		if _, err := CheckpointRecordVersion([]byte(bad)); !errors.Is(err, ErrCheckpointDamaged) {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
 }

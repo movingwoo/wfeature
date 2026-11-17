@@ -24,7 +24,9 @@ import (
 // is not at. See session_checkpoint.go for what a checkpoint is and is not.
 
 // checkpointVersion is the layout of checkpointState and every record in it.
-const checkpointVersion = 1
+// Version 1 is version 2 without GraphicsContext, and is still read: see
+// decodeCheckpointState.
+const checkpointVersion = 2
 
 type checkpointState struct {
 	Version uint32
@@ -36,6 +38,54 @@ type checkpointState struct {
 	Client                clientState
 	Runtime               runtimeState
 	Storage               storageState
+	// GraphicsContext is the layout of the WIPI C graphics contexts in the
+	// record's memory: graphicsContextHandset for a session that follows the
+	// handset's record, zero for one restored from a version 1 record, whose
+	// contexts were written in the earlier 52-byte one. See
+	// wipicrt.Runtime.LegacyGraphicsContext.
+	GraphicsContext uint32
+}
+
+// checkpointStateV1 is a version 1 record, which predates the field.
+type checkpointStateV1 struct {
+	Version               uint32
+	TimerLimit            int
+	DisableAuthentication bool
+	Client                clientState
+	Runtime               runtimeState
+	Storage               storageState
+}
+
+// graphicsContextHandset marks a record whose contexts follow the handset's
+// layout and whose pixel operations were asked in this platform's order.
+const graphicsContextHandset = 1
+
+// decodeCheckpointState reads a version 2 record, or a version 1 one as the
+// version 2 record of a session that keeps the earlier graphics context.
+func decodeCheckpointState(data []byte) (checkpointState, error) {
+	version, err := backend.CheckpointRecordVersion(data)
+	if err != nil {
+		return checkpointState{}, err
+	}
+	switch version {
+	case 1:
+		var earlier checkpointStateV1
+		if err := backend.DecodeCheckpointRecord(data, &earlier); err != nil {
+			return checkpointState{}, err
+		}
+		return checkpointState{Version: checkpointVersion, TimerLimit: earlier.TimerLimit, DisableAuthentication: earlier.DisableAuthentication,
+			Client: earlier.Client, Runtime: earlier.Runtime, Storage: earlier.Storage}, nil
+	case checkpointVersion:
+		var saved checkpointState
+		if err := backend.DecodeCheckpointRecord(data, &saved); err != nil {
+			return checkpointState{}, err
+		}
+		if saved.GraphicsContext > graphicsContextHandset {
+			return checkpointState{}, fmt.Errorf("%w: SKT Clet checkpoint graphics context layout is unknown", backend.ErrCheckpointDamaged)
+		}
+		return saved, nil
+	}
+	return checkpointState{}, fmt.Errorf("SKT Clet checkpoint record is version %d and this build reads %d: %w", version, checkpointVersion, backend.ErrCheckpointVersion)
 }
 
 // clientState is the client's half: the image the record belongs to, the core

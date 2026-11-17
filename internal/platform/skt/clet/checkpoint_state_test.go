@@ -116,6 +116,7 @@ func TestCheckpointAccountsForEveryField(t *testing.T) {
 			"InputModeTableAddress": recorded, "CInput": recorded, "Events": recorded, "GuestEventLoop": recorded,
 			"Leds": recorded, "AOTCallDepth": boundary, "DetachedCFiles": rebuilt, "PendingNetCallbacks": recorded,
 			"RepaintPending": recorded, "RepaintServicing": boundary, "GuestFlushedOwnFrame": recorded, "CollectAt": rebuilt,
+			"LegacyGraphicsContext": recorded,
 		},
 		reflect.TypeFor[cletState](): {
 			"program": rebuilt, "root": recorded, "destroyStarted": boundary, "repaint": recorded,
@@ -244,6 +245,7 @@ func TestCheckpointRefusesAnInconsistentRecord(t *testing.T) {
 		"input mode":        func(state *checkpointState) { state.Runtime.CInput.Mode = 9 },
 		"network callback":  func(state *checkpointState) { state.Runtime.Network = []netCallbackState{{}} },
 		"clip without data": func(state *checkpointState) { state.Runtime.Clips = []clipRecord{{Address: 8}} },
+		"context layout":    func(state *checkpointState) { state.GraphicsContext = graphicsContextHandset + 1 },
 		"opacity unheld": func(state *checkpointState) {
 			state.Runtime.Opacities = append(state.Runtime.Opacities, opacityState{Width: 1, Height: 1, Opaque: []byte{1}})
 		},
@@ -457,5 +459,48 @@ func TestASessionKeepsASaveTheEarlierEngineLeftListed(t *testing.T) {
 	}
 	if saved, _ := store.LoadSave("db/save.dat"); string(saved) != "progress" {
 		t.Errorf("db/save.dat = %q, want the progress kept", saved)
+	}
+}
+
+// A version 1 record, taken before the engine followed the handset's graphics
+// context, restores a session that keeps the earlier record, because the
+// contexts in its memory were written that way, and drops the pixel operation
+// answers it cached in the earlier argument order. A version 2 record says
+// which it holds.
+func TestCheckpointKeepsTheGraphicsContextItWasTakenWith(t *testing.T) {
+	program, checkpoint, _ := fixtureCheckpoint(t)
+	var saved checkpointState
+	if err := backend.DecodeCheckpointRecord(checkpoint.Runtime, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Version != checkpointVersion || saved.GraphicsContext != graphicsContextHandset {
+		t.Fatalf("a new session's record is version %d with layout %d", saved.Version, saved.GraphicsContext)
+	}
+	earlier, err := backend.EncodeCheckpointRecord(checkpointStateV1{Version: 1, TimerLimit: saved.TimerLimit,
+		DisableAuthentication: saved.DisableAuthentication, Client: saved.Client, Runtime: saved.Runtime, Storage: saved.Storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := saved
+	legacy.GraphicsContext = 0
+	relayered, err := backend.EncodeCheckpointRecord(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		record []byte
+		legacy bool
+	}{"version 1": {earlier, true}, "version 2, earlier record": {relayered, true}, "version 2": {checkpoint.Runtime, false}} {
+		changed := checkpoint
+		changed.Runtime = test.record
+		prepared, err := PrepareCheckpoint(program, changed, SessionOptions{Clock: wipicrt.NewManualClock(time.Time{})})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		runtime := prepared.session.Client.runtime
+		if runtime.LegacyGraphicsContext != test.legacy || test.legacy && runtime.PixelOps != nil {
+			t.Errorf("%s: legacy %v, cached operation %v", name, runtime.LegacyGraphicsContext, runtime.PixelOps)
+		}
+		prepared.Discard()
 	}
 }

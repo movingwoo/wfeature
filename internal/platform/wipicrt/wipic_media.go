@@ -82,6 +82,19 @@ import (
 // say what the source number selects or whether the level should stack on a
 // clip's own.
 //
+// **21 is handed a clip and a percentage** the moment the clip exists:
+//
+//	21 (clip, 100)           straight after 0 has created the clip with a
+//	                         callback, its answer unread, from one title that
+//	                         failed to start for want of it.
+//
+// That is MC_mdaSetWaterMark(clip, percent), the other contract with a clip
+// and a percentage: how far through its data a clip raises its end-of-data
+// callback. The title asks for 100, which the specification gives as the
+// default, so accepting it is the whole of the call; and since the callback a
+// clip is created with is not raised here (see wipicCreateClip), a mark below
+// 100 would have nothing to move either.
+//
 // Every function a local title reaches is now named by its callers, and a
 // number none of them reaches is refused rather than answered from the
 // specification's ordering alone, which is the rule the rest of the WIPI C
@@ -106,6 +119,7 @@ const (
 	WIPICMediaSetMuteState  = 17
 	WIPICMediaGetMuteState  = 18
 	WIPICMediaSourceVolume  = 19
+	WIPICMediaSetWaterMark  = 21
 	WIPICMediaClipGetVolume = 25
 	WIPICMediaClipSetVolume = 26
 )
@@ -318,6 +332,9 @@ func (runtime *Runtime) HandleWIPICMediaCall(thread *armcore.Thread, function ui
 		return 0, nil
 
 	case WIPICMediaSourceVolume:
+		return 0, nil
+
+	case WIPICMediaSetWaterMark:
 		return 0, nil
 
 	default:

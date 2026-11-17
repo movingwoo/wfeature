@@ -13,7 +13,9 @@ var ErrCheckpointBusy = errors.New("KTF checkpoint requires an idle session boun
 
 // sessionCheckpointVersion is the layout of sessionCheckpointState and of the
 // records inside it. Version 1 carried the content of every storage table.
-const sessionCheckpointVersion = 2
+// Version 2 is version 3 without GraphicsContext, and is still read: see
+// decodeSessionCheckpoint.
+const sessionCheckpointVersion = 3
 
 type sessionCheckpointState struct {
 	Version               uint32
@@ -21,6 +23,55 @@ type sessionCheckpointState struct {
 	DisableAuthentication bool
 	Client                clientState
 	Adapters              saveAdapterState
+	// GraphicsContext is the layout of the WIPI C graphics contexts in the
+	// record's memory: graphicsContextHandset for a session that follows the
+	// handset's record, zero for one restored from a version 2 record, whose
+	// contexts were written in the earlier 52-byte one. See
+	// wipicrt.Runtime.LegacyGraphicsContext.
+	GraphicsContext uint32
+}
+
+// sessionCheckpointStateV2 is a version 2 record, which predates the field.
+type sessionCheckpointStateV2 struct {
+	Version               uint32
+	TimerLimit            int
+	DisableAuthentication bool
+	Client                clientState
+	Adapters              saveAdapterState
+}
+
+// graphicsContextHandset marks a record whose contexts follow the handset's
+// layout.
+const graphicsContextHandset = 1
+
+// decodeSessionCheckpoint reads a version 3 record, or a version 2 one as the
+// version 3 record of a session that keeps the earlier graphics context: the
+// contexts in its memory were written that way, and nothing else in the
+// record changed.
+func decodeSessionCheckpoint(data []byte) (sessionCheckpointState, error) {
+	version, err := backend.CheckpointRecordVersion(data)
+	if err != nil {
+		return sessionCheckpointState{}, err
+	}
+	switch version {
+	case 2:
+		var earlier sessionCheckpointStateV2
+		if err := backend.DecodeCheckpointRecord(data, &earlier); err != nil {
+			return sessionCheckpointState{}, err
+		}
+		return sessionCheckpointState{Version: sessionCheckpointVersion, TimerLimit: earlier.TimerLimit,
+			DisableAuthentication: earlier.DisableAuthentication, Client: earlier.Client, Adapters: earlier.Adapters}, nil
+	case sessionCheckpointVersion:
+		var saved sessionCheckpointState
+		if err := backend.DecodeCheckpointRecord(data, &saved); err != nil {
+			return sessionCheckpointState{}, err
+		}
+		if saved.GraphicsContext > graphicsContextHandset {
+			return sessionCheckpointState{}, fmt.Errorf("%w: KTF checkpoint graphics context layout is unknown", backend.ErrCheckpointDamaged)
+		}
+		return saved, nil
+	}
+	return sessionCheckpointState{}, fmt.Errorf("KTF checkpoint session record is version %d and this build reads %d: %w", version, sessionCheckpointVersion, backend.ErrCheckpointVersion)
 }
 
 func checkpointTimerLimit(options SessionOptions) int {
@@ -100,8 +151,12 @@ func (session *Session) CaptureCheckpointWithSession(ctx context.Context, captur
 	if base == nil {
 		return backend.Checkpoint{}, fmt.Errorf("KTF checkpoint requires a save store")
 	}
+	layout := uint32(graphicsContextHandset)
+	if client.runtime != nil && client.runtime.LegacyGraphicsContext {
+		layout = 0
+	}
 	record, err := backend.EncodeCheckpointRecord(sessionCheckpointState{Version: sessionCheckpointVersion, TimerLimit: checkpointTimerLimit(session.options),
-		DisableAuthentication: session.options.DisableAuthentication, Client: saved, Adapters: adapters})
+		DisableAuthentication: session.options.DisableAuthentication, Client: saved, Adapters: adapters, GraphicsContext: layout})
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
@@ -166,12 +221,9 @@ func prepareSessionCheckpoint(archive *Archive, identity [32]byte, checkpoint ba
 	if checkpoint.Variant != backend.CheckpointKTFJava && checkpoint.Variant != backend.CheckpointKTFModule {
 		return nil, backend.ErrCheckpointVersion
 	}
-	var saved sessionCheckpointState
-	if err := backend.DecodeCheckpointRecord(checkpoint.Runtime, &saved); err != nil {
+	saved, err := decodeSessionCheckpoint(checkpoint.Runtime)
+	if err != nil {
 		return nil, err
-	}
-	if saved.Version != sessionCheckpointVersion {
-		return nil, fmt.Errorf("KTF checkpoint session record is version %d and this build reads %d: %w", saved.Version, sessionCheckpointVersion, backend.ErrCheckpointVersion)
 	}
 	if saved.TimerLimit != checkpointTimerLimit(options) || saved.DisableAuthentication != options.DisableAuthentication {
 		return nil, fmt.Errorf("KTF checkpoint was taken under another timer limit or authentication setting: %w", backend.ErrCheckpointVersion)
@@ -192,6 +244,9 @@ func prepareSessionCheckpoint(archive *Archive, identity [32]byte, checkpoint ba
 	if checkpoint.Variant != checkpointVariant(client) {
 		client.StopThreads()
 		return nil, backend.ErrCheckpointVersion
+	}
+	if client.runtime != nil {
+		client.runtime.LegacyGraphicsContext = saved.GraphicsContext != graphicsContextHandset
 	}
 	prepared.session = &Session{Archive: archive, Client: client, options: options, archiveIdentity: identity}
 	return prepared, nil

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
@@ -118,5 +119,89 @@ func TestBlitRunsTheGuestPixelOperation(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint16(drawn[2:]); got != 0xf800 {
 		t.Errorf("the opaque pixel drew %#x, want the source's %#x", got, 0xf800)
+	}
+}
+
+// TestPixelOperationArgumentOrderIsThePlatforms pins which pixel a platform
+// hands its operation first: KTF the one being drawn, an SKT Clet the one
+// already there. The operation here is `bx lr`, which answers its first
+// argument.
+func TestPixelOperationArgumentOrderIsThePlatforms(t *testing.T) {
+	for _, destinationFirst := range []bool{false, true} {
+		client, runtime := wipicrttest.NewRuntimeWith(t, armcore.CoreOptions{}, func(client *wipicrt.Client) {
+			client.Platform.PixelOpDestinationFirst = destinationFirst
+		})
+		runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
+		if err := runtime.Client.Core().Memory().Write(wipicrt.ImageBase+0x40, []byte{0x70, 0x47}); err != nil {
+			t.Fatal(err)
+		}
+		op := wipicrt.WIPICPixelOp{Function: (wipicrt.ImageBase + 0x40) | 1, Param: 7}
+		got, err := runtime.ApplyPixelOp(op, 0xf800, 0x001f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := uint16(0xf800)
+		if destinationFirst {
+			want = 0x001f
+		}
+		if got != want {
+			t.Fatalf("destination first %v: operation answered %#x, want %#x", destinationFirst, got, want)
+		}
+	}
+}
+
+// TestPixelOperationAnswersLastOneFrame pins how long a cached answer is
+// trusted. One title's operation reads a fade level from a global and steps it
+// once a frame; an answer kept past the frame it was asked in froze its title
+// screen at the first level. The operation here answers a global word.
+func TestPixelOperationAnswersLastOneFrame(t *testing.T) {
+	client, runtime := wipicrttest.NewRuntime(t)
+	runtime.CurrentThread, runtime.CurrentContext = client.Thread, context.Background()
+	global, err := runtime.AllocateWords([]uint32{0x1111})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := make([]byte, 12)
+	for index, instruction := range []uint16{
+		0x4801, // ldr r0, [pc, #4]
+		0x6800, // ldr r0, [r0]
+		0x4770, // bx lr
+		0x46c0, // nop
+	} {
+		binary.LittleEndian.PutUint16(code[index*2:], instruction)
+	}
+	binary.LittleEndian.PutUint32(code[8:], global)
+	if err := runtime.Client.Core().Memory().Write(wipicrt.ImageBase+0x40, code); err != nil {
+		t.Fatal(err)
+	}
+	op := wipicrt.WIPICPixelOp{Function: (wipicrt.ImageBase + 0x40) | 1}
+	ask := func() uint16 {
+		t.Helper()
+		got, err := runtime.ApplyPixelOp(op, 0xf800, 0x001f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := ask(); got != 0x1111 {
+		t.Fatalf("first answer %#x", got)
+	}
+	wipicrttest.WriteGuestWords(t, runtime, global, 0x2222)
+	if got := ask(); got != 0x1111 {
+		t.Fatalf("an answer within the frame was asked again: %#x", got)
+	}
+	screen, err := runtime.WIPICGetScreenFramebuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	framebuffer, err := runtime.ReadWIPICFramebuffer(screen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.FlushLCDRegion(framebuffer, 0, 0, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := ask(); got != 0x2222 {
+		t.Fatalf("the next frame kept the earlier answer %#x", got)
 	}
 }

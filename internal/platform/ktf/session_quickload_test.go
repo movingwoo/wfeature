@@ -406,7 +406,7 @@ func TestSessionCheckpointRefusesOtherRecordVersionsAndPolicies(t *testing.T) {
 		options      func(*SessionOptions)
 	}{
 		{"an earlier session record", "version 1", func(s *sessionCheckpointState) { s.Version = 1 }, nil},
-		{"a later session record", "version 3", func(s *sessionCheckpointState) { s.Version = 3 }, nil},
+		{"a later session record", "version 4", func(s *sessionCheckpointState) { s.Version = 4 }, nil},
 		{"another timer limit", "timer limit", nil, func(o *SessionOptions) { o.TimerLimit = 7 }},
 		{"another authentication setting", "authentication", nil, func(o *SessionOptions) { o.DisableAuthentication = true }},
 	} {

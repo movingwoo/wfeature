@@ -1400,6 +1400,10 @@ appears nowhere else in the record, not at the offset the documented
 index). The two pairs trade places with the font and style, which no local title
 reads back.
 
+(2026-11-17: no trade is needed. With every field a word in the index order the
+operation falls at `0x2c` and its parameter at `0x30` of a `0x40`-byte record;
+see [the handset's record](#ktf-new-archives-2026-11-17-graphics-context).)
+
 Every drawing call that takes a context runs its pixels through the operation:
 both blits, the fills and outline, the line, the pixel and both string forms.
 
@@ -1407,7 +1411,8 @@ both blits, the fills and outline, the line, the pixel and both string forms.
   and a blit would otherwise call the guest per pixel; keyed by the pixel pair,
   one title's dialogue-heavy run makes 7,600 guest calls against 24,000
   `MC_grpDrawImage` calls covering millions of pixels. The cache is dropped when
-  the function or parameter changes.
+  the function or parameter changes. (2026-11-17: and at every published frame;
+  see [the fade an operation reads](#ktf-new-archives-2026-11-17-fade).)
 - **A field this platform did not write is not trusted as a function.** A title
   that sets a font through the slot this handset uses for the operation leaves a
   small integer there. Only a Thumb address inside the loaded module counts,
@@ -10326,3 +10331,154 @@ Found and left:
 
 The validation of this pass, corpus and quick-save upgrade included, is with
 [the comparison](coverage.md#cross-platform-parity-2026-11-05).
+
+<a id="ktf-new-archives-2026-11-17"></a>
+
+## Newly added archives — 2026-11-17
+
+A batch of KTF, LGT and SKT archives launched by hand, among them repackaged
+and locally patched ones. Seven reports came back; four were this engine's and
+are fixed here and in the
+[LGT](lgt.md#lgt-new-archives-2026-11-17) and
+[SKT](skt.md#skt-pixel-operation-order-2026-11-17) records, and one was the
+archive's.
+
+<a id="ktf-new-archives-2026-11-17-water-mark"></a>
+
+### Media function 21 is `MC_mdaSetWaterMark`
+
+One title failed in `startApp` with `KTF WIPI C media function 21 is not
+implemented`. It creates its sound clip with a 16,000-byte buffer and a
+callback, then calls 21 with the clip and `100` and never reads the answer,
+then sets the clip's volume through 26. The specification's other contract
+with a clip and a percentage, the one 26 was ruled out as, is
+`void MC_mdaSetWaterMark(MC_MdaClip *clip, M_Int32 percent)`: how far through
+its data a playing clip raises its end-of-data event. The title asks for 100,
+the default the specification gives, so accepting the call is all of it; a
+clip's callback is not raised here at all (see `wipicCreateClip`), so a lower
+mark would have nothing to move. The title now reaches its menu, its opening
+scene and its first map. `TestWIPICMediaWaterMarkIsAccepted`.
+
+<a id="ktf-new-archives-2026-11-17-graphics-context"></a>
+
+### The graphics context is the handset's record
+
+A second title drew its title screen without its sky, clouds or menu
+captions, its dialogues without their titles and its interface without its
+labels, while its logo and the "press any key" line came out. Both halves are
+drawn by the title itself, from pixels it reads out of `MC_grpCreateImage`
+images through `MC_grpGetImageFrameBuffer`, by two routines. The one that
+worked ignores the context. The other copies `0x40` bytes of its own context
+record to call `MC_grpDrawImage` when the record carries a pixel operation,
+and otherwise draws the image itself, reading the record as words: the clip's
+corners at `+0x04`, `+0x08`, `+0x0c` and `+0x10`, the transparent pixel at
+`+0x1c`, the origin at `+0x24` and `+0x28`. The clip had been put there by
+`MC_grpSetContext`, which stored it as four 16-bit fields from `+0x04`, so the
+routine read the right and bottom edges packed together as its top edge,
+somewhere past the screen, and drew nothing — a 1×320 gradient 240 times a
+frame among it.
+
+Laid out as words in the order of the `MC_GRP_CONTEXT_*_IDX` numbers after a
+leading word for "a clip is set" — clip, foreground, background, transparent
+pixel, alpha, origin, pixel operation, its parameter, font, style — the record
+puts the pixel operation at `0x2c` and its parameter at `0x30` and is `0x40`
+bytes long. Those are exactly where the title that writes its context itself
+keeps them
+([the pixel operation](#implementation-the-transparency-a-title-brings-with-it-the-contexts-pixel-operation)),
+which the 16-bit record could only explain by having the operation trade places
+with the font and style; and `0x40` is what this title copies. The engine now
+uses that record (`graphics_context.go`): `MC_grpInitContext` clears `0x40`
+bytes, `MC_grpSetContext` and `MC_grpGetContext` copy the clip and the origin
+as words, and every drawing call reads the foreground from `+0x14` and the clip
+from `+0x04`. The title draws its title screen, menus and interface as its LGT
+edition does. One SKT Clet's own blit reads its context the same way and needed
+the same record ([SKT](skt.md#skt-pixel-operation-order-2026-11-17)).
+
+A title that only reads its contexts through the API draws the same with
+either record, since the engine reads back what it wrote; what changes for it
+is that `MC_grpInitContext` clears twelve more bytes, which the handset's
+sizeof already gives it. The authored SKT Clet fixture kept a 52-byte context
+with its flags right behind it and was moved apart.
+
+**A checkpoint keeps the record its contexts were written in.** Contexts live
+in guest memory, so a session restored from a checkpoint taken before this
+change holds 16-bit records, and reading them as words would draw with a clip
+corner as its colour. The KTF and SKT Clet runtime records gain a
+`GraphicsContext` field, `1` for the handset's record; a record without it is
+from before, and its session keeps the earlier record
+(`Runtime.LegacyGraphicsContext`) and writes `0` into every checkpoint it takes
+after. A new session follows the handset. An SKT session restored that way also
+drops its cached pixel-operation answers, which were asked in the earlier
+argument order. `TestWIPICGraphicsContextIsTheHandsetsRecord`,
+`TestWIPICLegacyGraphicsContextKeepsItsRecord`,
+`TestRuntimeControlKeepsTheGraphicsContextItWasTakenWith`,
+`TestCheckpointKeepsTheGraphicsContextItWasTakenWith`.
+
+<a id="ktf-new-archives-2026-11-17-alpha"></a>
+
+### Setting the alpha sets the operation's parameter
+
+The specification says of `MC_GRP_CONTEXT_ALPHA_IDX` that setting it sets
+`MC_GRP_CONTEXT_PIXELOP_IDX` and `MC_GRP_CONTEXT_PIXEL_PARAM1_IDX` with it, and
+two titles depend on the second half. Each sets the alpha and then its own
+operation, every time and in that order, and never sets the parameter; what it
+passes as the alpha is what its operation reads as its third argument. One
+KTF title's operations are an alpha blend that answers the drawn pixel outright
+at `0xff`, and a keyed blend that takes its key from the low 24 bits and its
+opacity from the top five; the SKT Clet's are the same idea. The engine kept the
+alpha and left the parameter alone, so the operations were handed whatever the
+parameter word held. `MC_grpSetContext(ALPHA)` now writes the value to the
+parameter word too. The operation the specification has the alpha install is
+not installed: every local title that sets the alpha replaces it at once, so
+none shows what the handset's own blend did. `TestWIPICAlphaIsThePixelOperationsParameter`.
+
+<a id="ktf-new-archives-2026-11-17-fade"></a>
+
+### A pixel operation that reads a fade
+
+The corpus A/B for the record above moved one more title the wrong way: its
+logo came out at a fifth of its brightness and stayed there. It writes its
+context itself — the foreground at `+0x14`, the transparent pixel at `+0x1c`,
+its operation at `+0x2c`, as the record says — and its operation is not a
+function of its arguments: it answers the screen's pixel for the transparent
+colour, which it reads through a global pointer to that context, and
+otherwise darkens or lightens the drawn pixel by a level from −4 to 4 that it
+keeps in a global and steps once a frame. The engine kept every answer for the
+life of the operation, so whichever level the first frame drew at was the
+level of the title screen for good; before the record changed, the first
+frame happened to be drawn at full brightness. The answers now last one
+published frame (`recordScreenFlush`), and the logo fades in and stays bright.
+A pure operation answers the same either way and only asks again once a frame.
+
+<a id="ktf-new-archives-2026-11-17-archive"></a>
+
+### A title that downloads its data on first run
+
+A third title shows "additional data must be downloaded" and then
+`CONNECTING (0KB/872KB)` for good. Before it asks, it looks for nine files in
+its own storage (`img.dat`, `sound.dat`, `bodyImage.dat` and six more); the
+archive's descriptor says the service downloads 872 KB after installation,
+and this repackaged archive carries the JAR and its icons but none of the nine.
+The emulator answers the lookups correctly. Another local archive of the same
+version carries all nine under `P/`. Nothing here is changed.
+
+<a id="ktf-new-archives-2026-11-17-validation"></a>
+
+### Validation
+
+Unit tests above; `make test`, `make test-debug`, `go test -race ./internal/...`
+and `go vet ./...`. Each fixed title was run past where it stopped or to the
+screens that were missing.
+
+The 647 local archives at 500 ticks from an empty save, under the build before
+these changes and with them, rerun three more times under each wherever the
+digests differed: 614 end on the same digest and 12 more vary between runs of
+either build. Of the 21 that moved, 10 are SKT Java titles whose four runs under
+one build give four digests, which this change does not reach; 7 are the titles
+above; 4 are earlier KTF titles that read their contexts the same way, and each
+moved for the better — a title logo and a dialogue's text that now draw, a
+title whose own clipping now reads the clip it set, and the fade above.
+
+A checkpoint each of three titles took under the earlier build loads under this
+one and goes on with the earlier record; one taken under this build loads and
+saves again.

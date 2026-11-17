@@ -27,6 +27,8 @@ var cletPlatform = wipicrt.Platform{
 	HandleFirstWord: wipicrt.WIPICAllocationOverhead,
 	HandleData:      0,
 	StaleRemovals:   true,
+	// See wipicrt.Runtime.pixelOpArguments for what settles the order.
+	PixelOpDestinationFirst: true,
 }
 
 // ImageBase is where a Clet's code is linked and loaded.

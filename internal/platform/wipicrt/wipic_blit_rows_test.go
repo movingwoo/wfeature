@@ -998,13 +998,18 @@ func gfxThread(t *testing.T, rt *wipicrt.Runtime, arguments ...uint32) *armcore.
 
 // gfxContext builds a graphics context with a foreground pixel and the
 // three clip words the context starts with.
+// gfxContext writes a context record with a foreground pixel and a clip. The
+// clip is given as the presence word and two words of 16-bit corner pairs,
+// left|top<<16 and right|bottom<<16, and written as the handset's four words.
 func gfxContext(t *testing.T, rt *wipicrt.Runtime, pixel uint32, clip [3]uint32) uint32 {
 	t.Helper()
 	record := make([]byte, wipicrt.WIPICGraphicsContextSize)
-	for index, word := range clip {
-		binary.LittleEndian.PutUint32(record[index*4:], word)
+	corners := []uint32{clip[1] & 0xffff, clip[1] >> 16, clip[2] & 0xffff, clip[2] >> 16}
+	binary.LittleEndian.PutUint32(record, clip[0])
+	for index, corner := range corners {
+		binary.LittleEndian.PutUint32(record[4+index*4:], uint32(int32(int16(corner))))
 	}
-	binary.LittleEndian.PutUint32(record[12:], pixel)
+	binary.LittleEndian.PutUint32(record[rt.WIPICForegroundOffset():], pixel)
 	address, err := rt.AllocateBytes(record)
 	if err != nil {
 		t.Fatal(err)

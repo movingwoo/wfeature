@@ -55,10 +55,11 @@ const (
 	sktCletQueuedKey  = sktCletData + 0x88
 	sktCletLogHandle  = sktCletData + 0x8c
 	sktCletLogName    = sktCletData + 0x90
-	sktCletContext    = sktCletData + 0xa0
-	sktCletScreen     = sktCletData + 0xd4
-	sktCletFlags      = sktCletData + 0xd8
-	sktCletDataSize   = 0x100
+	// sktCletContext is a whole MC_GrpContext, the handset's 0x40 bytes.
+	sktCletContext  = sktCletData + 0xa0
+	sktCletScreen   = sktCletData + 0xe0
+	sktCletFlags    = sktCletData + 0xe4
+	sktCletDataSize = 0x100
 
 	// SKTCletSaveKey and SKTCletLogKey are the save keys the two files land
 	// under in a session's store.
