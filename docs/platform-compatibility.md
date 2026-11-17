@@ -46,7 +46,7 @@ fixes require `native_module`.
 
 ### Registered fixes
 
-The registry holds 20 entries (last changed 2026-11-10). The `evidence` field of
+The registry holds 25 entries (last changed 2026-11-17). The `evidence` field of
 each entry is the authoritative index; this table groups them by fix.
 
 | Fix | Entries | Effect | Evidence |
@@ -59,6 +59,7 @@ each entry is the authoritative index; this table groups them by fix.
 | `lgt.direct_framebuffer_origin` | 1 | Removes the strip offset used by direct pixel writers | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-direct-framebuffer-origin) |
 | `lgt.image_framebuffer_origin` | 1 | Removes the strip offset from a native image path | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-image-path-origin) |
 | `lgt.color_key_sample_origin` | 1 | Aligns a native transparency calibration sample | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-transparency-calibration-origin) |
+| `lgt.screen_strip_constant` | 5 | Clears the 24-row strip a Clet adds to its own screen setup or pixel pointers, at instructions verified per module | [LGT](history/lgt.md#lgt-new-archives-2026-11-17) |
 | `lgt.wide_graphics_context` | 4 | Selects the 56-byte graphics context ABI instead of the compact default | [below](#lgt-wide-graphics-context) |
 | `lgt.wide_exclusive_clip` | 1 | Keeps the wide context's clip ends exclusive | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-second-color-report-wide-context-proof) |
 | `lgt.save_subscriber_identity` | 1 | Lets a recognized save reader accept a foreign subscriber identity | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison) |

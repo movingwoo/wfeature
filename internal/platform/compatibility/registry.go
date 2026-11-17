@@ -46,6 +46,11 @@ const LGTImageFramebufferOrigin = "lgt.image_framebuffer_origin"
 // LGTColorKeySampleOrigin aligns a native transparency calibration sample.
 const LGTColorKeySampleOrigin = "lgt.color_key_sample_origin"
 
+// LGTScreenStripConstant clears the 24-row handset strip a recognized Clet
+// adds to its own screen setup or pixel pointers, at instructions the platform
+// verifies for each recognized module.
+const LGTScreenStripConstant = "lgt.screen_strip_constant"
+
 // LGTSaveSubscriberIdentity permits a recognized save reader's foreign identity.
 const LGTSaveSubscriberIdentity = "lgt.save_subscriber_identity"
 
@@ -156,7 +161,7 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		seen := make(map[string]bool)
 		for _, fix := range entry.Fixes {
 			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache || fix == SKTResumeWithoutStart || fix == SKTResumeThroughStart) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
-				(fix == LGTCertificateMessage || fix == LGTPackagedCertificate || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule ||
+				(fix == LGTCertificateMessage || fix == LGTPackagedCertificate || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTScreenStripConstant || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule ||
 				(fix == SKTNativeSaveIdentity || fix == SKTNativeCertSubscriber || fix == SKTNativeDiscardOwnerState) && entry.Platform == "skt" && entry.Match.Kind == NativeModule
 			if !supported {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)

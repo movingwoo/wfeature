@@ -148,6 +148,66 @@
       "evidence": "docs/history/lgt.md#lgt-qa-2026-09-21-transparency-calibration-origin"
     },
     {
+      "id": "lgt-screen-strip-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "2d3ba68dd05da42f4e7e82467c093f9bb7ec080739044270cf3fc4e17a781066"
+      },
+      "fixes": [
+        "lgt.screen_strip_constant"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-new-archives-2026-11-17-screen-rectangle"
+    },
+    {
+      "id": "lgt-screen-strip-002",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "de22b7a161e64b843714a9ee815df1fd4daf6c480d4e7a442b5665315738fb43"
+      },
+      "fixes": [
+        "lgt.screen_strip_constant"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-new-archives-2026-11-17-screen-pointer"
+    },
+    {
+      "id": "lgt-screen-strip-003",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "3fb3d20a77abe89a2483b59d2eb3af355a9d475d262afc47aa5f4a3cd8c15f08"
+      },
+      "fixes": [
+        "lgt.screen_strip_constant"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-new-archives-2026-11-17-screen-height"
+    },
+    {
+      "id": "lgt-screen-strip-004",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "272c563375b086a182d8214f151ee4a75d3158bb1bd0f6a10ccb8979d1d18afc"
+      },
+      "fixes": [
+        "lgt.screen_strip_constant"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-new-archives-2026-11-17-every-pointer"
+    },
+    {
+      "id": "lgt-screen-strip-005",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "eb92c694ea9d88ff53690ea464114b907ce83225b745e55f10a86681a9aae6f0"
+      },
+      "fixes": [
+        "lgt.screen_strip_constant"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-new-archives-2026-11-17-every-pointer"
+    },
+    {
       "id": "lgt-wide-context-004",
       "platform": "lgt",
       "match": {
