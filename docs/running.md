@@ -506,11 +506,11 @@ launchers (`start`, `stop`, `status`), the notices and an empty `games/` tree,
 then writes `SHA256SUMS` (`make checksums`). The version is stamped into the
 binary (`-X main.version`) and the archive names. It is set by hand because a
 release number is a decision; the Makefile's `VERSION ?=` default is the last
-release (currently `0.5.2`), so pass it explicitly. In CI it comes from the
+release (currently `0.6.0`), so pass it explicitly. In CI it comes from the
 tag.
 
 ```sh
-make dist VERSION=0.5.2
+make dist VERSION=0.6.0
 ```
 
 ```text
@@ -749,7 +749,7 @@ therefore verified by execution for starting, serving, reporting and stopping â€
 not for playing a game.
 
 ```sh
-make dist VERSION=0.5.2
+make dist VERSION=0.6.0
 make dist-check
 ```
 
