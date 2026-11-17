@@ -205,8 +205,9 @@ settings below it; its settings
 **내보내기** and **가져오기** carry them as one JSON file
 (`wfeature-settings.json`, `format: "wfeature-settings"`, `version: 1`):
 the keypad's type and arrangement, the keyboard's and the game controller's
-keys, the two volumes, the picture filter, the screen and speed of each game,
-vibration and fullscreen (`web/settings-file.js` lists the keys). The token that
+keys, the two volumes, picture against sound (`🎬 사운드 싱크`), the picture
+filter, the screen and speed of each game, vibration and fullscreen
+(`web/settings-file.js` lists the keys). The token that
 takes a parked game back, the last game picked, whether a keyboard or a
 controller has been used here and the copy of a damaged keypad record stay in
 the browser that has them.
@@ -215,7 +216,7 @@ An import asks first, writes the file's settings over this browser's, leaves
 those the file does not hold, and opens the page again, which is when every
 setting is read. It reads only setting keys with string values of bounded size
 from a file of at most 1 MiB, refuses a newer version, and refuses a `.wfs`
-save backup with the place that takes one. A game's saves are not settings:
+save backup, saying it is a game's save backup. A game's saves are not settings:
 they are on the server and travel from the game picker, one game at a time.
 
 ### Adding a game from the page, and taking it back off
@@ -351,16 +352,20 @@ window, or `stop.bat`, waits for the drain.
 The server answers `GET /api/status` with what it is:
 
 ```json
-{"server":"wfeature","profile":"debug","version":"dev","pid":4242}
+{"server":"wfeature","profile":"debug","version":"dev","pid":4242,"https_port":11641}
 ```
+
+`https_port` is the port the same server serves HTTPS on, and is left out when
+it serves none.
 
 The profile cannot be read from outside the process any other way: two servers
 on two ports look alike, and the executable's path says nothing when it was
 started with `go run` or renamed into a release archive. `status` and `stop`
 use the answer to name the profile, to tell this server from a stranger before
 anything is stopped, and to know which process to signal if the graceful stop
-fails. The version is the one stamped by `make dist`, and `dev` in every other
-build.
+fails; `status` also prints the HTTPS address from `https_port`. The version is
+the one a release build stamps (`make dist` and the phone builds stamp the
+release's, the CI smoke job `ci`), and `dev` in every other build.
 
 ### /api/shutdown
 
@@ -469,6 +474,7 @@ games/ktf/<game>.zip       what to play
 ext/<game>.zip             what the page added, and what it may delete
 savedata/<profile>/...     written on the first save
 logs/                      written when a report is taken
+tls/                       the HTTPS certificate, made at the first start
 ```
 
 When the working directory has no `var/`, the server reads and writes the
@@ -638,6 +644,7 @@ var/ext/                       archives added from the page (the only ones it ma
 var/savedata/<profile>/<platform>/<owner>/   saves
 var/logs/                      debug run reports
 var/run/                       start.sh's per-profile server log
+var/tls/                       the HTTPS listener's certificate and key
 ```
 
 [`var/README.md`](../var/README.md) lists every directory under `var/`.

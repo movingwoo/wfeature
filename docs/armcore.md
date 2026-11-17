@@ -1,6 +1,6 @@
 # ARM execution core
 
-`internal/armcore` is a pure-Go ARM interpreter shared by KTF and LGT. It models
+`internal/armcore` is a pure-Go ARM interpreter shared by KTF, LGT and SKT native programs. It models
 the user-mode execution needed by supported archives, not a complete ARM system.
 Instruction investigations, optimization decisions, profiles and measurements
 are retained in [ARM history](history/armcore.md).
@@ -188,6 +188,11 @@ Tests do not see the profile, because a test binary has no `default.pgo` beside
 it; an A/B of the profile itself uses `go test -pgo=<file>`. The measured gains,
 the 2026-10-11 re-take and the reasons for each run are in
 [the build-flag record](history/armcore.md#implementation-the-host-profiles-next-answer-was-a-build-flag-and-it-was-12).
+The committed profile is that re-take. It predates the KTF quantum of 16,384
+and the WIPI-C engine's move to `internal/platform/wipicrt`, so the functions
+it names under their old package build as they would without a profile until
+the next `make pgo`
+([why it was kept for 0.6.0](history/armcore.md#ktf-quantum-2026-11-10)).
 Historical speedups apply to their recorded machine and workload; they are not
 current performance claims.
 

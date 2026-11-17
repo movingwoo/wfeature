@@ -52,7 +52,7 @@ each is written once:
 | `internal/textinput` | Keypad multi-tap text entry for MIDP `TextBox` and `TextField` and KTF lwc text components. |
 | `internal/wipic` | What the platforms share below the call boundary: format strings, handset bitmaps, tolerant picture decoders, the free list every guest arena reuses blocks from, and the C library's `struct tm`. |
 | `internal/curve` | Arcs and rounded rectangles for every drawing surface. |
-| `internal/glyph` | Runtime-authored 5x7 glyphs; an unsupported character becomes a codepoint-marked box. |
+| `internal/glyph` | Rasterizes the embedded pixel faces (`fonts`) for every platform's text, and keeps runtime-authored 5x7 glyphs; an unsupported character becomes a codepoint-marked box. |
 | `fonts` | The runtime's embedded font assets. |
 | `internal/cheat` | Memory search and patching over a guest's memory: the ARM address space on KTF, LGT and SKT native programs, a synthetic address space over the JVM heap on SKT Java. The Hosts expose it as the cheat panel and the CLI's `-cheat` and `-patch`. |
 
@@ -60,7 +60,7 @@ each is written once:
 
 | Package | Role |
 | --- | --- |
-| `internal/armcore` | Pure-Go ARMv4T (ARM and Thumb) interpreter for KTF and LGT. Shared memory belongs to the core, and each cooperative guest thread owns its register context. Instruction quanta are serialized and SVC handlers run outside that lock, so Host waits do not block other guest threads. See [ARM](armcore.md). |
+| `internal/armcore` | Pure-Go ARMv4T (ARM and Thumb) interpreter for KTF, LGT and SKT native programs. Shared memory belongs to the core, and each cooperative guest thread owns its register context. Instruction quanta are serialized and SVC handlers run outside that lock, so Host waits do not block other guest threads. See [ARM](armcore.md). |
 | `internal/armcore/conformance` | The corpus every armcore backend has to answer identically, with expectations derived from the architecture. |
 | `internal/jvm`, `internal/jvm/classfile` | Java class-file parsing and bytecode execution: SKT MIDP, SKVM and WIPI titles, and the Go objects behind KTF's AOT Java. See [JVM](jvm.md). |
 | `internal/sgsvm` | The SGS script format of SKT GNEX/GVM titles. See [SGS](sgs.md). |
@@ -97,6 +97,8 @@ support tests.
 | `internal/ladder` | The settled-screen and key-response judgment the local acceptance rungs share. |
 | `internal/storageinventory` | The arithmetic the opt-in storage inventory probes share. |
 | `internal/testfixture` | Newly authored archives for tests; no game or original-runtime bytes. |
+| `internal/testlocal` | Gates the tests that need what the repository does not hold — a local archive, a reference binary — on an environment variable; see [testing](testing.md#test-layout). |
+| `internal/platform/wipicrt/wipicrttest` | The WIPI-C engine with no platform above it, and the helpers its tests share with the platforms' tests. |
 | `internal/tools/acceptance` | Runs the local archive probes for all three platforms and records the answers (`make acceptance`). See [testing](testing.md#local-acceptance). |
 | `internal/tools/apiscan` | Reports, per archive, the platform surface a title links against that the runtime does not answer, without playing it. |
 | `internal/tools/distcheck` | Checks that the archives `make dist` wrote are what the repository meant to publish (`make dist-check`). |
@@ -709,11 +711,12 @@ version 9 records paused cursors, frozen output, note envelope ages, finite
 remaining passes, completion counts, media position, pitch sensitivity, RPN and
 NRPN selectors, released keys held by sustain, independent PCM group controls,
 original wave byte charges and fractional sample-frame positions; version 10
-adds the FM voice each sounding note plays and each channel's modulation. Genuine version 6, 7, 8 and 9
-records remain readable, versions 6–8 at their saved whole frames; versions
-6 and 7 derive charges from the available tails, and version 6 invents no PCM
-routing. Earlier versions and mixed shapes are refused. New captures write
-version 10 in both profiles; rollback needs a pre-upgrade checkpoint or normal
+adds the FM voice each sounding note plays and each channel's modulation, and
+version 11 the velocity of each sounding wave. Genuine version 6 to 10 records
+remain readable, versions 6–8 at their saved whole frames and every one before
+11 with its waves at full level; versions 6 and 7 derive charges from the
+available tails, and version 6 invents no PCM routing. Earlier versions and
+mixed shapes are refused. New captures write version 11 in both profiles; rollback needs a pre-upgrade checkpoint or normal
 startup. See [PCM state compatibility](audio.md#live-pcm-track-controls). SKT
 Java checkpoints also keep the bounded Player registry and queued listener events
 as heap roots, without callback closures. The
@@ -757,15 +760,19 @@ the one place where nothing of the guest's is in flight on the Host's own
 goroutine. Capture runs no guest code and does not call `pauseClet`; a load runs
 neither the module's entry, its initializer nor `startClet`.
 
-Java media adds an explicit version 3 runtime envelope that contains the
-unchanged strict version 2 session and client record plus a media ownership and
-notification record. The latter keeps Clip identities, exact completion
-watermarks and queued PlayListener recipients, and validates after guest
-bindings are restored and before workers start. The version 2 reader stays
-strict and reconstructs issued Clip ownership without inventing prior events;
-sessions with no Java media still write that shape. Earlier readers refuse the
-new envelope, so rollback requires a supported older checkpoint or ordinary
-startup. Delivery and GC rules are in
+Java state the strict version 2 session and client record has no field for
+travels in wrapping records, each holding that record unchanged beside what it
+adds: version 3 a media ownership and notification record (Clip identities,
+exact completion watermarks and queued PlayListener recipients, validated after
+guest bindings are restored and before workers start); version 4 the class
+library's tables; version 5 the stroke styles and the last font asked for, and
+version 6 the cards as well; version 7 the timers, their tasks and the
+interrupts not yet thrown. A record is written in the oldest shape that holds
+what the session has, so a session with none of it still writes version 2, and
+every earlier shape loads with the missing state empty. The version 2 reader
+stays strict and reconstructs issued Clip ownership without inventing prior
+events. Earlier readers refuse a newer envelope, so rollback requires a
+supported older checkpoint or ordinary startup. Delivery and GC rules are in
 [Java WIPI listeners](audio.md#java-wipi-playback-listeners). Ordinary save
 contents do not change.
 
@@ -834,6 +841,7 @@ at a platform call, the record names the remainder:
 | monitor | a contended monitor enter | take the lock, then the answer |
 | initializer | a class initializer the platform entered for the thread | finish the nested call, then the answer |
 | function | the C library's run-function call | finish the nested call, then the answer |
+| join | `Thread.join` | wait until the thread it joins has ended, looking again at each turn, then the answer |
 
 A thread whose slice ended on its instruction budget has no platform call above
 its innermost frame and resumes at that instruction with a fresh budget. A
@@ -936,16 +944,17 @@ it through the same `internal/session` calls.
 Two things stand between the rule and a runtime, and every variant handles them
 the same way.
 
-**A write the game issued may still be in the Host.** On LGT and SKT a write
-waits in the buffer the handles on its path share until a flush or close, and a
+**A write the game issued may still be in the Host.** On LGT and SKT Java a
+write waits in the buffer the handles on its path share until a flush or close, and a
 native KTF package's write waits in the platform until a file is closed or a
 frame ends. A checkpoint
 holds no save bytes, so such a write would be lost once the session that made it
 is gone. A quick save and a quick load therefore store it first, through a write
 whose failure is reported: when the store refuses, the step is refused with
 `backend.ErrCheckpointSaveWrite`, the game carries on, and the write is still
-pending in it. The descriptor KTF runtime stores every write before the call
-that made it returns, so it has nothing pending. Nothing the game has not issued
+pending in it. The descriptor KTF runtime and SKT native programs, which share
+its WIPI C file table, store every write before the call that made it returns,
+so they have nothing pending. Nothing the game has not issued
 is written. A write through an output stream is a write to its file on every
 platform, so it is pending like any other.
 
@@ -1028,8 +1037,6 @@ its saves, and the emulator does not correct them:
   now, so the save can hold two points in time.
 - A quick save taken while the game was in the middle of saving repeats the rest
   of that sequence on every load, over the save as it is then.
-- On KTF, `FileSystem.list` and `DataBase.listDataBases` answer the packaged
-  names plus the names this run knew, and do not read the disk.
 - An authentication adapter's issued certificate travels in the slot, because it
   was made for the run and never read from a save.
 - The LGT adapter that keeps a 100-byte file takes that file's original flag and
@@ -1100,7 +1107,8 @@ state caller responsibilities; they add no runtime layer.
 Every file and record surface a title saves through — KTF's WIPI C file table,
 its Java `File` and the earlier native package's files; LGT's C file table,
 Java `File`, streams and `DataBase`; SKT's `XFile`, WIPI `File`, `com.xce.io`
-streams and record stores — keeps the same rule:
+streams and record stores, and the WIPI C file table its native programs share
+with KTF — keeps the same rule:
 
 1. **A write is seen at once.** A write — through a handle, or through an
    output stream on one, which holds nothing back — or a truncation is what
@@ -1133,13 +1141,14 @@ When a surface stores within rule 2 differs by platform:
 
 | Surface | Stored |
 | --- | --- |
-| KTF C table, KTF Java `File`, record stores of every platform | at every write |
+| WIPI C table (KTF and SKT native programs), KTF Java `File`, record stores of every platform | at every write |
 | KTF earlier native package | at the close, at the end of each frame, at the end of the game |
 | LGT C table, Java `File` and streams | at the close or flush, and at the end of the game |
 | SKT `XFile`, WIPI `File`, `com.xce.io` streams | at the close or flush, and at the end of the game |
 
-Two platform contracts stand beside the rule. A KTF C create-mode open of a
-database the archive itself ships does not empty it. The earlier KTF native
+Two platform contracts stand beside the rule. A WIPI C create-mode open (KTF
+and SKT native programs) of a database the archive itself ships does not empty
+it. The earlier KTF native
 package's platform names its files by lower-cased base name, so names that
 differ only by case are one file there by the platform's own contract.
 
@@ -1155,9 +1164,10 @@ session clock needs a new timeline; a backwards timestamp does not rewind events
 already emitted. Paused guest time must not advance because the browser
 disconnects or wall time passes.
 
-KTF uses `guestElapsed()` for both playback and advancement, LGT uses
-`client.clock.now()`, and SKT uses `GuestElapsed()` through `audioNow()` and
-`AdvanceAudio()`. The script runtime uses its own `clock` for both. Keeping each
+KTF titles and SKT native programs use the WIPI-C engine's `GuestElapsed()`
+for both playback and advancement, and the earlier KTF native package its own
+`guestElapsed()`; LGT uses `client.clock.now()`, and SKT Java uses
+`GuestElapsed()` through `audioNow()` and `AdvanceAudio()`. The script runtime uses its own `clock` for both. Keeping each
 pair together prevents a sound from being scheduled in another clock domain and
 remaining indefinitely in the future.
 
@@ -1190,8 +1200,9 @@ not imply that every caller is the Host's frame-loop goroutine.
 
 `FrameUpdate` is an ownership transfer, unlike borrowed `Frame` pixels: a Host
 may keep its RGBA bytes. `FrameSink.Offer` does not block; the Host must detach
-the producer or stop the runtime before closing the channel. KTF sampling and the
-browser encoder use separate retained pixel storage. Ordinary server frames use
+the producer or stop the runtime before closing the channel. The WIPI-C
+engine's sampling (KTF and SKT native programs) and the browser encoder use
+separate retained pixel storage. Ordinary server frames use
 `Session.FrameUpdate` with the same ownership and scale contract. `Force`
 requests an explicit redraw across lifecycle or display-setting boundaries;
 otherwise the encoder can omit an identical consecutive picture. See

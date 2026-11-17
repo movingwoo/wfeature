@@ -288,7 +288,7 @@ handles are reused once a session has issued 4095 of either; an open is refused
 only while 4095 handles of its table are held at once. The WIPI C file table refuses a name that is
 not a save key of its own (`/`, `.`, a `..` component) in every slot, and a
 name with a line break where it would be written into a list (remove, rename,
-mkdir); `MC_fsGetFileStat` reads through the removal list like
+mkdir); `MC_fsFileAttribute` reads through the removal list like
 `MC_fsIsExist`. Table 7 follows the specification's `MC_fs*` order in every
 slot: 11 is `MC_fsTotalSpace` and 15 is `MC_fsTell`, and its directory slots
 are `MC_fsRmDir` 9, `MC_fsList` 10, `MC_fsSetMode` 13 and `MC_fsGetCounts` 14.
@@ -347,7 +347,8 @@ Particular to this platform:
   returns, so neither step has anything to store first. It keeps host copies
   of the saves: the WIPI C file table, the record databases, the Java
   databases, the bytes behind each `File` object, the table of names the
-  session wrote and the five removal and directory lists. A record names them
+  session wrote, the four removal lists, the two directory lists and
+  `jdb/.sizes`. A record names them
   and holds none of their bytes, and a load fills every one from the store.
 - After a load a name has one host store in each table, shared by every handle
   restored for it. A name the store has nothing for keeps its restored store
@@ -359,9 +360,11 @@ Particular to this platform:
   under that store. An open previously made a second store, and the two wrote
   their own record lists over each other's save. The WIPI C record table
   closes a deleted database's handles instead, so it has nothing to keep.
-- `FileSystem.list` and `DataBase.listDataBases` answer the packaged names plus
-  the names this run knew, without reading the disk. After a load they describe
-  the run the checkpoint was taken in.
+- `FileSystem.list` and `DataBase.listDataBases` read the saves in the store as
+  well as the packaged names and the names this session wrote or opened, as
+  [the WIPI storage contract](wipi-storage.md) has every platform list them.
+  After a load they answer the saves as the store has them then, not the run
+  the checkpoint was taken in.
 - A `File` opened in the truncating mode, and a native object opened in the
   mode that empties the file, take at most what they had written after a load,
   from the front of the file as it is. Every other object, including one whose

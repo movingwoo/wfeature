@@ -120,8 +120,9 @@ the byte constructors and `com.xce.io.ByteToCharEUC_KR` share one decoder.
 `m.MIN`, `m.VENDER`, `m.MODEL`, `m.MONDEL`, `m.CARRIER`, `m.COLOR`,
 `m.SK_VM`, `m.EXT_SW`, `m.TYPE` and `com.xce.wipi.version`. `m.SKT_API` stays
 null on purpose. The subscriber number comes from `-number` on the server or
-`WFEATURE_PHONE_NUMBER`, is read on each request, and `m.CARRIER` is derived
-from its prefix (`subscriberCarrier`). Five recognized license-check shapes
+`WFEATURE_PHONE_NUMBER`; a runtime takes it once, when it is built, and answers
+that number for the whole session, and `m.CARRIER` is derived from its prefix
+(`subscriberCarrier`). Five recognized license-check shapes
 are adapted in a session-owned class copy; see
 [SKT license checks](authentication.md#skt-license-checks).
 

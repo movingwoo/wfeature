@@ -132,7 +132,7 @@ place, so that each wait below moves with them:
 | Bound | Value | What it is |
 |---|---|---|
 | `backend.WaitBound` | 15 s | one call a title makes waiting on the clock (a KTF service call; the longest legitimate one is 5.2 s), and so the longest a round of an attached game can still be running when the stop comes |
-| `backend.EndingBound` | 15 s | a title's own ending: SKT `destroyApp` (`destroyWait`), LGT `destroyClet` (`closeWait`) and an LGT Jlet's `destroyApp`, a KTF Jlet's `destroyApp` |
+| `backend.EndingBound` | 15 s | a title's own ending: SKT `destroyApp` (`destroyWait`) and an SKT native program's teardown entry, LGT `destroyClet` (`closeWait`) and an LGT Jlet's `destroyApp`, a KTF Jlet's `destroyApp` |
 | `webhost.StopDeadline` | `WaitBound` + `EndingBound` + 5 s = 35 s | the drain: the games, attached and parked side by side, and the server's own requests; a close still running then is named in the log and left behind |
 | launcher `drainWait` | `StopDeadline` + 5 s = 40 s | how long `stop` waits for the drain before it signals, at each of its three steps |
 | Android `ENDING_WAIT_SECONDS` | 40 s | how long a reopened app waits for the server a finished activity ended; a test holds it past `StopDeadline` |
@@ -153,8 +153,8 @@ seconds after the window closes, whatever the drain is doing (see
 ## Checkpoints
 
 The shared session supports KTF Java/AOT, older descriptor modules and native
-packages, LGT Clets and AOT Java titles, and SKT Java/MIDP/WIPI and GNEX/GVM SGS
-titles ([SKT checkpoints](skt-checkpoints.md)). Each reports
+packages, LGT Clets and AOT Java titles, SKT Java/MIDP/WIPI and GNEX/GVM SGS
+titles, and SKT native programs (Clets) ([SKT checkpoints](skt-checkpoints.md)). Each reports
 `can_checkpoint: true` when the game has a save directory. A `start` with
 `quick_load: true` constructs from the archive's slot without running guest
 startup. The ordinary `resume` command still means reconnecting to a retained
@@ -263,7 +263,8 @@ Start, resume and display-setting changes force presentation even when the pixel
 match. That request survives a full queue until it is accepted, and its queued
 lifecycle answer is written before the forced picture.
 
-KTF additionally offers explicit LCD flushes through `backend.FrameSink` and
+KTF titles and SKT native programs, which share the WIPI-C engine, additionally
+offer explicit LCD flushes through `backend.FrameSink` and
 `session.Options.FrameUpdates`, including while startup or a long callback holds
 the execution lock. Each `FrameUpdate` owns its pixels. Sampling occurs at most
 once per 1/60 wall-clock second, skips unchanged samples, and never waits for the
@@ -507,9 +508,9 @@ recorded play, the alternatives measured and rejected, and their limitations.
 
 In-game saves use the common backend store. The web Host holds a filesystem
 claim for active and parked sessions and for imports. The CLI's shared `run`
-command, `runktf`, `importsaves` and `provision` take the same claim, so a second
-cooperating process cannot write through another live session; `runlgt` and
-`runskt` do not take it.
+command, `runktf`, `runskt` (an SGS title included), `runlgt`, `importsaves` and
+`provision` take the same claim, so a second cooperating process cannot write
+through another live session.
 
 Directory operations also take a shorter filesystem lock: a complete read,
 write, batch, slot write or recovery finishes before another begins. Listing and
@@ -540,8 +541,8 @@ record of no bytes (length zero) apart from a deleted one (the tombstone length)
 decoding returns the first as an empty record and the second as nil, so a restart
 or a quick load does not read a title's empty records as deleted. The encoding is
 unchanged, so saves written by earlier releases read with the meaning they were
-written with. Active KTF and LGT native boundaries keep read failures and refuse
-later writes; SKT RMS and XFile report guest exceptions. Authentication views
+written with. Active KTF, SKT native and LGT native boundaries keep read
+failures and refuse later writes; SKT RMS and XFile report guest exceptions. Authentication views
 keep the error-aware contract.
 
 KTF Java and WIPI-C files and records stage state before publishing mutations.

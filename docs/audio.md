@@ -60,8 +60,10 @@ three-carrier scan delayed everything after such a message by one to fifteen
 minutes, with the same notes in the same order. The setup reader knew only the
 Mobile framing and dropped every HPS setup message.
 
-The page configures no device from SysEx, so the audible effect of the repair
-is timing. Checkpoints hold the event lists already decoded for loaded sounds:
+The page configures no device from SysEx. When the repair was made its audible
+effect was timing; since 2026-11-01 the same framing also decides which of a
+handset score's own FM voices are read from its setup chunk
+([the file's own voices](#the-files-own-voices)). Checkpoints hold the event lists already decoded for loaded sounds:
 a restored sound keeps its old list, only newly loaded sounds use this reading,
 and no checkpoint field changed. The corpus measurements and the silent files
 that led here are in the [audit](history/audio.md#sounds-without-audible-events).
@@ -531,10 +533,10 @@ and its rhythm channels carry the drum key in the program rather than the note.
 A hit's loudness is derived from volume and expression, because a handset
 rhythm channel has no velocity.
 
-`smaf_test.go` is the reference implementation's own test suite carried over.
-A port that only proves it does not crash on real files would not catch a
-dialect decoded plausibly but wrongly; each carried-over case pins one such
-reading.
+`smaf_test.go` pins the parser's three sequence dialects and the tone map's
+conversions. A check that only proves the decoder does not crash on real files
+would not catch a dialect decoded plausibly but wrongly; each case pins one
+such reading.
 
 ## The Host boundary
 
@@ -574,9 +576,9 @@ output boundary below also keeps the intervals between those events.
 operations, including MIDI, PCM, gain, cancellation and resumed voices. A score
 event uses its absolute guest deadline; a command uses its synchronized guest
 instant. `SetPlaybackRate` drains the old rate before rebasing future
-intervals and changes neither pitch nor PCM sampling rate. All five execution
-paths (KTF Java/C, the earlier KTF native package, LGT, SKT Java/SKVM and SGS)
-initialize this mapping before playback and restore it at the saved guest
+intervals and changes neither pitch nor PCM sampling rate. All six execution
+paths (KTF Java/C, the earlier KTF native package, LGT, SKT Java/SKVM, SKT
+native C programs and SGS) initialize this mapping before playback and restore it at the saved guest
 instant (`RebasePlaybackClock`), without changing the portable save format.
 Restored overdue deadlines may be negative relative to the new output epoch's
 zero.
@@ -642,11 +644,12 @@ from 0.10 s to 0.23 s and back to about 0.10 s three to four seconds later; an
 ordinary session moves the anchor a few tens of milliseconds as its first
 batches settle ([runs](testing.md#anchor-steering)).
 
-The settings panel's 화면·소리 맞춤 slider moves the picture and the sound
+The settings panel's 🎬 사운드 싱크 slider moves the picture and the sound
 against each other (`web/av-sync.js`), for an output the browser cannot see
 into: a Bluetooth headset leaves the sound behind the picture by more than the
 lead. Its setting, −500 to +1,000 ms in steps of 10, is held for the browser
-(`wfeature:avSync`) and carried by the settings file. A positive value holds
+(`wfeature:avSync`) and carried by the settings file; the slider shows no
+figure, since the player moves it until the two agree. A positive value holds
 each composed picture back that long: the receiver lends one canvas, so a held
 picture is a copy, shown on the animation frame it falls due with the dirty
 area of every picture it skipped, at most 64 MiB of copies before the oldest
@@ -1328,8 +1331,8 @@ bend changes retune held melodic notes and release tails without retriggering.
 Percussion and PCM ignore MIDI bend.
 
 CC121 (Reset All Controllers) restores expression 127, sustain off, centered
-bend and null RPN/NRPN selection, and keeps volume, pan, program and the
-configured pitch sensitivity. These rules follow the
+bend, modulation zero and null RPN/NRPN selection, and keeps volume, pan,
+program and the configured pitch sensitivity. These rules follow the
 [MIDI 1.0 specification](https://midi.org/midi-1-0-detailed-specification),
 [reset recommendation](https://midi.org/response-to-reset-all-controllers) and
 [data increment/decrement recommendation](https://midi.org/response-to-data-increment-decrement-controllers).
@@ -1542,8 +1545,10 @@ method address or receiver vtable slot; cached metadata alone cannot supply
 either. Imported event constants receive all eight standard values rather than
 uninitialized zeroes.
 
-LGT checkpoints with Java Clips use a version-3 media envelope around the
-unchanged strict version-2 session/client records. It saves completion
+LGT checkpoints with Java Clips carry a media record beside the unchanged
+strict version-2 session/client records: in a version-3 envelope, or inside
+the version-4 to version-7 records a session writes when it also holds
+class-library tables, screen state or timers. It saves completion
 watermarks and queued recipient snapshots; the reader validates every owner
 and target against real guest class/interface metadata after restoring
 bindings and before workers start, and requires each watermark to equal its
@@ -1551,8 +1556,8 @@ audio count. Repeated adoption keeps the watermark. The reader also accepts the
 previous strict version-2 shape, infers ownership only from issued Clip objects
 and starts at the recorded completion count without inventing historical
 events; a missing or already freed legacy owner cannot be recovered. Sessions
-without Java media still write version 2. Older binaries refuse the new
-envelope; rollback requires an older supported checkpoint or an ordinary start.
+that hold none of these still write version 2. Older binaries refuse the newer
+shapes; rollback requires an older supported checkpoint or an ordinary start.
 Ordinary save files are unchanged.
 
 ## Transient tones and capability queries
@@ -1592,8 +1597,8 @@ empty media is refused rather than yielding an inert player.
   `Player` registrations; they use the vendor `AudioSystem`/`AudioClip`
   surface, which `runskt -audio` records. Measuring the unused MIDP surface
   was why `runskt -audio` was once judged unnecessary.
-- **Source mutes reach no sound.** KTF C and LGT remember a source's mute state
-  and answer it back; neither routes it to a clip, because the titles that set
+- **Source mutes reach no sound.** KTF C, SKT native C and LGT remember a
+  source's mute state and answer it back; none routes it to a clip, because the titles that set
   one go on playing every clip they have (see
   [the evidence](history/audio.md#source-mutes-and-the-ktf-c-media-slots-read-from-callers)).
   The KTF Java `Volume` mute and default-volume extensions stay stubs: no local
@@ -1623,7 +1628,7 @@ empty media is refused rather than yielding an inert player.
   gate its internal note-off, but whether a stream wave stops there or plays its
   sample out is the handset's choice, as are short-sample looping and
   same-channel retrigger. A hard cutoff would trim more than a tenth from 5,042
-  of the 8,752 local wave triggers, so the natural tail stays until a handset is
+  of the 8,752 PCM-track wave triggers counted on 2026-10-09, so the natural tail stays until a handset is
   heard, and a sound of PCM tracks alone lasts until its samples have played
   ([PCM-only sound length](#a-sound-of-pcm-tracks-alone-lasts-as-long-as-its-samples)).
   Stream waves follow their note's velocity

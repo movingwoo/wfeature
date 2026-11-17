@@ -511,6 +511,16 @@ Unknown exchanges still fail, and the authentication diagnostic opt-out disables
 this behavior. See the [protocol evidence](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility)
 and [the second revision](history/lgt.md#lgt-new-archives-2026-10-19-certificate-message).
 
+Two more recognized native modules get a packaged file adjusted, by exact
+fingerprint. One is served the certificate its archive ships under a directory
+at the bare name it opens, unless the application directory already mounts one
+(`lgt.packaged_certificate`, [evidence](history/lgt.md#lgt-new-archives-2026-11-03-packaged-certificate));
+the other reads its packaged record table with the end sequence its search
+stops on appended (`lgt.record_table_terminator`,
+[evidence](history/lgt.md#lgt-qa-2026-10-28-unterminated-record-table)). Only
+the archive's copy is adjusted: a file the title writes under the same name is
+a save, and it still wins.
+
 MC_mdaClipFree returns a C clip's record to the platform arena. A clip keeps at
 most 64 undelivered callback transitions; a full queue drops the oldest. The C
 string functions (`strchr` through `strcat`, `atoi`) and `%s` read with

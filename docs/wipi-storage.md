@@ -2,9 +2,11 @@
 
 WIPI is one standard across the three carriers, so a title's files, directories
 and databases answer the same way on every platform here. This page is that
-contract. It covers WIPI C `MC_fs*` (KTF and LGT), the WIPI C record table
-`MC_db*` (KTF; LGT's is not served, see [LGT](lgt.md)) and WIPI Java
-`org.kwis.msp.io.File`, `FileSystem` and `org.kwis.msp.db` (all three). It does
+contract. It covers WIPI C `MC_fs*` (KTF, LGT and the SKT Clet), the WIPI C
+record table `MC_db*` (KTF; LGT answers only `MC_dbListDataBases`, with no
+databases, and the SKT Clet none of it; see [LGT](lgt.md) and
+[SKT native](skt-native.md)) and WIPI Java `org.kwis.msp.io.File`,
+`FileSystem` and `org.kwis.msp.db` (all three). It does
 not cover SKVM `XFile`, MIDP RMS or BREW, which have their own documents.
 
 The specification decides wherever it speaks

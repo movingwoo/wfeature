@@ -78,7 +78,7 @@ slots and their meaning, read off the two examples' call sites:
 
 | slot | table | notes |
 |---|---|---|
-| 0 | kernel | numbered as the KTF kernel interface on every slot either title calls |
+| 0 | kernel | numbered as the KTF kernel interface on every slot through 31 either title calls; 37 (a setting by name, accepted) and 50 (a browser launch, refused) are the handset's own |
 | 1 | graphics | the KTF graphics table through `MC_grpPostEvent` at 36, then the input-method functions and the handset's own additions |
 | 3 | filesystem | the specification's `MC_fs*` order, with `MC_fsIsExist` and `MC_fsTell` at 15 and 16 exchanged from the KTF table |
 | 4 | misc | `MC_miscBackLight` at 0 |
@@ -160,8 +160,10 @@ asks whether a sprite exists and opens data files, all of them resources named
 `/data/...` and `/png/...` — so `ProgramFiles` exposes both
 (`internal/platform/skt/native.go`).
 
-The engine is SKT's own, so none of this is on any other vendor's path: the KTF
-and LGT platforms are untouched. The identity-compatibility code regions are the
+What is the Clet's own — its root table and numbering, its C library, its
+entry points and its checkpoint codec — is on no other vendor's path, and LGT
+is untouched; the WIPI-C engine beneath it is the one KTF's C titles run on
+(see Limitations). The identity-compatibility code regions are the
 only guest bytes the loader changes, and only for the exact executables the
 registry names (see Identity compatibility).
 
@@ -290,10 +292,11 @@ event entry or on its frame timer.
 ## Cheats
 
 A Clet runs on the ARM core like the other native titles, so the cheat panel
-and the CLI's `-cheat` attach to it through the adapter they all share
+attaches to it through the adapter they all share
 (`internal/platform/armcheat`): a search sweeps the committed writable pages,
 a freeze is rewritten after every service round, and a watch reports the store
-that moved an address. The program's code and its data are both labelled as
+that moved an address. The CLI's `-cheat` belongs to the platform commands,
+and none of them opens a Clet. The program's code and its data are both labelled as
 the client's and both swept, because the loader maps them side by side and
 adjacent pages come back as one region; the engine's own regions are named the
 way a KTF title's are. A saved table is named after the program and keyed by
