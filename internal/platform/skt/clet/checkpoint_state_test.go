@@ -205,6 +205,37 @@ func TestProgramServiceAllowanceOverridesAndRoundTrips(t *testing.T) {
 	}
 }
 
+func TestArchiveSubscriberSurvivesCheckpoint(t *testing.T) {
+	store, _ := backend.NewMemorySaveStore(nil)
+	program := fixtureProgram(t, testfixture.SKTCletOptions{FieldAtStart: true})
+	program.SubscriberNumber = "0101234567"
+	started := fixtureSession(t, program, store)
+	defer started.Close()
+	for _, name := range []string{"MIN", "PHONENUMBER"} {
+		if got, exists := started.Client.SystemProperty(name); !exists || got != program.SubscriberNumber {
+			t.Fatalf("%s does not use the archive's subscriber", name)
+		}
+	}
+	checkpoint, err := started.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := SessionOptions{Clock: wipicrt.NewManualClock(time.Time{})}
+	prepared, err := PrepareCheckpoint(program, checkpoint, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Discard()
+	if prepared.session.Client.SubscriberNumber != program.SubscriberNumber {
+		t.Fatal("restored session lost the archive's subscriber")
+	}
+
+	program.SubscriberNumber = "01000000000"
+	if _, err := PrepareCheckpoint(program, checkpoint, options); !errors.Is(err, backend.ErrCheckpointIdentity) {
+		t.Fatalf("restore with a different archive subscriber: %v", err)
+	}
+}
+
 // A record that names the wrong program, settings or layout is refused before
 // anything of it is used.
 func TestCheckpointRefusesAnotherProgramOrSetting(t *testing.T) {

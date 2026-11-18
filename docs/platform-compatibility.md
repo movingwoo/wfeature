@@ -69,7 +69,7 @@ each entry is the authoritative index; this table groups them by fix.
 | `skt.native_discard_owner_state` | 4 | Withholds a recognized device dump's install directory so the game starts fresh | [SKT native](skt-native.md#skt-native-identity-discard) |
 | `skt.native_save_identity` | 1 | Lets a recognized native executable accept its packaged save's handset digits | [SKT native](skt-native.md#skt-native-identity-save) |
 | `skt.native_cert_subscriber` | 1 | Lets a recognized native executable accept its cert.c2s subscriber field (error 5001) | [SKT native](skt-native.md#skt-native-identity-cert) |
-| `skt.native_usim_subscriber` | 1 | Lets a recognized native executable accept its usimcert.c2s subscriber comparison (error 1004) | [SKT native](skt-native.md#skt-native-identity-cert) |
+| `skt.native_paired_certificate` | 1 | Derives a session handset identity from the recognized paired certificates for the guest's original checks (errors 1004 and 3003) | [SKT native](skt-native.md#skt-native-identity-paired-certificate) |
 | `skt.native_certdata_subscriber` | 1 | Lets a recognized ARM native executable accept its CERTIDATA record subscriber comparison | [SKT native](skt-native.md#skt-native-identity-cert) |
 | `skt.native_service_allowance` | 1 | Raises a recognized native executable's Host service step allowance for a one-shot load past the default ceiling | [SKT native](skt-native.md#skt-native-identity-load-allowance) |
 

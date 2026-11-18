@@ -207,21 +207,13 @@ registry names (see Identity compatibility).
 
 ## Identity compatibility
 
-A native package is a handset's installed directory copied whole, so what the
-title wrote there is the previous owner's state, bound to the handset it was
-dumped from, and a different handset's player cannot use it: the title either
-rejects a foreign save (an error that stops it) or needs a foreign-subscriber
-field accepted. These are the same class of offline authentication the KTF and
-LGT platforms already adapt ([authentication](authentication.md)), and they are
-handled the same way — the exact executable is recognized by its SHA-256 in the
-compatibility registry ([code-revision compatibility](platform-compatibility.md)),
-and the fix is scoped to that executable, so nothing else is touched. Two shapes
-of fix are used, neither inventing data and neither changing a packaged file.
-
-The two local titles need different shapes, which is why this is per-title
-rather than one rule: one carries a certificate the other does not, so a single
-"ignore the owner's files" rule would strip a certificate the title cannot boot
-without.
+A native package may carry certificates or saves tied to the handset it was
+copied from. The compatibility registry identifies verified executable revisions
+by SHA-256 and selects the handling each format needs. A recognized certificate
+pair can supply that session's handset identity, some comparisons have a scoped
+code fix, and specific device dumps start with fresh save data. The archive and
+its files are left intact. See [authentication](authentication.md) and
+[code-revision compatibility](platform-compatibility.md).
 
 <a id="skt-native-identity-discard"></a>
 
@@ -267,20 +259,29 @@ executable accepts only the subscriber comparison, so the other two still run,
 and reports `skt-native-certificate`. No certificate is minted and no file is
 changed.
 
-Two other executables check a certificate the same way and are adapted the same
-way, each by its own registered fix on its own window of code
-([history](history/skt.md#skt-new-archives-2026-11-18-certificates)):
+The `skt.native_certdata_subscriber` rule handles an ARM title's `CERTIDATA`
+record inside its packaged container. It accepts the subscriber comparison at
+startup after the record has been read and verified, and reports
+`skt-native-certificate`. See [the recorded-identity replay](history/skt.md#skt-new-archives-2026-11-18-registry-review).
 
-- `skt.native_usim_subscriber` — a `usimcert.c2s` certificate whose subscriber
-  field, compared with the handset's number, reports error 1004 on a mismatch
-  and stops the title on its first screen. The decode runs; the one comparison's
-  rejection becomes an acceptance.
-- `skt.native_certdata_subscriber` — an ARM title's `CERTIDATA` record, read out
-  of its packaged container at start-up and compared with the handset's number;
-  a mismatch leaves the title on a blank screen. The record's presence and the
-  two checks ahead of the subscriber comparison still run; only that comparison
-  is accepted. Both report `skt-native-certificate`, mint no certificate and
-  change no file.
+<a id="skt-native-identity-paired-certificate"></a>
+
+### Packaged certificate pair (`skt.native_paired_certificate`)
+
+One recognized reader uses `MIN` for its 20-byte `usimcert.c2s` (error 1004)
+and `PHONENUMBER` for its 31-byte `cert.c2s` (error 3003). The first record's
+ten-digit padded field determines a bounded set of candidates. The second
+record's checksum must identify exactly one. With both records present and
+valid, the loader supplies that value for both properties in this session.
+The guest runs its original certificate checks. With an absent, invalid, or
+ambiguous pair, or with authentication compatibility disabled, it receives
+the configured handset value.
+
+Quick saves capture the session's identity with its guest memory. The restore
+path checks it against the archive pair. A quick save made with the earlier
+comparison patch for this revision needs a new session because the checkpoint
+identifies the patched executable image. See the
+[evidence and replay](history/skt.md#skt-new-archives-2026-11-18-certificates)
 
 <a id="skt-native-quick-save"></a>
 
@@ -380,9 +381,8 @@ that needs the server stays out of reach.
 One local title reaches its first stage, with its certificate accepted and the
 dumping handset's saves loaded, and then builds the stage in one timer callback
 that neither returns to the Host nor polls the clock: it decodes its own tables
-with a bit-serial routine the handset ran in hardware, which takes about 1.26
-billion ARM steps, more than the five hundred million a single Host service call
-is given, and so is refused as a runaway would be. Raising the allowance for
+with its own bit-serial routine, which takes about 1.26 billion ARM steps,
+more than the five hundred million a single Host service call is given, and so is refused as a runaway would be. Raising the allowance for
 every title would weaken the bound that stops a real runaway, so the registry
 raises it for this one recognized executable instead
 (`NativeHeavyLoadAllowance`, in `internal/platform/skt/native_identity.go`); the

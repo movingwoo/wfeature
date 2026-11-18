@@ -505,6 +505,9 @@ func (saved clientState) validate(client *Client, options SessionOptions) error 
 	if len(saved.Subscriber) > 64 || !bytes.Equal([]byte(saved.Subscriber), bytes.ToValidUTF8([]byte(saved.Subscriber), nil)) {
 		return fmt.Errorf("SKT Clet checkpoint subscriber is invalid")
 	}
+	if client.clet.program.SubscriberNumber != "" && saved.Subscriber != client.SubscriberNumber {
+		return fmt.Errorf("SKT Clet checkpoint handset identity differs from the archive: %w", backend.ErrCheckpointIdentity)
+	}
 	if saved.Root < wipicrt.PlatformDataBase || uint64(saved.Root)+cletRootSlots*4 > uint64(wipicrt.PlatformDataBase)+wipicrt.PlatformDataSize || saved.Root&3 != 0 {
 		return fmt.Errorf("SKT Clet checkpoint root table is outside the platform data")
 	}

@@ -56,17 +56,6 @@ var nativeIdentityFixes = []nativeIdentityFix{
 		offset: 0x1774e, window: "00 28 06 d0 36 4b 52 46 13 60", relax: 2, replacement: "06 e0",
 	},
 	{
-		// A `usimcert.c2s` subscriber comparison on another executable, which
-		// reports error 1004. The certificate's field is decoded and compared
-		// with the handset's number through the misc string compare; a match
-		// returns 1 and a mismatch returns 0, which stops the title on its
-		// first screen. The mismatch's `movs r0, #0` becomes `movs r0, #1`, so
-		// the one comparison is accepted while the certificate's presence and
-		// its decode still run.
-		fix: compatibility.SKTNativeUSIMSubscriber, status: backend.AuthenticationSKTNativeCertificate,
-		offset: 0x14fc6, window: "00 28 01 d1 01 20 00 e0 00 20", relax: 8, replacement: "01 20",
-	},
-	{
 		// An ARM title's CERTIDATA record comparison, run at start-up: the
 		// record is read out of the title's packaged container, its field is
 		// compared with the handset's number through the misc string compare,
@@ -160,7 +149,7 @@ func (executable *NativeExecutable) DiscardsOwnerState() bool {
 // NativeHeavyLoadAllowance is the Host service step allowance a title the
 // registry marks with skt.native_service_allowance is given, in place of the
 // engine's default. One local title's first stage load — its own bit-serial
-// decryption of its tables, which the handset ran in hardware — takes about
+// decryption of its tables — takes about
 // 1.26 billion ARM steps in a single timer callback that neither returns to the
 // Host nor polls the clock, past the default ceiling that stops a runaway. This
 // is a ceiling for that one load, not a figure it approaches every call.

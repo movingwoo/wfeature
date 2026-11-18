@@ -349,9 +349,9 @@
         "sha256": "43352886f4e8575cd4d7cc6ee5128e80594cd1d73d6eadfe9a0c2b14fc64ba51"
       },
       "fixes": [
-        "skt.native_usim_subscriber"
+        "skt.native_paired_certificate"
       ],
-      "evidence": "docs/skt-native.md#skt-native-identity-cert"
+      "evidence": "docs/skt-native.md#skt-native-identity-paired-certificate"
     },
     {
       "id": "skt-native-save-001",

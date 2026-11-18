@@ -14,9 +14,8 @@ import (
 // code it was linked at, which is the placement the executable's own
 // relocations describe.
 //
-// Unless authentication compatibility is turned off, a recognized executable's
-// identity comparison is accepted here, in the code before it is loaded; see
-// skt.NativeExecutable.ApplyIdentityCompatibility.
+// Authentication compatibility can bind the handset identity from a pair of
+// packaged certificates or apply a recognized comparison fix before loading.
 func sktNativeProgram(archive []byte, disableAuthentication bool) (clet.CletProgram, *skt.NativeArchive, error) {
 	opened, err := skt.OpenNative(archive)
 	if err != nil {
@@ -28,9 +27,14 @@ func sktNativeProgram(archive []byte, disableAuthentication bool) (clet.CletProg
 		return clet.CletProgram{}, nil, err
 	}
 	authentication := backend.AuthenticationOff
+	var subscriber string
 	if !disableAuthentication {
 		if authentication, err = executable.ApplyIdentityCompatibility(code); err != nil {
 			return clet.CletProgram{}, nil, err
+		}
+		subscriber = opened.PairedCertificateSubscriber()
+		if subscriber != "" {
+			authentication = backend.AuthenticationSKTNativeCertificate
 		}
 	}
 	dataAddress := clet.ImageBase + skt.NativeDataLink
@@ -58,10 +62,11 @@ func sktNativeProgram(archive []byte, disableAuthentication bool) (clet.CletProg
 			Paint:   entry(executable.Entries.Paint),
 			Event:   entry(executable.Entries.Event),
 		},
-		Resources:      executable.Resources,
-		ResourceOrder:  executable.ResourceOrder,
-		Files:          opened.ProgramFiles(),
-		Authentication: authentication,
-		ServiceSteps:   executable.ServiceAllowance(),
+		Resources:        executable.Resources,
+		ResourceOrder:    executable.ResourceOrder,
+		Files:            opened.ProgramFiles(),
+		Authentication:   authentication,
+		SubscriberNumber: subscriber,
+		ServiceSteps:     executable.ServiceAllowance(),
 	}, opened, nil
 }

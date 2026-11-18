@@ -3842,18 +3842,12 @@ Thirteen SKT archives arrived together, most of which failed to start: two GNEX
 script packages, three SKVM MIDlets and eight native packages. Before this
 record two native executables had been read; the eight new ones showed three
 more header layouts and ten platform answers the engine did not have. Eleven
-of the thirteen now start, and ten of the native and MIDlet titles reach play
-(title screen, menus, a new game, and its first scene or level, driven by
-scripted keys on the manual clock) — the last of them the ARM title, which
-reaches its stage once it runs under its own service allowance
-([the heavy load](#skt-new-archives-2026-11-18-load-allowance)). An eleventh
-reaches its title screen and stops at a second certificate when a game is
-started. Three had a certificate or license that named the handset the dump was
-taken from, adapted the way the platform's other offline-authentication fixes
-are, at the user's decision that this is the same class the project has always
-supported ([certificates](#skt-new-archives-2026-11-18-certificates)). The rest,
-and why, are in [the heavy load](#skt-new-archives-2026-11-18-load-allowance)
-and [what was left as it was](#skt-new-archives-2026-11-18-unchanged).
+of the thirteen start, and all eight native titles plus two SKVM titles reach
+play under scripted keys on a manual clock. One native title needs a longer
+[stage load allowance](#skt-new-archives-2026-11-18-load-allowance), and one
+validates a pair of certificates using the session identity recovered from
+the archive. A third SKVM title reaches its network-only menu. Two GNEX
+packages use a later script format.
 
 <a id="skt-new-archives-2026-11-18-layout"></a>
 
@@ -3968,29 +3962,29 @@ fix one earlier title already has.
 
 ### Certificates of another handset
 
-Three more titles check a certificate or license that names the dumping handset,
-and are adapted the way the KTF and LGT platforms and the earlier SKT native
-executable already are ([authentication](../authentication.md)): the exact
-executable is recognized by its SHA-256, one comparison is accepted in the code
-before it is loaded, every other check still runs, and no packaged file is
-changed. The decision to support these, rather than report them as the handset's
-own refusal, is the user's (2026-11-18): it is the same class the project has
-adapted all along.
+Three more titles check a certificate or license linked to the dumping handset.
+The native rules identify a recognized executable by SHA-256. The SKVM rule
+identifies a complete compiled license-check method. See
+[authentication](../authentication.md).
 
-- **An SKVM MIDlet, `MIDlet-Key4`.** Its license method is the four-generation
-  key check `skt-license` already recognizes, compiled with the digest object
-  and the subscriber in other local slots, so its normalized shape is a new
-  fingerprint (`1f44e007…`). With the fingerprint added it reports `skt-license`,
-  passes, and loads its packaged save to the snow field and a fight. The final
-  `String.equals` becomes `pop2; iconst_1; nop` in a session-owned class copy, as
-  the other layouts do; the digest still runs.
-- **A native title, `usimcert.c2s`.** It opens the certificate, reads the MIN,
-  decodes a field and compares it, and reports error 1004 on its first screen
-  when they differ. The recognized executable (`43352886…`,
-  `skt.native_usim_subscriber`) accepts that one comparison — its mismatch
-  `movs r0, #0` becomes `movs r0, #1` — so the title passes to its own offline
-  dialog ("세이브 복구 없이 초기 상태로 진행하시겠습니까?") and its title screen.
-  The certificate's presence check and its decode still run.
+- **An SKVM MIDlet, `MIDlet-Key4`.** A shorter four-generation license check
+  uses a different control-flow and property-read layout (`1f44e007…`).
+  With that full-method fingerprint it reports `skt-license` and loads its
+  packaged save to the snow field and a fight. The final `String.equals`
+  becomes `pop2; iconst_1; nop` in a session-owned class copy. The digest
+  still runs.
+- **A native title, `usimcert.c2s` and `cert.c2s`.** With the default
+  handset value the original first comparison reports 1004. The earlier
+  comparison fix reached the title screen, then the 31-byte application
+  certificate failed its integrity check with 3003. The 20-byte USIM
+  certificate is itself keyed by `MIN`. Its ten-digit field and padding
+  narrowed the archive to four candidates. The application certificate's
+  checksum picked one. Supplying it as `MIN` and `PHONENUMBER` made the
+  original comparison, checksum, and final comparison all succeed. The
+  `skt.native_paired_certificate` rule derives it at load time. The ordinary
+  CLI route with the default Host settings reached the first puzzle and
+  results screen. A quick save in the puzzle restored the exact frame and
+  continued taking input.
 - **A native title, `CERTIDATA`, ARM.** It reads a `CERTIDATA` record out of its
   packaged `kickass` container, compares it with `PHONENUMBER`, and leaves a
   blank screen on a mismatch. The recognized executable (`a3d70df6…`,
@@ -4002,8 +3996,7 @@ adapted all along.
   its own service allowance, its first stage and a fight
   (see [the heavy load](#skt-new-archives-2026-11-18-load-allowance)).
 
-Both native cert fixes report `skt-native-certificate`; neither mints a
-certificate or changes a file.
+Both native certificate rules report `skt-native-certificate`.
 
 <a id="skt-new-archives-2026-11-18-load-allowance"></a>
 
@@ -4018,9 +4011,8 @@ refused the way a runaway guest is, by `ErrServiceStepLimit`, at the same place 
 title that busy-waits forever is stopped.
 
 A profile of that callback is 84% one of the title's own routines: a bit-serial
-block cipher — eight 1-bit permutation passes per byte over its tables, the kind
-a handset ran in a hardware block the emulator runs as instructions — with its
-palette blits making up most of the rest. The whole load is about 1.26 billion
+block cipher — eight 1-bit permutation passes per byte over its tables, executed
+as ordinary guest instructions — with its palette blits making up most of the rest. The whole load is about 1.26 billion
 steps, the engine not idling in it. So the default allowance is not raised for
 every title, which would weaken the bound that stops a real runaway; the
 registry raises it for this one recognized executable
@@ -4033,6 +4025,43 @@ restore alike, so a checkpoint of it stays compatible
 (`TestProgramServiceAllowanceOverridesAndRoundTrips`). The LGT edition of the
 same title decodes its tables the same way, from a packaged `_DAT_DES` resource.
 
+<a id="skt-new-archives-2026-11-18-registry-review"></a>
+
+### Review of the compatibility rules
+
+- **Packaged saves.** Restoring all three install directories reproduced two
+  startup stalls and the third title's different error screen. A 240-tick
+  replay kept the dump's audio settings file with the same final frame as a
+  fresh start in each title. Omitting the first suspect file in each of the two
+  stalling titles still left a stall. The third booted to the same frame with
+  just its two startup save files omitted. Its other save slots were outside
+  that replay. A narrower save policy needs the formats and ownership of the
+  later files verified before it exposes them. There is no safe package-wide
+  rule based on file extensions or the presence of a save.
+- **ARM certificate.** The original code reads the container's `CERTIDATA`
+  entry, decrypts it, and checks its 16-byte digest before it compares the
+  subscriber. A probe read the validated field at that comparison. Using
+  it as the session's handset value with the original executable produced
+  148 frames in 150 ticks. A checked container and certificate reader could
+  replace the comparison fix. The packaged USIM pair uses a different
+  record format.
+- **ARM service allowance.** A second replay hit the 500,000,000-step
+  limit in the stage-load timer. With the registered limit, that tick used
+  1,260,830,867 ARM instructions and the title presented its stage and
+  dialogue. The timer has no yield or clock call where the Host can split
+  it. Faster ARM execution alone would still charge those instructions to
+  the same limit. Resumable callbacks would need their own continuation and
+  runaway policy. The verified limit increase is scoped to this executable.
+- **SKVM license.** The two four-generation shapes have 365 and 143
+  instructions, nine and six branches, and 19 and nine application-property
+  reads. Canonicalizing local slots alone would still leave different
+  methods. The matcher keeps the full shape for each revision.
+
+A focused before-and-after `make acceptance` run over the six archives
+covered by these rules had identical outcomes. All six booted and sustained
+a frame. The animation-based input probe skipped two changing screens. The
+scripted puzzle replay above independently exercised gameplay and restore.
+
 <a id="skt-new-archives-2026-11-18-unchanged"></a>
 
 ### What was left as it was
@@ -4042,21 +4071,6 @@ same title decodes its tables the same way, from a packaged `_DAT_DES` resource.
   on the batch CLI against 17 ms for other MIDlets, which is its own
   `Thread.sleep` on the event thread between `callSerially` frames. There is no
   server to reach.
-- **The `usimcert.c2s` title's second certificate.** Past the accepted
-  comparison it shows its title screen, and starting a game shows an
-  authentication error, 3003, and returns to the title. That error is a second
-  check, on a packaged `cert.c2s` (31 bytes, high entropy): the title reads it,
-  runs a routine that both verifies an embedded checksum and lays the record's
-  bytes out as a structure, and reports 3003 when the checksum does not match.
-  Flipping the checksum branch to accept, the way the subscriber comparisons are
-  accepted, is not enough here: the record is keyed to the dumping handset, so on
-  another handset the bytes decode wrong, and the title, let past the checksum,
-  then faults following a pointer the decoded record no longer holds (a probe
-  that forces the branch reaches a read of unmapped memory). Accepting this one
-  needs the record decoded under its original handset, which the subscriber
-  comparison does not supply, so it is left as it was pending more reading of
-  how the record keys itself. The title plays through its own offline dialog to
-  its title screen; a new game is what 3003 stops.
 - **The two GNEX packages** are a later script format than the SGS runtime
   reads: after a 32-byte block carrying a digest comes a version-4 header with
   32-bit region offsets, in scripts of about 400 KB, where the runtime reads
