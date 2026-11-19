@@ -75,7 +75,7 @@ func checkpointVariant(client *Client) uint16 {
 
 func validAuthentication(status string) bool {
 	switch backend.AuthenticationStatus(status) {
-	case backend.AuthenticationOff, backend.AuthenticationUnsupported, backend.AuthenticationLGTOptions,
+	case backend.AuthenticationOff, backend.AuthenticationUnsupported, backend.AuthenticationGuestManaged, backend.AuthenticationLGTOptions,
 		backend.AuthenticationLGTCertificate100, backend.AuthenticationLGTCertificate58,
 		backend.AuthenticationLGTNotification, backend.AuthenticationLGTHandshake,
 		backend.AuthenticationLGTSaveSubscriber, backend.AuthenticationLGTCertificateMessage:

@@ -133,94 +133,69 @@ func TestCertificate58RequiresConnectedContracts(t *testing.T) {
 	}
 }
 
-func TestCertificate58StorePreservesCertificateAndLedgerMembership(t *testing.T) {
-	for _, existing := range []bool{false, true} {
-		for _, membership := range []bool{false, true} {
-			base := backend.NewDirectorySaveStore(t.TempDir())
-			original := bytes.Repeat([]byte{0xa5}, 58)
-			if existing {
-				if err := base.StoreSave(authenticationCertificate58Key, original); err != nil {
-					t.Fatal(err)
-				}
-			}
-			ledger := []byte("ordinary.dat")
-			if membership {
-				ledger = []byte("audio.adt\nordinary.dat")
-			}
-			for _, key := range []string{fileRemovedKey, fileCreatedKey} {
-				if err := base.StoreSave(key, ledger); err != nil {
-					t.Fatal(err)
-				}
-			}
-			store, ok := newAuthenticationCertificate58Store(base, nil, "01012345678")
-			if !ok {
-				t.Fatal("valid certificate rejected")
-			}
-			got, _ := store.LoadSave(authenticationCertificate58Key)
-			cryptCertificate58(got)
-			if string(got[40:52]) != "01012345678\x00" {
-				t.Fatalf("MIN = %q", got[40:52])
-			}
-			if existing {
-				decoded := bytes.Clone(original)
-				cryptCertificate58(decoded)
-				if !bytes.Equal(got[:40], decoded[:40]) || !bytes.Equal(got[52:], decoded[52:]) {
-					t.Fatal("opaque certificate bytes changed")
-				}
-			}
-			if err := store.StoreSave(authenticationCertificate58Key, []byte("guest rewrite")); err != nil {
+func TestCertificate58StorePreservesLedgerMembership(t *testing.T) {
+	for _, membership := range []bool{false, true} {
+		base := backend.NewDirectorySaveStore(t.TempDir())
+		ledger := []byte("ordinary.dat")
+		if membership {
+			ledger = []byte("audio.adt\nordinary.dat")
+		}
+		for _, key := range []string{fileRemovedKey, fileCreatedKey} {
+			if err := base.StoreSave(key, ledger); err != nil {
 				t.Fatal(err)
 			}
-			for _, key := range []string{fileRemovedKey, fileCreatedKey} {
-				if err := store.StoreSave(key, []byte("audio.adt\nprogress.dat")); err != nil {
-					t.Fatal(err)
-				}
-				persisted, _ := base.LoadSave(key)
-				if !bytes.Equal(persisted, certificate58Ledger([]byte("progress.dat"), membership)) {
-					t.Fatalf("ledger %s changed original membership: %q", key, persisted)
-				}
-			}
-			if err := store.StoreSave("fs/progress.dat", []byte("checkpoint")); err != nil {
+		}
+		store, ok := newAuthenticationCertificate58Store(base, "01012345678")
+		if !ok {
+			t.Fatal("valid certificate rejected")
+		}
+		got, _ := store.LoadSave(authenticationCertificate58Key)
+		cryptCertificate58(got)
+		if string(got[40:52]) != "01012345678\x00" {
+			t.Fatalf("MIN = %q", got[40:52])
+		}
+		if err := store.StoreSave(authenticationCertificate58Key, []byte("guest rewrite")); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{fileRemovedKey, fileCreatedKey} {
+			if err := store.StoreSave(key, []byte("audio.adt\nprogress.dat")); err != nil {
 				t.Fatal(err)
 			}
-			data, found := base.LoadSave(authenticationCertificate58Key)
-			if found != existing || (found && !bytes.Equal(data, original)) {
-				t.Fatal("backing certificate changed")
+			persisted, _ := base.LoadSave(key)
+			if !bytes.Equal(persisted, certificate58Ledger([]byte("progress.dat"), membership)) {
+				t.Fatalf("ledger %s changed original membership: %q", key, persisted)
 			}
-			restarted, ok := newAuthenticationCertificate58Store(base, nil, "12")
-			if !ok {
-				t.Fatal("restart rejected")
-			}
-			restored, _ := restarted.LoadSave("fs/progress.dat")
-			if string(restored) != "checkpoint" {
-				t.Fatal("ordinary progress did not persist")
-			}
-			fresh, _ := restarted.LoadSave(authenticationCertificate58Key)
-			cryptCertificate58(fresh)
-			if string(fresh[40:52]) != "12\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" {
-				t.Fatalf("fresh identity = %q", fresh[40:52])
-			}
-			// Returned views must never mutate a later load.
-			fresh[0] ^= 1
-			again, _ := restarted.LoadSave(authenticationCertificate58Key)
-			cryptCertificate58(again)
-			if fresh[0] == again[0] {
-				t.Fatal("returned certificate aliases private state")
-			}
+		}
+		if err := store.StoreSave("fs/progress.dat", []byte("checkpoint")); err != nil {
+			t.Fatal(err)
+		}
+		if _, found := base.LoadSave(authenticationCertificate58Key); found {
+			t.Fatal("backing certificate changed")
+		}
+		restarted, ok := newAuthenticationCertificate58Store(base, "12")
+		if !ok {
+			t.Fatal("restart rejected")
+		}
+		restored, _ := restarted.LoadSave("fs/progress.dat")
+		if string(restored) != "checkpoint" {
+			t.Fatal("ordinary progress did not persist")
+		}
+		fresh, _ := restarted.LoadSave(authenticationCertificate58Key)
+		cryptCertificate58(fresh)
+		if string(fresh[40:52]) != "12\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" {
+			t.Fatalf("fresh identity = %q", fresh[40:52])
+		}
+		// Returned views must never mutate a later load.
+		fresh[0] ^= 1
+		again, _ := restarted.LoadSave(authenticationCertificate58Key)
+		cryptCertificate58(again)
+		if fresh[0] == again[0] {
+			t.Fatal("returned certificate aliases private state")
 		}
 	}
 	for _, number := range []string{"", "123456789012", "12a"} {
-		if _, ok := newAuthenticationCertificate58Store(nil, nil, number); ok {
+		if _, ok := newAuthenticationCertificate58Store(nil, number); ok {
 			t.Fatalf("invalid identity %q accepted", number)
-		}
-	}
-	for _, size := range []int{1, 57, 59, 60} {
-		base := backend.NewDirectorySaveStore(t.TempDir())
-		if err := base.StoreSave(authenticationCertificate58Key, make([]byte, size)); err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := newAuthenticationCertificate58Store(base, nil, "12"); ok {
-			t.Fatalf("record size %d accepted", size)
 		}
 	}
 }
@@ -232,8 +207,8 @@ func TestCertificate58SessionUsesGuestFilesAndIdentitySnapshot(t *testing.T) {
 		"0102ABCD.jar": zipOf(t, map[string][]byte{binaryModuleName: fixtureELF(code, data, entry)}),
 	})
 	base := backend.NewDirectorySaveStore(t.TempDir())
-	originalNumber := wipic.SubscriberNumber()
-	t.Cleanup(func() { _ = wipic.SetSubscriberNumber(originalNumber) })
+	originalNumber := wipic.ConfiguredSubscriberNumber()
+	t.Cleanup(func() { setTestHandset(t, originalNumber) })
 	for _, enabled := range []bool{true, false, true} {
 		if err := wipic.SetSubscriberNumber("01012345678"); err != nil {
 			t.Fatal(err)
@@ -321,8 +296,8 @@ func TestCertificate58SessionUsesGuestFilesAndIdentitySnapshot(t *testing.T) {
 }
 
 func TestLGTSubscriberSnapshotsCoexist(t *testing.T) {
-	original := wipic.SubscriberNumber()
-	t.Cleanup(func() { _ = wipic.SetSubscriberNumber(original) })
+	original := wipic.ConfiguredSubscriberNumber()
+	t.Cleanup(func() { setTestHandset(t, original) })
 	numbers := []string{"01012345678", "01987654321"}
 	clients := make([]*Client, len(numbers))
 	for index, number := range numbers {
@@ -364,7 +339,7 @@ func TestLGTSubscriberSnapshotsCoexist(t *testing.T) {
 
 func TestCertificate58CaseVariantsStayPrivate(t *testing.T) {
 	base := backend.NewDirectorySaveStore(t.TempDir())
-	store, ok := newAuthenticationCertificate58Store(base, nil, "12")
+	store, ok := newAuthenticationCertificate58Store(base, "12")
 	if !ok {
 		t.Fatal("private certificate setup failed")
 	}
@@ -394,7 +369,7 @@ func TestCertificate58EmptyFailedAttemptIsPrivateAndRecoverable(t *testing.T) {
 	if err := base.StoreSave("fs/progress.dat", []byte{4, 2}); err != nil {
 		t.Fatal(err)
 	}
-	store, ok := newAuthenticationCertificate58Store(base, nil, "01012345678")
+	store, ok := newAuthenticationCertificate58Store(base, "01012345678")
 	if !ok {
 		t.Fatal("empty certificate from a failed connection rejected")
 	}
@@ -424,7 +399,59 @@ func TestCertificate58EmptyFailedAttemptIsPrivateAndRecoverable(t *testing.T) {
 	if !bytes.Equal(saved, ledger) {
 		t.Fatal("original membership changed")
 	}
-	if _, ok := newAuthenticationCertificate58Store(base, nil, "01012345678"); !ok {
+	if _, ok := newAuthenticationCertificate58Store(base, "01012345678"); !ok {
 		t.Fatal("restart rejected preserved empty certificate")
+	}
+}
+
+func TestCertificate58ExistingRecordUsesGuestStorage(t *testing.T) {
+	_, code, data, entry := certificate58Fixture(t, 0)
+	archive := zipOf(t, map[string][]byte{
+		"app_info":     []byte("AID=0102ABCD\nPID=PF000001\n"),
+		"0102ABCD.jar": zipOf(t, map[string][]byte{binaryModuleName: fixtureELF(code, data, entry)}),
+	})
+	authoredRecord := func(number string) []byte {
+		record := make([]byte, 58)
+		copy(record[40:52], number)
+		cryptCertificate58(record)
+		return record
+	}
+	for _, record := range [][]byte{authoredRecord(wipic.SubscriberNumber()), authoredRecord("foreign"), []byte("truncated")} {
+		base := backend.NewDirectorySaveStore(t.TempDir())
+		if err := base.StoreSave(authenticationCertificate58Key, record); err != nil {
+			t.Fatal(err)
+		}
+		for run := 0; run < 3; run++ {
+			session, err := StartSession(context.Background(), archive, SessionOptions{SaveStore: base})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if session.Authentication() != backend.AuthenticationGuestManaged {
+				t.Fatalf("run %d, %d bytes: selected %q", run, len(record), session.Authentication())
+			}
+			files := newGuestFiles(t, session.client)
+			if run == 2 {
+				if files.exists(authenticationCertificate58Name) {
+					t.Fatal("restart resurrected the deleted certificate")
+				}
+			} else {
+				handle := files.open(authenticationCertificate58Name, fileOpenReadOnly)
+				if got := files.read(handle, len(record)); got != string(record) {
+					t.Fatal("guest received different certificate bytes")
+				}
+				files.close(handle)
+				if run == 0 {
+					record[0] ^= 0x40
+					handle = files.open(authenticationCertificate58Name, fileOpenWriteTruncate)
+					files.write(handle, string(record))
+					files.close(handle)
+				} else if result := callSlot(t, session.client, slotFsRemove, files.name(authenticationCertificate58Name)); result != 0 {
+					t.Fatalf("guest removal answered %d", int32(result))
+				}
+			}
+			if err := session.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 }

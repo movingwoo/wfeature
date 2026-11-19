@@ -334,6 +334,28 @@ accepted and then fails through that callback; recognized local compatibility
 services are listed in [network](network.md) and
 [authentication](authentication.md).
 
+### BREW packaged certificate
+
+Two BREW modules call byte offset `0x08` on interface `0x103028a`. The
+module passes the object in `r0`, the record address in `r1` and its length in
+`r2`. A trace of both modules showed the complete 74-byte packaged record
+at that address. Application 20714 reads `c2sgames.bin` and application
+23682 reads `gbxcerti.dat`.
+
+The runtime recognizes each module through the compatibility registry and
+checks its MIF application ID and the SHA-256 digest of its own packaged
+record. The interface returns zero only when the guest presents exactly
+those bytes. An unknown module, changed or missing resource, swapped record
+or unreadable guest buffer receives status one. One guest reports a pending
+one-time authentication request and the other offers network authentication.
+The session reports `ktf-brew-packaged-certificate` when the module and MIF
+select this verifier, including when its record fails. With `-no-auth` the
+interface answers one, letting the guest take its renewal path. A quick
+load for either registered module requires the same authentication setting.
+These checks establish an offline match to two archived installations.
+Verification of a newly issued certificate would require the issuer's
+verification mechanism. [Observed status codes](history/ktf.md#implementation-a-certificate-and-the-object-both-later-archives-create)
+
 ## Quick save and quick load
 
 All three kinds of KTF package can be recorded between two rounds and restored

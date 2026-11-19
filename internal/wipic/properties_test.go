@@ -8,14 +8,16 @@ import "testing"
 // for, and an answer no handset could give is refused rather than stored.
 func TestSubscriberNumberIsSettableAndValidated(t *testing.T) {
 	original := SubscriberNumber()
-	t.Cleanup(func() {
-		if err := SetSubscriberNumber(original); err != nil {
-			t.Fatal(err)
-		}
-	})
+	t.Cleanup(ResetSubscriberNumber)
 
 	if original != defaultSubscriberNumber {
 		t.Fatalf("the default number is %q, want %q", original, defaultSubscriberNumber)
+	}
+	if ConfiguredSubscriberNumber() != "" {
+		t.Fatal("the implicit default is reported as an operator setting")
+	}
+	if err := SetSubscriberNumber(defaultSubscriberNumber); err != nil || ConfiguredSubscriberNumber() != defaultSubscriberNumber {
+		t.Fatal("explicitly selecting the default number did not bind it")
 	}
 
 	if err := SetSubscriberNumber("9999"); err != nil {

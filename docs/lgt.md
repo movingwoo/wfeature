@@ -501,12 +501,37 @@ policy, and the net block's other 21 calls answer `M_E_ERROR` rather than
 stopping the session. [Authentication](authentication.md) and [network](network.md) describe
 the selected adapters and unsupported service-dependent paths.
 
-A recognized native revision's save reader accepts a saved subscriber identity
-from another handset when automatic authentication compatibility is enabled.
-The original length and checksum checks still run, and original files and the
-configured subscriber number remain unchanged. The CLI diagnostic opt-out
-(`-no-auth`) retains the original identity check. See the
+One recognized native revision compares a 12-byte subscriber field in each save
+with `PHONENUMBER`. A session started with an explicit handset number runs that
+comparison and reports `guest-managed`. Length and checksum checks run as well.
+With the implicit default handset, automatic compatibility retains the previous
+`lgt-save-subscriber` behavior. Quickload restores the number and comparison
+from the recorded session. The CLI diagnostic `-no-auth` always uses the
+original comparison. In a 2,400-tick local run on a copy of an existing save,
+explicitly selecting the default digits yielded two matches and two mismatches
+in the original reader. A different configured number yielded two mismatches
+and the same final frame as `-no-auth`. See the
 [save-reader evidence](history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison).
+
+Three file-based authentication contracts can start with guest-managed storage.
+The recognized reader for a 56-byte options file uses its saved success word
+and can clear it through an ordinary write. The standalone certificate reader
+receives every existing nonempty record at its original length. For the
+embedded format, a checksummed header with a nonzero presence byte selects the
+guest's own certificate reader. A malformed nonempty header also stays with
+the guest through initialization. In both certificate formats the guest checks
+the original bytes against its own requirements and subsequent writes use the
+normal save store. The reported `guest-managed` status describes who handles
+the record, including one the guest rejects. Missing initial registration
+still follows the existing format-specific offline compatibility path.
+A local comparison ran each archive twice for 400 ticks with the same keys.
+A copy of an existing success cache, a one-byte standalone record, and an
+embedded header with a damaged checksum produced the same frames as
+`-no-auth` on both starts. The files kept their original bytes. The unmodified
+embedded save had a clear presence flag and still selected its existing
+session-only adapter. These runs verify file handling. The origin of the
+saved success word and a carrier enrollment response are unverified.
+See the [file formats and offline services](authentication.md).
 
 Five recognized native revisions complete their two-stage certificate exchange
 through the same bounded local socket service. Requests must match the session

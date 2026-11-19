@@ -283,8 +283,9 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	if !options.DisableAuthentication {
 		client.authentication = backend.AuthenticationUnsupported
 		if certificate, ok := authenticationCertificate(archive, client.SubscriberNumber); ok {
-			client.AttachSaveStore(newCertificateSaveStore(client.SaveStore, certificate))
-			client.authentication = backend.AuthenticationKTFCertificate23
+			if err := client.selectCertificate(certificate, backend.AuthenticationKTFCertificate23); err != nil {
+				return nil, err
+			}
 		}
 	}
 	// Everything from here on has run guest code, so a failure carries the
@@ -325,8 +326,9 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 		if client.authentication == backend.AuthenticationUnsupported && (len(files[certificateName]) == 52 || len(files["prefs"]) == 64) {
 			if image, err := client.ImageBytes(); err == nil {
 				if certificate, ok := authenticationCertificate52(archive, image, client.SubscriberNumber); ok {
-					client.AttachSaveStore(newCertificateSaveStore(client.SaveStore, certificate))
-					client.authentication = backend.AuthenticationKTFCertificate52
+					if err := client.selectCertificate(certificate, backend.AuthenticationKTFCertificate52); err != nil {
+						return failed(err)
+					}
 				} else if number, ok := authenticationSubscriber(archive, image); ok {
 					client.SubscriberNumber = number
 					client.AttachSaveStore(authenticationSubscriberReceipt(client.SaveStore, archive, number))

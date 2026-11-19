@@ -11,6 +11,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/keypad"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 // Session is the driver a Host runs an LGT game through: start it, tick it,
@@ -150,13 +151,9 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 	if !options.DisableAuthentication {
 		authentication = backend.AuthenticationUnsupported
 		if authenticationOptions(client.module) {
-			client.saveStore = newAuthenticationOptionStore(client.saveStore, archive)
-			authentication = backend.AuthenticationLGTOptions
+			authentication = client.prepareAuthenticationOptions()
 		} else if authenticationCertificate58(client.module) {
-			if store, ok := newAuthenticationCertificate58Store(client.saveStore, archive, client.subscriberNumber); ok {
-				client.saveStore = store
-				authentication = backend.AuthenticationLGTCertificate58
-			}
+			authentication = client.prepareCertificate58()
 		}
 		if authentication == backend.AuthenticationUnsupported {
 			if network, status := client.recognizedNetwork(archive, false); network != nil {
@@ -166,8 +163,7 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 
 		if authentication == backend.AuthenticationUnsupported {
 			if contract := authenticationCertificate100(client.module); contract != nil {
-				embeddedCertificate = newAuthenticationCertificate100Store(client.saveStore, contract)
-				client.saveStore = embeddedCertificate
+				embeddedCertificate, authentication = client.prepareCertificate100(contract)
 			}
 		}
 		if authentication == backend.AuthenticationUnsupported && embeddedCertificate == nil {
@@ -180,10 +176,10 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 			options.Logger.Debug("authentication compatibility", "status", authentication)
 		}
 		if hasSaveIdentityCompatibility(archive.Module) {
-			if err := correctSaveSubscriberIdentity(client.core.Memory()); err != nil {
+			authentication, err = applySaveSubscriberIdentity(client.core.Memory(), wipic.ConfiguredSubscriberNumber() != "")
+			if err != nil {
 				return nil, err
 			}
-			authentication = backend.AuthenticationLGTSaveSubscriber
 			if options.Logger != nil {
 				options.Logger.Debug("authentication compatibility", "status", authentication)
 			}
@@ -198,8 +194,11 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 	if err := client.StartClet(ctx); err != nil && !errors.Is(err, ErrGuestExited) {
 		return nil, startFailure(client, err)
 	}
-	if embeddedCertificate != nil && embeddedCertificate.activate(client) {
-		authentication = backend.AuthenticationLGTCertificate100
+	if embeddedCertificate != nil {
+		authentication = embeddedCertificate.activate(client)
+		if authentication != backend.AuthenticationLGTCertificate100 {
+			client.saveStore = embeddedCertificate.base
+		}
 		if options.Logger != nil {
 			options.Logger.Debug("authentication compatibility", "status", authentication)
 		}

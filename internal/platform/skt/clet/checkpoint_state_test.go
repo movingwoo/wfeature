@@ -205,15 +205,25 @@ func TestProgramServiceAllowanceOverridesAndRoundTrips(t *testing.T) {
 	}
 }
 
-func TestArchiveSubscriberSurvivesCheckpoint(t *testing.T) {
+func TestSelectedHandsetSurvivesCheckpoint(t *testing.T) {
+	for _, status := range []backend.AuthenticationStatus{backend.AuthenticationSKTNativeCertificate, backend.AuthenticationGuestManaged} {
+		t.Run(string(status), func(t *testing.T) {
+			checkSelectedHandset(t, status)
+		})
+	}
+}
+
+func checkSelectedHandset(t *testing.T, status backend.AuthenticationStatus) {
+	t.Helper()
 	store, _ := backend.NewMemorySaveStore(nil)
 	program := fixtureProgram(t, testfixture.SKTCletOptions{FieldAtStart: true})
+	program.Authentication = status
 	program.SubscriberNumber = "0101234567"
 	started := fixtureSession(t, program, store)
 	defer started.Close()
 	for _, name := range []string{"MIN", "PHONENUMBER"} {
 		if got, exists := started.Client.SystemProperty(name); !exists || got != program.SubscriberNumber {
-			t.Fatalf("%s does not use the archive's subscriber", name)
+			t.Fatalf("%s does not use the selected handset", name)
 		}
 	}
 	checkpoint, err := started.CaptureCheckpoint(t.Context())
@@ -226,13 +236,18 @@ func TestArchiveSubscriberSurvivesCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer prepared.Discard()
-	if prepared.session.Client.SubscriberNumber != program.SubscriberNumber {
-		t.Fatal("restored session lost the archive's subscriber")
+	if prepared.session.Client.SubscriberNumber != program.SubscriberNumber || prepared.session.Authentication() != status {
+		t.Fatal("restored session lost the selected handset or authentication mode")
 	}
 
+	otherMode := program
+	otherMode.Authentication = backend.AuthenticationUnsupported
+	if _, err := PrepareCheckpoint(otherMode, checkpoint, options); !errors.Is(err, backend.ErrCheckpointVersion) {
+		t.Fatalf("restore under another authentication mode: %v", err)
+	}
 	program.SubscriberNumber = "01000000000"
 	if _, err := PrepareCheckpoint(program, checkpoint, options); !errors.Is(err, backend.ErrCheckpointIdentity) {
-		t.Fatalf("restore with a different archive subscriber: %v", err)
+		t.Fatalf("restore with a different handset: %v", err)
 	}
 }
 

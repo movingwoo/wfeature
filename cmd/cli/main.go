@@ -57,6 +57,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 2
 		}
+	} else {
+		wipic.ResetSubscriberNumber()
 	}
 	switch args[0] {
 	case "run":
@@ -1104,9 +1106,6 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 	// has no descriptor to inspect and no AOT methods to profile or symbolize.
 	// The cheat engine and the route runner it does have.
 	if ktf.IsNativeArchive(data) {
-		if authentication {
-			fmt.Fprintln(stderr, "authentication: unsupported")
-		}
 		for name, unsupported := range map[string]bool{
 			"-diag":           diagPath != "",
 			"-gdb":            gdbAddress != "",
@@ -1123,6 +1122,7 @@ func runKTF(path string, extra []string, stdout, stderr io.Writer) int {
 			}
 		}
 		return runKTFNative(ctx, data, nativeRun{
+			disableAuth:  !authentication,
 			archivePath:  path,
 			ticks:        ticks,
 			ticksChosen:  ticksChosen,

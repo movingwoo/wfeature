@@ -209,9 +209,11 @@ registry names (see Identity compatibility).
 
 A native package may carry certificates or saves tied to the handset it was
 copied from. The compatibility registry identifies verified executable revisions
-by SHA-256 and selects the handling each format needs. A recognized certificate
-pair can supply that session's handset identity, some comparisons have a scoped
-code fix, and specific device dumps start with fresh save data. The archive and
+by SHA-256 and selects the handling each format needs. When the operator
+supplies a handset number, the recognized subscriber and certificate readers
+run their original checks with that number. For the implicit handset, a
+recognized certificate pair can supply the identity, and some comparisons
+have a scoped code fix. Specific device dumps start with fresh save data. The archive and
 its files are left intact. See [authentication](authentication.md) and
 [code-revision compatibility](platform-compatibility.md).
 
@@ -240,8 +242,10 @@ The other title keeps, in the save its directory ships, the last digits of the
 number it was written under, and refuses a save whose digits do not match the
 running handset's — and that refusal is on its first screen, so the title cannot
 boot past it without the save accepted. The comparison does not key the save's
-encoding — the save is readable either way — so the recognized executable accepts
-that one comparison in the code before it is loaded and reports
+encoding — the save is readable either way. An explicitly configured handset
+runs the original comparison. On a local replay with a mismatching handset,
+the guest displayed its save/handset warning before play. With the implicit
+handset, the recognized executable accepts that comparison and reports
 `skt-native-save-subscriber`; the save's own length and checksum checks still
 run, and the file is not changed (`internal/platform/skt/native_identity.go`).
 
@@ -254,22 +258,41 @@ with error 5001 — the subscriber field of the certificate not matching the
 handset. This is the specification's `cert.c2s` contract, the one a KTF title
 reports 5001 for and `ktf-certificate` adapts, here in a longer variant on a
 different executable. The certificate decodes to three fields compared in a row
-— the subscriber (5001), a second field (5002) and a token (5003); the recognized
-executable accepts only the subscriber comparison, so the other two still run,
-and reports `skt-native-certificate`. No certificate is minted and no file is
-changed.
+— the subscriber (5001), a second field (5002) and a token (5003). With an
+explicit handset these checks run as written. The real mismatch above stopped
+at the earlier save check. An authored test executed both outcomes of this
+later subscriber branch. Under the implicit handset, the recognized executable
+accepts only the subscriber comparison and reports `skt-native-certificate`.
 
 The `skt.native_certdata_subscriber` rule handles an ARM title's `CERTIDATA`
-record inside its packaged container. It accepts the subscriber comparison at
-startup after the record has been read and verified, and reports
-`skt-native-certificate`. See [the recorded-identity replay](history/skt.md#skt-new-archives-2026-11-18-registry-review).
+record inside its packaged container. Its descriptor and packaged files provide
+no independent handset profile. When the operator supplies a subscriber through
+`WFEATURE_PHONE_NUMBER` or the server's `-number`, the guest receives that value
+through its handset properties and runs the original record and subscriber
+checks. A matching subscriber follows the normal startup path and a mismatch
+reaches the guest's refusal. The session reports `guest-managed` for both.
+Quick saves from this mode require the same handset number and executable image.
+
+With the default handset and no explicit setting, the existing registered
+correction still accepts the subscriber comparison after the guest reads and
+verifies the record. This mode reports `skt-native-certificate` and can load
+quick saves from the earlier implementation. At 150 ticks, a local replay and
+a pre-change quick save produced the same 240 × 320 frame under the implicit
+handset. An explicitly configured mismatch stayed on the guest's blank screen.
+Its quick save restored the same frame on the same handset and refused a
+different handset. An authored comparison exercises the matching branch. See
+[the recorded-identity replay](history/skt.md#skt-new-archives-2026-11-18-registry-review).
 
 <a id="skt-native-identity-paired-certificate"></a>
 
 ### Packaged certificate pair (`skt.native_paired_certificate`)
 
 One recognized reader uses `MIN` for its 20-byte `usimcert.c2s` (error 1004)
-and `PHONENUMBER` for its 31-byte `cert.c2s` (error 3003). The first record's
+and `PHONENUMBER` for its 31-byte `cert.c2s` (error 3003). With an explicit
+handset, the loader supplies its number to both properties and leaves both checks
+to the guest. A real mismatch displayed error 1004 at the first check. The
+second check requires the first to succeed. With the implicit handset,
+the first record's
 ten-digit padded field determines a bounded set of candidates. The second
 record's checksum must identify exactly one. With both records present and
 valid, the loader supplies that value for both properties in this session.
@@ -278,7 +301,9 @@ ambiguous pair, or with authentication compatibility disabled, it receives
 the configured handset value.
 
 Quick saves capture the session's identity with its guest memory. The restore
-path checks it against the archive pair. A quick save made with the earlier
+path checks it against the selected handset and authentication mode. The implicit
+handset still restored an existing pair-based slot to its original frame.
+A quick save made with the earlier
 comparison patch for this revision needs a new session because the checkpoint
 identifies the patched executable image. See the
 [evidence and replay](history/skt.md#skt-new-archives-2026-11-18-certificates)

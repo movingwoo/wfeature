@@ -5,10 +5,12 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 func TestSaveSubscriberBranchPreservesChecksum(t *testing.T) {
-	for _, corrected := range []bool{false, true} {
+	for _, configured := range []bool{false, true} {
 		for _, identityMatches := range []bool{false, true} {
 			for _, checksumMatches := range []bool{false, true} {
 				memory := armcore.NewMemory()
@@ -21,10 +23,16 @@ func TestSaveSubscriberBranchPreservesChecksum(t *testing.T) {
 				if err := memory.Load(0x69d98, code); err != nil {
 					t.Fatal(err)
 				}
-				if corrected {
-					if err := correctSaveSubscriberIdentity(memory); err != nil {
-						t.Fatal(err)
-					}
+				status, err := applySaveSubscriberIdentity(memory, configured)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantStatus := backend.AuthenticationLGTSaveSubscriber
+				if configured {
+					wantStatus = backend.AuthenticationGuestManaged
+				}
+				if status != wantStatus {
+					t.Fatalf("configured=%t status=%q, want %q", configured, status, wantStatus)
 				}
 				state := armcore.NewContext()
 				if !identityMatches {
@@ -40,7 +48,7 @@ func TestSaveSubscriberBranchPreservesChecksum(t *testing.T) {
 					t.Fatal(err)
 				}
 				want := uint32(0x69da2)
-				if !corrected && !identityMatches {
+				if configured && !identityMatches {
 					want = 0x69d9c
 				}
 				if state.Registers[15]&^1 != want {
@@ -62,7 +70,7 @@ func TestSaveSubscriberBranchPreservesChecksum(t *testing.T) {
 				if err := memory.Read(0x69d98, got); err != nil {
 					t.Fatal(err)
 				}
-				if corrected {
+				if !configured {
 					code[3] = 0xe0
 				}
 				if !bytes.Equal(got, code) {
@@ -75,16 +83,25 @@ func TestSaveSubscriberBranchPreservesChecksum(t *testing.T) {
 
 func TestSaveSubscriberBranchRejectsUnexpectedCode(t *testing.T) {
 	memory := armcore.NewMemory()
-	if err := correctSaveSubscriberIdentity(memory); err == nil {
+	if _, err := applySaveSubscriberIdentity(memory, false); err == nil {
 		t.Fatal("unmapped code accepted")
 	}
 	if err := memory.Map(0x69000, 0x1000, armcore.PermissionReadWriteExecute); err != nil {
 		t.Fatal(err)
 	}
-	if err := correctSaveSubscriberIdentity(memory); err == nil {
+	if _, err := applySaveSubscriberIdentity(memory, false); err == nil {
 		t.Fatal("unknown code accepted")
 	}
 	if hasSaveIdentityCompatibility([]byte("unrecognized module")) {
 		t.Fatal("unknown revision matched")
+	}
+}
+
+func setTestHandset(t *testing.T, number string) {
+	t.Helper()
+	if number == "" {
+		wipic.ResetSubscriberNumber()
+	} else if err := wipic.SetSubscriberNumber(number); err != nil {
+		t.Fatal(err)
 	}
 }

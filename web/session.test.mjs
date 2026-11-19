@@ -552,7 +552,7 @@ test("closing the transport rejects pending requests without waiting for a socke
 
 test("authentication is automatic and its result survives the protocol", async () => {
   const { session, socket } = await openFakeSession();
-  for (const status of ["unsupported", "ktf-certificate-23"]) {
+  for (const status of ["unsupported", "ktf-certificate-23", "guest-managed", "ktf-brew-packaged-certificate"]) {
     const asking = session.start("ktf/game.zip", 1, null, "browser", "");
     const sent = socket.sent.at(-1);
     assert.equal(sent.authentication, undefined);

@@ -10,21 +10,12 @@ import (
 )
 
 // A native package is a handset's installed directory, so what the title wrote
-// there names that handset, and both local titles compare it with the handset
-// they run on and stop when it differs. Each check is the same class of
-// offline authentication the KTF and LGT platforms already adapt: the exact
-// executable is recognized by its SHA-256 in the compatibility registry, one
-// comparison is accepted in the code before it is loaded, and every other check
-// the title makes still runs with no file changed. One executable gates more
-// than once — a packaged save's digits at start-up and then its certificate's
-// subscriber field when play begins — and each gate is its own registered fix,
-// applied where the registry names it. See docs/skt-native.md#skt-native-identity.
-//
-// The certificate gates match the specification's own `cert.c2s` subscriber
-// contract, the same one a KTF title reports error 5001 for and `ktf-certificate`
-// adapts; here the subscriber comparison is relaxed where the recognized
-// reader makes it, leaving the application-id and token comparisons it makes
-// either side intact.
+// there can identify that handset. The original readers compare this identity
+// with the running handset. An explicit handset runs those checks unchanged.
+// With the implicit handset, a registered code correction can accept the
+// subscriber comparison while the guest verifies its other fields. Each
+// correction is scoped to an exact executable digest and instruction window.
+// See docs/skt-native.md#skt-native-identity.
 type nativeIdentityFix struct {
 	fix    string
 	status backend.AuthenticationStatus
@@ -121,6 +112,27 @@ func (executable *NativeExecutable) ApplyIdentityCompatibility(code []byte) (bac
 		copy(code[fix.offset+fix.relax:], mustHex(fix.replacement))
 	}
 	return representativeStatus(selected), nil
+}
+
+// ApplyIdentityCompatibility selects the code and handset identity for a native
+// session. When a handset is configured, its own number reaches every recognized
+// save and certificate check in the original program.
+func (archive *NativeArchive) ApplyIdentityCompatibility(code []byte, configuredNumber string) (backend.AuthenticationStatus, string, error) {
+	if archive == nil || archive.Executable == nil {
+		return "", "", fmt.Errorf("executable is not parsed")
+	}
+	executable := archive.Executable
+	if configuredNumber != "" && (len(executable.registeredFixes()) != 0 || executable.readsPairedCertificate()) {
+		return backend.AuthenticationGuestManaged, configuredNumber, nil
+	}
+	status, err := executable.ApplyIdentityCompatibility(code)
+	if err != nil {
+		return "", "", err
+	}
+	if paired := archive.PairedCertificateSubscriber(); paired != "" {
+		return backend.AuthenticationSKTNativeCertificate, paired, nil
+	}
+	return status, "", nil
 }
 
 // representativeStatus picks the one status the session reports for a set of

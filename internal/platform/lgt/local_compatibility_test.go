@@ -9,6 +9,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/testlocal"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 // The compatibility registry's fixes are tested on authored fixtures beside
@@ -51,23 +52,65 @@ func TestLocalSaveSubscriberArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := bytes.Clone(data)
-	for _, disabled := range []bool{false, true} {
-		session, err := StartSession(context.Background(), data, SessionOptions{DisableAuthentication: disabled, Width: 240, Height: 320})
+	originalNumber := wipic.ConfiguredSubscriberNumber()
+	t.Cleanup(func() { setTestHandset(t, originalNumber) })
+	for _, tc := range []struct {
+		configured bool
+		disabled   bool
+		status     backend.AuthenticationStatus
+		branch     byte
+	}{
+		{false, false, backend.AuthenticationLGTSaveSubscriber, 0xe0},
+		{true, false, backend.AuthenticationGuestManaged, 0xd0},
+		{true, true, backend.AuthenticationOff, 0xd0},
+	} {
+		wipic.ResetSubscriberNumber()
+		if tc.configured {
+			// Even an explicit selection of the default digits is a handset choice.
+			setTestHandset(t, wipic.SubscriberNumber())
+		}
+		store := backend.NewDirectorySaveStore(t.TempDir())
+		opts := SessionOptions{DisableAuthentication: tc.disabled, SaveStore: store, Width: 240, Height: 320}
+		session, err := StartSession(context.Background(), data, opts)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var code [2]byte
-		if err := session.client.core.Memory().Read(0x69d9a, code[:]); err != nil {
-			t.Fatal(err)
+		check := func(s *Session) {
+			t.Helper()
+			var code [2]byte
+			if err := s.client.core.Memory().Read(0x69d9a, code[:]); err != nil {
+				t.Fatal(err)
+			}
+			if code != [2]byte{2, tc.branch} || s.Authentication() != tc.status {
+				t.Fatalf("configured=%v disabled=%v code=%x status=%s", tc.configured, tc.disabled, code, s.Authentication())
+			}
 		}
-		want := byte(0xe0)
-		status := backend.AuthenticationLGTSaveSubscriber
-		if disabled {
-			want = 0xd0
-			status = backend.AuthenticationOff
-		}
-		if code != [2]byte{2, want} || session.Authentication() != status {
-			t.Fatalf("disabled=%v code=%x status=%s", disabled, code, session.Authentication())
+		check(session)
+		if !tc.disabled {
+			snapshot := session.client.subscriberNumber
+			checkpoint, err := session.CaptureCheckpoint(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.configured {
+				wipic.ResetSubscriberNumber()
+			} else {
+				setTestHandset(t, "12")
+			}
+			prepared, err := PrepareSessionCheckpoint(data, checkpoint, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			restored, err := prepared.Commit(context.Background(), session, store)
+			prepared.Discard()
+			if err != nil {
+				t.Fatal(err)
+			}
+			session = restored
+			check(session)
+			if session.client.subscriberNumber != snapshot {
+				t.Fatal("restored handset differs from the recorded handset")
+			}
 		}
 		if err := session.Close(context.Background()); err != nil {
 			t.Fatal(err)

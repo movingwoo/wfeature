@@ -1595,7 +1595,7 @@ func TestCheckpointAdaptersDeriveDiskStateAgain(t *testing.T) {
 	t.Run("the 58-byte adapter's certificate at any length", func(t *testing.T) {
 		for _, private := range [][]byte{{}, []byte("half"), bytes.Repeat([]byte{0x5a}, 58), bytes.Repeat([]byte{0x33}, 90)} {
 			store := newFaultStore(t, nil)
-			adapter, ok := newAuthenticationCertificate58Store(store, nil, "12")
+			adapter, ok := newAuthenticationCertificate58Store(store, "12")
 			if !ok {
 				t.Fatal("the fixture adapter was not built")
 			}
@@ -1619,7 +1619,7 @@ func TestCheckpointAdaptersDeriveDiskStateAgain(t *testing.T) {
 	})
 	t.Run("the 58-byte adapter's path lists", func(t *testing.T) {
 		store := newFaultStore(t, map[string]string{fileCreatedKey: "other.dat", fileRemovedKey: ""})
-		adapter, ok := newAuthenticationCertificate58Store(store, nil, "12")
+		adapter, ok := newAuthenticationCertificate58Store(store, "12")
 		if !ok {
 			t.Fatal("the fixture adapter was not built")
 		}

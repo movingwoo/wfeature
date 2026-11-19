@@ -122,9 +122,17 @@ the byte constructors and `com.xce.io.ByteToCharEUC_KR` share one decoder.
 null on purpose. The subscriber number comes from `-number` on the server or
 `WFEATURE_PHONE_NUMBER`; a runtime takes it once, when it is built, and answers
 that number for the whole session, and `m.CARRIER` is derived from its prefix
-(`subscriberCarrier`). Five recognized license-check shapes
-are adapted in a session-owned class copy; see
+(`subscriberCarrier`). With an explicitly selected handset, recognized license
+methods run their original digest comparison against the key in the descriptor.
+Their quick saves require the same handset. With the default handset, the
+recognized methods keep their existing compatibility correction. See
 [SKT license checks](authentication.md#skt-license-checks).
+
+An authored MIDlet computes a synthetic checksum from its handset and service
+inputs. Its fixed descriptor key accepts the matching handset and rejects a
+different one. A local four-generation check exited on its first tick with an
+explicit mismatch. Its implicit-handset session stayed active for 150 ticks
+and restored a quick save produced by the previous implementation.
 
 The SKVM surface includes supported file, graphics, fixed-point math, audio,
 and device-property APIs. Missing methods and deliberate stubs remain bounded

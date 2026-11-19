@@ -136,12 +136,14 @@ func licenseShape(class *classfile.Class, method *classfile.Member) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(normalized.String())))
 }
 
-// Transform only the final license comparison. The guest still obtains its
+// Select the recognized implementations. With an explicit handset the original
+// class handles the comparison. The default correction transforms only the
+// final license comparison. The guest still obtains its
 // properties, initializes library state, calculates its digest, and handles
 // exceptions normally. pop2 / iconst_1 / nop has exactly the original call's
 // stack effect and length; exception ranges and all branch targets stay valid.
 // Source archives and the general String.equals implementation remain intact.
-func prepareAuthentication(archive *Archive) authenticationClasses {
+func prepareAuthentication(archive *Archive, keepOriginal bool) authenticationClasses {
 	classes := make(authenticationClasses)
 	names := make([]string, 0, len(archive.Entries))
 	for name := range archive.Entries {
@@ -164,6 +166,10 @@ func prepareAuthentication(archive *Archive) authenticationClasses {
 		for _, method := range class.Methods {
 			if !authenticationLicenseShapes[licenseShape(class, &method)] {
 				continue
+			}
+			if keepOriginal {
+				adapted = original
+				break
 			}
 			for _, attribute := range method.Attributes {
 				if attribute.Code == nil || bytes.Count(original, attribute.Info) != 1 {

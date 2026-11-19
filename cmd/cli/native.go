@@ -26,6 +26,7 @@ import (
 // and the options that only mean something to the other are refused by name
 // rather than ignored. See docs/history/ktf.md, "An earlier KTF package".
 type nativeRun struct {
+	disableAuth bool
 	// archivePath is what the package was read from, which is the second half
 	// of a cheat table's key beside the hash of the module itself.
 	archivePath string
@@ -57,10 +58,11 @@ type nativeRun struct {
 
 func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stderr io.Writer) int {
 	options := ktf.NativeSessionOptions{
-		Logger: run.logger,
-		Speed:  run.speed,
-		Width:  run.screenWidth,
-		Height: run.screenHeight,
+		DisableAuthentication: run.disableAuth,
+		Logger:                run.logger,
+		Speed:                 run.speed,
+		Width:                 run.screenWidth,
+		Height:                run.screenHeight,
 	}
 	if run.saveRoot != "" {
 		owner, err := nativeSaveOwner(data)
@@ -92,6 +94,9 @@ func runKTFNative(ctx context.Context, data []byte, run nativeRun, stdout, stder
 		return 1
 	}
 	defer session.Close()
+	if !run.disableAuth {
+		fmt.Fprintf(stderr, "authentication: %s\n", session.Authentication())
+	}
 	if audioSink != nil {
 		audioSink.Clock = session.GuestElapsed
 	}

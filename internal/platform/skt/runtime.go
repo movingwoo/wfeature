@@ -387,13 +387,17 @@ func newRuntime(archive *Archive, options Options) (*Runtime, error) {
 	authentication := backend.AuthenticationOff
 	if !options.DisableAuthentication {
 		authentication = backend.AuthenticationUnsupported
-		adapted := prepareAuthentication(archive)
-		if len(adapted) != 0 {
-			source = jvm.ClassSources{adapted, archive}
+		explicitHandset := wipic.ConfiguredSubscriberNumber() != ""
+		classes := prepareAuthentication(archive, explicitHandset)
+		switch {
+		case len(classes) != 0 && explicitHandset:
+			authentication = backend.AuthenticationGuestManaged
+		case len(classes) != 0:
+			source = jvm.ClassSources{classes, archive}
 			authentication = backend.AuthenticationSKTLicense
 		}
 		if options.JVM.Logger != nil {
-			options.JVM.Logger.Debug("authentication compatibility", "status", authentication, "classes", len(adapted))
+			options.JVM.Logger.Debug("authentication compatibility", "status", authentication, "classes", len(classes))
 		}
 	}
 	fixes := archive.classSetFixes()

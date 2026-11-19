@@ -10,24 +10,33 @@ comparison path, and the old `-auth` flag is still accepted for existing
 scripts. A resumed session keeps its original runtime. CLI reporting is in
 [the command line](cli.md#offline-authentication-compatibility).
 
+The two-stage LGT exchange starts with a guest request, delivers the recognized
+local replies, and leaves parsing and saving the new registration to the game.
+The KTF and SKT certificate readers below start at a different point in the
+lifecycle. They check a record already on the handset, or a license key already
+in the descriptor. Replaying the LGT messages there would skip the checks those
+games actually perform.
+
 ## Implemented mechanisms
 
 | Reported status | Recognition and adaptation |
 |---|---|
 | `off` | Compatibility was explicitly disabled for diagnostics. |
 | `unsupported` | No implemented mechanism matched; ordinary behavior remains. |
-| `ktf-certificate-23` | The packaged certificate, checksum, AID, cipher table and executable property/file names match the existing 23-byte format. Generate a session certificate for the session's subscriber number. |
-| `ktf-certificate-52` | A complete Thumb reader and decoder match; resolve their file and cipher pointers from the relocated image. Replace only the certificate's 12-byte subscriber field. |
+| `guest-managed` | A recognized guest uses the original record or the operator's handset identity and makes its own decision. This status covers both acceptance and refusal. |
+| `ktf-brew-packaged-certificate` | One of two registered BREW modules and its MIF application ID select the offline verifier. The module presents the complete packaged record. A missing, altered or foreign record takes the guest's renewal path. |
+| `ktf-certificate-23` | The packaged certificate, checksum, AID, cipher table and executable property/file names match the 23-byte format. The fallback supplies a session-local record for the configured number. |
+| `ktf-certificate-52` | The Thumb reader, decoder and relocated data identify the 52-byte format. The fallback changes only the subscriber field in a session-local copy. |
 | `ktf-subscriber-fallback` | A complete Thumb subscriber accessor matches, alongside a packaged 64-byte `prefs` record and no `cert.c2s`. Resolve its embedded fallback number and use that full number throughout this session. |
 | `lgt-cached-authentication` | Matching Thumb options reader/writer, authentication response handler and startup gate share a buffer. Expose its cached authentication word only within the session. |
 | `lgt-certificate-58` | Complete connected Thumb reader, writer, cipher and subscriber comparison match the 58-byte format. Keep a certificate for the session identity in memory. |
 | `lgt-certificate-100` | Connected embedded-certificate and options contracts match. Keep the certificate and its presence flag private while ordinary progress persists. |
 | `lgt-offline-notification` | Connected Thumb or ARM notification contracts match. Acknowledge the explicit choice locally; the Thumb variant also supports its empty remote-save query. |
 | `lgt-offline-authentication` | Connected packet builder, dial/socket callbacks and response dispatcher match. Answer the exact session-bound authentication request in process. |
-| `lgt-save-subscriber` | A recognized native revision's save reader matches. Accept a saved subscriber identity from another handset; the original length and checksum checks still run and no file changes. |
+| `lgt-save-subscriber` | With the implicit handset, a recognized native save reader accepts the archived subscriber identity and still checks the record length and checksum. With an explicitly configured number the guest performs the subscriber comparison too. |
 | `lgt-certificate-message` | Five native revisions use this two-stage certificate exchange. Answer it through the bounded local socket service so the guest sets and saves its own certificate-present flag. |
-| `skt-license` | A complete normalized Java license-check shape matches a supported compiler/library layout. Adapt only its terminal license comparison in a private class-file copy. |
-| `skt-native-certificate` | A recognized native executable selects a certificate rule. A validated `usimcert.c2s` and `cert.c2s` pair supplies the session's handset identity, and the original guest checks run. The `cert.c2s` subscriber comparison (5001) and an ARM `CERTIDATA` comparison have revision-specific fixes. See [SKT native](skt-native.md#skt-native-identity). |
+| `skt-license` | With the implicit handset, a complete normalized Java license-check shape matches a supported compiler/library layout. Adapt only its terminal license comparison in a private class-file copy. |
+| `skt-native-certificate` | On the implicit handset, a validated `usimcert.c2s` and `cert.c2s` pair can supply the session identity. The `cert.c2s` subscriber and ARM `CERTIDATA` comparisons have separate revision-specific fallbacks. [SKT native](skt-native.md#skt-native-identity) |
 | `skt-native-save-subscriber` | A recognized native executable's packaged save names the handset it was written on. Accept that one comparison; the save's own length and checksum checks still run and no file changes. See [SKT native](skt-native.md#skt-native-identity). |
 
 The status constants are in `internal/backend/authentication.go`. Selection is
@@ -90,12 +99,20 @@ construction. KTF's C, HandsetProperty, System and DMInfo readers agree; LGT's C
 and Java property readers agree; SKT's MIN and carrier agree. No adapter changes
 process-wide defaults or another running session's identity.
 
-Both certificate formats use the same in-memory save wrapper. Certificate writes
-and deletion state stay local to the run; the backing certificate and its
-original deletion bit stay intact, while other saves and deletion-ledger entries
-persist normally. Disabling compatibility for diagnostics exposes the original
-state again. The explicit `provision` command keeps its separate, persistent
-behavior.
+For both formats a visible, nonempty saved `db/cert.c2s` goes directly to the
+guest, including one left by the explicit `provision` command or one the guest
+will reject. When there is no saved override, packaged bytes that already match
+the session record also go directly to the guest. The session reports
+`guest-managed` and subsequent guest writes and deletions persist normally.
+Selection checks the save within the runtime's 4 MiB file limit and propagates
+a read error. An empty file, recorded deletion or foreign packaged certificate
+without a saved override uses the existing in-memory wrapper. Its certificate
+writes and deletion bit stay local to the run while other progress persists.
+
+The earlier BREW package uses a platform interface with its own result codes.
+Its two recognized modules use the archived installation to check an existing
+record. The original issuer's verification mechanism for new records is
+unknown. [BREW packaged certificates](ktf.md#brew-packaged-certificate)
 
 ## SKT license checks
 
@@ -107,11 +124,20 @@ notice wording do not select behavior; other instructions, descriptors or
 license constants produce a different shape. Parsing uses the bounded class-file
 reader.
 
-The supported layouts read `MIDlet-Key` and `MIDlet-Jar-URL`, extract a service
-identifier, combine subscriber data and a library salt, and compare a computed
+With a handset supplied through `WFEATURE_PHONE_NUMBER` or the server's
+`-number`, recognized Java license methods run unchanged against the configured
+handset. The recognized native readers also receive that number for their
+original checks of `CERTIDATA`, the saved handset digits and `cert.c2s`, or
+the paired USIM and application certificates. These sessions report
+`guest-managed`. With the implicit handset these cases use their previous
+compatibility paths. [SKT native identity](skt-native.md#skt-native-identity)
+
+The supported Java layouts read `MIDlet-Key` and `MIDlet-Jar-URL`, extract a
+service identifier, combine subscriber data and a library salt, and compare a computed
 digest against the key. Two layouts select among four key generations: the same
 check compiled with its digest object and subscriber in different local slots is
-a second fingerprint, not a second rule. The final `String.equals` call becomes
+a second fingerprint of the same rule. With the implicit handset the final
+`String.equals` call becomes
 `pop2; iconst_1; nop` in a session-owned class-file copy, keeping its length and
 stack effect. Earlier code, library state
 initialization, digest calculation, exception handling and every other equality
@@ -128,6 +154,42 @@ change to create a name. Off/on browser runs describe the earlier opt-in design;
 the current page applies recognized compatibility automatically.
 
 ## Validation evidence
+
+On two local KTF descriptor packages, separate save roots held existing
+subscriber-matched records and all-zero records of the same lengths (23 and
+52 bytes). Both selected `guest-managed`. For each input, the simulated keys
+produced the same screens as the diagnostic `-no-auth` run. Good and bad inputs
+diverged within each title. The 52-byte reader displayed error 3004 for the
+all-zero input. The 23-byte reader deleted the rejected record
+itself. Both positive sessions restored their quick saves with the same frame
+digest. If a subsequent launch finds only the deletion, it again uses the
+installation fallback.
+
+Five local SKT Java titles with recognized license checks stayed active for
+180 ticks with the implicit handset. The same five invoked their own refusal
+with an explicitly configured test number, both in automatic mode and with
+compatibility disabled. Four exited at their first tick and one after its logo.
+An authored JAR exercises the corresponding positive check with a matching
+fixture key. Native subscriber and save checks have their own
+[real archive evidence](skt-native.md#skt-native-identity).
+
+Four launches through the Chromium PWA and a local release server returned
+`guest-managed` for a KTF descriptor package, an SKT Java title and an LGT
+Clet, and `ktf-brew-packaged-certificate` for a KTF native package. Each
+session sent a frame to the page.
+
+On 2026-11-19 the baseline and updated builds covered 344 KTF, 151 LGT and
+107 SKT archives. Of 3,633 archive/stage outcomes, 3,632 agreed. One SKT input
+probe passed before the change and skipped afterwards because its opening
+animation kept changing. Eight isolated repetitions produced both outcomes
+in both builds (one pass before, two after). Both reported `unsupported`
+and remained active during the CLI check.
+
+Three KTF titles held up the serial input sweep. Each of the 344 input probes
+therefore ran in a separate process with a 90-second limit per archive on
+each build. The same three timed out on both. For each of those three, the
+CLI reported `unsupported` and produced identical first frames across builds.
+Their response to a key remains unverified.
 
 Authored tests exercise relocated addresses, decoder execution, duplicate cipher
 entries, invalid identities, changed instructions, truncated input, private saves
@@ -161,7 +223,9 @@ literal pointers, the shared options buffer and the file-call trampoline. It
 rejects different instructions, disconnected buffers and malformed addresses;
 the filename or record length alone never selects this adapter.
 
-The save view changes that word to one on reads of a complete recognized record.
+A complete options file with its success word already set, or a recorded file
+deletion, uses guest-managed storage. On the fallback path the save view changes
+the word to one on reads of a complete recognized record.
 Writes preserve the original four authentication bytes while persisting other
 settings normally, including writes that truncate the record. Progress files and
 creation/deletion ledgers pass through unchanged. Packaged defaults remain in the
@@ -200,16 +264,19 @@ and `build/auth-complete/`.
 and subscriber-gate instruction contracts, with bounded relocation-aware literal
 and call resolution; the filename alone never selects it. The cipher uses seed
 `0x21c3` and the 32-bit recurrence `state * 0x343fd + 0x269ec3`, XORing each byte
-with bits 16–23. The decoded subscriber occupies bytes 40–51. The other 46 bytes
-of an existing exact-length record are unchanged. An absent or empty record
-starts with zeros outside the session identity (see
-[the empty-certificate regression](#empty-certificate-regression-and-automatic-defaults));
-other nonzero lengths are refused.
+with bits 16–23. The decoded subscriber occupies bytes 40–51. The guest reads
+an existing nonempty record at its original length and handles acceptance,
+refusal and later writes itself. A recorded file deletion also uses the
+ordinary store. An absent or empty first attempt uses a private record that
+starts with zeros outside the session identity. [Empty-certificate regression](#empty-certificate-regression-and-automatic-defaults)
 
-The certificate and its guest rewrites stay in memory, as do case variants of
+On that fallback path the certificate and its guest rewrites stay in memory, as do case variants of
 the authentication filename. Both filesystem ledgers keep the original
 certificate membership on disk while ordinary file creation, deletion and
-progress persist. A fresh session uses its own subscriber snapshot; disabling
+progress persist. For the separate 100-byte embedded format, the loader checks
+the options container before initialization. A corrupt nonempty container or
+a valid header with a set presence byte goes to the original reader. The guest
+can then update or reject its record on disk. A fresh session uses its own subscriber snapshot; disabling
 authentication exposes the original file state. No network callback, consent
 selection or executable instruction changes.
 
@@ -351,8 +418,8 @@ Fresh-save acceptance had not covered this state.
 
 For this recognized contract, an empty certificate now receives the same private
 58-byte replacement as a missing one. The zero-byte backing file,
-creation-ledger membership and ordinary options and progress stay intact; other
-nonzero invalid lengths still fail recognition. An authored regression test
+creation-ledger membership and ordinary options and progress stay intact. The
+guest handles nonempty records at their original length. An authored regression test
 fails before the change and passes afterwards, including private rewrites and a
 second session against the preserved empty file. Copies of the user's save
 reproduce the connection wait before the fix and reach the game menu afterwards

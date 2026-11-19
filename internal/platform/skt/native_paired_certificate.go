@@ -20,8 +20,7 @@ func (archive *NativeArchive) PairedCertificateSubscriber() string {
 	if archive == nil || archive.Executable == nil || len(archive.Executable.Data) < pairedCertificateTableEnd {
 		return ""
 	}
-	digest := hex.EncodeToString(archive.Executable.Digest[:])
-	if !compatibility.HasFix("skt", compatibility.NativeModule, digest, compatibility.SKTNativePairedCertificate) {
+	if !archive.Executable.readsPairedCertificate() {
 		return ""
 	}
 	usim, cert := archive.Files["usimcert.c2s"], archive.Files["cert.c2s"]
@@ -30,6 +29,11 @@ func (archive *NativeArchive) PairedCertificateSubscriber() string {
 	}
 	table := archive.Executable.Data[pairedCertificateTableStart:pairedCertificateTableEnd]
 	return pairedCertificateSubscriber(usim, cert, table)
+}
+
+func (executable *NativeExecutable) readsPairedCertificate() bool {
+	digest := hex.EncodeToString(executable.Digest[:])
+	return compatibility.HasFix("skt", compatibility.NativeModule, digest, compatibility.SKTNativePairedCertificate)
 }
 
 func pairedCertificateSubscriber(usim, cert, table []byte) string {
