@@ -38,8 +38,8 @@ markers keep precedence.
 the existing framebuffer, audio, save and logging boundaries. The server's
 shared session and the CLI `runskt` command both call `skt.StartScript`.
 `inspect` reports SGS metadata without requiring a Java main class. JVM
-invocation and cheats remain Java-specific. Quick save and quick load cover version 1/2 SGS
-sessions; see [SKT checkpoints](skt-checkpoints.md#sgs-state).
+invocation and cheats remain Java-specific. Quick save and quick load use the same
+slot and controls for SGS versions 1, 2 and 4. See [SKT checkpoints](skt-checkpoints.md#sgs-state).
 
 The legacy parser accepts version 1 (52-byte header), version 2 (100-byte header), and
 the observed 32-byte download prefix. Internal offsets stay relative to the SGS
@@ -64,8 +64,9 @@ release supplies 255. The renderer handles indexed images, palette overrides,
 text, the drawing and backup buffers and presentation. Packed sounds pass
 through the shared SMAF decoder. Regular files and the 64-byte user NV area
 start with their archived contents when present. Changed data persists in
-the title's save directory. Version 4 quick checkpoints are currently
-unavailable. Guest socket calls return the disconnected handset result.
+the title's save directory. A quick load restores the last presented frame and
+resumes the saved timers and input state. Later ordinary saves remain current.
+Guest socket calls return the disconnected handset result.
 Random integers use the session's seeded generator with an exclusive upper bound.
 
 One local installation reaches its third stage in the browser with its original

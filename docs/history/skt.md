@@ -4147,7 +4147,11 @@ finishes the third stage. The results page shows maximum speed, combo and
 points. OK advances to the fourth stage. A fresh process reading the updated
 64-byte NV save opens the fourth stage and resumes play. The local regression
 checks the third-stage result and fourth-stage headings independently of the
-changing score and animation. To run both regressions, set
+changing score and animation. A third regression quicksaves at tick 1845,
+restores the exact stage frame and reproduces the next three sampled frames
+under the same input and timing. In Chromium the keypad quickload button
+restored the saved third-stage map pixel for pixel, and OK entered play again.
+To run all three regressions, set
 `WFEATURE_SKT_WIDE_STAGE` to the larger archive's path and run
 `go test ./internal/session -run '^TestLocalWideScriptStage' -count=1`.
 

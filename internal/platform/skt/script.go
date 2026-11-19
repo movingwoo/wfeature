@@ -212,11 +212,14 @@ func (s *ScriptSession) Close() error {
 	return s.event(context.Background(), 1, 0)
 }
 func (s *ScriptSession) SendKey(ctx context.Context, action string, code int32) error {
-	if s.closed || s.paused || s.Exited() {
+	if s.closed || s.Exited() {
 		return nil
 	}
 	if s.wide != nil {
 		return s.sendWideKey(ctx, action, code)
+	}
+	if s.paused {
+		return nil
 	}
 	if action != "press" {
 		return nil

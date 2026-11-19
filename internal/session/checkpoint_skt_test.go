@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -219,5 +220,127 @@ func TestCheckpointScriptSubprocess(t *testing.T) {
 	process.Env = append(os.Environ(), variable+"="+root)
 	if output, err := process.CombinedOutput(); err != nil {
 		t.Fatalf("script checkpoint process: %v\n%s", err, output)
+	}
+}
+
+func TestCheckpointWideScriptResumesHeldInputAndTimer(t *testing.T) {
+	// Each timer adds 32 to the red channel. Both key edges add eight.
+	// Continuing from a checkpoint therefore depends on the saved variable,
+	// held key, timer phase, and current drawing surface.
+	data := make([]byte, 128)
+	data[0], data[5] = 4, 4
+	copy(data[10:26], "Timer fixture")
+	paint := []uint16{4, 10, 5, 0, 5, 0, 0x92, 0x38, 0x92, 0x5f, 0xff}
+	entries := [4][]uint16{
+		0: {5, 10, 5, 1, 0x92, 0x95, 0x92, 0x3b, 0x92, 0x5f, 0xff},
+		2: append([]uint16{0x7a, 10, 32}, paint...),
+		3: append([]uint16{0x7a, 10, 8}, paint...),
+	}
+	for slot, code := range entries {
+		if len(code) == 0 {
+			continue
+		}
+		binary.LittleEndian.PutUint32(data[28+4*slot:], uint32(len(data)))
+		for _, op := range code {
+			data = binary.LittleEndian.AppendUint16(data, op)
+		}
+	}
+	vd := len(data)
+	for range 11 {
+		data = append(data, 1, 0, 1, 0, 0, 0, 0, 0)
+	}
+	vi := len(data)
+	data = append(data, make([]byte, 11*4)...)
+	for i, offset := range []int{vd, vi, len(data), len(data)} {
+		binary.LittleEndian.PutUint32(data[72+i*4:], uint32(offset))
+	}
+	binary.LittleEndian.PutUint32(data[120:], uint32(len(data)))
+	archive := packScriptFixture(t, data)
+	saveRoot := t.TempDir()
+	store := backend.NewDirectorySaveStore(saveRoot)
+	identity := backend.SaveIdentity(archive)
+	live, err := Start(t.Context(), archive, Options{Width: 7, Height: 5, SaveStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	advance := func(ms int) {
+		t.Helper()
+		if _, err := live.sktScript().Advance(t.Context(), time.Duration(ms)*time.Millisecond); err != nil {
+			t.Fatal(err)
+		}
+	}
+	frame := func() []byte {
+		t.Helper()
+		pixels, w, h, ok := live.Frame()
+		if !ok || w != 7 || h != 5 || len(pixels) != w*h*4 {
+			t.Fatal("missing fixture frame")
+		}
+		return pixels
+	}
+	advance(16)
+	if err := live.SendKey(t.Context(), KeyPress, '5'); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := frame()
+	slot, err := live.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreCheckpoint(identity, slot); err != nil {
+		t.Fatal(err)
+	}
+	replay := func() [][]byte {
+		t.Helper()
+		if err := live.SendKey(t.Context(), KeyRelease, '5'); err != nil {
+			t.Fatal(err)
+		}
+		edges := [][]byte{frame()}
+		advance(9)
+		edges = append(edges, frame())
+		advance(1)
+		return append(edges, frame())
+	}
+	want := replay()
+	if bytes.Equal(snapshot, want[0]) || !bytes.Equal(want[0], want[1]) || bytes.Equal(want[1], want[2]) {
+		t.Fatal("key edge or pending timer did not change the expected frame")
+	}
+	slot, found, err := backend.NewDirectorySaveStore(saveRoot).LoadCheckpoint(identity)
+	if err != nil || !found {
+		t.Fatalf("quicksave slot missing: %v", err)
+	}
+	if err := live.LoadCheckpoint(t.Context(), archive, slot); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(snapshot, frame()) || !slices.Equal(live.HeldKeys(), []int32{'5'}) || !live.Running() {
+		t.Fatal("restored frame, held key or running state differs")
+	}
+	if got := replay(); !reflect.DeepEqual(want, got) {
+		t.Fatal("restored inputs and timer produced different frames")
+	}
+
+	// The browser releases keys from the old input epoch before it resumes a
+	// paused slot. The guest must observe the release and stop repeating.
+	if err := live.LoadCheckpoint(t.Context(), archive, slot); err != nil {
+		t.Fatal(err)
+	}
+	if err := live.Pause(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	paused, err := live.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := live.LoadCheckpoint(t.Context(), archive, paused); err != nil || !live.Paused() {
+		t.Fatalf("paused restore: %v", err)
+	}
+	if err := live.ReleaseHeldInput(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := live.Resume(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(frame(), want[0]) || len(live.HeldKeys()) != 0 {
+		t.Fatal("paused restore lost the release of the saved key")
 	}
 }

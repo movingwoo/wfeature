@@ -332,11 +332,15 @@ func wideFileName(vm *sgsvm.WideVM, index int32) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	return normalizeWideFileName(name)
+}
+
+func normalizeWideFileName(name string) (string, bool) {
 	name = strings.TrimLeft(strings.ReplaceAll(strings.ToLower(name), "\\", "/"), "/")
 	if strings.ContainsAny(name, ":\r\n") || strings.ContainsRune(name, '\uFFFD') {
 		return "", false
 	}
-	name, err = backend.NormalizeSaveKey(name)
+	name, err := backend.NormalizeSaveKey(name)
 	return name, err == nil && len("files/")+len(name) <= 512
 }
 
@@ -344,7 +348,9 @@ func wideFileName(vm *sgsvm.WideVM, index int32) (string, bool) {
 func (s *ScriptSession) wideFileContents(vm *sgsvm.WideVM, name string) ([]byte, bool, error) {
 	for _, h := range s.wideFiles {
 		if h.data != nil && h.name == name {
-			return *h.data, true, nil
+			// Restoring a handle on a removed file keeps its cursor and its
+			// shared buffer, but the name stays absent until a create or write.
+			return *h.data, *h.data != nil, nil
 		}
 	}
 	if err := vm.Charge(32); err != nil {
@@ -354,24 +360,35 @@ func (s *ScriptSession) wideFileContents(vm *sgsvm.WideVM, name string) ([]byte,
 	if err != nil {
 		return nil, false, err
 	}
-	if !present {
-		data, found := s.wideSeed(name)
-		return data, found, nil
+	if present {
+		if err := vm.Charge(1 + len(raw)/32); err != nil {
+			return nil, false, err
+		}
 	}
-	if err := vm.Charge(1 + len(raw)/32); err != nil {
-		return nil, false, err
+	return s.decodeWideFile(name, raw, present)
+}
+
+func (s *ScriptSession) decodeWideFile(name string, raw []byte, present bool) ([]byte, bool, error) {
+	var data []byte
+	if present {
+		if len(raw) < 4 || binary.LittleEndian.Uint32(raw) > 1 {
+			return nil, false, fmt.Errorf("SGS: invalid saved file record")
+		}
+		records, err := backend.DecodeSaveRecords(raw)
+		if err != nil || len(records) == 0 {
+			return nil, false, err
+		}
+		data = records[0]
+	} else {
+		var found bool
+		if data, found = s.wideSeed(name); !found {
+			return nil, false, nil
+		}
 	}
-	if len(raw) < 4 || binary.LittleEndian.Uint32(raw) > 1 {
-		return nil, false, fmt.Errorf("SGS: invalid saved file record")
+	if data == nil {
+		data = []byte{}
 	}
-	records, err := backend.DecodeSaveRecords(raw)
-	if err != nil {
-		return nil, false, err
-	}
-	if len(records) == 0 {
-		return nil, false, nil
-	}
-	return records[0], true, nil
+	return data, true, nil
 }
 
 func (s *ScriptSession) wideWriteFile(name string, data []byte) error {
@@ -442,6 +459,9 @@ func (s *ScriptSession) wideFile(id uint16, vm *sgsvm.WideVM) error {
 			for _, other := range s.wideFiles {
 				if other.data != nil && other.name == name {
 					handle.data = other.data
+					if mode == 2 {
+						*handle.data = data
+					}
 					break
 				}
 			}

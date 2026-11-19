@@ -17,6 +17,7 @@ type wideScreen struct {
 	g                                  graphicsContext
 	fb                                 backend.Framebuffer
 	back, visible                      []byte
+	presents                           uint64
 	gamma, alpha, zoom, mirror, rotate int
 	font, fg, bg, align, style         int
 	palette                            [182]uint32
@@ -55,7 +56,11 @@ func (s *wideScreen) present(r paintRect) error {
 			s.visible[i+2] = byte(int(s.g.pixels[i+2]>>3) * 255 / 31)
 		}
 	}
-	return s.fb.Present(backend.Frame{Width: s.g.width, Height: s.g.height, RGBA: s.visible})
+	if err := s.fb.Present(backend.Frame{Width: s.g.width, Height: s.g.height, RGBA: s.visible}); err != nil {
+		return err
+	}
+	s.presents++
+	return nil
 }
 
 // The public master palette is indexed by a four-by-eight-by-four cube.

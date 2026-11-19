@@ -16,9 +16,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/testlocal"
 )
 
-// Run one fresh installation session. Ticks in captures count completed 16 ms
-// passes. Each keypad press is released before the following pass.
-func runLocalWideStage(t *testing.T, saves string, inputs map[int]int32, captures ...int) map[int][]byte {
+func openLocalWideStage(t *testing.T, saves string) (*Session, []byte) {
 	t.Helper()
 	path := testlocal.Value(t, "WFEATURE_SKT_WIDE_STAGE", "the word-script archive with the packaged stage save")
 	data, err := os.ReadFile(path)
@@ -29,28 +27,46 @@ func runLocalWideStage(t *testing.T, saves string, inputs map[int]int32, capture
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
-	script := s.sktScript()
-	if script == nil {
+	if s.sktScript() == nil {
+		s.Close()
 		t.Fatal("expected an SGS session")
 	}
+	return s, data
+}
+
+func localWideStageKeys(inputs map[int]int32) map[int]int32 {
 	keys := map[int]int32{800: -5, 1056: -5, 1127: -5, 1193: -5, 1259: -5, 1350: -5}
 	maps.Copy(keys, inputs)
+	return keys
+}
+
+func advanceLocalWideStage(t *testing.T, s *Session, keys map[int]int32, tick int) {
+	t.Helper()
+	if key, ok := keys[tick-1]; ok {
+		if err := s.SendKey(t.Context(), KeyRelease, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if key, ok := keys[tick]; ok {
+		if err := s.SendKey(t.Context(), KeyPress, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.sktScript().Advance(t.Context(), 16*time.Millisecond); err != nil {
+		t.Fatalf("tick %d: %v", tick, err)
+	}
+}
+
+// Run one fresh installation session. Ticks in captures count completed 16 ms
+// passes. Each keypad press is released before the following pass.
+func runLocalWideStage(t *testing.T, saves string, inputs map[int]int32, captures ...int) map[int][]byte {
+	t.Helper()
+	s, _ := openLocalWideStage(t, saves)
+	defer s.Close()
+	keys := localWideStageKeys(inputs)
 	frames := make(map[int][]byte, len(captures))
 	for tick := range slices.Max(captures) {
-		if key, ok := keys[tick-1]; ok {
-			if err := s.SendKey(t.Context(), KeyRelease, key); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if key, ok := keys[tick]; ok {
-			if err := s.SendKey(t.Context(), KeyPress, key); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if _, err := script.Advance(t.Context(), 16*time.Millisecond); err != nil {
-			t.Fatalf("tick %d: %v", tick, err)
-		}
+		advanceLocalWideStage(t, s, keys, tick)
 		if !slices.Contains(captures, tick+1) {
 			continue
 		}
@@ -119,5 +135,57 @@ func TestLocalWideScriptStageProgress(t *testing.T) {
 		if got := fmt.Sprintf("%x", hash.Sum(nil)); got != check.want {
 			t.Errorf("%s: got %s, want %s", check.name, got, check.want)
 		}
+	}
+}
+
+func TestLocalWideScriptStageCheckpoint(t *testing.T) {
+	s, archive := openLocalWideStage(t, t.TempDir())
+	defer s.Close()
+	const checkpointTick = 1845
+	keys := localWideStageKeys(map[int]int32{1850: '5'})
+	for tick := range checkpointTick {
+		advanceLocalWideStage(t, s, keys, tick)
+	}
+	savedFrame, _, _, ok := s.Frame()
+	if !ok || !s.Running() {
+		t.Fatal("stage not running")
+	}
+	slot, err := s.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay := func() [][]byte {
+		t.Helper()
+		var frames [][]byte
+		for tick := checkpointTick; tick < 1880; tick++ {
+			advanceLocalWideStage(t, s, keys, tick)
+			if tick == 1850 || tick == 1860 || tick == 1879 {
+				frame, _, _, ok := s.Frame()
+				if !ok || !s.Running() {
+					t.Fatalf("stage stopped at tick %d", tick)
+				}
+				frames = append(frames, frame)
+			}
+		}
+		return frames
+	}
+	want := replay()
+	if bytes.Equal(savedFrame, want[len(want)-1]) {
+		t.Fatal("stage did not advance before quickload")
+	}
+	if err := s.LoadCheckpoint(t.Context(), archive, slot); err != nil {
+		t.Fatal(err)
+	}
+	frame, _, _, ok := s.Frame()
+	if !ok || !bytes.Equal(savedFrame, frame) {
+		t.Fatal("quickload did not return to the saved stage frame")
+	}
+	for i, got := range replay() {
+		if !bytes.Equal(got, want[i]) {
+			t.Fatalf("replayed stage frame %d differs", i)
+		}
+	}
+	if _, err := s.CaptureCheckpoint(t.Context()); err != nil {
+		t.Fatalf("second quicksave after replay: %v", err)
 	}
 }

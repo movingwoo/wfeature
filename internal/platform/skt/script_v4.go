@@ -17,13 +17,8 @@ func (s *ScriptSession) startWide(ctx context.Context) (*ScriptSession, error) {
 	}
 	s.screen = screen
 	s.wide = sgsvm.NewWide(s.archive.Script, s.wideService)
-	if len(s.wide.Variables) < 10 {
-		return nil, fmt.Errorf("SGS: missing version 4 system variables")
-	}
-	for i := 0; i < 10; i++ {
-		if len(s.wide.Variables[i]) == 0 {
-			return nil, fmt.Errorf("SGS: empty system symbol %d", i)
-		}
+	if err := validateWideSystem(s.wide); err != nil {
+		return nil, err
 	}
 	w, h := s.options.Framebuffer.Dimensions()
 	s.wide.Variables[4][0], s.wide.Variables[5][0] = int32(w), int32(h)
@@ -31,6 +26,18 @@ func (s *ScriptSession) startWide(ctx context.Context) (*ScriptSession, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+func validateWideSystem(vm *sgsvm.WideVM) error {
+	if len(vm.Variables) < 10 {
+		return fmt.Errorf("SGS: missing version 4 system variables")
+	}
+	for i := 0; i < 10; i++ {
+		if len(vm.Variables[i]) == 0 {
+			return fmt.Errorf("SGS: empty system symbol %d", i)
+		}
+	}
+	return nil
 }
 
 func (s *ScriptSession) sendWideKey(ctx context.Context, action string, code int32) error {
@@ -63,6 +70,11 @@ func (s *ScriptSession) sendWideKey(ctx context.Context, action string, code int
 	case code == KeyCodeSoft2:
 		key = 22
 	default:
+		return nil
+	}
+	// A new host releases the previous host's held keys before resuming a
+	// paused checkpoint. Deliver the matching release to end guest repeat.
+	if s.paused && (action != "release" || key != s.wideHeld) {
 		return nil
 	}
 	if s.wideEditor != nil {
