@@ -190,6 +190,11 @@ var screenStripSites = map[string][]screenStripSite{
 		{at: 0x459e6, expect: []byte{0x16, 0x99, 0x18, 0x23, 0xcd, 0x6c, 0x17, 0x9a, 0x6b, 0x43, 0xc0, 0x18}, immediate: 2},
 		{at: 0x45efe, expect: []byte{0x11, 0x99, 0x18, 0x23, 0xca, 0x6c, 0x53, 0x43, 0xc0, 0x18}, immediate: 2},
 	},
+	// The drawing routines add this row count times the stride to the screen
+	// pointer. The width <= 128 branch stores 14 in the same word.
+	"ca3f14e043fcd1659b894144d31053042d7f8f0f8d2a4c07b3aff8ab8879f8e4": {
+		{at: 0x211e, expect: []byte{0xa4, 0x4a, 0x18, 0x23, 0x13, 0x60}, immediate: 2},
+	},
 }
 
 // clearScreenStripConstant replaces the strip each site loads with 0, after

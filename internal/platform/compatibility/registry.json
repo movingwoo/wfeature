@@ -276,7 +276,8 @@
         "sha256": "ca3f14e043fcd1659b894144d31053042d7f8f0f8d2a4c07b3aff8ab8879f8e4"
       },
       "fixes": [
-        "lgt.certificate_message"
+        "lgt.certificate_message",
+        "lgt.screen_strip_constant"
       ],
       "evidence": "docs/history/lgt.md#lgt-puzzle-archives-2026-11-18"
     },

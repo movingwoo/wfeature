@@ -122,12 +122,13 @@ func TestLocalImageFramebufferOriginArchive(t *testing.T) {
 	testLocalStripOrigin(t, "WFEATURE_LGT_IMAGE_ORIGIN_ARCHIVE", 0x28a10, 0x22)
 }
 
+func TestLocalScreenStripConstantArchive(t *testing.T) {
+	testLocalStripOrigin(t, "WFEATURE_LGT_SCREEN_STRIP_ARCHIVE", 0x2120, 0x23)
+}
+
 func testLocalStripOrigin(t *testing.T, variable string, address uint32, opcode byte) {
 	t.Helper()
-	path := os.Getenv(variable)
-	if path == "" {
-		t.Skip("set " + variable)
-	}
+	path := testlocal.Value(t, variable, "a local archive")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
