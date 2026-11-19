@@ -61,6 +61,7 @@ This consolidation adds no execution or acceptance evidence.
 - [What the other platforms already answered — 2026-11-05](#lgt-parity-fill-2026-11-05)
 - [A Clet's timer comes due while it is paused — 2026-11-10](#lgt-paused-timer-2026-11-10)
 - [Five more Clets built for a strip above the screen — 2026-11-17](#lgt-new-archives-2026-11-17)
+- [Sync export and three certificate clients — 2026-11-19](#lgt-puzzle-archives-2026-11-18)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -8861,3 +8862,51 @@ refusal of changed code with nothing written, the `movs` executing as the zero
 the module stores, and that every module with sites is registered
 (`screen_strip_test.go`). Each title was run 3,000 ticks with and without the
 fix.
+
+<a id="lgt-puzzle-archives-2026-11-18"></a>
+
+## Sync export and three certificate clients — 2026-11-19
+
+A descriptorless sync export contained an AOT Java application in
+`WEBSYNC1.jar`. Its module (`83639c555b8b632c…`) ran with a temporary
+descriptor. Detection and loading now recognize the original package. Changing
+a wrapper directory or icon preserves its save owner, and changing the module
+selects a separate owner.
+
+Three native modules stopped at enrollment. Each used the existing two-stage
+local service with different request bytes. The service matches the module
+digest, dial and socket callbacks, destination, and both complete requests.
+The guest consumes the replies and persists its own enrollment state.
+
+| Module SHA-256 prefix | First / second request bytes | Observed request fields |
+| --- | --- | --- |
+| `12d776585da56713` | 73 / 58 | The first frame pads 26 bytes with ASCII zeroes. The second ends after the model and carries the command word `03 f7`. |
+| `ca3f14e043fcd165` | 108 / 79 | The first frame includes the same padding and 35 trailing zero bytes. The second carries `04 12` and the product. |
+| `f11086c249b30515` | 73 / 79 | Both request headers carry `04 2c`. The second carries the product. |
+
+The last module also calls `MC_knlGetResource` with `M_E_NOENT` after
+`MC_knlGetResourceID` fails to find `sjis.bin`. Returning that error to the
+guest lets its own resource handler continue. Previously the runtime
+dereferenced the error as the address of a resource name.
+
+One export of this module ships a 76-byte `cert.c2s`. The guest reads all 76
+bytes, decodes the record, then reports error 5001 because its subscriber
+field is empty. With automatic authentication enabled, this module's local
+service omits the fingerprinted unassigned record from the packaged-file view.
+The guest then offers enrollment and stores its own record. Other accessory
+files and save overrides remain available.
+
+The four revisions reached their first puzzle through the shared runtime. At
+the board, a key changed the selection or playfield, and quickload restored
+the saved frame. The three certificate clients completed enrollment with an
+empty save directory and reopened the game using their persisted data. The
+original and combined packages of the last module each reached the same board.
+After ten ticks from a common checkpoint, idle, left, right and select produced
+four distinct frames in each package. The browser player rendered all five
+packages.
+
+Across the 150 archives already classified as LGT, the original and combined
+packages moved from failure to passing all three acceptance stages. The
+descriptorless export now passes all three as well. The two pre-existing
+failures in other archives (one black boot frame and one unresponsive screen)
+persisted. No archive regressed.

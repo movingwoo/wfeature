@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/detect"
 )
 
 func TestExecutableJARSelection(t *testing.T) {
@@ -71,4 +72,39 @@ func TestInstalledResourcePrefixesResolveFromTheReadOnlyRoot(t *testing.T) {
 			t.Fatal("installed alias overrode JAR resource")
 		}
 	}
+}
+
+func TestDescriptorlessSyncExport(t *testing.T) {
+	jar := fixtureJAR(t)
+	open := func(files map[string][]byte, wantLGT bool) *Archive {
+		t.Helper()
+		data := zipOf(t, files)
+		platform, err := detect.Archive(data)
+		if err != nil || (platform == detect.LGT) != wantLGT {
+			t.Fatalf("platform = %s, error = %v, want LGT %t", platform, err, wantLGT)
+		}
+		game, err := Open(data)
+		if (err == nil) != wantLGT {
+			t.Fatalf("open error = %v, want LGT %t", err, wantLGT)
+		}
+		return game
+	}
+	a := open(map[string][]byte{"WEBSYNC1.jar": jar, "big.png": nil}, true)
+	b := open(map[string][]byte{"folder/websync1.JAR": jar, "folder/big.png": []byte("icon")}, true)
+	if a.Descriptor.AID != "WEBSYNC1" || SaveOwner(a.Descriptor) != SaveOwner(b.Descriptor) ||
+		SaveOwner(a.Descriptor) == "WEBSYNC1" || backend.SaveOwnerRefused(SaveOwner(a.Descriptor)) {
+		t.Fatal("export has no stable, module-specific save owner", a.Descriptor, b.Descriptor)
+	}
+	entries, err := readZIP(jar, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries[binaryModuleName] = append(entries[binaryModuleName], 0)
+	other := open(map[string][]byte{"WEBSYNC1.jar": zipOf(t, entries)}, true)
+	if SaveOwner(other.Descriptor) == SaveOwner(a.Descriptor) {
+		t.Fatal("two executable revisions shared a save owner")
+	}
+	open(map[string][]byte{"WEBSYNC1.jar": zipOf(t, map[string][]byte{"binary.mod": []byte("unrelated")})}, false)
+	open(map[string][]byte{"WEBSYNC1.jar": jar, "another.jar": jar}, false)
+	open(map[string][]byte{"outer/inner/WEBSYNC1.jar": jar}, false)
 }

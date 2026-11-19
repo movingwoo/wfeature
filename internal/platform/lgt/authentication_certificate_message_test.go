@@ -10,14 +10,15 @@ import (
 	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
-// The native modules of the two local revisions, as the registry names them.
+// The native modules of the local revisions, as the registry names them.
 const (
-	firstCertificateMessageModule  = "e73ff5c0e4ea82d53291faec14bc9a33ac9d85bc95124f6058d523ee5621fea1"
-	secondCertificateMessageModule = "c3abb052c4eda11bba233e1bf21641fe04c5fb276b8fda9af4f581a1d7b1be8c"
+	firstCertificateMessageModule     = "e73ff5c0e4ea82d53291faec14bc9a33ac9d85bc95124f6058d523ee5621fea1"
+	modelOnlyCertificateMessageModule = "12d776585da56713c33860ffd9404a71a3d0d8a660984d129e8e8f438b037055"
+	secondCertificateMessageModule    = "c3abb052c4eda11bba233e1bf21641fe04c5fb276b8fda9af4f581a1d7b1be8c"
 )
 
 func TestCertificateMessageSequenceAndFragments(t *testing.T) {
-	for _, module := range []string{firstCertificateMessageModule, secondCertificateMessageModule} {
+	for module := range certificateMessageRevisions {
 		t.Run(module[:8], func(t *testing.T) {
 			testCertificateMessageSequenceAndFragments(t, certificateMessageNetwork(certificateMessageRevisions[module], "01012345678", "Fixture"))
 		})
@@ -103,7 +104,7 @@ func testCertificateMessageSequenceAndFragments(t *testing.T, n *notificationNet
 // identity and model, and the socket contract its code passes. The bytes are
 // fixed here rather than derived from the revision table: the client field,
 // the code word and the product field after the model are what separate the
-// two revisions.
+// revisions.
 func TestCertificateMessageRevisionRequests(t *testing.T) {
 	for _, revision := range []struct {
 		module   string
@@ -121,6 +122,16 @@ func TestCertificateMessageRevisionRequests(t *testing.T) {
 			contract: notificationContract{dials: [2]uint32{0x2d5c1, 0x2d5c1}, socketCallback: 0x2d471, address: 0xfa4273d3, port: 0x1d3b},
 		},
 		{
+			module: modelOnlyCertificateMessageModule,
+			observed: [2]string{
+				"004900003003f900000205312e302e32000000000000000000000000000000303130303030303030303000" +
+					"000000003030303030303030303030303030303030303030303030303030",
+				"003a0014300a03f7456d756c61746f72000000000000000000000000000000000000000000000000000000" +
+					"000000000000000000000000000000",
+			},
+			contract: notificationContract{dials: [2]uint32{0x2d791, 0x2d791}, socketCallback: 0x2d641, address: 0xfa4273d3, port: 0x1d3b},
+		},
+		{
 			module: secondCertificateMessageModule,
 			observed: [2]string{
 				"004900000003f9000002054c47545f57495049435f312e302e300000000000303130303030303030303000" +
@@ -129,6 +140,22 @@ func TestCertificateMessageRevisionRequests(t *testing.T) {
 					"000000000000000000000000000000003030303330363042000000000000000000000000",
 			},
 			contract: notificationContract{dials: [2]uint32{0x1ddf5, 0x1ddf5}, socketCallback: 0x1e1c5, address: 0xfc4273d3, port: 0x223b},
+		},
+		{
+			module: "ca3f14e043fcd1659b894144d31053042d7f8f0f8d2a4c07b3aff8ab8879f8e4",
+			observed: [2]string{
+				"006c00000003f900000205312e302e320000000000000000000000000000003031303030303030303030000000000030303030303030303030303030303030303030303030303030300000000000000000000000000000000000000000000000000000000000000000000000",
+				"004f0014000c0412456d756c61746f72000000000000000000000000000000000000000000000000000000000000000000000000000000000000003030303243423641000000000000000000000000",
+			},
+			contract: notificationContract{dials: [2]uint32{0x2dc81, 0x2dc81}, socketCallback: 0x2db21, address: 0xfc4273d3, port: 0x1d3b},
+		},
+		{
+			module: "f11086c249b305152625674c4accba4fd705d59ade956824b4c45ea3cea7576f",
+			observed: [2]string{
+				"004900000003f9042c0205312e302e31000000000000000000000000000000303130303030303030303000000000000000000000000000000000000000000000000000000000000000",
+				"004f0014000c042c456d756c61746f72000000000000000000000000000000000000000000000000000000000000000000000000000000000000003031303432383735000000000000000000000000",
+			},
+			contract: notificationContract{dials: [2]uint32{0x1d11d, 0x1d11d}, socketCallback: 0x1d4f5, address: 0xfc4273d3, port: 0x223b},
 		},
 	} {
 		n := certificateMessageNetwork(certificateMessageRevisions[revision.module], "01000000000", "Emulator")
@@ -148,8 +175,17 @@ func TestCertificateMessageRevisionRequests(t *testing.T) {
 }
 
 func TestCertificateMessageSocketDeferredDeliveryAndClose(t *testing.T) {
+	for module, revision := range certificateMessageRevisions {
+		t.Run(module[:8], func(t *testing.T) {
+			testCertificateMessageSocket(t, revision)
+		})
+	}
+}
+
+func testCertificateMessageSocket(t *testing.T, revision certificateMessageRevision) {
+	t.Helper()
 	c := fixtureClient(t)
-	n := certificateMessageNetwork(certificateMessageRevisions[firstCertificateMessageModule], "01012345678", "Fixture")
+	n := certificateMessageNetwork(revision, "01012345678", "Fixture")
 	n.active = true
 	c.notificationNetwork = n
 	cb := notificationReportingCallback(t, c)

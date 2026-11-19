@@ -996,7 +996,7 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"outstanding": rebuilt,
 		},
 		"notificationNetwork": {
-			"contract": rebuilt, "identity": rebuilt, "authenticationRequest": rebuilt, "certificateRequests": rebuilt,
+			"contract": rebuilt, "identity": rebuilt, "authenticationRequest": rebuilt, "certificateRequests": rebuilt, "unassignedCertificate": rebuilt,
 			"active": recorded, "next": recorded, "serial": recorded, "sockets": recorded,
 		},
 		"notificationSocketState": {

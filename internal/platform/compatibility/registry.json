@@ -257,6 +257,42 @@
       "evidence": "docs/history/lgt.md#lgt-new-archives-2026-10-19-certificate-message"
     },
     {
+      "id": "lgt-certificate-message-003",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "12d776585da56713c33860ffd9404a71a3d0d8a660984d129e8e8f438b037055"
+      },
+      "fixes": [
+        "lgt.certificate_message"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-puzzle-archives-2026-11-18"
+    },
+    {
+      "id": "lgt-certificate-message-004",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "ca3f14e043fcd1659b894144d31053042d7f8f0f8d2a4c07b3aff8ab8879f8e4"
+      },
+      "fixes": [
+        "lgt.certificate_message"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-puzzle-archives-2026-11-18"
+    },
+    {
+      "id": "lgt-certificate-message-005",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "f11086c249b305152625674c4accba4fd705d59ade956824b4c45ea3cea7576f"
+      },
+      "fixes": [
+        "lgt.certificate_message"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-puzzle-archives-2026-11-18"
+    },
+    {
       "id": "lgt-record-table-terminator-001",
       "platform": "lgt",
       "match": {

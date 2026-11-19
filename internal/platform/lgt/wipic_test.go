@@ -135,8 +135,12 @@ func TestResourceIDIsAHandleTheResourceCallAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result := callSlot(t, client, slotGetResourceID, missing, size); int32(result) >= 0 {
+	result := callSlot(t, client, slotGetResourceID, missing, size)
+	if int32(result) != wipiNoEntry {
 		t.Fatalf("a missing resource answered %#x", result)
+	}
+	if read := callSlot(t, client, slotGetResource, result, buffer, 0); int32(read) != wipiNoEntry {
+		t.Fatalf("reading missing resource ID answered %#x", read)
 	}
 	if length, err := client.readWord(size); err != nil || length != 0 {
 		t.Fatalf("missing resource size = %d/%v, want 0", length, err)

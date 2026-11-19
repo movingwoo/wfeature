@@ -59,6 +59,8 @@ type Descriptor struct {
 	// Fields keeps every key app_info carried, because titles disagree about
 	// which ones they set and a Host may want to show them.
 	Fields map[string]string
+	// A sync export has no carrier PID and reuses the same JAR name.
+	syncOwner string
 }
 
 // Archive is one LGT game: its descriptor, its ELF module, and the files the
@@ -115,6 +117,9 @@ func EarlierSaveOwner(descriptor Descriptor) string {
 func rawSaveOwner(descriptor Descriptor) string {
 	if descriptor.PID != "" {
 		return descriptor.PID
+	}
+	if descriptor.syncOwner != "" {
+		return descriptor.syncOwner
 	}
 	if descriptor.AID != "" {
 		return descriptor.AID
@@ -191,18 +196,31 @@ func Open(data []byte) (*Archive, error) {
 	// internal/zipentry; the JAR read below deliberately does not ask, because
 	// a JAR never qualifies.
 	files = zipentry.Unwrap(files)
-	info, ok := files["app_info"]
-	if !ok {
-		return nil, fmt.Errorf("LGT archive has no app_info")
-	}
-	descriptor, err := ParseDescriptor(info)
-	if err != nil {
-		return nil, err
-	}
-
-	jar, err := selectJAR(files, descriptor)
-	if err != nil {
-		return nil, err
+	info, described := files["app_info"]
+	var descriptor Descriptor
+	var jar []byte
+	if described {
+		descriptor, err = ParseDescriptor(info)
+		if err != nil {
+			return nil, err
+		}
+		jar, err = selectJAR(files, descriptor)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		names := make([]string, 0, len(files))
+		for name := range files {
+			names = append(names, name)
+		}
+		name := detect.LGTSyncJAR(names, "")
+		if name == "" {
+			return nil, fmt.Errorf("LGT archive has no app_info")
+		}
+		jar = files[name]
+		if len(jar) > detect.MaxLGTSyncJARSize {
+			return nil, fmt.Errorf("LGT sync JAR exceeds %d bytes", detect.MaxLGTSyncJARSize)
+		}
 	}
 	entries, err := readZIP(jar, "LGT JAR")
 	if err != nil {
@@ -211,6 +229,13 @@ func Open(data []byte) (*Archive, error) {
 	module, ok := entries[binaryModuleName]
 	if !ok {
 		return nil, fmt.Errorf("LGT JAR has no %s", binaryModuleName)
+	}
+	if !described {
+		if !detect.LGTSyncModule(module) {
+			return nil, fmt.Errorf("LGT sync JAR has no ARM executable")
+		}
+		descriptor.AID = "WEBSYNC1"
+		descriptor.syncOwner = "sync-" + moduleDigest(module)[:32]
 	}
 	delete(entries, binaryModuleName)
 	// The JAR itself is not a file the game opens, and neither is the
