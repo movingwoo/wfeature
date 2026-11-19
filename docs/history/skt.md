@@ -43,6 +43,7 @@ This consolidation adds no execution or acceptance evidence.
 - [One WIPI-C engine for KTF and SKT (2026-10-31)](#skt-wipic-engine-2026-10-31)
 - [Resumed, not started again (2026-11-10)](#skt-resume-2026-11-10)
 - [A Clet's pixel operation takes the screen's pixel first (2026-11-17)](#skt-pixel-operation-order-2026-11-17)
+- [Thirteen new SKT archives (2026-11-18)](#skt-new-archives-2026-11-18)
 
 <a id="implementation-skvm-and-the-skt-platform"></a>
 
@@ -3832,3 +3833,291 @@ The title's logo, menu fade and selection and its tutorial prompt now draw as
 intended. Neither of the two other local native titles sets a pixel operation
 or creates an image, so the order changes nothing for them.
 `TestPixelOperationArgumentOrderIsThePlatforms`.
+
+<a id="skt-new-archives-2026-11-18"></a>
+
+## Thirteen new SKT archives (2026-11-18)
+
+Thirteen SKT archives arrived together, most of which failed to start: two GNEX
+script packages, three SKVM MIDlets and eight native packages. Before this
+record two native executables had been read; the eight new ones showed three
+more header layouts and ten platform answers the engine did not have. Eleven
+of the thirteen start, and all eight native titles plus two SKVM titles reach
+play under scripted keys on a manual clock. One native title needs a longer
+[stage load allowance](#skt-new-archives-2026-11-18-load-allowance), and one
+validates a pair of certificates using the session identity recovered from
+the archive. A third SKVM title reaches its network-only menu. Two GNEX
+packages use a later script format.
+
+<a id="skt-new-archives-2026-11-18-layout"></a>
+
+### Three more executable layouts
+
+- **A 0x6c-byte second block** (two titles). After the usual sizes and entries,
+  `0x70` holds the sizes the regions are stored at, and the regions start at
+  `0x8c`. The code is stored zlib-compressed (`78 9c`), 0x1ef54 bytes for
+  0x3815c in one and 0x33408 for 0x698a8 in the other; data, relocations and
+  resources are stored at their own sizes, and the stored sizes add up to the
+  file length exactly. The sixth entry is 1: the event handler is the first
+  routine in the code, at offset zero.
+- **ARM entries** (one title). Its six entries are even and word-aligned
+  (`0x5fd78`, …), and its code is ARM throughout (`e92d4ffe` at offset zero);
+  it calls the platform with `bx` through the same root table.
+- **Unused directory slots** (one title). The resource directory counts 350
+  slots for 246 files. The slots after the last file hold no offset and no
+  size, and the name area ends one NUL and a `0xcc` pad after the last name.
+
+<a id="skt-new-archives-2026-11-18-calls"></a>
+
+### Calls the engine did not answer
+
+| Slot | Caller's evidence | Answer |
+| --- | --- | --- |
+| media 31 | three titles of one engine, `("GENERAL")`, the answer clamped to 0..100 and kept as the title's volume, zero turning sound off | the device volume (`MC_mdaGetDefaultVolume` by category name); another name `M_E_INVALID` |
+| media 12 | a clip created only to be asked and freed, the answer handed to media 13 on four clips | `MC_mdaClipGetVolume` |
+| media 2 | `(clip, 100)` between a clip's data and its play | `MC_mdaSetWaterMark`, as the KTF table's 21 |
+| kernel 63 | `(buf, 150)` after the `TERMSVCOPT` property; the text's digits read as one number and compared with 11000, a flag the title starts at 1 and keeps on a failure | refused |
+| graphics 54 | `(buf, 1024)`, a comma-separated list of face names each handed to graphics 53; on a failure the title keeps its font | refused: one face, no name |
+
+<a id="skt-new-archives-2026-11-18-resources"></a>
+
+### A resource's identifier is its directory position
+
+The ARM title faulted writing `0xf0014ae0` at its first resource lookup. It asks
+`MC_knlGetResourceID` for one resource first, sizes a table by that resource's
+size, and then files every other resource's size at `table[id + n/4]`, stepping
+`id` down by one past that resource's own identifier. The resource sits at
+directory position 969 of 1,809 and is 7,232 bytes, 1,808 words — one for each
+other resource — and the table it sizes has exactly the room position-based
+identifiers from zero need; from one it overruns by a word. The engine's answer,
+the address of a copy of the name, was used as an index. A Clet program now
+carries its directory order and is answered with the position;
+`MC_knlGetResource` reads a position, or an address it is handed, which a quick
+save from before can hold. The change also stops one allocation per lookup.
+
+<a id="skt-new-archives-2026-11-18-names"></a>
+
+### A packaged file opened as "./name"
+
+One title opens every file it ships as `./name`. The C file table looked the
+name up as written, missed the packaged copy, and the title then created and
+wrote its sound list, item and record files over the ones it shipped, and
+showed an error. [WIPI storage](../wipi-storage.md#names-and-areas) already
+drops `.` and empty segments; the packaged-file lookup now does too, under the
+same removal list. Saves were already filed under the cleaned key. One name
+opened under two spellings in one session is still two stores in the C file
+table, as that page records.
+
+<a id="skt-new-archives-2026-11-18-transparency"></a>
+
+### Two kinds of transparency, and the alpha
+
+- **The context's transparent pixel.** One title calls `MC_grpSetContext` with
+  index 3 and `MC_grpGetPixelFromRGB(255, 0, 255)` before every
+  `MC_grpDrawImage` — 25,322 times in 600 ticks — sets nothing else but the
+  foreground and the alpha, and has no pixel operation: its images' magenta
+  showed as boxes behind sprites and lettering. The specification has the draw
+  copy "with the context's transparency and transparent colour". An SKT draw
+  now leaves that pixel out, and a cleared context's zero is none: another
+  title draws all its images through cleared contexts. No other local native
+  title sets the field. KTF titles that set it draw correctly without it, so
+  KTF does not apply it.
+- **The transparent pixel of a decoded image.** Another title builds its 3D
+  view and sprites in its own blitters, reading pictures decoded by
+  `MC_grpCreateImage`. Its loader hands each picture's record the constant
+  `0xFFF7` as the colour to skip (a literal in its code, for every picture),
+  and both its blitters skip that value. Its pictures are palette PNGs whose
+  transparent entry is (0, 32, 8) in 184, magenta in 15, white in 17 and black
+  in 6, so the colours the engine kept there were drawn: 2,257 dark pixels and
+  751 magenta ones on its first corridor. The engine now writes `0xFFF7` where
+  an SKT picture is transparent; its mask is unchanged, so the platform's own
+  draws skip those pixels as before. No other local native title has the
+  constant.
+- **The alpha.** A third title fills 38-pixel card slots through a context whose
+  alpha is 100 and which has no operation, so they came out as opaque black. The
+  specification has setting the alpha install the platform's blend as the
+  operation; that is now done, on KTF too (an open KTF note had one KTF 1.2
+  title expecting the same). The operation field holds `WIPICBuiltinAlphaOp`,
+  the stub arena's last byte, an address no stub starts at and no module
+  covers, recognised wherever the field is read and blended on the Host; a
+  title's own operation set afterwards replaces it, as before.
+
+<a id="skt-new-archives-2026-11-18-owner"></a>
+
+### Packaged saves of another handset
+
+Three titles of one engine read a packaged save, read `PHONENUMBER`, and stop.
+Two halt in the same routine, which draws "유효하지 않는 데이타 입니다" and
+spins on `b .` — one in its start entry, one in a timer — so the service call
+ended at its step allowance; the third shows its error number -1001. In the
+first, the save loader decrypts the file, reads a 12-byte field and compares it
+with the subscriber number. With the dump's own files withheld, each starts
+fresh: its customer-data dialog reports the server unreachable, offers to go on,
+starts its authentication, fails to connect, and continues to its title, menus
+and a new game. The three executables are registered with
+`skt.native_discard_owner_state` (`41a29457…`, `b29a6429…`, `d37574e6…`), the
+fix one earlier title already has.
+
+<a id="skt-new-archives-2026-11-18-certificates"></a>
+
+### Certificates of another handset
+
+Three more titles check a certificate or license linked to the dumping handset.
+The native rules identify a recognized executable by SHA-256. The SKVM rule
+identifies a complete compiled license-check method. See
+[authentication](../authentication.md).
+
+- **An SKVM MIDlet, `MIDlet-Key4`.** A shorter four-generation license check
+  uses a different control-flow and property-read layout (`1f44e007…`).
+  With that full-method fingerprint it reports `skt-license` and loads its
+  packaged save to the snow field and a fight. The final `String.equals`
+  becomes `pop2; iconst_1; nop` in a session-owned class copy. The digest
+  still runs.
+- **A native title, `usimcert.c2s` and `cert.c2s`.** With the default
+  handset value the original first comparison reports 1004. The earlier
+  comparison fix reached the title screen, then the 31-byte application
+  certificate failed its integrity check with 3003. The 20-byte USIM
+  certificate is itself keyed by `MIN`. Its ten-digit field and padding
+  narrowed the archive to four candidates. The application certificate's
+  checksum picked one. Supplying it as `MIN` and `PHONENUMBER` made the
+  original comparison, checksum, and final comparison all succeed. The
+  `skt.native_paired_certificate` rule derives it at load time. The ordinary
+  CLI route with the default Host settings reached the first puzzle and
+  results screen. A quick save in the puzzle restored the exact frame and
+  continued taking input.
+- **A native title, `CERTIDATA`, ARM.** It reads a `CERTIDATA` record out of its
+  packaged `kickass` container, compares it with `PHONENUMBER`, and leaves a
+  blank screen on a mismatch. The recognized executable (`a3d70df6…`,
+  `skt.native_certdata_subscriber`) turns the subscriber comparison's `bne` to
+  the rejection into a no-op (`mov r0, r0`, which the ARM core runs where the
+  UAL `nop` encoding is refused), so the mismatch falls through to the acceptance
+  the match reaches. The record's presence and the two checks ahead of this one
+  still run. It then loads the dump's saves, reaches its slot screen and, under
+  its own service allowance, its first stage and a fight
+  (see [the heavy load](#skt-new-archives-2026-11-18-load-allowance)).
+
+Both native certificate rules report `skt-native-certificate`.
+
+<a id="skt-new-archives-2026-11-18-load-allowance"></a>
+
+### The load it runs under its own allowance
+
+The ARM title above, past its certificate and with the dump's saves loaded,
+chooses a save slot and begins loading its first stage — its tiles, NPCs, event
+scripts, in-game UI and item icons, in sequence — and the load runs more than
+the five hundred million ARM steps a single Host service call is allowed, in one
+timer callback that neither returns to the Host nor polls the clock. It was
+refused the way a runaway guest is, by `ErrServiceStepLimit`, at the same place a
+title that busy-waits forever is stopped.
+
+A profile of that callback is 84% one of the title's own routines: a bit-serial
+block cipher — eight 1-bit permutation passes per byte over its tables, executed
+as ordinary guest instructions — with its palette blits making up most of the rest. The whole load is about 1.26 billion
+steps, the engine not idling in it. So the default allowance is not raised for
+every title, which would weaken the bound that stops a real runaway; the
+registry raises it for this one recognized executable
+(`skt.native_service_allowance`, `NativeHeavyLoadAllowance` = 2 billion in
+`internal/platform/skt/native_identity.go`), and every other title keeps the
+default. Under it the title loads its stage and reaches its character, dialogue
+and a fight; the load is about twenty seconds of the debug build, less on the
+release build. The raised allowance is part of the title's run at save and at
+restore alike, so a checkpoint of it stays compatible
+(`TestProgramServiceAllowanceOverridesAndRoundTrips`). The LGT edition of the
+same title decodes its tables the same way, from a packaged `_DAT_DES` resource.
+
+<a id="skt-new-archives-2026-11-18-registry-review"></a>
+
+### Review of the compatibility rules
+
+- **Packaged saves.** Restoring all three install directories reproduced two
+  startup stalls and the third title's different error screen. A 240-tick
+  replay kept the dump's audio settings file with the same final frame as a
+  fresh start in each title. Omitting the first suspect file in each of the two
+  stalling titles still left a stall. The third booted to the same frame with
+  just its two startup save files omitted. Its other save slots were outside
+  that replay. A narrower save policy needs the formats and ownership of the
+  later files verified before it exposes them. There is no safe package-wide
+  rule based on file extensions or the presence of a save.
+- **ARM certificate.** The original code reads the container's `CERTIDATA`
+  entry, decrypts it, and checks its 16-byte digest before it compares the
+  subscriber. A probe read the validated field at that comparison. Using
+  it as the session's handset value with the original executable produced
+  148 frames in 150 ticks. A checked container and certificate reader could
+  replace the comparison fix. The packaged USIM pair uses a different
+  record format.
+- **ARM service allowance.** A second replay hit the 500,000,000-step
+  limit in the stage-load timer. With the registered limit, that tick used
+  1,260,830,867 ARM instructions and the title presented its stage and
+  dialogue. The timer has no yield or clock call where the Host can split
+  it. Faster ARM execution alone would still charge those instructions to
+  the same limit. Resumable callbacks would need their own continuation and
+  runaway policy. The verified limit increase is scoped to this executable.
+- **SKVM license.** The two four-generation shapes have 365 and 143
+  instructions, nine and six branches, and 19 and nine application-property
+  reads. Canonicalizing local slots alone would still leave different
+  methods. The matcher keeps the full shape for each revision.
+
+A focused before-and-after `make acceptance` run over the six archives
+covered by these rules had identical outcomes. All six booted and sustained
+a frame. The animation-based input probe skipped two changing screens. The
+scripted puzzle replay above independently exercised gameplay and restore.
+
+<a id="skt-new-archives-2026-11-18-unchanged"></a>
+
+### What was left as it was
+
+- **An SKVM network edition.** Its title offers only a network entry; the
+  connection is refused and it returns to its title. Its ticks take about 66 ms
+  on the batch CLI against 17 ms for other MIDlets, which is its own
+  `Thread.sleep` on the event thread between `callSerially` frames. There is no
+  server to reach.
+- **The two GNEX packages** are a later script format than the SGS runtime
+  reads: after a 32-byte block carrying a digest comes a version-4 header with
+  32-bit region offsets, in scripts of about 400 KB, where the runtime reads
+  versions 1 and 2 of at most 128 KiB with 16-bit offsets, and the bytecode is
+  a word per operand where the older is a byte. Reading it is a new interpreter,
+  and SGS work is paused ([SGS](../sgs.md)).
+
+<a id="skt-new-archives-2026-11-18-validation"></a>
+
+### Validation
+
+Unit tests: the stored header and its refusals, ARM entries and unused slots
+(`internal/platform/skt/native_test.go`), the new table slots
+(`clet/tables_test.go`), resource positions, the dot spelling, the two
+transparencies, the alpha and its pinned value (`internal/platform/wipicrt`),
+and the identity fixes' well-formedness (`skt/native_identity_test.go`). The
+three certificate fixes are scoped by digest and window the way the earlier
+native cert fix is, and reaching each title's screen past its gate was confirmed
+by a probe on the real archive on the manual clock.
+
+A 500-tick digest A/B over the 664 local archives against the previous
+revision: 621 the same, 21 told apart as noise by reruns, 22 moved. Seven of
+the 22 are the native titles above, which had not started before. Four are KTF
+1.2 archives (one of them twice, as two copies of the same package): two draw
+an overlay through an alpha with no operation of their own and now show it
+translucent — film scratches over a cut-scene, a shadow over a frame — and the
+third opens its packaged option save as `./name` and now reads it instead of
+writing defaults. The other eleven are SKT MIDlets and SGS scripts, paced by the
+wall clock, whose four runs under each binary gave four different digests (or,
+run again one at a time, a digest both binaries gave); neither path imports the
+WIPI-C engine. A quick save and load of a title with stored code and of the ARM
+title restored and ran on.
+
+Each SKT platform value was then turned off on its own over the eleven local
+native titles, 2,000 ticks twice under each build. Without
+`ContextTransparentPixel` only the title that keys out magenta draws
+differently, without `TransparentImagePixel` only the title with its own
+blitters, and the other nine give one digest under all three builds.
+
+The title that renders through its own blitters costs 15.6 s of CPU for 1,200
+ticks, 22.6 s of its own time, on the debug build: about two thirds of a core,
+nearly all of it in `MC_grpGetRGBFromPixel` and `MC_grpGetPixelFromRGB`, which
+it calls about 25,000 times a tick. Another title of the same engine costs 0.9 s
+for the same ticks.
+
+The three certificate fixes were added after that sweep. Each is scoped to the
+executable its digest names — one Java class copy, two native byte windows — so
+no other archive is reached; a sweep is not rerun for a fix that patches only a
+named revision. The three titles' own digests change as their gates now pass,
+which a probe confirmed title by title.

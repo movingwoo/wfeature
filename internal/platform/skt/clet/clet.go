@@ -54,13 +54,27 @@ type CletProgram struct {
 	// the program's own files, which its storage held on the handset.
 	Resources map[string][]byte
 	Files     map[string][]byte
-	// Authentication is the compatibility the loader applied to the code,
-	// which the session reports as its authentication status.
+	// ResourceOrder lists Resources in the executable's directory order; a
+	// resource's identifier is its position in it.
+	ResourceOrder []string
+	// Authentication is the compatibility the loader selected, which the
+	// session reports as its authentication status.
 	Authentication backend.AuthenticationStatus
+
+	// SubscriberNumber is the handset identity supplied by the program loader.
+	// Empty uses the Host handset number.
+	SubscriberNumber string
+
+	// ServiceSteps, when it is not zero, is this program's own Host service
+	// step allowance, in place of the session's. The registry raises it for a
+	// title whose own one-shot load runs past the default ceiling; see
+	// skt.NativeExecutable.ServiceAllowance.
+	ServiceSteps uint64
 }
 
-// CletEntries are the program's entry points, absolute Thumb addresses. Zero
-// is an entry the program does not have; only Start is required.
+// CletEntries are the program's entry points, absolute Thumb addresses (odd)
+// or ARM ones (word-aligned). Zero is an entry the program does not have;
+// only Start is required.
 type CletEntries struct {
 	Start, Pause, Resume, Destroy, Paint, Event uint32
 }
@@ -129,7 +143,10 @@ func LoadCletClient(program CletProgram, options armcore.CoreOptions) (*Client, 
 	initial := armcore.NewContext()
 	initial.Registers[armcore.RegisterSP] = wipicrt.ThreadStackBase + uint32(wipicrt.ThreadStackSize)
 	engine := wipicrt.NewClient(cletPlatform, core, armcore.NewThread(initial), uint64(len(program.Code)))
-	engine.SubscriberNumber = HandsetNumber()
+	engine.SubscriberNumber = program.SubscriberNumber
+	if engine.SubscriberNumber == "" {
+		engine.SubscriberNumber = HandsetNumber()
+	}
 	client := &Client{
 		Client: engine,
 		// The image a client is told about is the code alone: it is what a
@@ -165,8 +182,9 @@ func (program CletProgram) validate() error {
 		if entry == 0 {
 			continue
 		}
-		if entry&1 == 0 || uint64(entry) < uint64(ImageBase) || uint64(entry) >= codeEnd {
-			return fmt.Errorf("Clet %q entry %#x is not a Thumb address in its code", program.Name, entry)
+		// Odd is Thumb; a word-aligned even entry is ARM code.
+		if (entry&1 == 0 && entry&3 != 0) || uint64(entry) < uint64(ImageBase) || uint64(entry) >= codeEnd {
+			return fmt.Errorf("Clet %q entry %#x is not a Thumb or ARM address in its code", program.Name, entry)
 		}
 	}
 	if program.Entries.Start == 0 {
@@ -203,9 +221,17 @@ func newCletSessionClient(program CletProgram, options SessionOptions) (*Client,
 	client.FrameSink = options.FrameSink
 	client.ThreadSliceSteps = options.ThreadSliceSteps
 	client.ServiceSteps, client.ServiceWait = options.ServiceSteps, options.ServiceWait
+	if program.ServiceSteps != 0 {
+		// A program the registry gives its own allowance runs under it rather
+		// than the session default, at save and at restore alike, so a
+		// checkpoint of it stays compatible (validate compares the effective
+		// allowance).
+		client.ServiceSteps = program.ServiceSteps
+	}
 	client.SetProgramName(program.ProgramName)
 	client.authentication = program.Authentication
 	client.AttachResources(program.Resources)
+	client.ResourceOrder = program.ResourceOrder
 	client.AttachFilesystem(program.Files)
 	if options.SaveStore != nil {
 		client.AttachSaveStore(options.SaveStore)

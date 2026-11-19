@@ -36,16 +36,23 @@ opens them by.
 
 ## The executable
 
-The `.daf` lays out as both local examples do:
+The `.daf` lays out as every local example does:
 
-- A 0x20-byte block whose word 0 is `0x20`, then a 0x50-byte second block at
-  0x20 whose length is at `0x28`. Offsets `0x3c` to `0x50` hold five sizes:
-  the code with its read-only data, the initialised data, the BSS (which is not
-  in the file), the relocation table, and an embedded resource archive. Offsets
-  `0x58` to `0x6c` are six odd offsets into the code — the Thumb entry points.
-- The regions follow the header back to back from `0x70`, BSS aside, and in
-  both examples the four sizes add up to the file length exactly. A layout that
-  does not is refused.
+- A 0x20-byte block whose word 0 is `0x20`, then a second block at 0x20 whose
+  length is at `0x28`. Offsets `0x3c` to `0x50` hold the sizes of the code
+  with its read-only data, the initialised data, the BSS (which is not in the
+  file) and the relocation table, a word that is zero in every example, and the
+  size of an embedded resource archive. Offsets `0x58` to `0x6c` are six
+  offsets into the code — the entry points, odd for Thumb code and
+  word-aligned for ARM code: one local title is built entirely as ARM.
+- The second block is 0x50 bytes in most examples, and the regions follow the
+  header back to back from `0x70`, BSS aside. Two examples have a 0x6c-byte
+  block: the same sizes and entries, then at `0x70` the sizes the regions are
+  stored at, and the regions from `0x8c`. Their code is stored
+  zlib-compressed — stored smaller than its size — and must inflate to exactly
+  that size; every other region is stored at its own size, and a layout that
+  stores one otherwise is refused. In every example the stored sizes add up to
+  the file length exactly. A layout that does not is refused.
 - Code and read-only data are linked at zero; data and BSS at `0x01001000`. The
   first data word is a marker (`0xCAFECAFE`) the loader overwrites with the
   platform's root table pointer.
@@ -58,7 +65,7 @@ code region and one for the data region. Each entry advances an offset from its
 region's start to the next word holding an address, and its first byte's bits
 say how far (a low nibble, or a 12-, 20- or 28-bit delta) and what the word
 points into (a data address, a code address, or a target less its own address).
-Decoded this way every entry in both examples lands on a word pointing where the
+Decoded this way every entry in every example lands on a word pointing where the
 entry says, so both regions are relocatable and a loader can place them
 anywhere. `Load` places the code at the KTF image base and the data at the same
 distance from it they were linked at, adding the base to every code and data
@@ -67,30 +74,34 @@ the BSS after the data. Out-of-range or misaligned entries are refused.
 
 The resource archive opens `{0x10, 1, 0x10, "KO", directory size, 0, count}`,
 then `count` pairs of offset and size, then `count` NUL-terminated names; the
-files follow the directory, and the offsets count from there.
+files follow the directory, and the offsets count from there. One example's
+directory lists 350 slots for 246 files: the slots after the last file have no
+offset, no size and nothing left in the name area, and are read as unused. An
+unused slot ahead of a named one is refused. The directory's order is kept,
+because a resource's identifier is its position in it (below).
 
 ## Calling the platform
 
 There is no SVC and no imported name. Every call loads the word at `0x01001000`
 (the root table the loader wrote), a table pointer at `root + 4*slot`, a
 function at `table + 4*function`, and branches through a `bx` veneer. The root's
-slots and their meaning, read off the two examples' call sites:
+slots and their meaning, read off the local examples' call sites:
 
 | slot | table | notes |
 |---|---|---|
-| 0 | kernel | numbered as the KTF kernel interface on every slot through 31 either title calls; 37 (a setting by name, accepted) and 50 (a browser launch, refused) are the handset's own |
-| 1 | graphics | the KTF graphics table through `MC_grpPostEvent` at 36, then the input-method functions and the handset's own additions |
+| 0 | kernel | numbered as the KTF kernel interface on every slot through 31 a title calls; 37 (a setting by name, accepted), 50 (a browser launch, refused) and 63 (a text whose digits one title compares with 11000, refused, which leaves that title on its own default) are the handset's own |
+| 1 | graphics | the KTF graphics table through `MC_grpPostEvent` at 36, then the input-method functions and the handset's own additions, among them 54, a title's list of font faces, refused: there is one face and no name for it, and the title keeps the font it has |
 | 3 | filesystem | the specification's `MC_fs*` order, with `MC_fsIsExist` and `MC_fsTell` at 15 and 16 exchanged from the KTF table |
 | 4 | misc | `MC_miscBackLight` at 0 |
 | 5 | network | the specification's order, refused the way a KTF title's is |
 | 6 | utility | byte-order and address conversion |
-| 7 | media | named by its callers, a different numbering from both the specification and the KTF table |
+| 7 | media | named by its callers, a different numbering from both the specification and the KTF table; 31 is the default volume of a category named by text (`"GENERAL"`), answered with the device volume |
 | 9 | serial | refused |
 | 10 | phone | refused |
 | 11 | terminal resources | the phonebook; refused |
 | 14 | C library | `string.h` 0–18, `stdlib.h` 19–24, `time.h` 25–30, in the specification's list order |
 
-Slots 2, 8, 12 and 13 are not reached by either title. The function numbers
+Slots 2, 8, 12 and 13 are not reached by any local title. The function numbers
 inside a table are the specification's, which the KTF C runtime follows too;
 only the order of the tables in the root and the few exceptions above differ, so
 `handleCletCall` routes a call to the handler the engine serves for it
@@ -111,6 +122,31 @@ where a KTF title's take them the other way round
 (`Platform.PixelOpDestinationFirst`;
 [history](history/skt.md#skt-pixel-operation-order-2026-11-17)). The graphics
 context record itself is the same word record on both.
+
+An SKT handset answers these calls its own way too
+([history](history/skt.md#skt-new-archives-2026-11-18)):
+
+- `MC_knlGetResourceID` answers a resource's position in the executable's
+  resource directory, from zero (`Client.ResourceOrder`). One title sizes a
+  table by a resource that lists every other resource and indexes it with these
+  identifiers, stepping over that resource's own position; the name's address,
+  which the engine answers a KTF title with, wrote far outside the table.
+  `MC_knlGetResource` still reads an address it is handed, which a quick save
+  from before can hold.
+- `MC_grpDrawImage` leaves out the source pixels equal to the context's
+  transparent pixel (`Platform.ContextTransparentPixel`). One title sets it to
+  magenta before every image and has no other transparency. Zero, which
+  `MC_grpInitContext` leaves, is no transparent pixel: another title draws every
+  image through a cleared context.
+- `MC_grpCreateImage` writes `0xFFF7` where the decoded picture is transparent
+  (`Platform.TransparentImagePixel`). One title reads its pictures' pixels
+  itself and skips `0xFFF7` in both its blitters, whatever colour a picture
+  declared transparent.
+
+Setting a context's alpha installs the platform's own blend as the pixel
+operation, with the alpha as its parameter, on both platforms
+(`WIPICBuiltinAlphaOp`): one title fills its card slots through an alpha of
+100 and no operation of its own.
 
 The C library at slot 14 is served in `clet_clib.go`: the string, memory,
 conversion and time functions the specification lists, each named where that
@@ -171,35 +207,30 @@ registry names (see Identity compatibility).
 
 ## Identity compatibility
 
-A native package is a handset's installed directory copied whole, so what the
-title wrote there is the previous owner's state, bound to the handset it was
-dumped from, and a different handset's player cannot use it: the title either
-rejects a foreign save (an error that stops it) or needs a foreign-subscriber
-field accepted. These are the same class of offline authentication the KTF and
-LGT platforms already adapt ([authentication](authentication.md)), and they are
-handled the same way — the exact executable is recognized by its SHA-256 in the
-compatibility registry ([code-revision compatibility](platform-compatibility.md)),
-and the fix is scoped to that executable, so nothing else is touched. Two shapes
-of fix are used, neither inventing data and neither changing a packaged file.
-
-The two local titles need different shapes, which is why this is per-title
-rather than one rule: one carries a certificate the other does not, so a single
-"ignore the owner's files" rule would strip a certificate the title cannot boot
-without.
+A native package may carry certificates or saves tied to the handset it was
+copied from. The compatibility registry identifies verified executable revisions
+by SHA-256 and selects the handling each format needs. A recognized certificate
+pair can supply that session's handset identity, some comparisons have a scoped
+code fix, and specific device dumps start with fresh save data. The archive and
+its files are left intact. See [authentication](authentication.md) and
+[code-revision compatibility](platform-compatibility.md).
 
 <a id="skt-native-identity-discard"></a>
 
 ### Fresh start (`skt.native_discard_owner_state`)
 
-One title finds the previous owner's packaged saves, validates them against the
-handset, and stops with a data error when they do not match — it does not fall
-back to a new game on its own. For a recognized device dump, the loader does not
-present the install directory's files, so the game finds no save and starts
-fresh, writing its own saves from there (`internal/platform/skt/native.go`,
-`ProgramFiles`). The embedded resource archive — the game's read-only content —
-is unaffected, and no file is changed. This is the loader withholding another
-handset's state, not a code change, so the session reports no authentication
-status for it.
+Four titles find the previous owner's packaged saves, validate them against the
+handset, and stop when they do not match — with a data error, an error number,
+or a halt that draws its message and never returns — and none falls back to a
+new game on its own. Three of them, which share one engine, check their saves
+against the subscriber number: without the dump's files they start fresh, show
+their own server dialogs, fail to reach the server and play on. For a
+recognized device dump, the loader does not present the install directory's
+files, so the game finds no save and starts fresh, writing its own saves from
+there (`internal/platform/skt/native.go`, `ProgramFiles`). The embedded resource
+archive — the game's read-only content — is unaffected, and no file is changed.
+This is the loader withholding another handset's state, not a code change, so
+the session reports no authentication status for it.
 
 <a id="skt-native-identity-save"></a>
 
@@ -227,6 +258,30 @@ different executable. The certificate decodes to three fields compared in a row
 executable accepts only the subscriber comparison, so the other two still run,
 and reports `skt-native-certificate`. No certificate is minted and no file is
 changed.
+
+The `skt.native_certdata_subscriber` rule handles an ARM title's `CERTIDATA`
+record inside its packaged container. It accepts the subscriber comparison at
+startup after the record has been read and verified, and reports
+`skt-native-certificate`. See [the recorded-identity replay](history/skt.md#skt-new-archives-2026-11-18-registry-review).
+
+<a id="skt-native-identity-paired-certificate"></a>
+
+### Packaged certificate pair (`skt.native_paired_certificate`)
+
+One recognized reader uses `MIN` for its 20-byte `usimcert.c2s` (error 1004)
+and `PHONENUMBER` for its 31-byte `cert.c2s` (error 3003). The first record's
+ten-digit padded field determines a bounded set of candidates. The second
+record's checksum must identify exactly one. With both records present and
+valid, the loader supplies that value for both properties in this session.
+The guest runs its original certificate checks. With an absent, invalid, or
+ambiguous pair, or with authentication compatibility disabled, it receives
+the configured handset value.
+
+Quick saves capture the session's identity with its guest memory. The restore
+path checks it against the archive pair. A quick save made with the earlier
+comparison patch for this revision needs a new session because the checkpoint
+identifies the patched executable image. See the
+[evidence and replay](history/skt.md#skt-new-archives-2026-11-18-certificates)
 
 <a id="skt-native-quick-save"></a>
 
@@ -313,8 +368,25 @@ engine is checked against both platforms' archives. Where an SKT handset is
 observed to answer differently from a KTF one, the difference becomes a
 platform value or hook rather than a second copy of the handler.
 
-The two local examples are both GCC-built, so an executable built with another
-toolchain may lay its header or its relocation table out differently. One
-example is an online game: offline it is told its server cannot be reached,
-reports that and plays on, and the content that needs the server stays out of
-reach.
+The local examples are GCC-built, and three header layouts are known (above);
+an executable built with another toolchain may lay its header or its
+relocation table out differently. One example is an online game: offline it is
+told its server cannot be reached, reports that and plays on, and the content
+that needs the server stays out of reach.
+
+<a id="skt-native-identity-load-allowance"></a>
+
+### Service step allowance (`skt.native_service_allowance`)
+
+One local title reaches its first stage, with its certificate accepted and the
+dumping handset's saves loaded, and then builds the stage in one timer callback
+that neither returns to the Host nor polls the clock: it decodes its own tables
+with its own bit-serial routine, which takes about 1.26 billion ARM steps,
+more than the five hundred million a single Host service call is given, and so is refused as a runaway would be. Raising the allowance for
+every title would weaken the bound that stops a real runaway, so the registry
+raises it for this one recognized executable instead
+(`NativeHeavyLoadAllowance`, in `internal/platform/skt/native_identity.go`); the
+default still bounds every other title. Under the raised allowance the title
+loads its stage and reaches its character, dialogue and a fight. A checkpoint of
+a title given its own allowance restores under the same one
+([history](history/skt.md#skt-new-archives-2026-11-18-load-allowance)).

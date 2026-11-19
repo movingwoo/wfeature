@@ -27,7 +27,7 @@ scripts. A resumed session keeps its original runtime. CLI reporting is in
 | `lgt-save-subscriber` | A recognized native revision's save reader matches. Accept a saved subscriber identity from another handset; the original length and checksum checks still run and no file changes. |
 | `lgt-certificate-message` | Five native revisions use this two-stage certificate exchange. Answer it through the bounded local socket service so the guest sets and saves its own certificate-present flag. |
 | `skt-license` | A complete normalized Java license-check shape matches a supported compiler/library layout. Adapt only its terminal license comparison in a private class-file copy. |
-| `skt-native-certificate` | A recognized native executable's packaged certificate names the handset it was issued to. Accept that one comparison in the code before it is loaded; every other check still runs and no file changes. See [SKT native](skt-native.md#skt-native-identity). |
+| `skt-native-certificate` | A recognized native executable selects a certificate rule. A validated `usimcert.c2s` and `cert.c2s` pair supplies the session's handset identity, and the original guest checks run. The `cert.c2s` subscriber comparison (5001) and an ARM `CERTIDATA` comparison have revision-specific fixes. See [SKT native](skt-native.md#skt-native-identity). |
 | `skt-native-save-subscriber` | A recognized native executable's packaged save names the handset it was written on. Accept that one comparison; the save's own length and checksum checks still run and no file changes. See [SKT native](skt-native.md#skt-native-identity). |
 
 The status constants are in `internal/backend/authentication.go`. Selection is
@@ -109,9 +109,11 @@ reader.
 
 The supported layouts read `MIDlet-Key` and `MIDlet-Jar-URL`, extract a service
 identifier, combine subscriber data and a library salt, and compare a computed
-digest against the key. One layout selects among four key generations. The final
-`String.equals` call becomes `pop2; iconst_1; nop` in a session-owned class-file
-copy, keeping its length and stack effect. Earlier code, library state
+digest against the key. Two layouts select among four key generations: the same
+check compiled with its digest object and subscriber in different local slots is
+a second fingerprint, not a second rule. The final `String.equals` call becomes
+`pop2; iconst_1; nop` in a session-owned class-file copy, keeping its length and
+stack effect. Earlier code, library state
 initialization, digest calculation, exception handling and every other equality
 comparison execute normally. The archive and JVM implementation are unchanged.
 

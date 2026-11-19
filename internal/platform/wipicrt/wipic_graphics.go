@@ -1237,12 +1237,17 @@ func (runtime *Runtime) WIPICCreateImage(thread *armcore.Thread) (uint32, error)
 	// The record's own mask framebuffer stays empty, which is what a guest
 	// reading MC_GrpImage expects of an image without one; the transparency
 	// the encoding declared is kept beside the pixels instead.
-	runtime.SetFramebufferOpacity(framebuffer, ImageOpacityOf(decoded))
+	opacity := ImageOpacityOf(decoded)
+	runtime.SetFramebufferOpacity(framebuffer, opacity)
+	marker := runtime.Client.Platform.TransparentImagePixel
 	memory := runtime.Client.core.Memory()
 	row := make([]byte, int(width)*2)
 	for y := uint32(0); y < height; y++ {
 		for x := uint32(0); x < width; x++ {
 			pixel := ImagePixel565(decoded, bounds.Min.X+int(x), bounds.Min.Y+int(y))
+			if marker != 0 && opacity != nil && !opacity.OpaqueAt(int(x), int(y)) {
+				pixel = marker
+			}
 			binary.LittleEndian.PutUint16(row[x*2:], pixel)
 		}
 		if err := memory.Write(target.Pixels+y*target.Bpl, row); err != nil {
@@ -1324,15 +1329,37 @@ func (runtime *Runtime) wipicDrawImage(thread *armcore.Thread) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
+	opacity := BlitOpacity{
+		Source:      runtime.FramebufferOpacityOf(registers[5]),
+		Destination: runtime.FramebufferOpacityOf(registers[0]),
+	}
+	if opacity.Key, opacity.Keyed, err = runtime.contextTransparentPixel(registers[8]); err != nil {
+		return 0, err
+	}
 	return 0, runtime.WIPICBlitClipped(
 		destination, clip, op, int32(registers[1]), int32(registers[2]),
 		int32(registers[3]), int32(registers[4]),
 		source, int32(registers[6]), int32(registers[7]),
-		BlitOpacity{
-			Source:      runtime.FramebufferOpacityOf(registers[5]),
-			Destination: runtime.FramebufferOpacityOf(registers[0]),
-		},
+		opacity,
 	)
+}
+
+// contextTransparentPixel answers the transparent pixel a draw leaves out, on a
+// platform whose MC_grpDrawImage honours the context's (see
+// Platform.ContextTransparentPixel). Zero, which MC_grpInitContext leaves, and
+// a word too wide for a 16-bit pixel are no transparent pixel.
+func (runtime *Runtime) contextTransparentPixel(context uint32) (uint16, bool, error) {
+	if !runtime.Client.Platform.ContextTransparentPixel || context == 0 {
+		return 0, false, nil
+	}
+	value, err := runtime.ReadWord(context + runtime.graphicsContext().transparent)
+	if err != nil {
+		return 0, false, fmt.Errorf("read %s context transparent pixel: %w", runtime.platformName(), err)
+	}
+	if value == 0 || value > 0xffff {
+		return 0, false, nil
+	}
+	return uint16(value), true, nil
 }
 
 // WIPICBlit copies a rectangle between guest framebuffers. Pixels the source's
@@ -1551,6 +1578,19 @@ func (runtime *Runtime) copyRow(blit *framebufferCopy, line, first, end int32, s
 			drawn[column] = mask.OpaqueAt(int(fromX)+column, int(fromY))
 		}
 	}
+	if blit.opacity.Keyed {
+		if drawn == nil {
+			drawn = scratch.drawn[:count]
+			for column := range drawn {
+				drawn[column] = true
+			}
+		}
+		for column := range drawn {
+			if binary.LittleEndian.Uint16(source[column*2:]) == blit.opacity.Key {
+				drawn[column] = false
+			}
+		}
+	}
 	pixels := source
 	if blit.op.Active() {
 		pixels = scratch.destination[:count*2]
@@ -1643,6 +1683,9 @@ func (runtime *Runtime) copyPixels(blit *framebufferCopy, line, first, end int32
 			copy(data[:], blit.snapshot[(int(line)*int(blit.Width)+int(column))*2:])
 		} else if err := memory.Read(blit.source.Pixels+uint32(fromY)*blit.source.Bpl+uint32(fromX)*2, data[:]); err != nil {
 			return err
+		}
+		if blit.opacity.Keyed && binary.LittleEndian.Uint16(data[:]) == blit.opacity.Key {
+			continue
 		}
 		address := blit.destination.Pixels + uint32(toY)*blit.destination.Bpl + uint32(toX)*2
 		if err := runtime.blendPixel(blit.op, address, binary.LittleEndian.Uint16(data[:])); err != nil {

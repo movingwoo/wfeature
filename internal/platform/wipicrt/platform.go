@@ -43,6 +43,26 @@ type Platform struct {
 	// drawn pixel first, the order of the prototype's parameter names. See
 	// wipic_pixelop.go.
 	PixelOpDestinationFirst bool
+	// ContextTransparentPixel says MC_grpDrawImage leaves out the source
+	// pixels equal to the context's transparent pixel, as the specification
+	// words the call ("투명정도와 투명색으로"). One SKT title sets the
+	// transparent pixel to magenta before every image it draws and has no
+	// other transparency, so its sprites and lettering came out on magenta
+	// boxes. A context MC_grpInitContext cleared holds zero there, which is
+	// read as no transparent pixel: another SKT title draws every image
+	// through such a context. KTF titles that set the pixel draw correctly
+	// without it, so KTF does not apply it.
+	ContextTransparentPixel bool
+	// TransparentImagePixel, when it is not zero, is the pixel
+	// MC_grpCreateImage writes where the decoded image is transparent, in
+	// place of the colour the encoding kept there. One SKT title decodes every
+	// picture through MC_grpCreateImage, reads the pixels itself and skips
+	// 0xFFF7 in each of its two blitters, a constant it hands its sprite
+	// records for every picture whatever colour the picture declared
+	// transparent; drawn with the kept colours instead, its sprites came out
+	// on boxes of those colours. Zero keeps the encoding's colour, which LGT
+	// and KTF titles key on.
+	TransparentImagePixel uint16
 }
 
 // ClientHooks are the platform's parts of a service round. A hook left nil is
