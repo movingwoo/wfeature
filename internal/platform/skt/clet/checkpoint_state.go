@@ -493,7 +493,10 @@ func (saved clientState) validate(client *Client, options SessionOptions) error 
 	if saved.Thread.StepBudget != 0 || !stackContains(saved.Thread.Context.Registers[armcore.RegisterSP]) || saved.WorkBaseline > saved.Core.Steps {
 		return fmt.Errorf("SKT Clet checkpoint client thread or instruction baseline is invalid")
 	}
-	if saved.ThreadSliceSteps != options.ThreadSliceSteps || saved.ServiceSteps != options.ServiceSteps || saved.ServiceWait != options.ServiceWait {
+	// client.ServiceSteps is the effective allowance, the session's unless the
+	// program the registry recognized carries its own, so a checkpoint of a
+	// title given a raised allowance restores under the same one.
+	if saved.ThreadSliceSteps != options.ThreadSliceSteps || saved.ServiceSteps != client.ServiceSteps || saved.ServiceWait != options.ServiceWait {
 		return fmt.Errorf("SKT Clet checkpoint service policy is incompatible: %w", backend.ErrCheckpointVersion)
 	}
 	if saved.Authentication != client.authentication {
@@ -501,6 +504,9 @@ func (saved clientState) validate(client *Client, options SessionOptions) error 
 	}
 	if len(saved.Subscriber) > 64 || !bytes.Equal([]byte(saved.Subscriber), bytes.ToValidUTF8([]byte(saved.Subscriber), nil)) {
 		return fmt.Errorf("SKT Clet checkpoint subscriber is invalid")
+	}
+	if client.clet.program.SubscriberNumber != "" && saved.Subscriber != client.SubscriberNumber {
+		return fmt.Errorf("SKT Clet checkpoint handset identity differs from the archive: %w", backend.ErrCheckpointIdentity)
 	}
 	if saved.Root < wipicrt.PlatformDataBase || uint64(saved.Root)+cletRootSlots*4 > uint64(wipicrt.PlatformDataBase)+wipicrt.PlatformDataSize || saved.Root&3 != 0 {
 		return fmt.Errorf("SKT Clet checkpoint root table is outside the platform data")

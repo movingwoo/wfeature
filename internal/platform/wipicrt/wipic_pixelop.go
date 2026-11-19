@@ -44,6 +44,33 @@ type WIPICPixelOp struct {
 	Xor bool
 }
 
+// WIPICBuiltinAlphaOp is what MC_grpSetContext stores as a context's pixel
+// operation when it is handed MC_GRP_CONTEXT_ALPHA_IDX: the specification has
+// setting the alpha install the platform's own blend as the operation and the
+// alpha as its parameter. It names no code — an odd address above the stub
+// arena's last stub, outside every module — and every reader of the operation
+// field recognises it and blends on the Host. A title that reads the field
+// back and stores it again keeps the blend; one that installs its own
+// operation, as every local title that sets the alpha before drawing an image
+// does, replaces it. Before this the alpha only reached the parameter, so a
+// title that set it and drew no operation of its own drew opaque: one SKT
+// title's translucent card slots came out as black squares.
+const WIPICBuiltinAlphaOp = PlatformCodeBase + uint32(PlatformCodeSize) - 1
+
+// builtinAlpha blends the drawn pixel over the one already there by an alpha
+// from 0, which leaves the surface as it was, to 255, which draws the pixel
+// itself, a channel at a time in the surface's 5-6-5 colour.
+func builtinAlpha(source, destination uint16, alpha uint32) uint16 {
+	if alpha > 255 {
+		alpha = 255
+	}
+	blend := func(shift, mask uint16) uint16 {
+		drawn, kept := uint32(source>>shift&mask), uint32(destination>>shift&mask)
+		return uint16((drawn*alpha+kept*(255-alpha)+127)/255) << shift
+	}
+	return blend(11, 0x1f) | blend(5, 0x3f) | blend(0, 0x1f)
+}
+
 // Active reports whether a write has to read the destination first. Both a
 // guest operation and XOR need what is already there; a context with neither
 // writes the source pixel.
@@ -63,6 +90,9 @@ func (runtime *Runtime) WIPICReadContextPixelOp(contextAddress uint32) (WIPICPix
 		return WIPICPixelOp{}, err
 	}
 	function := words[0]
+	if function == WIPICBuiltinAlphaOp {
+		return WIPICPixelOp{Function: function, Param: words[1]}, nil
+	}
 	if function&1 == 0 {
 		return WIPICPixelOp{}, nil
 	}
@@ -108,6 +138,9 @@ func (runtime *Runtime) ApplyPixelOp(op WIPICPixelOp, source, destination uint16
 	}
 	if !op.Active() {
 		return source, nil
+	}
+	if op.Function == WIPICBuiltinAlphaOp {
+		return builtinAlpha(source, destination, op.Param), nil
 	}
 	key := PixelOpKey(source, destination)
 	cache := runtime.PixelOps
@@ -158,6 +191,9 @@ func (runtime *Runtime) cachedPixelOp(op WIPICPixelOp, source, destination uint1
 	}
 	if !op.Active() {
 		return source, true
+	}
+	if op.Function == WIPICBuiltinAlphaOp {
+		return builtinAlpha(source, destination, op.Param), true
 	}
 	if !runtime.PixelOps.answers(op) {
 		return 0, false

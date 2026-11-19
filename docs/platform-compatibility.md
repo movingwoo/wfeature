@@ -46,7 +46,7 @@ fixes require `native_module`.
 
 ### Registered fixes
 
-The registry holds 25 entries (last changed 2026-11-17). The `evidence` field of
+The registry holds 30 entries (last changed 2026-11-18). The `evidence` field of
 each entry is the authoritative index; this table groups them by fix.
 
 | Fix | Entries | Effect | Evidence |
@@ -66,9 +66,12 @@ each entry is the authoritative index; this table groups them by fix.
 | `lgt.certificate_message` | 2 | Selects the recognized two-stage local certificate exchange | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility), [second revision](history/lgt.md#lgt-new-archives-2026-10-19-certificate-message) |
 | `lgt.packaged_certificate` | 1 | Serves an archive's own packaged certificate at the bare name the title opens it by | [LGT QA](history/lgt.md#lgt-new-archives-2026-11-03-packaged-certificate) |
 | `lgt.record_table_terminator` | 1 | Appends the end sequence a record-table search stops on, which the packaged table lacks | [LGT QA](history/lgt.md#lgt-qa-2026-10-28-unterminated-record-table) |
-| `skt.native_discard_owner_state` | 1 | Withholds a recognized device dump's install directory so the game starts fresh | [SKT native](skt-native.md#skt-native-identity-discard) |
+| `skt.native_discard_owner_state` | 4 | Withholds a recognized device dump's install directory so the game starts fresh | [SKT native](skt-native.md#skt-native-identity-discard) |
 | `skt.native_save_identity` | 1 | Lets a recognized native executable accept its packaged save's handset digits | [SKT native](skt-native.md#skt-native-identity-save) |
 | `skt.native_cert_subscriber` | 1 | Lets a recognized native executable accept its cert.c2s subscriber field (error 5001) | [SKT native](skt-native.md#skt-native-identity-cert) |
+| `skt.native_paired_certificate` | 1 | Derives a session handset identity from the recognized paired certificates for the guest's original checks (errors 1004 and 3003) | [SKT native](skt-native.md#skt-native-identity-paired-certificate) |
+| `skt.native_certdata_subscriber` | 1 | Lets a recognized ARM native executable accept its CERTIDATA record subscriber comparison | [SKT native](skt-native.md#skt-native-identity-cert) |
+| `skt.native_service_allowance` | 1 | Raises a recognized native executable's Host service step allowance for a one-shot load past the default ceiling | [SKT native](skt-native.md#skt-native-identity-load-allowance) |
 
 `skt.tutorial_name_cache` replaces a redundant phase assignment in an in-memory
 class copy when one verified code revision returns from its tutorial equipment

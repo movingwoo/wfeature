@@ -3,7 +3,10 @@ package clet
 import (
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
 // The SKT root table and its divergences from the KTF function numbering are
@@ -31,8 +34,10 @@ func TestSKTMediaFunctionsMapToRuntime(t *testing.T) {
 	want := map[uint32]uint32{
 		0:  wipicrt.WIPICMediaClipCreate,
 		1:  wipicrt.WIPICMediaClipFree,
+		2:  wipicrt.WIPICMediaSetWaterMark,
 		4:  wipicrt.WIPICMediaClipPutData,
 		10: wipicrt.WIPICMediaClipClearData,
+		12: wipicrt.WIPICMediaClipGetVolume,
 		13: wipicrt.WIPICMediaClipSetVolume,
 		14: wipicrt.WIPICMediaPlay,
 		17: wipicrt.WIPICMediaStop,
@@ -64,5 +69,54 @@ func TestSKTRootSlotOrder(t *testing.T) {
 		if c.slot != c.want {
 			t.Errorf("SKT root %s = %d, want %d", c.name, c.slot, c.want)
 		}
+	}
+}
+
+// TestSKTHandsetCallsTitlesFallBackOn pins the handset's own slots three
+// titles call: the default volume by category name, and two the titles carry
+// on without — a text the kernel is asked for and the font faces.
+func TestSKTHandsetCallsTitlesFallBackOn(t *testing.T) {
+	store, _ := backend.NewMemorySaveStore(nil)
+	session := fixtureSession(t, fixtureProgram(t, testfixture.SKTCletOptions{}), store)
+	defer session.Close()
+	runtime := session.Client.runtime
+	call := func(slot, function uint32, registers ...uint32) uint32 {
+		t.Helper()
+		thread := armcore.NewThread(armcore.NewContext())
+		for index, value := range registers {
+			if err := thread.SetRegister(index, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := runtime.handleCletCall(thread, slot<<16|function)
+		if err != nil {
+			t.Fatalf("root %d function %d: %v", slot, function, err)
+		}
+		return result
+	}
+	general, err := runtime.AllocateBytes([]byte("GENERAL\x00"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ring, err := runtime.AllocateBytes([]byte("RING\x00"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer, err := runtime.AllocateBytes(make([]byte, 1024))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Client.Audio.SetVolume(60)
+	if got := call(sktRootMedia, sktMediaDefaultVolume, general); got != 60 {
+		t.Errorf("default volume of GENERAL = %d, want the device's 60", got)
+	}
+	if got := call(sktRootMedia, sktMediaDefaultVolume, ring); got != wipicrt.WIPICErrorInvalid {
+		t.Errorf("default volume of RING = %#x, want M_E_INVALID", got)
+	}
+	if got := call(sktRootKernel, sktKernelVersionText, buffer, 150); got != wipicrt.WIPICErrorInvalid {
+		t.Errorf("kernel 63 = %#x, want M_E_INVALID", got)
+	}
+	if got := call(sktRootGraphics, sktGraphicsFontFaces, buffer, 1024); got != wipicrt.WIPICErrorInvalid {
+		t.Errorf("graphics 54 = %#x, want M_E_INVALID", got)
 	}
 }

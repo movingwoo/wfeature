@@ -87,7 +87,7 @@ func TestCheckpointAccountsForEveryField(t *testing.T) {
 		},
 		reflect.TypeFor[wipicrt.Client](): {
 			"Platform": rebuilt, "Hooks": rebuilt, "Runtime": recorded, "Prepared": boundary, "SubscriberNumber": recorded, "core": recorded, "Thread": recorded,
-			"Run": host, "Resources": rebuilt, "Files": rebuilt, "SaveStore": store, "ProgramName": rebuilt,
+			"Run": host, "Resources": rebuilt, "ResourceOrder": rebuilt, "resourceIndex": rebuilt, "Files": rebuilt, "SaveStore": store, "ProgramName": rebuilt,
 			"FrameRGBA": recorded, "FrameWidth": recorded, "FrameHeight": recorded, "FlushCount": recorded,
 			"FramePending": recorded, "PartialFrame": recorded, "FrameSink": host, "FrameSampleAt": host,
 			"FrameSampleClock": host, "LastSample": host, "ScreenWidth": recorded, "ScreenHeight": recorded,
@@ -171,6 +171,69 @@ func fixtureCheckpoint(t *testing.T) (CletProgram, backend.Checkpoint, *backend.
 		t.Fatal(err)
 	}
 	return program, checkpoint, store
+}
+
+// A program the registry gives its own service allowance runs under it, not
+// the session default, and a checkpoint of it restores under the same
+// allowance although the session options name none. A checkpoint taken under a
+// different allowance is refused.
+func TestProgramServiceAllowanceOverridesAndRoundTrips(t *testing.T) {
+	store, _ := backend.NewMemorySaveStore(nil)
+	program := fixtureProgram(t, testfixture.SKTCletOptions{FieldAtStart: true})
+	program.ServiceSteps = 2_000_000_000
+	session := fixtureSession(t, program, store)
+	if got := session.Client.ServiceSteps; got != program.ServiceSteps {
+		session.Close()
+		t.Fatalf("effective allowance = %d, want the program's %d", got, program.ServiceSteps)
+	}
+	fixtureTicks(t, session, 3)
+	checkpoint, err := session.CaptureCheckpoint(t.Context())
+	session.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := SessionOptions{Clock: wipicrt.NewManualClock(time.Time{})}
+	prepared, err := PrepareCheckpoint(program, checkpoint, options)
+	if err != nil {
+		t.Fatalf("restore under the program's allowance: %v", err)
+	}
+	prepared.Discard()
+	lower := program
+	lower.ServiceSteps = 500_000_000
+	if _, err := PrepareCheckpoint(lower, checkpoint, options); !errors.Is(err, backend.ErrCheckpointVersion) {
+		t.Fatalf("restore under another allowance: %v", err)
+	}
+}
+
+func TestArchiveSubscriberSurvivesCheckpoint(t *testing.T) {
+	store, _ := backend.NewMemorySaveStore(nil)
+	program := fixtureProgram(t, testfixture.SKTCletOptions{FieldAtStart: true})
+	program.SubscriberNumber = "0101234567"
+	started := fixtureSession(t, program, store)
+	defer started.Close()
+	for _, name := range []string{"MIN", "PHONENUMBER"} {
+		if got, exists := started.Client.SystemProperty(name); !exists || got != program.SubscriberNumber {
+			t.Fatalf("%s does not use the archive's subscriber", name)
+		}
+	}
+	checkpoint, err := started.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := SessionOptions{Clock: wipicrt.NewManualClock(time.Time{})}
+	prepared, err := PrepareCheckpoint(program, checkpoint, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Discard()
+	if prepared.session.Client.SubscriberNumber != program.SubscriberNumber {
+		t.Fatal("restored session lost the archive's subscriber")
+	}
+
+	program.SubscriberNumber = "01000000000"
+	if _, err := PrepareCheckpoint(program, checkpoint, options); !errors.Is(err, backend.ErrCheckpointIdentity) {
+		t.Fatalf("restore with a different archive subscriber: %v", err)
+	}
 }
 
 // A record that names the wrong program, settings or layout is refused before

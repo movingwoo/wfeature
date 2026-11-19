@@ -29,6 +29,8 @@ var cletPlatform = wipicrt.Platform{
 	StaleRemovals:   true,
 	// See wipicrt.Runtime.pixelOpArguments for what settles the order.
 	PixelOpDestinationFirst: true,
+	ContextTransparentPixel: true,
+	TransparentImagePixel:   0xfff7,
 }
 
 // ImageBase is where a Clet's code is linked and loaded.

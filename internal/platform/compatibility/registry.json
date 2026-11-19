@@ -293,6 +293,67 @@
       "evidence": "docs/skt-native.md#skt-native-identity-discard"
     },
     {
+      "id": "skt-native-fresh-002",
+      "platform": "skt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "41a294579cd9524c6d8a0d74b14542079eb40cdb87498d7a252a64137bffa56b"
+      },
+      "fixes": [
+        "skt.native_discard_owner_state"
+      ],
+      "evidence": "docs/skt-native.md#skt-native-identity-discard"
+    },
+    {
+      "id": "skt-native-fresh-003",
+      "platform": "skt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "b29a6429c1a8807941196f8f3e99ebfaaa25dfd16cbff9d338cdbf1e05f3f602"
+      },
+      "fixes": [
+        "skt.native_discard_owner_state"
+      ],
+      "evidence": "docs/skt-native.md#skt-native-identity-discard"
+    },
+    {
+      "id": "skt-native-fresh-004",
+      "platform": "skt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "d37574e6667e9eee09d6a7f59c193e8a2a70e179c760a157e4918b8e8a639c26"
+      },
+      "fixes": [
+        "skt.native_discard_owner_state"
+      ],
+      "evidence": "docs/skt-native.md#skt-native-identity-discard"
+    },
+    {
+      "id": "skt-native-certdata-001",
+      "platform": "skt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "a3d70df6a56b18053c1734462373f95150102b536a3fcf01c5ed81e815aefc34"
+      },
+      "fixes": [
+        "skt.native_certdata_subscriber",
+        "skt.native_service_allowance"
+      ],
+      "evidence": "docs/skt-native.md#skt-native-identity-cert"
+    },
+    {
+      "id": "skt-native-usim-001",
+      "platform": "skt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "43352886f4e8575cd4d7cc6ee5128e80594cd1d73d6eadfe9a0c2b14fc64ba51"
+      },
+      "fixes": [
+        "skt.native_paired_certificate"
+      ],
+      "evidence": "docs/skt-native.md#skt-native-identity-paired-certificate"
+    },
+    {
       "id": "skt-native-save-001",
       "platform": "skt",
       "match": {

@@ -164,7 +164,9 @@ func TestWIPICGraphicsContextIsTheHandsetsRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []uint32{1, 34, 50, 206, 100, 0xf800, 0x07e0, 0xf81f, 0x80, 3, 0xfffffffc, 0, 0x80, 8, 1, 0}
+	// Setting the alpha installs the platform's own blend as the operation,
+	// with the alpha as its parameter.
+	want := []uint32{1, 34, 50, 206, 100, 0xf800, 0x07e0, 0xf81f, 0x80, 3, 0xfffffffc, wipicrt.WIPICBuiltinAlphaOp, 0x80, 8, 1, 0}
 	for index := range want {
 		if words[index] != want[index] {
 			t.Fatalf("context word %#x = %#x, want %#x (record %#x)", index*4, words[index], want[index], words)

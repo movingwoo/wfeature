@@ -338,3 +338,62 @@ func publishFrame(t *testing.T, runtime *wipicrt.Runtime) {
 		t.Fatal(err)
 	}
 }
+
+// TestAlphaInstallsTheBuiltinBlend pins the specification's alpha: setting it
+// installs the platform's blend as the operation, so a title that sets an
+// alpha and draws with no operation of its own draws translucent — one SKT
+// title's card slots came out as black squares — and a title that installs
+// its own, or clears it, replaces the blend.
+func TestAlphaInstallsTheBuiltinBlend(t *testing.T) {
+	const red, blue = 0xf800, 0x001f
+	fill := func(alpha uint32, clear bool) uint16 {
+		_, runtime := wipicrttest.NewRuntime(t)
+		destination, framebuffer := surface(t, runtime, blue)
+		context, err := runtime.AllocateBytes(make([]byte, wipicrt.WIPICGraphicsContextSize))
+		if err != nil {
+			t.Fatal(err)
+		}
+		contextCall(t, runtime, true, context, 1, red)
+		contextCall(t, runtime, true, context, 4, alpha)
+		op, err := runtime.WIPICReadContextPixelOp(context)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if op.Function != wipicrt.WIPICBuiltinAlphaOp || op.Param != alpha {
+			t.Fatalf("operation after the alpha = %+v", op)
+		}
+		if clear {
+			contextCall(t, runtime, true, context, 5, 0)
+		}
+		tableCall(t, runtime, 11, destination, 0, 0, 1, 1, context)
+		return wipicrttest.ReadSurfacePixels(t, runtime, framebuffer)[0]
+	}
+	if got := fill(255, false); got != red {
+		t.Errorf("alpha 255 drew %#x, want %#x", got, red)
+	}
+	if got := fill(0, false); got != blue {
+		t.Errorf("alpha 0 drew %#x, want the surface's %#x", got, blue)
+	}
+	// Half of red over blue, a channel at a time: 16 of 31 red, 15 of 31 blue.
+	if got, want := fill(128, false), uint16(16<<11|15); got != want {
+		t.Errorf("alpha 128 drew %#x, want %#x", got, want)
+	}
+	if got := fill(128, true); got != red {
+		t.Errorf("a cleared operation drew %#x, want %#x", got, red)
+	}
+}
+
+// TestBuiltinAlphaOpStaysPut pins the value that stands for the built-in blend.
+// A context's operation field is guest memory, so a quick save keeps the value
+// a context was given, and a restored session has to recognise it: moving it,
+// with the stub arena or otherwise, needs a checkpoint migration. No stub can
+// have it as its address, since a stub starts word-aligned and is called with
+// the Thumb bit set.
+func TestBuiltinAlphaOpStaysPut(t *testing.T) {
+	if wipicrt.WIPICBuiltinAlphaOp != 0x350fffff {
+		t.Fatalf("WIPICBuiltinAlphaOp = %#x, which quick saves hold as 0x350fffff", wipicrt.WIPICBuiltinAlphaOp)
+	}
+	if wipicrt.WIPICBuiltinAlphaOp&3 == 1 {
+		t.Fatalf("WIPICBuiltinAlphaOp %#x has a stub address's shape", wipicrt.WIPICBuiltinAlphaOp)
+	}
+}

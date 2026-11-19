@@ -26,6 +26,8 @@ var authenticationLicenseShapes = map[string]bool{
 	"19db02bb01a4956db1f26a2664c1298c28792e79929eef39c9a0898f48a66684": true,
 	"ea1ae7596a8b605a83493e19d5cae9c0d48169d846d40c94ed20345a210cb3ad": true,
 	"521d50e14821448ffd09ad86d456e4dd96d9cf27150543f2a4d19e2391879870": true,
+	// A shorter four-generation check with its own branch and property-read layout.
+	"1f44e007022a778acfed4e776463da768bc14a85a768bd41550b30d89e52514f": true,
 }
 
 type authenticationClasses map[string][]byte

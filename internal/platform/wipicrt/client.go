@@ -34,10 +34,17 @@ type Client struct {
 	Runtime  *Runtime
 	Prepared *Runtime
 
-	Resources   map[string][]byte
-	Files       map[string][]byte
-	SaveStore   SaveStore
-	ProgramName string
+	Resources map[string][]byte
+	// ResourceOrder, when set, lists Resources in the order the program's
+	// resource directory gives them, and a resource's identifier is its
+	// position there, as an SKT handset answers MC_knlGetResourceID; see
+	// wipicGetResourceID. Without it an identifier is the guest address of the
+	// resource's name.
+	ResourceOrder []string
+	resourceIndex map[string]uint32
+	Files         map[string][]byte
+	SaveStore     SaveStore
+	ProgramName   string
 
 	// Frame plumbing: the converted RGBA frame, its size, and the sink the Host
 	// collects it through. See the frame methods below.
