@@ -28,6 +28,7 @@ type notificationNetwork struct {
 	identity              string
 	authenticationRequest []byte
 	certificateRequests   [2][]byte
+	unassignedCertificate string
 	active                bool
 	next                  uint32
 	serial                uint64
@@ -210,7 +211,7 @@ func (client *Client) notificationSocketCall(thread *armcore.Thread, slot uint32
 		s.write = notificationCallback{args[1], args[2], n.serial}
 		return 0
 	case slotNetSocketWrite:
-		if !s.connected || s.failed || args[2] > 100 {
+		if !s.connected || s.failed || args[2] > uint32(max(100, len(n.certificateRequests[0]))) {
 			return wipiError
 		}
 		if args[2] == 0 {

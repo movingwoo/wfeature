@@ -129,6 +129,10 @@ func (client *Client) handleResource(thread *armcore.Thread, slot uint32) error 
 	if err != nil {
 		return err
 	}
+	// A title can pass the failed lookup straight back to GetResource.
+	if slot == slotGetResource && int32(identifier) == wipiNoEntry {
+		return answerCode(thread, wipiNoEntry)
+	}
 	name, known := client.resourceNames[identifier]
 	if !known {
 		// A name the platform has not issued an id for is read from guest

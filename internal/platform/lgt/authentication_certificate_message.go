@@ -10,13 +10,25 @@ import (
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
+type certificateMessageLayout uint8
+
+const (
+	certificateStandard certificateMessageLayout = iota
+	certificateModelOnly
+	certificateExtendedHello
+)
+
+const certificateExtendedHelloSize = 108
+
 // certificateMessageRevision is one recognized native revision of the
 // exchange: the fields its client writes that the session does not supply, and
-// the callbacks and endpoint its socket code passes. The two local revisions
-// share the frame layout and differ only in these.
+// the callbacks and endpoint its socket code passes.
 type certificateMessageRevision struct {
 	// version fills the 20-byte client field of the first request.
-	version string
+	version               string
+	layout                certificateMessageLayout
+	helloCode             [2]byte
+	unassignedCertificate string
 	// code is bytes 6 and 7 of the second request, and product the field that
 	// follows the model and its one-byte flag there. One revision sends no
 	// product.
@@ -41,6 +53,19 @@ var certificateMessageRevisions = map[string]certificateMessageRevision{
 	"c3abb052c4eda11bba233e1bf21641fe04c5fb276b8fda9af4f581a1d7b1be8c": {
 		version: "LGT_WIPIC_1.0.0", code: [2]byte{4, 0x29}, product: "0003060B",
 		dial: 0x1ddf5, socket: 0x1e1c5, address: 0xfc4273d3, port: 0x223b,
+	},
+	"12d776585da56713c33860ffd9404a71a3d0d8a660984d129e8e8f438b037055": {
+		version: "1.0.2", layout: certificateModelOnly, code: [2]byte{3, 0xf7},
+		dial: 0x2d791, socket: 0x2d641, address: 0xfa4273d3, port: 0x1d3b,
+	},
+	"ca3f14e043fcd1659b894144d31053042d7f8f0f8d2a4c07b3aff8ab8879f8e4": {
+		version: "1.0.2", layout: certificateExtendedHello, code: [2]byte{4, 0x12}, product: "0002CB6A",
+		dial: 0x2dc81, socket: 0x2db21, address: 0xfc4273d3, port: 0x1d3b,
+	},
+	"f11086c249b305152625674c4accba4fd705d59ade956824b4c45ea3cea7576f": {
+		version: "1.0.1", helloCode: [2]byte{4, 0x2c}, code: [2]byte{4, 0x2c}, product: "01042875",
+		unassignedCertificate: "a08305330a2cfe2aa7a74782ff4cecdfe0030d9388791bf27f6244dc3ea91d02",
+		dial:                  0x1d11d, socket: 0x1d4f5, address: 0xfc4273d3, port: 0x223b,
 	},
 }
 
@@ -71,14 +96,31 @@ func certificateMessageNetwork(revision certificateMessageRevision, identity, mo
 		dials: [2]uint32{revision.dial, revision.dial}, socketCallback: revision.socket,
 		address: revision.address, port: revision.port, protocol: localCertificateMessageProtocol,
 	}}
-	n.certificateRequests[0] = make([]byte, 73)
-	copy(n.certificateRequests[0], []byte{0, 73, 0, 0, 0, 3, 0xf9, 0, 0, 2, 5})
-	copy(n.certificateRequests[0][11:31], revision.version)
-	copy(n.certificateRequests[0][31:43], identity)
-	n.certificateRequests[1] = make([]byte, 79)
-	copy(n.certificateRequests[1], []byte{0, 79, 0, 20, 0, 12, revision.code[0], revision.code[1]})
-	copy(n.certificateRequests[1][8:58], model)
-	copy(n.certificateRequests[1][59:79], revision.product)
+	helloSize, modelSize := 73, 79
+	if revision.layout == certificateExtendedHello {
+		helloSize = certificateExtendedHelloSize
+	}
+	if revision.layout == certificateModelOnly {
+		modelSize = 58
+	}
+	hello, handset := make([]byte, helloSize), make([]byte, modelSize)
+	copy(hello, []byte{0, byte(helloSize), 0, 0, 0, 3, 0xf9, revision.helloCode[0], revision.helloCode[1], 2, 5})
+	copy(hello[11:31], revision.version)
+	copy(hello[31:43], identity)
+	if revision.layout == certificateModelOnly || revision.layout == certificateExtendedHello {
+		for i := 47; i < 73; i++ {
+			hello[i] = '0'
+		}
+	}
+	copy(handset, []byte{0, byte(modelSize), 0, 20, 0, 12, revision.code[0], revision.code[1]})
+	copy(handset[8:58], model)
+	if revision.layout == certificateModelOnly {
+		hello[4], handset[4], handset[5] = '0', '0', 10
+	} else {
+		copy(handset[59:79], revision.product)
+	}
+	n.unassignedCertificate = revision.unassignedCertificate
+	n.certificateRequests = [2][]byte{hello, handset}
 	return n
 }
 

@@ -226,6 +226,7 @@ func (client *Client) recognizedNetwork(archive *Archive, message bool) (*notifi
 	model, _ := client.systemProperty("PHONEMODEL")
 	if message {
 		if network := newCertificateMessageNetwork(archive, client.subscriberNumber, model); network != nil {
+			client.omitUnassignedCertificate(network.unassignedCertificate)
 			return network, backend.AuthenticationLGTCertificateMessage
 		}
 		return nil, backend.AuthenticationUnsupported

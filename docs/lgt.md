@@ -8,13 +8,19 @@ are in [LGT history](history/lgt.md).
 
 ## Packages and loading
 
-An archive contains `app_info` beside a JAR whose `binary.mod` entry is the ELF
-module. The descriptor supplies AID, PID, and the main class; unknown keys are
+A descriptor-based archive contains `app_info` beside a JAR whose `binary.mod` entry is
+the ELF module. The descriptor supplies AID, PID, and the main class; unknown keys are
 kept. Descriptor-named JARs take precedence. If that match is absent, a single
 fallback is accepted; multiple candidates require exactly one valid module.
 Candidate inspection shares an expanded-byte budget and rejects malformed
 auxiliary JARs. An archive is bounded to 128 MiB, one entry to 64 MiB, all
 entries together to 512 MiB, and the entry count to 8,192.
+
+Some handset sync exports omit `app_info`. The loader accepts a single
+`WEBSYNC1.jar` of up to 4 MiB with a root `binary.mod` carrying the
+little-endian ARM ELF32 executable header. These exports use the first 128 bits
+of the module's SHA-256 in their save owner because the exporter's filename
+is common to different applications.
 
 Descriptor and entry names accept UTF-8 and MS949. Resource lookup recognizes
 plain, `P/`, and `P/<AID>/` names, with JAR resources ahead of outer-archive
@@ -36,8 +42,9 @@ most 64 sections with an address, and no two non-empty ones may overlap in
 memory or share file bytes, because every recognition scan walks each section
 once per probed address.
 
-Saves belong to the PID, or to the AID when the PID is absent. Colliding
-identifiers are not rewritten without evidence for a different identity rule;
+For descriptor-based packages, saves belong to the PID, or to the AID when the
+PID is absent. Colliding identifiers are not rewritten without evidence for a
+different identity rule;
 `checkgames` reports a save owner claimed under more than one AID
 ([CLI](cli.md#checkgames)).
 
@@ -501,15 +508,16 @@ configured subscriber number remain unchanged. The CLI diagnostic opt-out
 (`-no-auth`) retains the original identity check. See the
 [save-reader evidence](history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison).
 
-Two recognized native revisions complete their two-stage certificate exchange
+Five recognized native revisions complete their two-stage certificate exchange
 through the same bounded local socket service. Requests must match the session
 identity, model and the revision's observed protocol fields (client field, code
 word and product field). The nonempty local message lets
 the guest set and save its own certificate-present flag. Responses are deferred
 to a service boundary; no external connection or carrier credential is created.
 Unknown exchanges still fail, and the authentication diagnostic opt-out disables
-this behavior. See the [protocol evidence](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility)
-and [the second revision](history/lgt.md#lgt-new-archives-2026-10-19-certificate-message).
+this behavior. See the [protocol evidence](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility),
+[second revision](history/lgt.md#lgt-new-archives-2026-10-19-certificate-message),
+and [later request layouts](history/lgt.md#lgt-puzzle-archives-2026-11-18).
 
 Two more recognized native modules get a packaged file adjusted, by exact
 fingerprint. One is served the certificate its archive ships under a directory

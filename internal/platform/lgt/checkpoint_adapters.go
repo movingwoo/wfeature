@@ -182,10 +182,14 @@ func (saved adapterState) validate() error {
 		if saved.Store != adapterStoreNone || network.Protocol > uint8(localCertificateMessageProtocol) || len(network.Sockets) > 4 {
 			return invalid("an invalid local service")
 		}
+		requestLimit := 100
+		if network.Protocol == uint8(localCertificateMessageProtocol) {
+			requestLimit = certificateExtendedHelloSize
+		}
 		for index, socket := range network.Sockets {
 			if index > 0 && network.Sockets[index-1].Descriptor >= socket.Descriptor ||
 				socket.Descriptor <= 100 || socket.Descriptor-100 > network.Next ||
-				len(socket.Request) > 100 || len(socket.Response) > 65536 || len(socket.PendingResponse) > 65536 ||
+				len(socket.Request) > requestLimit || len(socket.Response) > 65536 || len(socket.PendingResponse) > 65536 ||
 				socket.Connect.Serial > network.Serial || socket.Read.Serial > network.Serial || socket.Write.Serial > network.Serial {
 				return invalid("an invalid local socket")
 			}
