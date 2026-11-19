@@ -641,8 +641,8 @@ func (e sktScriptEngine) authentication() backend.AuthenticationStatus {
 func (e sktScriptEngine) uncaughtCallbacks() (uint64, string) { return 0, "" }
 
 // textInput is never offered: the script machine has no text field.
-func (e sktScriptEngine) textInput(context.Context) (*backend.TextInput, error) {
-	return nil, backend.ErrNoTextInput
+func (e sktScriptEngine) textInput(ctx context.Context) (*backend.TextInput, error) {
+	return e.script.TextInput(ctx)
 }
 
 func (e sktScriptEngine) canCheckpoint() bool { return e.script.CanCheckpoint() }

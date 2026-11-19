@@ -1,6 +1,6 @@
 # SKT checkpoints
 
-SKT Java/MIDP/WIPI, GNEX/GVM SGS and native WIPI-C programs (Clets) use the
+SKT Java/MIDP/WIPI, GNEX/GVM SGS versions 1 and 2, and native WIPI-C programs (Clets) use the
 shared checkpoint envelope, one slot per archive, CLI commands and browser keypad
 controls. Restoration works in a
 fresh process and across debug/release profiles. A load does not replay guest
@@ -113,13 +113,16 @@ range reported by the API.
 
 ## SGS state
 
-SGS captures between complete synchronous events. Its record preserves the VM
+SGS versions 1 and 2 capture between complete synchronous events. Their record preserves the VM
 instruction boundary, variables/constants, resources, shared byte-buffer views,
 queued bitmap aliases (including storage retained after resource resize), PCG
 random state, timers, indexed graphics and last presentation. Audio, vibration,
 clock, speed and pause state accompany the VM. Replacement does not call the
 termination entry. SGS save writes are synchronous and it has no persistent
 file handles to rebuild.
+
+Version 4 supports ordinary guest files and user NV storage across sessions.
+Its 32-bit VM and display buffers have no quick checkpoint format yet.
 
 ## Native Clet state
 

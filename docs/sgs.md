@@ -7,9 +7,9 @@ request on 2026-09-11 superseded the earlier decision to exclude this runtime.
 
 ## Current acceptance status
 
-The initial SGS execution path and the reported QA fixes passed their
-checkpoint. Further compatibility work is paused, and the user authorized a PR
-of the implementation as it stood: a partial-support delivery.
+The initial version 1/2 execution path and the reported QA fixes passed their
+checkpoint. The September delivery covers a subset of that runtime. Work on
+two version 4 installations resumed in November.
 [The remaining acceptance gates](sgs-completion.md) record unfinished
 full-compatibility work. After the final fixes, the user confirmed that the
 previously questioned archive runs, the reported text corruption is gone, and
@@ -38,19 +38,47 @@ markers keep precedence.
 the existing framebuffer, audio, save and logging boundaries. The server's
 shared session and the CLI `runskt` command both call `skt.StartScript`.
 `inspect` reports SGS metadata without requiring a Java main class. JVM
-invocation and cheats remain Java-specific. Quick save and quick load cover SGS
+invocation and cheats remain Java-specific. Quick save and quick load cover version 1/2 SGS
 sessions; see [SKT checkpoints](skt-checkpoints.md#sgs-state).
 
-The parser accepts version 1 (52-byte header), version 2 (100-byte header), and
+The legacy parser accepts version 1 (52-byte header), version 2 (100-byte header), and
 the observed 32-byte download prefix. Internal offsets stay relative to the SGS
 header. It validates callbacks, variable and resource tables, initializer
 spans, descriptor counts and the original 16 KiB initial allocation budget.
 Input is bounded to 128 KiB plus the optional prefix. No game archives or
 original runtime binaries are distributed with this implementation.
 
+## Version 4
+
+The word interpreter reads an optional 32-byte download prefix, a 128-byte
+header, 32-bit region offsets and eleven callback slots. Each operation and
+operand occupies a little-endian 16-bit word. Long addresses put the high
+word first and are relative to the header. The operand values, symbol banks
+and integer saves use 32-bit words. The loader checks code alignment, event
+addresses and exact descriptor data sizes within a 4 MiB image. Mutable
+media belongs to the session. The shared CLI and browser use the same bounded
+interpreter, timer clock, file store and audio timeline.
+
+The default display is 240 × 320. A key press supplies its handset code and a
+release supplies 255. The renderer handles indexed images, palette overrides,
+text, the drawing and backup buffers and presentation. Packed sounds pass
+through the shared SMAF decoder. Regular files and the 64-byte user NV area
+start with their archived contents when present. Changed data persists in
+the title's save directory. Version 4 quick checkpoints are currently
+unavailable. Guest socket calls return the disconnected handset result.
+Random integers use the session's seeded generator with an exclusive upper bound.
+
+One local installation reaches its third stage in the browser with its original
+save. Numeric input draws obstacles. Completing the stage records progress
+in user NV, and a fresh process resumes the fourth stage. A changed sound
+setting also persists. A second installation displays an authentication error
+with the default handset profile. The MOD descriptor supplies the script's
+install user ID. The configured subscriber number supplies the handset MIN.
+See [the two installation checks](history/skt.md#sgs-word-qa).
+
 ## Execution and events
 
-Values are signed 16-bit integers. Bytecode words and branch targets are big
+The legacy VM uses signed 16-bit integers. Bytecode words and branch targets are big
 endian; header fields, initializer words and saved words are little endian.
 The VM implements indexed/scalar loads and stores, arithmetic and comparisons,
 assignment shortcuts, branches, calls, encoded word references and vector
@@ -65,7 +93,7 @@ operations, and checks context cancellation. Unknown operations fail with
 their opcode and instruction offset instead of silently succeeding. Guest code
 cannot create host threads or run an unlimited loop.
 
-The eight header callbacks are initialization, termination, timer, key, two
+The eight legacy header callbacks are initialization, termination, timer, key, two
 message callbacks and two system callbacks. The host drives initialization,
 termination, timers and key activation. Variables 0–15 include the event
 parameter, screen dimensions, timer counters and runtime version. Three timers

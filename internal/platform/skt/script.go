@@ -35,6 +35,12 @@ type ScriptSession struct {
 	audio         *backend.Audio
 	sound         backend.AudioHandle
 	vm            *sgsvm.VM
+	wide          *sgsvm.WideVM
+	screen        *wideScreen
+	wideFiles     [15]wideFileHandle
+	wideHeld      int16
+	wideKeyDue    time.Duration
+	wideEditor    *wideEditor
 	graphics      *scriptGraphics
 	options       ScriptOptions
 	timers        [3]scriptTimer
@@ -50,16 +56,20 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 	if archive == nil || archive.Script == nil {
 		return nil, fmt.Errorf("SKT archive contains no SGS program")
 	}
-	graphics, err := newScriptGraphics(options.Framebuffer)
-	if err != nil {
-		return nil, err
-	}
 	source := rand.NewPCG(1, 2)
-	s := &ScriptSession{archive: archive, graphics: graphics, options: options, last: time.Now(), random: rand.New(source), randomSource: source}
+	s := &ScriptSession{archive: archive, options: options, last: time.Now(), random: rand.New(source), randomSource: source}
 	s.audio = backend.NewAudio(options.AudioSink)
 	s.audio.SetLogger(options.Logger)
 	_ = s.audio.SetPlaybackRate(0, options.Speed)
 	s.vibrator.SetClock(func() time.Time { return time.Unix(0, int64(s.clock)) })
+	if archive.Script.Wide != nil {
+		return s.startWide(ctx)
+	}
+	graphics, err := newScriptGraphics(options.Framebuffer)
+	if err != nil {
+		return nil, err
+	}
+	s.graphics = graphics
 	s.vm = sgsvm.New(archive.Script, s)
 	if len(s.vm.Variables) < 16 {
 		return nil, fmt.Errorf("SGS system variable bank is missing")
@@ -81,6 +91,13 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 	return s, nil
 }
 func (s *ScriptSession) event(ctx context.Context, entry int, value int16) error {
+	if s.wide != nil {
+		for i := 0; i < 4; i++ {
+			s.wide.Variables[i][0] = 0
+		}
+		s.wide.Variables[0][0] = int32(value)
+		return s.wide.Run(ctx, s.archive.Script.Wide.Entries[entry])
+	}
 	if len(s.vm.Variables) > 0 && len(s.vm.Variables[0].Values) > 0 {
 		s.vm.Set(0, 0, value)
 	}
@@ -93,7 +110,12 @@ func (s *ScriptSession) event(ctx context.Context, entry int, value int16) error
 func (s *ScriptSession) Vibration() backend.Vibration { return s.vibrator.State() }
 func (s *ScriptSession) GuestElapsed() time.Duration  { return s.clock }
 
-func (s *ScriptSession) Exited() bool { return s.vm.Exited() }
+func (s *ScriptSession) Exited() bool {
+	if s.wide != nil {
+		return s.wide.Exited
+	}
+	return s.vm.Exited()
+}
 
 func (s *ScriptSession) Tick(ctx context.Context) (time.Duration, error) {
 	now := time.Now()
@@ -111,7 +133,7 @@ func (s *ScriptSession) Advance(ctx context.Context, elapsed time.Duration) (tim
 	if elapsed < 0 || elapsed > 250*time.Millisecond {
 		return 0, fmt.Errorf("SGS elapsed tick outside 0..250ms")
 	}
-	if s.closed || s.paused || s.Exited() {
+	if s.closed || s.paused || s.Exited() || s.wideEditor != nil {
 		return 16 * time.Millisecond, nil
 	}
 	speed := backend.ClampSpeed(s.options.Speed)
@@ -121,7 +143,9 @@ func (s *ScriptSession) Advance(ctx context.Context, elapsed time.Duration) (tim
 	if speed <= 0 {
 		speed = 1
 	}
-	defer func() { s.audio.Advance(s.clock) }()
+	if s.wide == nil {
+		defer func() { s.audio.Advance(s.clock) }()
+	}
 	s.clock += time.Duration(float64(elapsed) * speed)
 	for i := range s.timers {
 		if s.Exited() {
@@ -136,7 +160,12 @@ func (s *ScriptSession) Advance(ctx context.Context, elapsed time.Duration) (tim
 		} else {
 			timer.active = false
 		}
-		if i == 0 && len(s.vm.Variables) > 6 {
+		if s.wide != nil && i == 0 {
+			v := s.wide.Variables
+			frame := (v[6][0] + 1) % 5040
+			v[6][0], v[7][0], v[8][0], v[9][0] = frame, frame%2, frame%3, frame%6
+		}
+		if s.vm != nil && i == 0 && len(s.vm.Variables) > 6 {
 			tick := (s.vm.Value(3, 0) + 1) % 5040
 			s.vm.Set(3, 0, tick)
 			s.vm.Set(4, 0, tick%2)
@@ -144,6 +173,24 @@ func (s *ScriptSession) Advance(ctx context.Context, elapsed time.Duration) (tim
 			s.vm.Set(6, 0, tick%6)
 		}
 		if err := s.event(ctx, 2, int16(i)); err != nil {
+			return 0, err
+		}
+		if s.wideEditor != nil {
+			return time.Duration(float64(16*time.Millisecond) / speed), nil
+		}
+	}
+	if s.wide != nil {
+		playing := s.sound != 0 && s.audio.Playing(s.sound)
+		s.audio.Advance(s.clock)
+		if playing && !s.audio.Playing(s.sound) && !s.Exited() {
+			if err := s.event(ctx, 6, 23); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if s.wide != nil && s.wideHeld != 0 && s.clock >= s.wideKeyDue && !s.Exited() {
+		s.wideKeyDue = s.clock + 50*time.Millisecond
+		if err := s.event(ctx, 3, s.wideHeld); err != nil {
 			return 0, err
 		}
 	}
@@ -167,6 +214,9 @@ func (s *ScriptSession) Close() error {
 func (s *ScriptSession) SendKey(ctx context.Context, action string, code int32) error {
 	if s.closed || s.paused || s.Exited() {
 		return nil
+	}
+	if s.wide != nil {
+		return s.sendWideKey(ctx, action, code)
 	}
 	if action != "press" {
 		return nil

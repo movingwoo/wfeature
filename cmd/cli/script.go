@@ -73,6 +73,13 @@ func runScript(archive *skt.Archive, run scriptCLIRun, stdout, stderr io.Writer)
 		return core.SendKey(ctx, action, key)
 	}
 	advance := func(ctx context.Context) (bool, error) {
+		if archive.Script.Wide != nil && ticks >= max(1, run.hold) {
+			for _, key := range run.keys[ticks-max(1, run.hold)] {
+				if err := send(ctx, false, key); err != nil {
+					return false, err
+				}
+			}
+		}
 		for _, key := range run.keys[ticks] {
 			if err := send(ctx, true, key); err != nil {
 				return false, err

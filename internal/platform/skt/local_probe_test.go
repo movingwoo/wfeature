@@ -12,13 +12,9 @@ import (
 	"github.com/movingwoo/wfeature/internal/session"
 )
 
-// probeTitle is a started SKT archive as the local probes drive it. Most are
-// MIDlets this package runs; an archive whose executable is a native `.daf`
-// program is run by the SKT Clet engine, which these probes reach through the
-// session a Host starts it with. The rungs ask both the same questions: before
-// the native archives were driven this way, every one of them stopped at the
-// boot rung on a missing MIDlet manifest while the CLI and the server played
-// it.
+// probeTitle is a started SKT archive as the local probes drive it. MIDlets use
+// their Java lifecycle directly. Scripts and native programs use the same
+// session and framebuffer selection as the CLI and browser.
 type probeTitle interface {
 	// tick runs one Host pass.
 	tick() error
@@ -39,15 +35,14 @@ func startProbeTitle(t *testing.T, data []byte) probeTitle {
 	t.Helper()
 	saves := backend.NewDirectorySaveStore(t.TempDir())
 	if skt.IsNativeArchive(data) {
-		started, err := session.Start(context.Background(), data, session.Options{SaveStore: saves})
-		if err != nil {
-			t.Fatalf("start the native program: %v", err)
-		}
-		return &nativeTitle{session: started}
+		return startHostProbe(t, data, saves)
 	}
 	archive, err := skt.Open(data)
 	if err != nil {
 		t.Fatalf("open archive: %v", err)
+	}
+	if archive.Script != nil {
+		return startHostProbe(t, data, saves)
 	}
 	framebuffer := localProbeFramebuffer(t, archive)
 	runtime, err := skt.Start(archive, skt.Options{Framebuffer: framebuffer, SaveStore: saves})
@@ -55,6 +50,17 @@ func startProbeTitle(t *testing.T, data []byte) probeTitle {
 		t.Fatalf("start: %v", err)
 	}
 	return &midletTitle{runtime: runtime, framebuffer: framebuffer}
+}
+
+func startHostProbe(t *testing.T, data []byte, saves backend.SaveStore) *hostProbeTitle {
+	t.Helper()
+	started, err := session.Start(context.Background(), data, session.Options{SaveStore: saves})
+	if err != nil {
+		t.Fatalf("start the program: %v", err)
+	}
+	title := &hostProbeTitle{session: started}
+	title.take(started.Flushes())
+	return title
 }
 
 type midletTitle struct {
@@ -89,26 +95,26 @@ func (title *midletTitle) key(pressed bool, code int32) error {
 
 func (title *midletTitle) close() { _ = title.runtime.Destroy(true) }
 
-// nativeTitle is a native program in the session a Host plays it in, ticked
+// hostProbeTitle is a script or native program in the session a Host plays it in, ticked
 // with the budget a server's pass has. Presents are the frames the program
 // finished (Progress.Flushes), and the frame kept is the last one taken when
 // that count moved, as a Host takes them: a pass that drew nothing new
 // presents nothing, and a program that ended itself leaves its last frame.
-type nativeTitle struct {
+type hostProbeTitle struct {
 	session  *session.Session
 	presents uint64
 	frame    backend.Frame
 	exited   string
 }
 
-// nativeTickBudget is how much guest time one pass covers, as a server's does.
-const nativeTickBudget = 32 * time.Millisecond
+// hostTickBudget is how much guest time one pass covers, as a server's does.
+const hostTickBudget = 32 * time.Millisecond
 
-func (title *nativeTitle) tick() error {
+func (title *hostProbeTitle) tick() error {
 	if title.exited != "" {
 		return errors.New(title.exited)
 	}
-	progress, err := title.session.Tick(context.Background(), nativeTickBudget)
+	progress, err := title.session.Tick(context.Background(), hostTickBudget)
 	// A program that ends itself in a tick says so in the progress, with no
 	// error; the next tick would only answer that nothing is running.
 	if progress.Exited || errors.Is(err, session.ErrExited) {
@@ -128,7 +134,7 @@ func (title *nativeTitle) tick() error {
 
 // take keeps the frame on the screen when the count of finished frames has
 // moved.
-func (title *nativeTitle) take(flushes uint64) {
+func (title *hostProbeTitle) take(flushes uint64) {
 	if flushes == title.presents {
 		return
 	}
@@ -138,11 +144,11 @@ func (title *nativeTitle) take(flushes uint64) {
 	}
 }
 
-func (title *nativeTitle) ended() string { return title.exited }
+func (title *hostProbeTitle) ended() string { return title.exited }
 
-func (title *nativeTitle) presented() (backend.Frame, uint64) { return title.frame, title.presents }
+func (title *hostProbeTitle) presented() (backend.Frame, uint64) { return title.frame, title.presents }
 
-func (title *nativeTitle) key(pressed bool, code int32) error {
+func (title *hostProbeTitle) key(pressed bool, code int32) error {
 	action := session.KeyRelease
 	if pressed {
 		action = session.KeyPress
@@ -158,4 +164,4 @@ func (title *nativeTitle) key(pressed bool, code int32) error {
 	return err
 }
 
-func (title *nativeTitle) close() { title.session.Close() }
+func (title *hostProbeTitle) close() { title.session.Close() }

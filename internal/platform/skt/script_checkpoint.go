@@ -45,7 +45,7 @@ type scriptCheckpointState struct {
 }
 
 func (s *ScriptSession) CanCheckpoint() bool {
-	return s != nil && !s.closed && s.archive != nil && s.archive.identity != ([32]byte{})
+	return s != nil && s.wide == nil && !s.closed && s.archive != nil && s.archive.identity != ([32]byte{})
 }
 func (s *ScriptSession) Speed() float64 { return backend.ClampSpeed(s.options.Speed) }
 
@@ -167,7 +167,7 @@ func PrepareScriptCheckpoint(archive []byte, checkpoint backend.Checkpoint, opti
 	if err != nil {
 		return nil, err
 	}
-	if opened.Script == nil {
+	if opened.Script == nil || opened.Script.Wide != nil {
 		return nil, backend.ErrCheckpointVersion
 	}
 	placeholder := backend.NewDetachedSaveStore()

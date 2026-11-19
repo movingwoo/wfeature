@@ -1,6 +1,8 @@
 package skt_test
 
 import (
+	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -51,8 +53,7 @@ func TestLocalSKTArchivesBootAndPaint(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read archive: %v", err)
 			}
-			// A MIDlet, or a native program the SKT Clet engine runs; saves go
-			// to the test's own directory (startProbeTitle).
+			// Start the matching runtime with a private save directory.
 			title := startProbeTitle(t, data)
 			defer title.close()
 
@@ -129,10 +130,7 @@ func TestLocalSKTArchiveSoundsDecode(t *testing.T) {
 				t.Skipf("the archive does not open: %v", err)
 			}
 			carried := 0
-			for name, body := range archive.Entries {
-				if len(body) < 4 || string(body[:4]) != "MMMD" {
-					continue
-				}
+			checkSound := func(name string, body []byte) {
 				carried++
 				sounds++
 				sink := backend.NewRecordingSink(nil)
@@ -140,16 +138,16 @@ func TestLocalSKTArchiveSoundsDecode(t *testing.T) {
 				handle, err := audio.Load(body)
 				if err != nil {
 					t.Errorf("%s: %v", name, err)
-					continue
+					return
 				}
 				length, known := audio.Length(handle)
 				if !known || length <= 0 {
 					t.Errorf("%s: decoded to nothing", name)
-					continue
+					return
 				}
 				if err := audio.Play(handle, 0, false); err != nil {
 					t.Errorf("%s: play: %v", name, err)
-					continue
+					return
 				}
 				audio.Advance(length + time.Second)
 				messages, samples := sink.Summary()
@@ -163,6 +161,34 @@ func TestLocalSKTArchiveSoundsDecode(t *testing.T) {
 					withWave++
 				default:
 					t.Errorf("%s: %v of sound reached the sink as nothing", name, length)
+				}
+			}
+			for name, body := range archive.Entries {
+				if len(body) >= 4 && string(body[:4]) == "MMMD" {
+					checkSound(name, body)
+				}
+			}
+			if archive.Script != nil {
+				for i, resource := range archive.Script.Resources {
+					if resource.Kind != 2 || len(resource.Data) == 0 {
+						continue
+					}
+					name := fmt.Sprintf("SGS sound %d", i)
+					if len(resource.Data) < 2 {
+						t.Errorf("%s: missing wrapper", name)
+						continue
+					}
+					body := resource.Data[2:]
+					if archive.Script.Wide != nil {
+						// Wide media records may contain alignment padding after the song.
+						if len(body) < 8 || string(body[:4]) != "MMMD" ||
+							uint64(binary.BigEndian.Uint32(body[4:8])) > uint64(len(body)-8) {
+							t.Errorf("%s: invalid sized SMAF resource", name)
+							continue
+						}
+						body = body[:8+int(binary.BigEndian.Uint32(body[4:8]))]
+					}
+					checkSound(name, body)
 				}
 			}
 			if carried == 0 {
