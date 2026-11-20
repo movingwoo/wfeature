@@ -853,7 +853,10 @@ const sessionStateChanged = state => {
   if (state === "ready") {
     document.getElementById("prestart")?.classList.remove("hidden");
     document.getElementById("prestart").inert = false;
-    document.getElementById("settings-panel")?.classList.remove("visible");
+    // A modal settings panel would sit over the picker, so a narrow window
+    // closes it. The rail of a wide one holds it open, as initSettings does on
+    // load; closing it here hid the rail on every fresh visit.
+    document.getElementById("settings-panel")?.classList.toggle("visible", panelsDocked());
     document.getElementById("cheat-panel")?.classList.remove("visible");
     resetCheatPanel();
     setStatus("");
