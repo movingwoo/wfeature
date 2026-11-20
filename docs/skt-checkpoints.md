@@ -1,6 +1,6 @@
 # SKT checkpoints
 
-SKT Java/MIDP/WIPI, GNEX/GVM SGS and native WIPI-C programs (Clets) use the
+SKT Java/MIDP/WIPI, GNEX/GVM SGS versions 1, 2 and 4, and native WIPI-C programs (Clets) use the
 shared checkpoint envelope, one slot per archive, CLI commands and browser keypad
 controls. Restoration works in a
 fresh process and across debug/release profiles. A load does not replay guest
@@ -113,13 +113,26 @@ range reported by the API.
 
 ## SGS state
 
-SGS captures between complete synchronous events. Its record preserves the VM
+All three supported SGS versions capture between synchronous events. The version
+1 and 2 format is unchanged and existing slots remain readable. It preserves the VM
 instruction boundary, variables/constants, resources, shared byte-buffer views,
 queued bitmap aliases (including storage retained after resource resize), PCG
 random state, timers, indexed graphics and last presentation. Audio, vibration,
 clock, speed and pause state accompany the VM. Replacement does not call the
-termination entry. SGS save writes are synchronous and it has no persistent
-file handles to rebuild.
+termination entry. These two versions write saves synchronously and have no
+persistent file handles.
+
+Version 4 uses the same slot with a separate runtime record. It preserves
+32-bit variable banks and their address relationships, mutable media and its
+allocated capacity, keypad repeat timing and any open text editor. The game
+resumes with the saved timer deadlines, random generator, audio and vibration.
+The drawing buffer, LCD backup and last presented frame are kept separately so
+a partially drawn frame stays off screen until the next presentation.
+
+A load reopens each guest file by name in the current save store and restores
+each handle's cursor and read-only mode. Multiple handles on one file see the
+same data. A file deleted since capture stays deleted until the guest creates
+or writes it again. The 64-byte user NV area also retains later ordinary saves.
 
 ## Native Clet state
 

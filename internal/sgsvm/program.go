@@ -14,6 +14,7 @@ import (
 // Entries are initialization, termination, timer, key, two message callbacks,
 // system notification, and an additional system callback, in that order.
 type Program struct {
+	Wide               *WideProgram
 	CodeStart, CodeEnd int
 	Data               []byte
 	Name               string
@@ -40,6 +41,15 @@ type Resource struct {
 
 // Parse validates a script before exposing its code or allocating runtime banks.
 func Parse(data []byte) (*Program, error) {
+	if len(data) >= 33 && data[32] == 4 && binary.LittleEndian.Uint32(data) == 32 {
+		if !bytes.Equal(data[4:8], []byte{0, 0, 0, 0}) || !bytes.Equal(data[24:32], make([]byte, 8)) {
+			return nil, fmt.Errorf("SGS: invalid version 4 wrapper")
+		}
+		return parseWide(data[32:])
+	}
+	if len(data) != 0 && data[0] == 4 {
+		return parseWide(data)
+	}
 	if len(data) > 128*1024+32 {
 		return nil, fmt.Errorf("SGS: script exceeds 128 KiB plus wrapper")
 	}

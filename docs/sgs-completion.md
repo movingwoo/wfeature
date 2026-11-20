@@ -1,11 +1,11 @@
 # SGS completion acceptance
 
-## Paused at user request
+## September version 1/2 checkpoint
 
 Development of further compatibility features stopped on 2026-09-11 at the
 user's request. The user then authorized a PR containing all SGS work completed
 to that point: a partial-support delivery that does not depend on the
-full-compatibility requirements below. Further implementation remains paused.
+full-compatibility requirements below. The separate November version 4 work is recorded in [SGS](sgs.md#version-4).
 Unrelated workspace changes were excluded from the PR.
 
 The local SIS metadata query for `0xe8` is included, with focused header,

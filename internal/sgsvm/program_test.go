@@ -137,6 +137,7 @@ func TestParseRejectsMalformedRegions(t *testing.T) {
 func FuzzParse(f *testing.F) {
 	f.Add(parserFixture(1))
 	f.Add(parserFixture(2))
+	f.Add(wideProgramFixture())
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, b []byte) { _, _ = Parse(b) })
 }

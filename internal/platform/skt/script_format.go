@@ -40,6 +40,10 @@ func formatScriptResource(vm *sgsvm.VM, count int) error {
 }
 
 func scriptFormat(format []byte, values ...int16) ([]byte, error) {
+	return formatScriptIntegers(format, values...)
+}
+
+func formatScriptIntegers[T int16 | int32](format []byte, values ...T) ([]byte, error) {
 	out := make([]byte, 0, 256)
 	appendText := func(s string) { n := min(len(s), 255-len(out)); out = append(out, s[:n]...) }
 	used := 0
@@ -105,13 +109,13 @@ func scriptFormat(format []byte, values ...int16) ([]byte, error) {
 		case 'c':
 			digits = string([]byte{byte(value)})
 		case 'd':
-			n := int(value)
+			n := int64(value)
 			prefix = sign
 			if n < 0 {
 				prefix = "-"
 				n = -n
 			}
-			digits = strconv.Itoa(n)
+			digits = strconv.FormatInt(n, 10)
 		case 'x', 'X':
 			// The native formatter receives a sign-extended 32-bit word.
 			digits = strconv.FormatUint(uint64(uint32(int32(value))), 16)

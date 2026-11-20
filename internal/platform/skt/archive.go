@@ -75,6 +75,7 @@ type Archive struct {
 	identity        [32]byte
 	Script          *sgsvm.Program
 	ScriptSaveOwner string
+	ScriptUserID    string
 	Descriptor      Descriptor
 	MainClass       *classfile.Class
 	Entries         map[string][]byte

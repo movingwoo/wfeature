@@ -4121,3 +4121,41 @@ executable its digest names — one Java class copy, two native byte windows —
 no other archive is reached; a sweep is not rerun for a fix that patches only a
 named revision. The three titles' own digests change as their gates now pass,
 which a probe confirmed title by title.
+
+<a id="sgs-word-qa"></a>
+
+## Word-script installations, 2026-11-19
+
+Both carrier downloads have a version 4 header at byte 32. The download digest
+is present in the wrapper and repeated in the MOD record. The parser reads 489
+symbol records and 1,250 media records from the 406,172-byte download and 925
+symbols and 1,415 media records from the 438,164-byte download. Their installed
+files contain 1,772 bytes of preferences and a 64-byte user NV record,
+respectively. Guest file reads reproduced both byte sequences. The sound
+decoder accepted all 43 and 31 sound resources.
+
+On the larger archive, the shared session reaches the title, two menus,
+stage selection and the third stage from the packaged save. At 16 ms per tick,
+OK at ticks 800, 1056, 1127, 1193, 1259 and 1350 reaches play. Comparing a
+numeric 5 pressed at tick 1850 with an idle run shows different obstacles
+at tick 1860. Clear opens the pause menu. Changing the sound setting and
+reopening from a fresh process reads the updated 64-byte save. The regression
+checks all 76,800 pixels on each of two menu screens. Chromium also reached
+the live stage through the PWA controls. Missing the track leads to Game Over, and OK opens
+the retry menu. Matching keypad drawings to the slopes, gaps and obstacles
+finishes the third stage. The results page shows maximum speed, combo and
+points. OK advances to the fourth stage. A fresh process reading the updated
+64-byte NV save opens the fourth stage and resumes play. The local regression
+checks the third-stage result and fourth-stage headings independently of the
+changing score and animation. A third regression quicksaves at tick 1845,
+restores the exact stage frame and reproduces the next three sampled frames
+under the same input and timing. In Chromium the keypad quickload button
+restored the saved third-stage map pixel for pixel, and OK entered play again.
+To run all three regressions, set
+`WFEATURE_SKT_WIDE_STAGE` to the larger archive's path and run
+`go test ./internal/session -run '^TestLocalWideScriptStage' -count=1`.
+
+The smaller installation reads the handset MIN and installed script user ID,
+then displays an authentication error without reading its packaged preferences.
+With the default handset profile, 1,024 ticks and keypad input leave the single
+presented frame unchanged. Gameplay remains unverified for this installation.

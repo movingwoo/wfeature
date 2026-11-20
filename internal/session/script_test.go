@@ -41,6 +41,11 @@ func scriptArchiveFixture(t *testing.T, lcdMask ...byte) []byte {
 	for i, v := range []int{vd, vi, vi, vi} {
 		binary.LittleEndian.PutUint16(data[44+i*2:], uint16(v))
 	}
+	return packScriptFixture(t, data)
+}
+
+func packScriptFixture(t *testing.T, data []byte) []byte {
+	t.Helper()
 	var descriptor []byte
 	for _, v := range []string{"application/x-gnex-sgs", "SGS"} {
 		descriptor = binary.LittleEndian.AppendUint32(descriptor, uint32(len(v)))
@@ -186,5 +191,62 @@ func TestScriptSessionLargeLCDAndExplicitScreen(t *testing.T) {
 		if w != want[0] || h != want[1] || fw != w || fh != h || !ok {
 			t.Fatalf("requested %v: screen %dx%d frame %dx%d valid=%v, want %v", size, w, h, fw, fh, ok, want)
 		}
+	}
+}
+
+// Exercise the word interpreter through the same archive detector, framebuffer,
+// clock and private save store that a player opens from the browser.
+func TestWideScriptSessionLifecycle(t *testing.T) {
+	data := make([]byte, 128)
+	data[0], data[5] = 4, 4
+	copy(data[10:26], "Wide fixture")
+	entry := func(slot int, words ...uint16) {
+		binary.LittleEndian.PutUint32(data[28+4*slot:], uint32(len(data)))
+		for _, word := range words {
+			data = binary.LittleEndian.AppendUint16(data, word)
+		}
+	}
+	entry(0, 0x92, 0x3a, 0x92, 0x5f, 0xff)
+	// Save the most recent key event as a full word, clear the LCD using RGB.
+	entry(3, 0x8e, 0, 0x05, 1, 0x92, 0x94, 0x05, 12, 0x05, 34, 0x05, 56, 0x92, 0x38, 0x92, 0x5f, 0xff)
+	vd := len(data)
+	for range 20 {
+		data = append(data, 1, 0, 1, 0, 0, 0, 0, 0)
+	}
+	vi := len(data)
+	data = append(data, make([]byte, 80)...)
+	for i, n := range []int{vd, vi, len(data), len(data)} {
+		binary.LittleEndian.PutUint32(data[72+i*4:], uint32(n))
+	}
+	binary.LittleEndian.PutUint32(data[120:], uint32(len(data)))
+	wrapper := make([]byte, 32)
+	wrapper[0], wrapper[8] = 32, 111
+	archive := packScriptFixture(t, append(wrapper, data...))
+	ctx := context.Background()
+	store := backend.NewDirectorySaveStore(t.TempDir())
+	session, err := Start(ctx, archive, Options{Width: 5, Height: 7, SaveStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	rgba, w, h, ok := session.Frame()
+	if !ok || w != 5 || h != 7 || rgba[0] != 255 || rgba[3] != 255 || session.Summary().Name != "Wide fixture" {
+		t.Fatal("wrong initial frame or title")
+	}
+	for _, event := range []struct {
+		action   string
+		expected uint32
+	}{{KeyPress, 5}, {KeyRelease, 255}} {
+		if err := session.SendKey(ctx, event.action, '5'); err != nil {
+			t.Fatal(err)
+		}
+		stored, ok := store.LoadSave("nv/data")
+		if !ok || len(stored) < 4 || binary.LittleEndian.Uint32(stored) != event.expected {
+			t.Fatalf("%s: stored bytes %x", event.action, stored)
+		}
+	}
+	rgba, _, _, _ = session.Frame()
+	if rgba[3] != 255 || rgba[0] >= rgba[1] || rgba[1] >= rgba[2] {
+		t.Fatalf("key frame pixel %v", rgba[:4])
 	}
 }
