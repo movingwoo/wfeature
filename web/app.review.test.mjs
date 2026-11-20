@@ -47,3 +47,12 @@ test("the game list is asked for through the Korean network failure", () => {
   assert.match(body, /await reach\(fetch, "games\.json"/);
   assert.doesNotMatch(body, /await fetch\("games\.json"/);
 });
+
+// A fresh visit reaches 'ready' just after initSettings opened the rail, and
+// closing the panel there unconditionally made a wide window look like the
+// narrow layout once the session connected.
+test("the picker keeps the settings rail open in a wide window", () => {
+  const ready = between('if (state === "ready") {', "void initGameSelect();");
+  assert.match(ready, /getElementById\("settings-panel"\)\?\.classList\.toggle\("visible", panelsDocked\(\)\)/);
+  assert.doesNotMatch(ready, /getElementById\("settings-panel"\)\?\.classList\.remove\("visible"\)/);
+});
