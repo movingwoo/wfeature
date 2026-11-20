@@ -11,7 +11,34 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
+
+func TestHandsetSettingDistinguishesExplicitAndImplicitDefaults(t *testing.T) {
+	sink, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+	t.Cleanup(wipic.ResetSubscriberNumber)
+	for _, tc := range []struct {
+		env, want string
+		flags     []string
+	}{
+		{"01000000000", "01000000000", nil},
+		{"", "", nil},
+		{"01012345678", "01000000000", []string{"-number", "01000000000"}},
+	} {
+		t.Setenv("WFEATURE_PHONE_NUMBER", tc.env)
+		if err := run(append([]string{"-version"}, tc.flags...), sink, sink); err != nil {
+			t.Fatal(err)
+		}
+		if wipic.ConfiguredSubscriberNumber() != tc.want {
+			t.Fatal("server did not preserve the explicit handset setting")
+		}
+	}
+}
 
 // A socket path has to be short: the sockaddr_un a bind writes into is 104
 // bytes on macOS and 108 on Linux, and a test's own temporary directory is

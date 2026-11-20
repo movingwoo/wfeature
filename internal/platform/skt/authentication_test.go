@@ -8,6 +8,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/jvm/classfile"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 //go:embed testdata/license.jar
@@ -94,6 +95,27 @@ func TestAuthenticationLicensePreservesMalformedPropertyExceptions(t *testing.T)
 	}
 }
 
+func TestAuthenticationLicenseRunsOriginalComparisonWithConfiguredHandset(t *testing.T) {
+	t.Cleanup(wipic.ResetSubscriberNumber)
+	// The fixture's synthetic checksum for its service and the first handset
+	// is 66. Hold the packaged key fixed as the handset changes.
+	for _, tt := range []struct {
+		number   string
+		accepted int32
+	}{{"01000000000", 1}, {"01000000001", 0}} {
+		if err := wipic.SetSubscriberNumber(tt.number); err != nil {
+			t.Fatal(err)
+		}
+		archive := licenseFixture(t)
+		archive.Descriptor.Properties["MIDlet-Key"] = "66"
+		runtime := startLicenseFixture(t, archive, true, nil)
+		if runtime.Authentication() != backend.AuthenticationGuestManaged ||
+			licenseInt(t, runtime, "accepted", "()Z") != tt.accepted || licenseInt(t, runtime, "digestCalls", "()I") != 1 {
+			t.Fatalf("original digest comparison did not return %d", tt.accepted)
+		}
+	}
+}
+
 func TestAuthenticationLicenseRefusesNearMatchesAndTruncation(t *testing.T) {
 	archive := licenseFixture(t)
 	original := archive.Entries["LicenseCheck.class"]
@@ -116,7 +138,7 @@ func TestAuthenticationLicenseRefusesNearMatchesAndTruncation(t *testing.T) {
 		changed := bytes.Clone(original)
 		changed[start+offset] ^= 1
 		archive.Entries["LicenseCheck.class"] = changed
-		if len(prepareAuthentication(archive)) != 0 {
+		if len(prepareAuthentication(archive, false)) != 0 {
 			t.Fatalf("changed bytecode at %d was recognized", offset)
 		}
 	}
@@ -124,13 +146,13 @@ func TestAuthenticationLicenseRefusesNearMatchesAndTruncation(t *testing.T) {
 		changed := bytes.Clone(original)
 		changed[bytes.Index(changed, []byte(text))] ^= 1
 		archive.Entries["LicenseCheck.class"] = changed
-		if len(prepareAuthentication(archive)) != 0 {
+		if len(prepareAuthentication(archive, false)) != 0 {
 			t.Fatalf("changed contract %q was recognized", text)
 		}
 	}
 	for length := range original {
 		archive.Entries["LicenseCheck.class"] = original[:length]
-		if len(prepareAuthentication(archive)) != 0 {
+		if len(prepareAuthentication(archive, false)) != 0 {
 			t.Fatalf("truncated class at %d was recognized", length)
 		}
 	}
@@ -144,7 +166,7 @@ func TestAuthenticationLicenseObfuscatedClassAndMethodNames(t *testing.T) {
 	changed = bytes.ReplaceAll(changed, []byte("valid"), []byte("probe"))
 	delete(archive.Entries, "LicenseCheck.class")
 	archive.Entries["RenamedCheck.class"] = changed
-	if classes := prepareAuthentication(archive); len(classes) != 1 || classes["RenamedCheck"] == nil {
+	if classes := prepareAuthentication(archive, false); len(classes) != 1 || classes["RenamedCheck"] == nil {
 		t.Fatal("recognition depended on class or method name")
 	}
 }

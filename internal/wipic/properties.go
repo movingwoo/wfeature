@@ -57,6 +57,8 @@ var SystemProperties = map[string]string{
 // for another one.
 const defaultSubscriberNumber = "01000000000"
 
+var subscriberNumberConfigured bool
+
 // maxSubscriberNumber is the width the shortest buffer a title reads the
 // number into can hold. One title copies it into twelve bytes and compares it
 // as a string, so eleven digits and a terminator is the ceiling.
@@ -79,7 +81,15 @@ func SetSubscriberNumber(number string) error {
 	}
 	SystemProperties["PHONENUMBER"] = number
 	SystemProperties["MIN"] = number
+	subscriberNumberConfigured = true
 	return nil
+}
+
+// ResetSubscriberNumber selects the emulator's default handset at Host startup.
+func ResetSubscriberNumber() {
+	SystemProperties["PHONENUMBER"] = defaultSubscriberNumber
+	SystemProperties["MIN"] = defaultSubscriberNumber
+	subscriberNumberConfigured = false
 }
 
 // ValidateSubscriberNumber checks an identity without changing Host defaults.
@@ -103,3 +113,12 @@ func ValidateSubscriberNumber(number string) error {
 
 // SubscriberNumber is the number this platform is currently answering with.
 func SubscriberNumber() string { return SystemProperties["PHONENUMBER"] }
+
+// ConfiguredSubscriberNumber returns the Host's explicit handset choice, or
+// an empty string when the emulator supplied its default.
+func ConfiguredSubscriberNumber() string {
+	if subscriberNumberConfigured {
+		return SubscriberNumber()
+	}
+	return ""
+}

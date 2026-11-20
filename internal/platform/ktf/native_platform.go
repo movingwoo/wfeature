@@ -33,9 +33,10 @@ import (
 //   - One object per interface number it queries. Each is a table of its own,
 //     so what the module calls on one is recorded apart from every other.
 type NativePlatform struct {
-	client  *NativeClient
-	archive *NativeArchive
-	clock   wipicrt.Clock
+	client         *NativeClient
+	archive        *NativeArchive
+	clock          wipicrt.Clock
+	authentication backend.AuthenticationStatus
 	// pace is the same clock, kept in its own type so the rate can be changed
 	// and a guest duration converted back to what it costs a Host. source is
 	// the clock underneath it, which is what a probe drives.
@@ -337,12 +338,7 @@ func (platform *NativePlatform) Install() error {
 }
 
 func nativeAnswerZero(*armcore.Thread) (uint32, error) { return 0, nil }
-
-// nativeAnswerCertificate accepts the certificate the module presents.
-func nativeAnswerCertificate(*armcore.Thread) (uint32, error) {
-	return nativeCertificateAccepted, nil
-}
-func nativeAnswerOne(*armcore.Thread) (uint32, error) { return 1, nil }
+func nativeAnswerOne(*armcore.Thread) (uint32, error)  { return 1, nil }
 
 // allocate answers the platform table's allocator. A size of nothing is
 // answered with null rather than refused, which is what BREW's own heap does
@@ -577,25 +573,6 @@ const (
 	nativeScreenColour = 0x28
 )
 
-// The later modules create one more object, and both of them create the same
-// one: the second ClassID their information file carries beside the applet's.
-// Two archives from two publishers naming the same number is what says it is
-// the carrier's rather than either title's.
-//
-// One call is reached, and what it is handed names it: the block is the
-// archive's own `gbxcerti.dat`, all 74 bytes of it, loaded through the resource
-// loader and freed straight afterwards. The answer is a small signed status —
-// the module turns it into one of ten messages through a table of its own — and
-// the two ends of it are visible from the outside: answering zero leaves the
-// title on its own screen, and answering one sends it to the dialog that offers
-// to authenticate over the network. So zero is the certificate being accepted,
-// which is what a handset with a valid one answers.
-const (
-	nativeInterfaceCertificate = 0x103028a
-	nativeCertificateCheck     = 0x08
-	nativeCertificateAccepted  = 0
-)
-
 // nativeInterfaceHandset is the object the title queries for a record it turns
 // into a 26-character identifier, padding whatever the record leaves empty
 // with `X`. Its two methods fill that record and drop the object.
@@ -610,8 +587,7 @@ const (
 // two fields and the identifier is made of both.
 const nativeHandsetRecordSize = 0x26
 
-// installRemaining registers the slots that are established but whose answers
-// the title does not read.
+// installRemaining registers the remaining object and platform slots.
 func (platform *NativePlatform) installRemaining() {
 	client := platform.client
 	client.Serve(NativePlatformTable, nativeSlotDestroyObject, platform.destroyObject)
@@ -621,7 +597,7 @@ func (platform *NativePlatform) installRemaining() {
 	client.Serve(screen, nativeScreenColour, platform.screenColour)
 
 	certificate := nativeInterfaceSurface(nativeInterfaceCertificate)
-	client.Serve(certificate, nativeCertificateCheck, nativeAnswerCertificate)
+	client.Serve(certificate, nativeCertificateCheck, platform.checkCertificate(platform.selectPackagedCertificate()))
 
 	handset := nativeInterfaceSurface(nativeInterfaceHandset)
 	client.Serve(handset, nativeHandsetRecord, platform.handsetRecord)

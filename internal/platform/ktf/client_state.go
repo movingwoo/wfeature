@@ -135,7 +135,7 @@ func (client *Client) validateClientState(saved clientState) error {
 		return fmt.Errorf("KTF client subscriber is invalid")
 	}
 	switch saved.Authentication {
-	case "", backend.AuthenticationOff, backend.AuthenticationUnsupported, backend.AuthenticationKTFCertificate23, backend.AuthenticationKTFCertificate52, backend.AuthenticationKTFSubscriber:
+	case "", backend.AuthenticationOff, backend.AuthenticationUnsupported, backend.AuthenticationGuestManaged, backend.AuthenticationKTFCertificate23, backend.AuthenticationKTFCertificate52, backend.AuthenticationKTFSubscriber:
 	default:
 		return fmt.Errorf("KTF client authentication state is invalid")
 	}

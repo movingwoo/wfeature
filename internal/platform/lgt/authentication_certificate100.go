@@ -63,36 +63,61 @@ func (store *authenticationCertificate100Store) putHeader(data, header []byte, f
 	copy(data, header)
 }
 
+// Choose the ordinary store before the Clet runs. A guest can reject or reset
+// its own record during initialization; that must not turn into a first run.
+func (client *Client) prepareCertificate100(contract *certificate100Contract) (*authenticationCertificate100Store, backend.AuthenticationStatus) {
+	store := newAuthenticationCertificate100Store(client.saveStore, contract)
+	if client.archive.Descriptor.AID != contract.application {
+		return nil, backend.AuthenticationUnsupported
+	}
+	data, _ := client.readFile(contract.name)
+	if client.saveReadError != nil {
+		return nil, backend.AuthenticationUnsupported
+	}
+	if len(data) > 0 {
+		header, valid := store.header(data)
+		if !valid || header[27] != 0 {
+			return nil, backend.AuthenticationGuestManaged
+		}
+	}
+	client.saveStore = store
+	return store, backend.AuthenticationUnsupported
+}
+
 // Activate after initialization has created or read the ordinary save. This
 // also handles a first run without inventing game progress or default settings.
-func (store *authenticationCertificate100Store) activate(client *Client) bool {
+func (store *authenticationCertificate100Store) activate(client *Client) backend.AuthenticationStatus {
 	if client.archive.Descriptor.AID != store.contract.application || wipic.ValidateSubscriberNumber(client.subscriberNumber) != nil {
-		return false
+		return backend.AuthenticationUnsupported
 	}
 	plain := []byte(client.subscriberNumber + store.contract.application + store.contract.token)
 	if len(plain) >= 100 {
-		return false
+		return backend.AuthenticationUnsupported
 	}
 	data, present := client.readFile(store.contract.name)
 	header, valid := store.header(data)
 	if !present || !valid {
-		return false
+		return backend.AuthenticationUnsupported
+	}
+	// Any nonzero presence byte makes the guest run its own certificate reader.
+	if header[27] != 0 {
+		return backend.AuthenticationGuestManaged
 	}
 	live := make([]byte, 48)
 	if err := client.core.Memory().Read(store.contract.state, live); err != nil || !bytes.Equal(live, header[:48]) {
-		return false
+		return backend.AuthenticationUnsupported
 	}
 	// Do not replace a file while the guest still holds its previous contents.
 	for _, file := range client.files {
 		if fileListKey(file.name) == fileListKey(store.contract.name) {
-			return false
+			return backend.AuthenticationUnsupported
 		}
 	}
 	cryptCertificate100(plain, store.contract.seed, store.contract.multiplier, true)
 	certificate := make([]byte, 100)
 	copy(certificate, plain)
 	if err := client.core.Memory().Write(store.contract.state+27, []byte{1}); err != nil {
-		return false
+		return backend.AuthenticationUnsupported
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -101,7 +126,7 @@ func (store *authenticationCertificate100Store) activate(client *Client) bool {
 	store.certificate = certificate
 	store.bind(client)
 	store.active = true
-	return true
+	return backend.AuthenticationLGTCertificate100
 }
 
 // bind attaches the one thing about an active store that is not data: where

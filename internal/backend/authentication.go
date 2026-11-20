@@ -6,6 +6,8 @@ package backend
 type AuthenticationStatus string
 
 const (
+	// AuthenticationGuestManaged leaves the decision to the guest's original checks.
+	AuthenticationGuestManaged          AuthenticationStatus = "guest-managed"
 	AuthenticationOff                   AuthenticationStatus = "off"
 	AuthenticationUnsupported           AuthenticationStatus = "unsupported"
 	AuthenticationKTFCertificate23      AuthenticationStatus = "ktf-certificate-23"
@@ -24,3 +26,7 @@ const (
 	AuthenticationSKTNativeCertificate    AuthenticationStatus = "skt-native-certificate"
 	AuthenticationSKTNativeSaveSubscriber AuthenticationStatus = "skt-native-save-subscriber"
 )
+
+// AuthenticationKTFBREWPackagedCertificate selects the archival record
+// verifier on a registered BREW module.
+const AuthenticationKTFBREWPackagedCertificate AuthenticationStatus = "ktf-brew-packaged-certificate"

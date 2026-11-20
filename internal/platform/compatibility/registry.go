@@ -19,6 +19,9 @@ const JavaClassSet = "java_class_set"
 // NativeModule identifies the SHA-256 digest of a complete native module.
 const NativeModule = "native_module"
 
+// KTFBREWPackagedCertificate identifies a BREW module with a known packaged certificate.
+const KTFBREWPackagedCertificate = "ktf.brew_packaged_certificate"
+
 // SKTInclusiveSetClip selects the SKT runtime's inclusive clip correction.
 const SKTInclusiveSetClip = "skt.inclusive_set_clip"
 
@@ -176,7 +179,8 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		for _, fix := range entry.Fixes {
 			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache || fix == SKTResumeWithoutStart || fix == SKTResumeThroughStart) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
 				(fix == LGTCertificateMessage || fix == LGTPackagedCertificate || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTScreenStripConstant || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule ||
-				(fix == SKTNativeSaveIdentity || fix == SKTNativeCertSubscriber || fix == SKTNativePairedCertificate || fix == SKTNativeCertDataSubscriber || fix == SKTNativeDiscardOwnerState || fix == SKTNativeServiceAllowance) && entry.Platform == "skt" && entry.Match.Kind == NativeModule
+				(fix == SKTNativeSaveIdentity || fix == SKTNativeCertSubscriber || fix == SKTNativePairedCertificate || fix == SKTNativeCertDataSubscriber || fix == SKTNativeDiscardOwnerState || fix == SKTNativeServiceAllowance) && entry.Platform == "skt" && entry.Match.Kind == NativeModule ||
+				fix == KTFBREWPackagedCertificate && entry.Platform == "ktf" && entry.Match.Kind == NativeModule
 			if !supported {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)
 			}

@@ -54,7 +54,7 @@ func cletOptions(options Options) clet.SessionOptions {
 }
 
 func ktfNativeOptions(options Options) ktf.NativeSessionOptions {
-	return ktf.NativeSessionOptions{SaveStore: options.SaveStore, AudioSink: options.AudioSink,
+	return ktf.NativeSessionOptions{DisableAuthentication: options.DisableAuthentication, SaveStore: options.SaveStore, AudioSink: options.AudioSink,
 		Speed: options.Speed, Logger: options.Logger, Width: options.width(), Height: options.height(), Clock: options.Clock}
 }
 

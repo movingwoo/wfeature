@@ -8910,3 +8910,29 @@ packages moved from failure to passing all three acceptance stages. The
 descriptorless export now passes all three as well. The two pre-existing
 failures in other archives (one black boot frame and one unresponsive screen)
 persisted. No archive regressed.
+
+<a id="lgt-puzzle-screen-strip"></a>
+
+### A 24-row strip above the title and puzzle
+
+On a 240×320 screen, module `ca3f14e0…` left the first 24 rows white and
+clipped the bottom of the title. Its display setup stores 24 at `0x01500044`
+when the framebuffer width exceeds 128. The drawing routine at `0x38c8`
+multiplies that value by the row stride and adds it to the framebuffer
+pointer. Other drawing and screen-copy routines read the same word.
+
+The module's existing registry entry also selects `lgt.screen_strip_constant`.
+The loader clears the immediate in `movs r3,#24` at `0x2120`. The separate
+branch for widths up to 128 still stores 14. In a fresh-save replay the
+original title's rows 24–319 matched the corrected rows 0–295 pixel for
+pixel. The bottom 24 rows now show the rest of the artwork and the copyright.
+The menu and first playable board matched over the same 296 rows. Chromium
+also rendered the title at row zero. From a checkpoint on the corrected
+board, right, down and select each produced a different frame from ten idle
+ticks. Quickload restored the saved frame exactly. The LGT acceptance sweep
+reported the same boot, sustained and interactive outcomes for all 151
+archives before and after the change.
+
+A checkpoint created before the correction restores the old display state.
+Starting a new session runs the corrected initialization with the ordinary
+game save.

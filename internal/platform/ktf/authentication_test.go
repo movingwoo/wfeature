@@ -5,8 +5,10 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
 
 func certificateArchive() *Archive {
@@ -160,5 +162,84 @@ func TestAuthenticationCertificatePreservesSavedCertificateAndDeletion(t *testin
 	}
 	if _, ok := store.LoadSave("db/progress"); ok {
 		t.Fatal("nil backing store gained persistence")
+	}
+}
+
+func TestCertificateSelectionLeavesOriginalRecordsForTheGuest(t *testing.T) {
+	for _, scheme := range []struct {
+		size   int
+		status backend.AuthenticationStatus
+	}{{23, backend.AuthenticationKTFCertificate23}, {52, backend.AuthenticationKTFCertificate52}} {
+		t.Run(string(scheme.status), func(t *testing.T) {
+			sessionRecord := bytes.Repeat([]byte{1}, scheme.size)
+			for _, tc := range []struct {
+				name            string
+				saved           []byte
+				packagedMatches bool
+				deleted         bool
+				guestManaged    bool
+			}{
+				{name: "missing"},
+				{name: "matching package", packagedMatches: true, guestManaged: true},
+				{name: "saved", saved: sessionRecord, guestManaged: true},
+				{name: "malformed save", saved: []byte{2}, packagedMatches: true, guestManaged: true},
+				{name: "empty overrides package", saved: []byte{}, packagedMatches: true},
+				{name: "deleted overrides package and save", saved: sessionRecord, packagedMatches: true, deleted: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					client, _ := newTestRuntime(t)
+					packaged := make([]byte, scheme.size)
+					if tc.packagedMatches {
+						copy(packaged, sessionRecord)
+					}
+					client.AttachFilesystem(map[string][]byte{certificateName: packaged})
+					entries := map[string][]byte{}
+					if tc.saved != nil {
+						entries[certificateSaveKey] = tc.saved
+					}
+					if tc.deleted {
+						entries[wipicrt.DatabaseRemovedKey] = wipicrt.JoinRemovalList([]string{certificateName})
+					}
+					base := testSaveStore(t, entries)
+					client.AttachSaveStore(base)
+					if err := client.selectCertificate(sessionRecord, scheme.status); err != nil {
+						t.Fatal(err)
+					}
+					want := scheme.status
+					if tc.guestManaged {
+						want = backend.AuthenticationGuestManaged
+					}
+					if client.authentication != want || (client.SaveStore == base) != tc.guestManaged {
+						t.Fatalf("selected %q with original store %v", client.authentication, client.SaveStore == base)
+					}
+					if err := client.SaveStore.StoreSave(certificateSaveKey, []byte("guest write")); err != nil {
+						t.Fatal(err)
+					}
+					saved, _ := base.LoadSave(certificateSaveKey)
+					if bytes.Equal(saved, []byte("guest write")) != tc.guestManaged {
+						t.Fatalf("wrong certificate write destination")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestCertificateSelectionPropagatesSaveErrors(t *testing.T) {
+	for _, key := range []string{certificateSaveKey, wipicrt.DatabaseRemovedKey} {
+		t.Run(key, func(t *testing.T) {
+			client, _ := newTestRuntime(t)
+			store := &wipicrttest.UnreadableSaves{
+				DirectorySaveStore: wipicrt.NewDirectorySaveStore(t.TempDir()),
+				Keys:               map[string]bool{key: true},
+			}
+			client.AttachSaveStore(store)
+			if err := client.selectCertificate(make([]byte, 23), backend.AuthenticationKTFCertificate23); err == nil {
+				t.Fatal("an unreadable save was treated as a fresh installation")
+			}
+			if client.SaveStore != store {
+				t.Fatal("a failed read installed a certificate adapter")
+			}
+		})
 	}
 }

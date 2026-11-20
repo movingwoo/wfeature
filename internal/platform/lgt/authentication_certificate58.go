@@ -140,34 +140,29 @@ type authenticationCertificate58Store struct {
 	originalMembership map[string]bool
 }
 
-func newAuthenticationCertificate58Store(base backend.SaveStore, archive *Archive, number string) (*authenticationCertificate58Store, bool) {
+func (client *Client) prepareCertificate58() backend.AuthenticationStatus {
+	data, _ := client.readFile(authenticationCertificate58Name)
+	if client.saveReadError != nil {
+		return backend.AuthenticationUnsupported
+	}
+	// The matched guest owns existing records, including its rejection and
+	// removal of a certificate. Only a missing or empty first attempt needs a view.
+	if len(data) != 0 || client.fileRemoved(authenticationCertificate58Name) {
+		return backend.AuthenticationGuestManaged
+	}
+	store, ok := newAuthenticationCertificate58Store(client.saveStore, client.subscriberNumber)
+	if !ok {
+		return backend.AuthenticationUnsupported
+	}
+	client.saveStore = store
+	return backend.AuthenticationLGTCertificate58
+}
+
+func newAuthenticationCertificate58Store(base backend.SaveStore, number string) (*authenticationCertificate58Store, bool) {
 	if wipic.ValidateSubscriberNumber(number) != nil {
 		return nil, false
 	}
-	var data []byte
-	var exists bool
-	if base != nil {
-		var err error
-		data, exists, err = backend.ReadSave(base, authenticationCertificate58Key)
-		if err != nil {
-			return nil, false
-		}
-	}
-	if !exists {
-		data, exists = archive.Resource(authenticationCertificate58Name)
-	}
-	// A refused first connection can leave an empty file. The matched guest
-	// reader treats it as missing; replace it only in this session.
-	if exists && len(data) != 0 && len(data) != 58 {
-		return nil, false
-	}
-	if len(data) == 58 {
-		data = bytes.Clone(data)
-		cryptCertificate58(data)
-	} else {
-		data = make([]byte, 58)
-	}
-	clear(data[40:52])
+	data := make([]byte, 58)
 	copy(data[40:52], number)
 	cryptCertificate58(data)
 	store := &authenticationCertificate58Store{base: base, certificate: data, ledgers: make(map[string][]byte), originalMembership: make(map[string]bool)}

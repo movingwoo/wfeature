@@ -121,7 +121,10 @@ can bill and then asks to download data its own archive already carries; a
 shorter number such as `-number 9999` lets it start. Another title needs the
 full-length default for the certificate it checks, so the value is a choice
 rather than a better answer; [`network.md`](network.md) has both sides. The CLI
-reads the same `WFEATURE_PHONE_NUMBER`.
+reads the same `WFEATURE_PHONE_NUMBER`. Supplying a number explicitly, even
+the default value, selects the original handset check in recognized SKT
+license readers and one LGT save reader. A mismatching record can reach the game's own
+refusal screen. [Offline authentication](authentication.md)
 
 The build profile served is **the binary that is running**, not a flag: a
 server built with `-tags debug` collects the full diagnostics and writes to the

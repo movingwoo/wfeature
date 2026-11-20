@@ -63,6 +63,43 @@ func TestNativeCheckpointFixtureUsesOrdinaryStartupFramesAndInput(t *testing.T) 
 	}
 }
 
+func TestNativeCheckpointWithoutCertificateKeepsBothDiagnosticModesCompatible(t *testing.T) {
+	archive, err := testfixture.KTFNativeCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, disabled := range []bool{false, true} {
+		options := NativeSessionOptions{Clock: wipicrt.NewManualClock(time.Time{}), SaveStore: newNativeSaveFixtureStore(t), DisableAuthentication: disabled}
+		session, err := StartNativeSession(t.Context(), archive, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkpoint, err := session.CaptureCheckpoint(t.Context())
+		session.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared, err := PrepareNativeSessionCheckpoint(archive, checkpoint, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := backend.AuthenticationUnsupported
+		if disabled {
+			want = backend.AuthenticationOff
+		}
+		if got := prepared.session.Authentication(); got != want {
+			t.Errorf("restored policy %q, want %q", got, want)
+		}
+		prepared.Discard()
+		options.DisableAuthentication = !disabled
+		prepared, err = PrepareNativeSessionCheckpoint(archive, checkpoint, options)
+		if err != nil {
+			t.Fatalf("a package without a verifier refused the other setting: %v", err)
+		}
+		prepared.Discard()
+	}
+}
+
 // A checkpoint brings back the devices and the objects the title holds, and
 // none of what its files held: an open file is read again from the store the
 // restored session runs over, and the tables that shadow the store start empty.

@@ -276,7 +276,8 @@
         "sha256": "ca3f14e043fcd1659b894144d31053042d7f8f0f8d2a4c07b3aff8ab8879f8e4"
       },
       "fixes": [
-        "lgt.certificate_message"
+        "lgt.certificate_message",
+        "lgt.screen_strip_constant"
       ],
       "evidence": "docs/history/lgt.md#lgt-puzzle-archives-2026-11-18"
     },
@@ -401,6 +402,30 @@
         "skt.native_cert_subscriber"
       ],
       "evidence": "docs/skt-native.md#skt-native-identity-save"
+    },
+    {
+      "id": "ktf-brew-packaged-certificate-001",
+      "platform": "ktf",
+      "match": {
+        "kind": "native_module",
+        "sha256": "e14a20c0029c38253b9c8e8ac4e5efbd15bd80e60eed5338064c3f1a35c1e76d"
+      },
+      "fixes": [
+        "ktf.brew_packaged_certificate"
+      ],
+      "evidence": "docs/ktf.md#brew-packaged-certificate"
+    },
+    {
+      "id": "ktf-brew-packaged-certificate-002",
+      "platform": "ktf",
+      "match": {
+        "kind": "native_module",
+        "sha256": "53a4527808c40da6e49b3f6661aed60825ca7232942f6e8add9aa15889ace23c"
+      },
+      "fixes": [
+        "ktf.brew_packaged_certificate"
+      ],
+      "evidence": "docs/ktf.md#brew-packaged-certificate"
     }
   ]
 }

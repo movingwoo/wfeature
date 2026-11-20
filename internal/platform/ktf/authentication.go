@@ -40,6 +40,30 @@ func authenticationCertificate(archive *Archive, number string) ([]byte, bool) {
 	return certificate.Data, true
 }
 
+// An existing saved certificate belongs to the guest, including when its
+// checks will reject it. With no save, a matching packaged record can also
+// go through the ordinary database. Empty files and deletions retain the
+// previous session-local fallback for a fresh installation.
+func (client *Client) selectCertificate(certificate []byte, fallback backend.AuthenticationStatus) error {
+	store := newCertificateSaveStore(client.SaveStore, certificate)
+	if store.readError != nil {
+		return store.readError
+	}
+	if !store.originalRemoved {
+		saved, present, err := backend.ReadSaveLimit(client.SaveStore, certificateSaveKey, wipicrt.MaxCFileBytes)
+		if err != nil {
+			return err
+		}
+		if len(saved) > 0 || (!present && bytes.Equal(client.Files[certificateName], certificate)) {
+			client.authentication = backend.AuthenticationGuestManaged
+			return nil
+		}
+	}
+	client.AttachSaveStore(store)
+	client.authentication = fallback
+	return nil
+}
+
 // certificateSaveStore keeps the certificate and its deletion state local to
 // this run. All other game progress still uses the original persistence path.
 // In particular, writing the shared deletion ledger must preserve the original
@@ -71,7 +95,7 @@ func newCertificateSaveStore(base wipicrt.SaveStore, certificate []byte) *certif
 // removedInRun says the title removed the certificate in this run. A run that
 // starts has not; one that a checkpoint brought back may have.
 func (store *certificateSaveStore) loadRemovalView(removedInRun bool) error {
-	data, _, err := backend.ReadSave(store.base, wipicrt.DatabaseRemovedKey)
+	data, _, err := backend.ReadSaveLimit(store.base, wipicrt.DatabaseRemovedKey, wipicrt.MaxCFileBytes)
 	if err != nil {
 		return err
 	}

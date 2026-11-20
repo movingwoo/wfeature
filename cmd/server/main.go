@@ -132,8 +132,14 @@ func run(arguments []string, answer, output *os.File) error {
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if err := wipic.SetSubscriberNumber(*number); err != nil {
-		return err
+	numberChosen := os.Getenv("WFEATURE_PHONE_NUMBER") != ""
+	flags.Visit(func(f *flag.Flag) { numberChosen = numberChosen || f.Name == "number" })
+	if numberChosen {
+		if err := wipic.SetSubscriberNumber(*number); err != nil {
+			return err
+		}
+	} else {
+		wipic.ResetSubscriberNumber()
 	}
 	if *showVersion {
 		fmt.Fprintf(answer, "wfeature-server %s (%s)\n", version, backend.BuildProfile())

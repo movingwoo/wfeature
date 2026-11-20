@@ -76,7 +76,12 @@ func (session *NativeSession) CaptureCheckpointWithSession(ctx context.Context, 
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
-	record, err := backend.EncodeCheckpointRecord(nativeShapesRecord{Version: nativeShapesRecordVersion, State: saved, Shapes: session.platform.shapes.capture()})
+	shapes := nativeShapesRecord{Version: nativeShapesRecordVersion, State: saved, Shapes: session.platform.shapes.capture()}
+	var runtime any = shapes
+	if session.options.disablesPackagedCertificate(session.Archive) {
+		runtime = nativeNoAuthenticationRecord{Runtime: shapes}
+	}
+	record, err := backend.EncodeCheckpointRecord(runtime)
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
@@ -125,16 +130,16 @@ func PrepareNativeSessionCheckpoint(archive []byte, checkpoint backend.Checkpoin
 	if checkpoint.Variant != backend.CheckpointKTFNative {
 		return nil, backend.ErrCheckpointVersion
 	}
-	saved, shapes, err := decodeNativeRecord(checkpoint.Runtime)
+	opened, err := OpenNative(archive)
+	if err != nil {
+		return nil, err
+	}
+	saved, shapes, err := decodeNativeRecord(checkpoint.Runtime, options.disablesPackagedCertificate(opened))
 	if err != nil {
 		return nil, err
 	}
 	if saved.Version != nativeStateVersion {
 		return nil, fmt.Errorf("KTF native checkpoint record is version %d and this build reads %d: %w", saved.Version, nativeStateVersion, backend.ErrCheckpointVersion)
-	}
-	opened, err := OpenNative(archive)
-	if err != nil {
-		return nil, err
 	}
 	prepared := &PreparedNativeSession{state: saved, placeholder: backend.NewDetachedSaveStore()}
 	detached := options

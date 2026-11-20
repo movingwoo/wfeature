@@ -4,6 +4,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/skt"
 	"github.com/movingwoo/wfeature/internal/platform/skt/clet"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 // sktNativeProgram lays an SKT native package out for the Clet runtime that
@@ -14,8 +15,8 @@ import (
 // code it was linked at, which is the placement the executable's own
 // relocations describe.
 //
-// Authentication compatibility can bind the handset identity from a pair of
-// packaged certificates or apply a recognized comparison fix before loading.
+// The native archive selects any authentication compatibility and handset
+// identity before the program runs or a checkpoint is restored.
 func sktNativeProgram(archive []byte, disableAuthentication bool) (clet.CletProgram, *skt.NativeArchive, error) {
 	opened, err := skt.OpenNative(archive)
 	if err != nil {
@@ -29,12 +30,9 @@ func sktNativeProgram(archive []byte, disableAuthentication bool) (clet.CletProg
 	authentication := backend.AuthenticationOff
 	var subscriber string
 	if !disableAuthentication {
-		if authentication, err = executable.ApplyIdentityCompatibility(code); err != nil {
+		authentication, subscriber, err = opened.ApplyIdentityCompatibility(code, wipic.ConfiguredSubscriberNumber())
+		if err != nil {
 			return clet.CletProgram{}, nil, err
-		}
-		subscriber = opened.PairedCertificateSubscriber()
-		if subscriber != "" {
-			authentication = backend.AuthenticationSKTNativeCertificate
 		}
 	}
 	dataAddress := clet.ImageBase + skt.NativeDataLink

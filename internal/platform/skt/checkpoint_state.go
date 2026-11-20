@@ -283,7 +283,8 @@ func (saved javaPlatformState) validate() error {
 	}
 	if saved.Version != 1 || saved.RootCount < 0 || saved.RootCount > checkpointListLimit ||
 		saved.State != StateCreated && saved.State != StateActive && saved.State != StatePaused ||
-		saved.Authentication != backend.AuthenticationOff && saved.Authentication != backend.AuthenticationUnsupported && saved.Authentication != backend.AuthenticationSKTLicense ||
+		saved.Authentication != backend.AuthenticationOff && saved.Authentication != backend.AuthenticationUnsupported &&
+			saved.Authentication != backend.AuthenticationGuestManaged && saved.Authentication != backend.AuthenticationSKTLicense ||
 		len(saved.SubscriberNumber) > 128 || !utf8.ValidString(saved.SubscriberNumber) ||
 		len(saved.FrameRGBA) != length || len(saved.RefreshFrame) != 0 && len(saved.RefreshFrame) != length || saved.RefreshPending && len(saved.RefreshFrame) != length ||
 		!saved.LastRefresh.valid() || len(saved.PendingSerial) > maxPendingSerialRunnables || len(saved.CardStack) > checkpointListLimit ||

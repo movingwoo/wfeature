@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/backend"
 )
 
 func TestNativePairedCertificateSelectsTheSubscriber(t *testing.T) {
@@ -52,6 +54,16 @@ func TestNativePairedCertificateSelectsTheSubscriber(t *testing.T) {
 
 	if got := archive.PairedCertificateSubscriber(); got != subscriber {
 		t.Fatal("the paired records did not select the expected subscriber")
+	}
+	for _, configured := range []string{subscriber, "01000000000"} {
+		status, selected, err := archive.ApplyIdentityCompatibility(nil, configured)
+		if err != nil || status != backend.AuthenticationGuestManaged || selected != configured {
+			t.Fatal("the explicit handset did not reach the paired certificate reader")
+		}
+	}
+	status, selected, err := archive.ApplyIdentityCompatibility(nil, "")
+	if err != nil || status != backend.AuthenticationSKTNativeCertificate || selected != subscriber {
+		t.Fatal("the implicit handset lost its certificate pair")
 	}
 	if !bytes.Equal(usim, makeUSIM(subscriber, 240)) {
 		t.Fatal("the resolver changed the packaged USIM certificate")

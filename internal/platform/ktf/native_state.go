@@ -402,6 +402,9 @@ func restoreNativeState(archive *NativeArchive, saved nativeState, options Nativ
 		return nil, err
 	}
 	platform := NewNativePlatform(client, archive, options.Clock)
+	if options.DisableAuthentication {
+		platform.authentication = backend.AuthenticationOff
+	}
 	platform.SetScreen(saved.Screen.Width, saved.Screen.Height)
 	if err := platform.Install(); err != nil {
 		return nil, err

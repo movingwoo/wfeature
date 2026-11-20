@@ -209,12 +209,7 @@ func TestSKVMTimerRunsATaskBesideTheCaller(t *testing.T) {
 // does, and what it must come back with is the number this runtime was told to
 // answer with.
 func TestTheCarrierCodeDescribesTheNumberItIsAnsweredBeside(t *testing.T) {
-	original := wipic.SubscriberNumber()
-	t.Cleanup(func() {
-		if err := wipic.SetSubscriberNumber(original); err != nil {
-			t.Fatalf("restore the subscriber number: %v", err)
-		}
-	})
+	t.Cleanup(wipic.ResetSubscriberNumber)
 	// One line per network prefix a handset of this era could carry, plus the
 	// unified prefix that replaced them, which is the shape a number most
 	// likely has today and the one a fixed "SKT" got most wrong.

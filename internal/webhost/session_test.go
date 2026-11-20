@@ -18,6 +18,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
+	"github.com/movingwoo/wfeature/internal/wipic"
 	"github.com/movingwoo/wfeature/internal/wsproto"
 )
 
@@ -156,6 +157,20 @@ func TestSessionAuthenticationReportsUnsupportedAndRetainsItOnResume(t *testing.
 }
 
 func TestSessionAuthenticationAppliesLicenseAndRetainsItOnResume(t *testing.T) {
+	t.Run("implicit handset", func(t *testing.T) {
+		testSessionLicenseStatus(t, backend.AuthenticationSKTLicense)
+	})
+	t.Run("configured handset", func(t *testing.T) {
+		if err := wipic.SetSubscriberNumber("01023456789"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(wipic.ResetSubscriberNumber)
+		testSessionLicenseStatus(t, backend.AuthenticationGuestManaged)
+	})
+}
+
+func testSessionLicenseStatus(t *testing.T, want backend.AuthenticationStatus) {
+	t.Helper()
 	connection, logs := sessionFixture(t)
 	archive, err := os.ReadFile(filepath.Join("..", "platform", "skt", "testdata", "license.jar"))
 	if err != nil {
@@ -185,14 +200,14 @@ func TestSessionAuthenticationAppliesLicenseAndRetainsItOnResume(t *testing.T) {
 	expectMessage(t, connection, serverReady)
 	send(t, connection, clientMessage{Kind: clientStart, Game: "games/skt/license.zip"})
 	started := expectMessage(t, connection, serverStarted)
-	if started.Started == nil || started.Started.Authentication != backend.AuthenticationSKTLicense {
+	if started.Started == nil || started.Started.Authentication != want {
 		t.Fatalf("authentication result = %+v", started.Started)
 	}
 	send(t, connection, clientMessage{Kind: clientPark})
 	expectMessage(t, connection, serverResult)
 	send(t, connection, clientMessage{Kind: clientResume, Token: started.Started.Token})
 	resumed := expectMessage(t, connection, serverStarted)
-	if resumed.Started == nil || resumed.Started.Authentication != backend.AuthenticationSKTLicense {
+	if resumed.Started == nil || resumed.Started.Authentication != want {
 		t.Fatalf("resumed authentication = %+v", resumed)
 	}
 	// An older page may still send its saved false preference. Compatibility
@@ -202,7 +217,7 @@ func TestSessionAuthenticationAppliesLicenseAndRetainsItOnResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	again := expectMessage(t, connection, serverStarted)
-	if again.Started == nil || again.Started.Authentication != backend.AuthenticationSKTLicense {
+	if again.Started == nil || again.Started.Authentication != want {
 		t.Fatalf("obsolete preference changed automatic policy: %+v", again.Started)
 	}
 

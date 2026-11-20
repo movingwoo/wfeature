@@ -1130,14 +1130,15 @@ startup, stderr reports the selected mechanism as `authentication: <status>`:
 
 | Platform | Statuses |
 |---|---|
-| KTF | `ktf-certificate-23`, `ktf-certificate-52`, `ktf-subscriber-fallback` |
-| SKT | `skt-license` |
+| KTF | `ktf-certificate-23`, `ktf-certificate-52`, `ktf-subscriber-fallback`, `ktf-brew-packaged-certificate` |
+| SKT | `skt-license`, `skt-native-certificate`, `skt-native-save-subscriber` (native through the shared session) |
 | LGT | `lgt-cached-authentication`, `lgt-certificate-58`, `lgt-certificate-100`, `lgt-offline-notification`, `lgt-offline-authentication`, `lgt-save-subscriber`, `lgt-certificate-message` |
 
-`authentication: unsupported` leaves ordinary behavior in place; the earlier
-native KTF package always reports it. The notification, binary authentication
+`guest-managed` applies to all three platforms. The original guest checks its
+record or the explicitly configured handset, and may accept or refuse it.
+`unsupported` means no recognized mechanism matched. The notification, binary authentication
 and certificate-message statuses answer an exact exchange locally and send
-nothing outside the emulator. Certificate data and adapted class files stay in
-memory; ordinary progress uses `-save`. This differs from `provision`, which
-writes a persistent replacement. See
+nothing outside the emulator. Session-generated certificates and adapted class
+files stay in memory. Guest-managed records use ordinary persistence under
+`-save`. The explicit `provision` command writes a persistent replacement. See
 [mechanisms, recognition and limitations](authentication.md).

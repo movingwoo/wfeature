@@ -226,6 +226,18 @@ type authenticationOptionStore struct {
 	readError error
 }
 
+func (client *Client) prepareAuthenticationOptions() backend.AuthenticationStatus {
+	data, _ := client.readFile(authenticationOptionsName)
+	if client.saveReadError != nil {
+		return backend.AuthenticationUnsupported
+	}
+	if client.fileRemoved(authenticationOptionsName) || (len(data) == 56 && binary.LittleEndian.Uint32(data[40:44]) == 1) {
+		return backend.AuthenticationGuestManaged
+	}
+	client.saveStore = newAuthenticationOptionStore(client.saveStore, client.archive)
+	return backend.AuthenticationLGTOptions
+}
+
 func newAuthenticationOptionStore(base backend.SaveStore, archive *Archive) *authenticationOptionStore {
 	store := &authenticationOptionStore{base: base, archive: archive}
 	if data, ok := store.loadOptions(); ok && len(data) >= 44 {

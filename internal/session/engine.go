@@ -262,9 +262,8 @@ func (e ktfNativeEngine) virtualClock() bool             { return false }
 func (e ktfNativeEngine) cheat() *cheat.Session          { return e.session.Cheat() }
 func (e ktfNativeEngine) cheatConsole() *cheat.Console   { return e.session.CheatConsole() }
 
-// authentication is unsupported: the earlier package has no check to adapt.
 func (e ktfNativeEngine) authentication() backend.AuthenticationStatus {
-	return backend.AuthenticationUnsupported
+	return e.session.Authentication()
 }
 
 // uncaughtCallbacks is none: the earlier package runs no Java.

@@ -219,3 +219,50 @@ func TestAuthenticationOptionsSessionUsesGuestFilePersistence(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthenticationOptionsGuestCanClearSavedResult(t *testing.T) {
+	_, code, data, entry := optionFixture(t, 0)
+	archive := zipOf(t, map[string][]byte{
+		"app_info":     []byte("AID=0102ABCD\nPID=PF000001\n"),
+		"0102ABCD.jar": zipOf(t, map[string][]byte{binaryModuleName: fixtureELF(code, data, entry)}),
+	})
+	base := backend.NewDirectorySaveStore(t.TempDir())
+	record := make([]byte, 56)
+	binary.LittleEndian.PutUint32(record[40:], 1)
+	if err := base.StoreSave(authenticationOptionsKey, record); err != nil {
+		t.Fatal(err)
+	}
+	for _, restart := range []bool{false, true} {
+		session, err := StartSession(context.Background(), archive, SessionOptions{SaveStore: base, DisableAuthentication: restart})
+		if err != nil {
+			t.Fatal(err)
+		}
+		files := newGuestFiles(t, session.client)
+		handle := files.open(authenticationOptionsName, fileOpenReadWrite)
+		if got := files.read(handle, len(record)); got != string(record) {
+			t.Fatalf("restart=%v: guest options differ", restart)
+		}
+		files.close(handle)
+		if !restart {
+			if session.Authentication() != backend.AuthenticationGuestManaged {
+				t.Fatalf("saved result selected %q", session.Authentication())
+			}
+			checkpoint, err := session.CaptureCheckpoint(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			session = mustCommitFixture(t, archive, checkpoint, session, base)
+			if session.Authentication() != backend.AuthenticationGuestManaged {
+				t.Fatalf("restored status = %q", session.Authentication())
+			}
+			files = newGuestFiles(t, session.client)
+			record[40] = 0
+			handle = files.open(authenticationOptionsName, fileOpenWriteTruncate)
+			files.write(handle, string(record))
+			files.close(handle)
+		}
+		if err := session.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

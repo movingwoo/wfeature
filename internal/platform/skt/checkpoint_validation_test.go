@@ -1,6 +1,7 @@
 package skt
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -8,7 +9,42 @@ import (
 	"github.com/movingwoo/wfeature/internal/api/midp"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
+
+func TestJavaCheckpointRequiresTheConfiguredLicenseHandset(t *testing.T) {
+	t.Cleanup(wipic.ResetSubscriberNumber)
+	if err := wipic.SetSubscriberNumber("01000000000"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := backend.NewMemorySaveStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := startLicenseFixture(t, licenseFixture(t), true, store)
+	checkpoint, err := source.CaptureCheckpointWithSession(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := PrepareJavaCheckpoint(licenseJAR, checkpoint, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.runtime.Authentication() != backend.AuthenticationGuestManaged || licenseInt(t, prepared.runtime, "accepted", "()Z") != 0 {
+		t.Fatal("restored runtime changed the original license decision")
+	}
+	prepared.Discard()
+	if err := wipic.SetSubscriberNumber("01012345678"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = PrepareJavaCheckpoint(licenseJAR, checkpoint, Options{}); !errors.Is(err, backend.ErrCheckpointIdentity) {
+		t.Fatalf("another explicit handset restored the slot: %v", err)
+	}
+	wipic.ResetSubscriberNumber()
+	if _, err = PrepareJavaCheckpoint(licenseJAR, checkpoint, Options{}); err == nil {
+		t.Fatal("default compatibility restored an original-check slot")
+	}
+}
 
 func TestJavaCheckpointRejectsMalformedScreenContent(t *testing.T) {
 	source := newPlatformCheckpointRuntime(t)

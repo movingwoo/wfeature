@@ -380,6 +380,12 @@ type nativeShapesRecord struct {
 	Shapes  nativeShapesState
 }
 
+// The diagnostic record preserves the opt-out across a load. The ordinary
+// record retains the layout of checkpoints made before the option existed.
+type nativeNoAuthenticationRecord struct {
+	Runtime nativeShapesRecord
+}
+
 // nativeShapesRecordVersion is the layout of nativeShapesRecord. Version 3 had
 // no fill; nativeOutlineShapesRecord reads it.
 const nativeShapesRecordVersion = 4
@@ -462,9 +468,16 @@ func (saved nativeShapesState) restore() *nativeShapes {
 // decodeNativeRecord reads a checkpoint's runtime record in any of its shapes.
 // One without the shape interface's state answers the interface a title starts
 // with, and one without the fill answers the fill it starts with.
-func decodeNativeRecord(data []byte) (nativeState, nativeShapesState, error) {
+func decodeNativeRecord(data []byte, disableAuthentication bool) (nativeState, nativeShapesState, error) {
 	var extended nativeShapesRecord
-	if err := backend.DecodeCheckpointRecord(data, &extended); err == nil {
+	if disableAuthentication {
+		var diagnostic nativeNoAuthenticationRecord
+		if err := backend.DecodeCheckpointRecord(data, &diagnostic); err != nil {
+			return nativeState{}, nativeShapesState{}, fmt.Errorf("KTF native checkpoint requires the diagnostic authentication setting: %w", err)
+		}
+		extended = diagnostic.Runtime
+	}
+	if disableAuthentication || backend.DecodeCheckpointRecord(data, &extended) == nil {
 		if extended.Version != nativeShapesRecordVersion {
 			return nativeState{}, nativeShapesState{}, fmt.Errorf("KTF native shapes checkpoint version %d: %w", extended.Version, backend.ErrCheckpointVersion)
 		}

@@ -50,6 +50,8 @@ type NativeSession struct {
 
 // NativeSessionOptions bound and equip one session.
 type NativeSessionOptions struct {
+	// DisableAuthentication leaves the carrier certificate interface requiring renewal.
+	DisableAuthentication bool
 	// MaxSteps caps the ARM instructions one bounded guest run may retire.
 	// Zero selects a ceiling the local title's start-up fits inside.
 	MaxSteps uint64
@@ -126,6 +128,9 @@ func StartNativeSession(ctx context.Context, data []byte, options NativeSessionO
 		return nil, err
 	}
 	platform := NewNativePlatform(client, archive, options.Clock)
+	if options.DisableAuthentication {
+		platform.authentication = backend.AuthenticationOff
+	}
 	platform.SetSpeed(options.Speed)
 	// Before Boot, because Install builds the screen from it.
 	platform.SetScreen(options.Width, options.Height)
@@ -159,6 +164,15 @@ func (session *NativeSession) Platform() *NativePlatform {
 		return nil
 	}
 	return session.platform
+}
+
+// Authentication reports the verifier selected for the module, independently
+// of the status the guest receives for any particular record.
+func (session *NativeSession) Authentication() backend.AuthenticationStatus {
+	if session == nil || session.platform == nil {
+		return backend.AuthenticationUnsupported
+	}
+	return session.platform.authentication
 }
 
 // TickFor runs the title's frame as often as it is due, for at most budget of

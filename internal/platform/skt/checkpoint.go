@@ -212,6 +212,9 @@ func PrepareJavaCheckpoint(archive []byte, checkpoint backend.Checkpoint, option
 	if saved.Platform.Jlet != runtime.jlet || saved.Platform.LegacyClip != runtime.legacyClip || saved.Platform.ResumeWithoutStart != runtime.resumeWithoutStart || saved.Platform.Authentication != runtime.authentication {
 		return nil, fmt.Errorf("SKT checkpoint platform policy differs from its archive")
 	}
+	if runtime.authentication == backend.AuthenticationGuestManaged && saved.Platform.SubscriberNumber != runtime.subscriberNumber {
+		return nil, fmt.Errorf("SKT checkpoint belongs to another handset: %w", backend.ErrCheckpointIdentity)
+	}
 	if err = saved.Platform.restoreBuffers(runtime); err != nil {
 		return nil, err
 	}

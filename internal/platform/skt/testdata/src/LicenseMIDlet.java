@@ -40,11 +40,15 @@ public final class LicenseMIDlet extends MIDlet {
 /** The digest is deliberately synthetic; no external license code is bundled. */
 final class LicenseCheck {
     public static int calls;
+    private int checksum;
 
     private static String number() { return System.getProperty("MIN"); }
-    public void update(byte[] data, int offset, int length) { calls++; }
-    public void finish(byte[] output) { output[0] = 42; }
-    private String hex(byte[] output) { return "fixture-digest"; }
+    public void update(byte[] data, int offset, int length) {
+        calls++;
+        for (int i = offset; i < offset + length; i++) checksum += data[i] & 255;
+    }
+    public void finish(byte[] output) { output[0] = (byte) checksum; }
+    private String hex(byte[] output) { return Integer.toString(output[0] & 255); }
 
     public static boolean valid(MIDlet midlet) {
         String number = number();

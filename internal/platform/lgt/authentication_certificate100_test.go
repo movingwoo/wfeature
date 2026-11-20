@@ -228,7 +228,7 @@ func TestCertificate100ActivationAndReinitialization(t *testing.T) {
 	if err := client.core.Memory().Write(state, plain[:48]); err != nil {
 		t.Fatal(err)
 	}
-	if !store.activate(client) {
+	if store.activate(client) != backend.AuthenticationLGTCertificate100 {
 		t.Fatal("valid live state refused")
 	}
 	view, _, err := store.ReadSave(store.key)
@@ -295,5 +295,81 @@ func TestCertificate100RejectsMissingDataAndDisconnectedState(t *testing.T) {
 	binary.LittleEndian.PutUint32(code[pool:], module.Sections[1].Address+0x404)
 	if authenticationCertificate100(module) != nil {
 		t.Fatal("disconnected state accepted")
+	}
+}
+
+func TestCertificate100PresentFlagLeavesValidationAndWritesToGuest(t *testing.T) {
+	for _, matches := range []bool{false, true} {
+		base := backend.NewDirectorySaveStore(t.TempDir())
+		var record []byte
+		for run := 0; run < 2; run++ {
+			client := fixtureClient(t)
+			client.saveStore = base
+			state, err := client.allocate(48)
+			if err != nil {
+				t.Fatal(err)
+			}
+			contract := certificate100Contract{name: "state.dat", application: client.archive.Descriptor.AID, token: "Example", state: state, seed: 0x1571, headerSeed: 0x1bb2, multiplier: 1951 * 42537}
+			store := newAuthenticationCertificate100Store(base, &contract)
+			if run == 0 {
+				record = make([]byte, 320)
+				store.putHeader(record, make([]byte, 100), 1)
+				// Keep nonzero padding in both records to expose any whole-record rewrite.
+				for index := 100; index < 200; index++ {
+					record[index] = 0xa5
+				}
+				if matches {
+					authored := []byte(client.subscriberNumber + contract.application + contract.token)
+					cryptCertificate100(authored, contract.seed, contract.multiplier, true)
+					copy(record[100:], authored)
+					record[100+len(authored)] = 0
+				}
+				if err := base.StoreSave(store.key, record); err != nil {
+					t.Fatal(err)
+				}
+			}
+			header, valid := store.header(record)
+			if !valid {
+				t.Fatal("invalid authored options header")
+			}
+			if err := client.core.Memory().Write(state, header[:48]); err != nil {
+				t.Fatal(err)
+			}
+			if pending, status := client.prepareCertificate100(&contract); pending != nil || status != backend.AuthenticationGuestManaged || client.saveStore != base {
+				t.Fatalf("matches=%v, run=%d: pre-start selection %v", matches, run, status)
+			}
+			// A certificate first written by the guest during initialization also
+			// takes precedence when the pending adapter considers activation.
+			if status := store.activate(client); status != backend.AuthenticationGuestManaged || store.active {
+				t.Fatalf("matches=%v, run=%d: selected %v", matches, run, status)
+			}
+			if view, ok := client.readFile(contract.name); !ok || !bytes.Equal(view, record) {
+				t.Fatal("guest received different options or certificate")
+			}
+			if run == 0 {
+				record[150] ^= 1
+				record[220] = 42
+				if err := client.storeFile(contract.name, record); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+}
+
+func TestCertificate100DamagedHeaderStaysInGuestStorage(t *testing.T) {
+	client := fixtureClient(t)
+	base := backend.NewDirectorySaveStore(t.TempDir())
+	client.saveStore = base
+	contract := &certificate100Contract{name: "state.dat", application: client.archive.Descriptor.AID, headerSeed: 0x1bb2, multiplier: 1951 * 42537}
+	store := newAuthenticationCertificate100Store(base, contract)
+	record := make([]byte, 200)
+	store.putHeader(record, make([]byte, 100), 0)
+	record[48] ^= 1
+	if err := base.StoreSave(store.key, record); err != nil {
+		t.Fatal(err)
+	}
+	if pending, status := client.prepareCertificate100(contract); status != backend.AuthenticationGuestManaged || pending != nil || client.saveStore != base {
+		t.Fatalf("damaged options header selected %v", status)
 	}
 }
