@@ -10788,9 +10788,17 @@ written to an options record of the title's own, and a quick save loads to the
 same frame in the same and in a new process. An explicit handset and `-no-auth`
 change nothing here.
 
-**Limits.** Neither of the two new flags travels in a checkpoint. A quick save
-an earlier build took on the frozen picture, or one taken during a loading
-screen, keeps the flush retained until the title's next whole-screen flush and
+**Quick saves.** Both flags travel with a quick save: the KTF session record is
+version 4, and version 3 and 2 records restore with neither set, as they did
+before. As first written they were not recorded, and a quick save taken in the
+few ticks between the title's last loading flush and its first repaint request
+restored behind the loading picture, which held until the next map change;
+the version 4 record restores that slot to the same frames as a run that was
+never saved. A version 4 record is refused by earlier builds, as every step
+of the record is.
+
+**Limits.** A quick save an earlier build took after the title froze restores
+frozen, and holds the flush until the title's next whole-screen flush and
 repaint, its next map load. The title refuses to save during its opening, so its
 own save file was not written and read back. No handset was observed: that a
 requested paint shows the screen framebuffer is read from the title's code,

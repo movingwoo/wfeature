@@ -13,9 +13,10 @@ var ErrCheckpointBusy = errors.New("KTF checkpoint requires an idle session boun
 
 // sessionCheckpointVersion is the layout of sessionCheckpointState and of the
 // records inside it. Version 1 carried the content of every storage table.
-// Version 2 is version 3 without GraphicsContext, and is still read: see
+// Version 2 is version 3 without GraphicsContext, and version 3 is version 4
+// without WholeFrameFlush and TitleRepaint; both are still read: see
 // decodeSessionCheckpoint.
-const sessionCheckpointVersion = 3
+const sessionCheckpointVersion = 4
 
 type sessionCheckpointState struct {
 	Version               uint32
@@ -29,6 +30,23 @@ type sessionCheckpointState struct {
 	// contexts were written in the earlier 52-byte one. See
 	// wipicrt.Runtime.LegacyGraphicsContext.
 	GraphicsContext uint32
+	// WholeFrameFlush and TitleRepaint are the client's: whether the flush the
+	// Host still holds covered the whole screen out of the screen framebuffer,
+	// and whether the title has asked for a repaint since. A record taken
+	// between such a flush and that repaint would otherwise keep the flush
+	// against it; see wipicrt.Runtime.BeginCardPaint.
+	WholeFrameFlush, TitleRepaint bool
+}
+
+// sessionCheckpointStateV3 is a version 3 record, which predates the two
+// presentation flags.
+type sessionCheckpointStateV3 struct {
+	Version               uint32
+	TimerLimit            int
+	DisableAuthentication bool
+	Client                clientState
+	Adapters              saveAdapterState
+	GraphicsContext       uint32
 }
 
 // sessionCheckpointStateV2 is a version 2 record, which predates the field.
@@ -44,10 +62,11 @@ type sessionCheckpointStateV2 struct {
 // layout.
 const graphicsContextHandset = 1
 
-// decodeSessionCheckpoint reads a version 3 record, or a version 2 one as the
-// version 3 record of a session that keeps the earlier graphics context: the
-// contexts in its memory were written that way, and nothing else in the
-// record changed.
+// decodeSessionCheckpoint reads a version 4 record. A version 3 one is the
+// version 4 record of a session that holds no whole-screen flush, which is how
+// such a record restored before, and a version 2 one is also that of a
+// session that keeps the earlier graphics context: the contexts in its memory
+// were written that way, and nothing else in the record changed.
 func decodeSessionCheckpoint(data []byte) (sessionCheckpointState, error) {
 	version, err := backend.CheckpointRecordVersion(data)
 	if err != nil {
@@ -61,6 +80,17 @@ func decodeSessionCheckpoint(data []byte) (sessionCheckpointState, error) {
 		}
 		return sessionCheckpointState{Version: sessionCheckpointVersion, TimerLimit: earlier.TimerLimit,
 			DisableAuthentication: earlier.DisableAuthentication, Client: earlier.Client, Adapters: earlier.Adapters}, nil
+	case 3:
+		var earlier sessionCheckpointStateV3
+		if err := backend.DecodeCheckpointRecord(data, &earlier); err != nil {
+			return sessionCheckpointState{}, err
+		}
+		if earlier.GraphicsContext > graphicsContextHandset {
+			return sessionCheckpointState{}, fmt.Errorf("%w: KTF checkpoint graphics context layout is unknown", backend.ErrCheckpointDamaged)
+		}
+		return sessionCheckpointState{Version: sessionCheckpointVersion, TimerLimit: earlier.TimerLimit,
+			DisableAuthentication: earlier.DisableAuthentication, Client: earlier.Client, Adapters: earlier.Adapters,
+			GraphicsContext: earlier.GraphicsContext}, nil
 	case sessionCheckpointVersion:
 		var saved sessionCheckpointState
 		if err := backend.DecodeCheckpointRecord(data, &saved); err != nil {
@@ -156,7 +186,8 @@ func (session *Session) CaptureCheckpointWithSession(ctx context.Context, captur
 		layout = 0
 	}
 	record, err := backend.EncodeCheckpointRecord(sessionCheckpointState{Version: sessionCheckpointVersion, TimerLimit: checkpointTimerLimit(session.options),
-		DisableAuthentication: session.options.DisableAuthentication, Client: saved, Adapters: adapters, GraphicsContext: layout})
+		DisableAuthentication: session.options.DisableAuthentication, Client: saved, Adapters: adapters, GraphicsContext: layout,
+		WholeFrameFlush: client.WholeFrameFlush, TitleRepaint: client.TitleRepaint})
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
@@ -248,6 +279,7 @@ func prepareSessionCheckpoint(archive *Archive, identity [32]byte, checkpoint ba
 	if client.runtime != nil {
 		client.runtime.LegacyGraphicsContext = saved.GraphicsContext != graphicsContextHandset
 	}
+	client.WholeFrameFlush, client.TitleRepaint = saved.WholeFrameFlush, saved.TitleRepaint
 	prepared.session = &Session{Archive: archive, Client: client, options: options, archiveIdentity: identity}
 	return prepared, nil
 }

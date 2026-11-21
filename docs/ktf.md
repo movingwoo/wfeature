@@ -492,6 +492,12 @@ rule and its accepted limits are in
 [Quick load and ordinary saves](architecture.md#quick-load-and-ordinary-saves).
 Particular to this platform:
 
+- The descriptor package's session record, version 4, keeps whether the Host
+  holds a whole-screen flush and whether the title has asked for a repaint
+  since, so a session saved between the two presents that repaint after a
+  load. Version 3 and 2 records load with neither set; earlier builds refuse a
+  version 4 record.
+
 - The descriptor runtime stores every write before the call that made it
   returns, so neither step has anything to store first. It keeps host copies
   of the saves: the WIPI C file table, the record databases, the Java
