@@ -11,6 +11,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/sgsvm"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 type ScriptOptions struct {
@@ -19,6 +20,8 @@ type ScriptOptions struct {
 	AudioSink   backend.AudioSink
 	Logger      *slog.Logger
 	Speed       float64
+	// DisableAuthentication opts out of automatic compatibility for diagnostics.
+	DisableAuthentication bool
 }
 
 type scriptTimer struct {
@@ -29,6 +32,11 @@ type scriptTimer struct {
 // ScriptSession drives SGS events on the host's session goroutine. Guest
 // timers use a virtual clock and cannot create unbounded goroutines.
 type ScriptSession struct {
+	// program is what the machine executes: the archive's script, or the
+	// session's own copy when a recognized comparison is accepted.
+	program        *sgsvm.Program
+	authentication backend.AuthenticationStatus
+
 	archive       *Archive
 	vibrator      backend.Vibrator
 	overlayPolicy byte
@@ -58,6 +66,9 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 	}
 	source := rand.NewPCG(1, 2)
 	s := &ScriptSession{archive: archive, options: options, last: time.Now(), random: rand.New(source), randomSource: source}
+	if err := s.selectProgram(); err != nil {
+		return nil, err
+	}
 	s.audio = backend.NewAudio(options.AudioSink)
 	s.audio.SetLogger(options.Logger)
 	_ = s.audio.SetPlaybackRate(0, options.Speed)
@@ -70,7 +81,7 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 		return nil, err
 	}
 	s.graphics = graphics
-	s.vm = sgsvm.New(archive.Script, s)
+	s.vm = sgsvm.New(s.program, s)
 	if len(s.vm.Variables) < 16 {
 		return nil, fmt.Errorf("SGS system variable bank is missing")
 	}
@@ -90,6 +101,60 @@ func StartScript(ctx context.Context, archive *Archive, options ScriptOptions) (
 	}
 	return s, nil
 }
+
+// selectProgram decides what this session executes and reports as its
+// authentication policy. A restored session asks again under its own options
+// and then restores with whichever program its record was taken with (see
+// restoreProgram): the comparison the policy concerns ran when the game first
+// started.
+func (s *ScriptSession) selectProgram() error {
+	program, status, err := s.archive.scriptIdentity(s.options.DisableAuthentication, wipic.ConfiguredSubscriberNumber() != "")
+	if err != nil {
+		return err
+	}
+	s.program, s.authentication = program, status
+	if s.options.Logger != nil {
+		s.options.Logger.Debug("authentication compatibility", "status", status)
+	}
+	return nil
+}
+
+// restoreProgram restores a recorded machine with the program the session
+// selected, and failing that with the other program a registered script can
+// have been recorded with: the packaged image, which a configured handset,
+// -no-auth and every earlier build ran, or the accepted copy. A machine is
+// bound to its program's bytes, and the two differ in one word of the start
+// event, which a recorded machine has already run. The session then reports
+// the status of the program it restored with.
+func restoreProgram[M any](s *ScriptSession, restore func(*sgsvm.Program) (M, error)) (M, error) {
+	machine, err := restore(s.program)
+	if err == nil {
+		return machine, nil
+	}
+	other, status := s.archive.Script, backend.AuthenticationGuestManaged
+	if s.program == s.archive.Script {
+		accepted, acceptedStatus, selectErr := s.archive.scriptIdentity(false, false)
+		if selectErr != nil || acceptedStatus != backend.AuthenticationSKTScriptInstall {
+			return machine, err
+		}
+		other, status = accepted, acceptedStatus
+	}
+	restored, otherErr := restore(other)
+	if otherErr != nil {
+		return machine, err
+	}
+	s.program, s.authentication = other, status
+	return restored, nil
+}
+
+// Authentication reports the policy selected for this session.
+func (s *ScriptSession) Authentication() backend.AuthenticationStatus {
+	if s == nil || s.authentication == "" {
+		return backend.AuthenticationUnsupported
+	}
+	return s.authentication
+}
+
 func (s *ScriptSession) event(ctx context.Context, entry int, value int16) error {
 	if s.wide != nil {
 		for i := 0; i < 4; i++ {

@@ -194,6 +194,11 @@ startup. A handset never answers with an empty string. Nothing goes online
 either way, so the properties describe a handset and the refusal happens where
 the connection is attempted.
 
+One answer is an exception, for one registered LGT module: `DS_LOCK` reads `1`
+there, a handset whose subscriber locked wireless internet. Both values are
+answers a handset gives, and the title has a path of its own for this one
+([below](#lgt-data-service-lock)). Every other title reads `0`.
+
 ### The subscriber number is the one property worth changing
 
 The automatic authentication adapter isolates this choice per KTF session and
@@ -327,6 +332,63 @@ behind a question the refusal never lets it ask.
 dial and refuse everything after it. A third title with the same screen was not
 a network case at all — it was waiting for a key — which is why the change is
 measured rather than reasoned from the screen.
+
+### Two parked titles the registry answers
+
+The policy stays as it is, and two more titles that park on it are answered
+one at a time through the [compatibility registry](platform-compatibility.md).
+Both were found on a clean save root: a first launch leads each into the
+network screen it parks on. Neither fix is an authentication adapter. Each
+applies for every handset and with `-no-auth`, the status is the one the
+title has without it (`unsupported`, or `off` with `-no-auth`), and other
+titles are untouched because the selection is the executable's digest.
+
+<a id="lgt-data-service-lock"></a>
+
+**An LGT module is told its data service is locked.** Agreeing to its
+first-run consent opens a network scene whose initializer asks for `DS_LOCK`,
+`ROAMING_AREA` and `AIRPLANE_MODE`. With `0` for all three it dials, and its
+dial callback only prints when the dial fails: the scene stays in its
+connecting state with every key ignored and no timeout. No answer of the dial
+contract moves it. A refusal by return value makes it dial again every frame, a
+successful callback goes on to a socket that is refused in a branch that also
+only prints, and any other callback error returns silently. A nonzero
+`DS_LOCK` selects the one state of that scene a key leaves: the title's own
+notice that wireless internet is locked, after which OK goes on into the game.
+`lgt.data_service_lock` answers `1` to that module, after checking the 46
+bytes of the initializer that read the answer, and changes nothing in the
+guest. The same scene serves the title's ranking registration and its coin
+purchase, which end at the same notice instead of hanging. The agreement is
+asked again at each start until it is refused once, because the title stores
+it only after its server answered.
+[History](history/lgt.md#lgt-dial-failure-2026-11-21-data-service-lock)
+
+<a id="ktf-dial-failure-notice"></a>
+
+**A KTF client's dial callback records the failure.** Its capture carries the
+title's options record without the save that belongs to it, so a first launch
+asks the title's server for a saved file. The dial is accepted and its callback
+is given `M_E_ERROR`; the callback's failure branch prints and returns, the
+network state word stays at "connecting", and the screen that waits on it has
+no key and no timeout. Here too no other answer helps: a refusal by return
+value is repeated at every paint, and a connection that then fails on write
+sends the title into its send loop for good. `ktf.dial_failure_notice` rewrites
+12 bytes of that branch so that it stores 100 in the state word, the value the
+title's own write and read callbacks store, which every screen of the title
+that waits on the network already sends to its failure notice. A second write
+gives entry 100 of the saved-file check's jump table the offset of entry 31,
+the branch for a server that holds no saved file: one notice, after which the
+title records the check as done and does not dial at later starts. That notice
+is a local answer, since no server was asked. With the first write alone the
+check comes back at every start as a failure notice and a question whose No
+deletes the save.
+[History](history/ktf.md#ktf-dial-failure-2026-11-21-saved-file-check)
+
+Both changes live with the session. The LGT answer is derived from the module
+at load, so it also holds after a quick load of an earlier record. The KTF
+rewrite is guest memory: a quick save an earlier build took restores the
+packaged callback and waits as before. A quick save taken while either title
+is already parked stays parked.
 
 ### The sweep that measured it, and what it found
 

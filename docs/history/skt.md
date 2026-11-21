@@ -44,6 +44,7 @@ This consolidation adds no execution or acceptance evidence.
 - [Resumed, not started again (2026-11-10)](#skt-resume-2026-11-10)
 - [A Clet's pixel operation takes the screen's pixel first (2026-11-17)](#skt-pixel-operation-order-2026-11-17)
 - [Thirteen new SKT archives (2026-11-18)](#skt-new-archives-2026-11-18)
+- [A word-script installation's user ID (2026-11-20)](#sgs-install-identity-2026-11-20)
 
 <a id="implementation-skvm-and-the-skt-platform"></a>
 
@@ -4159,3 +4160,59 @@ The smaller installation reads the handset MIN and installed script user ID,
 then displays an authentication error without reading its packaged preferences.
 With the default handset profile, 1,024 ticks and keypad input leave the single
 presented frame unchanged. Gameplay remains unverified for this installation.
+
+<a id="sgs-install-identity-2026-11-20"></a>
+
+## A word-script installation's user ID — 2026-11-20
+
+The smaller installation of the [word-script record](#sgs-word-qa) stops on
+its notice at every launch, whatever its save root holds. Its start event calls
+one routine, at image offset `0x1da`, and draws the notice when the answer is
+not 0:
+
+```
+0001dc  push v26            service 0x1     ; MIN
+0001e4  push v25            service 0x2     ; the installed user ID
+0001f0  push v24, v20, v21, v26, 0          call 0xb70a
+00020a  push v24, v25       service 0xa4    ; compare
+000216  if pop != 0 goto 0x224
+00021e  push 0              ret
+000224  push v23, v20, v21, v26, 1          call 0xb70a
+00023e  push v23, v25       service 0xa4
+00024a  if pop != 0 goto 0x258
+000252  push 0              ret
+000258  push 1              ret
+```
+
+The routine at `0xb70a` derives an eight-character value from `MIN` and two of
+the script's own strings, in one of two ways, and the installed ID has to equal
+one of them. The ID in the download descriptor is the one issued to the handset
+the capture came from. Nothing else in the script calls either routine.
+
+A script has no native module, so the registry gained a third fingerprint,
+`script_image`: the SHA-256 of the image after the download prefix, the digest
+that already names the title's save directory. `skt.script_install_identity`
+selects this image. On the implicit handset the session checks the 72 bytes at
+`0x1dc` and runs its own copy of the image in which the first branch continues
+at `0x21e`, the matching answer. The archive's image is not written. A
+configured handset and `-no-auth` run the script as packaged, and report
+`guest-managed` and `off`.
+
+On an empty save root the session reports `skt-script-install-identity`, under
+`run` and `runskt` alike. The title shows its logos and title screen, a
+character's greeting, its menu and a game list, spends 500 of the 1,500 stars
+in its packaged preferences to open a game, and says 1,000 remain. It quick
+saves, quick loads to the same frame in the same and in a new process, and
+starts again on the preferences it wrote. `TestScriptInstallIdentity` runs the
+routine on the word machine with the comparison as packaged and accepted, and
+`TestLocalScriptInstallIdentity` starts the archive through the shared session.
+
+A recorded machine is bound to the bytes of its program, and as first written a
+slot only loaded under the handset setting it was taken with: one taken on the
+implicit handset was refused under a configured handset or `-no-auth`, the
+reverse too, and every slot an earlier build had taken, all with the packaged
+image, was refused on the implicit handset. A restore now tries the program the
+session selected and then the other one, and keeps whichever the record
+belongs to; the two differ in one word of the start event, which the recorded
+machine has already run. Slots across all three directions load to the frame
+they were taken on, and `TestLocalScriptInstallIdentity` loads one of each kind.

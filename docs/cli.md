@@ -1130,9 +1130,9 @@ startup, stderr reports the selected mechanism as `authentication: <status>`:
 
 | Platform | Statuses |
 |---|---|
-| KTF | `ktf-certificate-23`, `ktf-certificate-52`, `ktf-subscriber-fallback`, `ktf-brew-packaged-certificate` |
-| SKT | `skt-license`, `skt-native-certificate`, `skt-native-save-subscriber` (native through the shared session) |
-| LGT | `lgt-cached-authentication`, `lgt-certificate-58`, `lgt-certificate-100`, `lgt-offline-notification`, `lgt-offline-authentication`, `lgt-save-subscriber`, `lgt-certificate-message` |
+| KTF | `ktf-certificate-23`, `ktf-certificate-52`, `ktf-subscriber-fallback`, `ktf-save-subscriber`, `ktf-brew-packaged-certificate` |
+| SKT | `skt-license`, `skt-script-install-identity` (a version-four script), `skt-native-certificate`, `skt-native-save-subscriber` (native through the shared session) |
+| LGT | `lgt-cached-authentication`, `lgt-certificate-58`, `lgt-certificate-100`, `lgt-offline-notification`, `lgt-offline-authentication`, `lgt-save-subscriber`, `lgt-certificate-message`, `lgt-authentication-allowance` |
 
 `guest-managed` applies to all three platforms. The original guest checks its
 record or the explicitly configured handset, and may accept or refuse it.

@@ -328,7 +328,7 @@ func restoreEngine(ctx context.Context, archive []byte, checkpoint backend.Check
 		if saved.Pointer.Down || saved.Pad.Down || saved.Repeat.Held {
 			return nil, fmt.Errorf("SGS checkpoint has unsupported pointer or repeat ownership")
 		}
-		prepared, err := skt.PrepareScriptCheckpoint(archive, checkpoint, skt.ScriptOptions{AudioSink: options.AudioSink, Logger: options.Logger})
+		prepared, err := skt.PrepareScriptCheckpoint(archive, checkpoint, skt.ScriptOptions{AudioSink: options.AudioSink, Logger: options.Logger, DisableAuthentication: options.DisableAuthentication})
 		if err != nil {
 			return nil, err
 		}

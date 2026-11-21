@@ -12,6 +12,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 // ErrGuestExited reports that guest code called MC_knlExit: the game ended on
@@ -253,7 +254,7 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	if err != nil {
 		return nil, err
 	}
-	client, err := newSessionClient(archive, options)
+	client, err := newSessionClient(archive, options, saveKeyNumber(options))
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +321,9 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	}
 	// The 52-byte reader obtains its cipher through the relocated pointer
 	// table. Inspect it before constructing the application, after the loader
-	// has established those pointers. No guest instruction or table is patched.
+	// has established those pointers. The certificate and subscriber adapters
+	// patch no guest instruction or table; the archived-subscriber sites below
+	// do, each after its code has been checked.
 	if !options.DisableAuthentication {
 		files := archive.GuestFiles()
 		if client.authentication == backend.AuthenticationUnsupported && (len(files[certificateName]) == 52 || len(files["prefs"]) == 64) {
@@ -336,7 +339,46 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 				}
 			}
 		}
+		// A registered client compares a record its capture carries with the
+		// handset. The client has relocated itself by now, so the comparison
+		// is where it will execute.
+		if client.authentication == backend.AuthenticationUnsupported && hasSaveIdentityCompatibility(archive.JAR.Client.Data) {
+			status, err := applySaveSubscriberIdentity(client.Core().Memory(), clientDigest(archive.JAR.Client.Data), wipic.ConfiguredSubscriberNumber() != "")
+			if err != nil {
+				return failed(err)
+			}
+			client.authentication = status
+		}
+		// A registered client's saves are keyed by the handset; the session
+		// presented the capture's under its own key when it was built.
+		if client.authentication == backend.AuthenticationUnsupported && hasSaveSubscriberKey(archive.JAR.Client.Data) {
+			client.authentication = backend.AuthenticationKTFSaveSubscriber
+			if wipic.ConfiguredSubscriberNumber() != "" {
+				client.authentication = backend.AuthenticationGuestManaged
+			}
+		}
 		client.Log("authentication compatibility", "status", client.authentication)
+	}
+	// A registered client answers a save it does not accept by writing its
+	// defaults, and that routine goes through a null pointer.
+	if hasNullPageCompatibility(archive.JAR.Client.Data) {
+		if err := mapNullPage(client.Core().Memory()); err != nil {
+			return failed(err)
+		}
+	}
+	// A registered client's dial callback drops the failure every dial gets
+	// here, and the title waits on it without end.
+	if hasDialFailureCompatibility(archive.JAR.Client.Data) {
+		if err := applyDialFailureNotice(client.Core().Memory(), clientDigest(archive.JAR.Client.Data)); err != nil {
+			return failed(err)
+		}
+	}
+	// A registered client deletes a save whose recorded file time is not the
+	// file's time now, which no save a capture carries can match here.
+	if hasSaveFileTimeCompatibility(archive.JAR.Client.Data) {
+		if err := applySaveFileTime(client.Core().Memory(), clientDigest(archive.JAR.Client.Data)); err != nil {
+			return failed(err)
+		}
 	}
 	// The main class's constructor and startApp are the first Host service
 	// call, and they get the allowance every later one does. Two local titles

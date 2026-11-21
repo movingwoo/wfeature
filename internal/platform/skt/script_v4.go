@@ -16,7 +16,7 @@ func (s *ScriptSession) startWide(ctx context.Context) (*ScriptSession, error) {
 		return nil, err
 	}
 	s.screen = screen
-	s.wide = sgsvm.NewWide(s.archive.Script, s.wideService)
+	s.wide = sgsvm.NewWide(s.program, s.wideService)
 	if err := validateWideSystem(s.wide); err != nil {
 		return nil, err
 	}

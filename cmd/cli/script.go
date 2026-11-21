@@ -23,6 +23,7 @@ type scriptCLIRun struct {
 	keys                                   map[int][]int32
 	route                                  *route.Route
 	serve                                  bool
+	disableAuth                            bool
 }
 
 // runScript drives the same SGS core as the browser host, using a manual
@@ -56,12 +57,15 @@ func runScript(archive *skt.Archive, run scriptCLIRun, stdout, stderr io.Writer)
 		recording = backend.NewRecordingSink(func() time.Duration { return elapsed })
 		sink = recording
 	}
-	core, err := skt.StartScript(ctx, archive, skt.ScriptOptions{Framebuffer: fb, SaveStore: backend.NewDirectorySaveStore(run.saveRoot), AudioSink: sink, Logger: logger})
+	core, err := skt.StartScript(ctx, archive, skt.ScriptOptions{Framebuffer: fb, SaveStore: backend.NewDirectorySaveStore(run.saveRoot), AudioSink: sink, Logger: logger, DisableAuthentication: run.disableAuth})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	defer core.Close()
+	if !run.disableAuth {
+		fmt.Fprintf(stderr, "authentication: %s\n", core.Authentication())
+	}
 	ticks := 0
 	frame := func() ([]byte, int, int) { f, _ := fb.Snapshot(); return f.RGBA, f.Width, f.Height }
 	digest := func() uint64 { f, _, _ := frame(); h := fnv.New64a(); _, _ = h.Write(f); return h.Sum64() }

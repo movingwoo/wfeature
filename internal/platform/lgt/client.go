@@ -122,6 +122,9 @@ type Client struct {
 	wideGraphicsContexts  bool
 	wideExclusiveClip     bool
 	recordTableTerminator bool
+	// dataServiceLock answers DS_LOCK "1" for a recognized module; see
+	// data_service_lock.go.
+	dataServiceLock bool
 
 	core                *armcore.Core
 	thread              *armcore.Thread
@@ -469,6 +472,11 @@ func Load(archive *Archive, options Options) (*Client, error) {
 			return nil, fmt.Errorf("map LGT %s: %w", region.what, err)
 		}
 	}
+	if hasNullPageMemory(archive.Module) {
+		if err := mapNullPage(memory); err != nil {
+			return nil, fmt.Errorf("map LGT null page: %w", err)
+		}
+	}
 
 	initial := armcore.NewContext()
 	initial.Registers[armcore.RegisterSP] = stackBase + uint32(stackSize)
@@ -502,6 +510,9 @@ func Load(archive *Archive, options Options) (*Client, error) {
 	client.wideExclusiveClip = hasWideExclusiveClip(client.archive.Module)
 	client.recordTableTerminator = hasRecordTableTerminator(client.archive.Module)
 	if err := client.applyOriginCompatibility(); err != nil {
+		return nil, err
+	}
+	if err := client.selectDataServiceLock(); err != nil {
 		return nil, err
 	}
 	if options.TraceSVC > 0 {

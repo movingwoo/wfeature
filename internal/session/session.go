@@ -398,6 +398,7 @@ func start(ctx context.Context, archive []byte, options Options) (*Session, erro
 			started, err := skt.StartScript(ctx, opened, skt.ScriptOptions{
 				Framebuffer: surface, SaveStore: options.SaveStore,
 				AudioSink: options.AudioSink, Logger: options.Logger, Speed: options.Speed,
+				DisableAuthentication: options.DisableAuthentication,
 			})
 			if started != nil {
 				session.engine = sktScriptEngine{started, surface}

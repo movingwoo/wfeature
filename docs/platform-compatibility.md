@@ -16,13 +16,14 @@ The document has schema `version: 1` and an `entries` array. Each entry contains
 
 - `id`: a unique, behavior-based identifier, without an individual game name.
 - `platform`: `skt`, `ktf` or `lgt`.
-- `match.kind`: the fingerprint algorithm, `java_class_set` or `native_module`.
+- `match.kind`: the fingerprint algorithm, `java_class_set`, `native_module` or
+  `script_image`.
 - `match.sha256`: the exact lowercase SHA-256 code fingerprint.
 - `fixes`: names of reviewed implementations in Go.
 - `evidence`: a repository documentation path, optionally with a section anchor,
   recording the reproduction, reason, validation and limits.
 
-The two fingerprints:
+The three fingerprints:
 
 - `java_class_set` sorts all `.class` entry names, then hashes each name's UTF-8
   bytes and its complete class bytes, each preceded by its byte length as an
@@ -30,7 +31,12 @@ The two fingerprints:
   the fingerprint.
 - `native_module` hashes the complete, unmodified native executable. LGT uses
   `binary.mod` including its ELF headers and sections, SKT uses the entire
-  `.daf` including its relocation table, and KTF BREW uses the packaged module.
+  `.daf` including its relocation table, KTF BREW uses the packaged module, and
+  a KTF descriptor package uses the `client.bin` entry of its JAR as packaged,
+  before the client relocates itself.
+- `script_image` hashes the complete SGS script image: the bytes after the
+  optional 32-byte download prefix, which are also what names the title's save
+  directory.
 
 Archive filenames, display names, descriptors, ZIP metadata and resources select
 nothing, so identical code repackaged with different resources receives the same
@@ -40,17 +46,23 @@ Matching always includes the platform and fingerprint kind, not only the hash.
 The shared package owns metadata validation and matching; each platform owns
 fingerprint calculation and correction behavior. Fix names are
 platform-prefixed and accepted only with their platform and kind: SKT's Java
-fixes require `java_class_set`. SKT, LGT and KTF native fixes require
-`native_module`.
+fixes require `java_class_set`, its script fix requires `script_image`, and
+SKT, LGT and KTF native fixes require `native_module`.
 
 ### Registered fixes
 
-The registry holds 35 entries (last changed 2026-11-19). The `evidence` field of
+The registry holds 48 entries (last changed 2026-11-21). The `evidence` field of
 each entry is the authoritative index; this table groups them by fix.
 
 | Fix | Entries | Effect | Evidence |
 | --- | --- | --- | --- |
 | `ktf.brew_packaged_certificate` | 2 | Checks the guest-supplied record against the certificate bound to this installation | [KTF BREW](ktf.md#brew-packaged-certificate) |
+| `ktf.save_subscriber_identity` | 2 | Lets the implicit default handset read the owner record, or the saves, its capture carries. An explicitly configured handset uses the guest's comparison | [KTF owner record](history/ktf.md#ktf-first-launch-2026-11-20-owner-record), [KTF save owner](history/ktf.md#ktf-first-launch-2026-11-21-save-owner) |
+| `ktf.dial_failure_notice` | 1 | Rewrites a client's dial callback so that a failed dial stores the title's own network-error state, and answers its saved-file check with the title's branch for a server that holds nothing. As packaged the callback drops the failure and the title waits without end | [KTF dial failure](network.md#ktf-dial-failure-notice) |
+| `ktf.withheld_private_file` | 1 | Keeps a capture's options record from the guest: it lists saves the capture does not carry, and the title starts a reset character from them | [KTF withheld files](ktf.md#withheld-private-files) |
+| `ktf.save_subscriber_key` | 1 | With the implicit handset, presents a capture's saves, which the client enciphers under a key derived from `PHONENUMBER`, under the session's key. An explicitly configured handset reads them as packaged | [KTF save key](ktf.md#save-subscriber-key) |
+| `ktf.save_file_time` | 1 | Sends a client's comparison of the file time its save records with the file's time now to the exit a matching time takes, so a save its capture carries is not deleted | [KTF save file time](ktf.md#save-file-time) |
+| `ktf.null_page_memory` | 1 | Maps the first page as zero-filled read-write memory for a client whose own routine reads and stores through a null pointer on a path a handset completes. Every other title still stops at such an access | [KTF null page](ktf.md#null-page-memory) |
 | `skt.inclusive_set_clip` | 2 | MIDP `Graphics.setClip` treats extents as inclusive | [below](#skt-skt-original-specific-clip-compatibility), [SKT QA](history/skt.md#skt-qa-2026-09-29-inclusive-tile-clipping) |
 | `skt.resume_without_start` | 2 | Preserves a live game whose start callback would recreate it | [SKT resume](history/skt.md#skt-resume-2026-09-30), [SKT QA](history/skt.md#skt-qa-2026-09-29) |
 | `skt.resume_through_start` | 2 | Resumes through `startApp` again and lets a thread whose run returned start again, for a MIDlet whose `startApp` restarts the thread its `pauseApp` ended | [SKT resume](history/skt.md#skt-resume-2026-11-10) |
@@ -62,16 +74,20 @@ each entry is the authoritative index; this table groups them by fix.
 | `lgt.screen_strip_constant` | 6 | Clears the 24-row strip a Clet adds to its own screen setup or pixel pointers, at instructions verified per module | [First five modules](history/lgt.md#lgt-new-archives-2026-11-17), [sixth module](history/lgt.md#lgt-puzzle-screen-strip) |
 | `lgt.wide_graphics_context` | 4 | Selects the 56-byte graphics context ABI instead of the compact default | [below](#lgt-wide-graphics-context) |
 | `lgt.wide_exclusive_clip` | 1 | Keeps the wide context's clip ends exclusive | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-second-color-report-wide-context-proof) |
-| `lgt.save_subscriber_identity` | 1 | Lets the implicit default handset load a foreign save. An explicitly configured handset uses the guest's subscriber check | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison) |
+| `lgt.save_subscriber_identity` | 2 | Lets the implicit default handset read the saves, registration record or owner record its capture carries. An explicitly configured handset uses the guest's subscriber checks | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison), [first launch](history/lgt.md#lgt-first-launch-2026-11-20) |
 | `lgt.certificate_message` | 5 | Selects the recognized two-stage local certificate exchange | [LGT QA](history/lgt.md#lgt-qa-2026-09-21-certificate-message-compatibility), [later revisions](history/lgt.md#lgt-puzzle-archives-2026-11-18) |
 | `lgt.packaged_certificate` | 1 | Serves an archive's own packaged certificate at the bare name the title opens it by | [LGT QA](history/lgt.md#lgt-new-archives-2026-11-03-packaged-certificate) |
 | `lgt.record_table_terminator` | 1 | Appends the end sequence a record-table search stops on, which the packaged table lacks | [LGT QA](history/lgt.md#lgt-qa-2026-10-28-unterminated-record-table) |
+| `lgt.data_service_lock` | 1 | Answers `DS_LOCK` with `1` for a module whose network scene has its own notice for a locked data service and no way out of a dial that fails. No guest byte changes | [LGT data service lock](network.md#lgt-data-service-lock) |
+| `lgt.authentication_allowance` | 2 | Lets a title give its one-time network authentication up after the first failed attempt rather than the fifth | [Authentication allowance](authentication.md#lgt-authentication-allowance) |
+| `lgt.null_page_memory` | 2 | Maps the first page read only and zero-filled for a module whose weapon key reads through a null pointer during its opening. A store through null still stops the guest | [LGT null page](lgt.md#null-page-memory) |
 | `skt.native_discard_owner_state` | 4 | Withholds a recognized device dump's install directory so the game starts fresh | [SKT native](skt-native.md#skt-native-identity-discard) |
 | `skt.native_save_identity` | 1 | Runs the guest's save-digit check on an explicit handset, or accepts that comparison on the implicit handset | [SKT native](skt-native.md#skt-native-identity-save) |
 | `skt.native_cert_subscriber` | 1 | Runs the guest's cert.c2s subscriber check on an explicit handset, or accepts that comparison on the implicit handset (error 5001) | [SKT native](skt-native.md#skt-native-identity-cert) |
 | `skt.native_paired_certificate` | 1 | Uses the explicit handset for the original guest checks, or selects the identity confirmed by both packaged records for the implicit handset (errors 1004 and 3003) | [SKT native](skt-native.md#skt-native-identity-paired-certificate) |
 | `skt.native_certdata_subscriber` | 1 | Runs the original CERTIDATA comparison with an explicitly configured handset and uses the compatibility comparison with the implicit default | [SKT native](skt-native.md#skt-native-identity-cert) |
 | `skt.native_service_allowance` | 1 | Raises a recognized native executable's Host service step allowance for a one-shot load past the default ceiling | [SKT native](skt-native.md#skt-native-identity-load-allowance) |
+| `skt.script_install_identity` | 1 | Accepts a version-four script's comparison of the handset with the user ID its installation was issued, on the implicit handset, in a session-owned copy of the script | [SGS install identity](history/skt.md#sgs-install-identity-2026-11-20) |
 
 `skt.tutorial_name_cache` replaces a redundant phase assignment in an in-memory
 class copy when one verified code revision returns from its tutorial equipment

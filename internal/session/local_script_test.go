@@ -189,3 +189,126 @@ func TestLocalWideScriptStageCheckpoint(t *testing.T) {
 		t.Fatalf("second quicksave after replay: %v", err)
 	}
 }
+
+// TestLocalScriptInstallIdentity starts the registered word-script archive,
+// from the absolute path in WFEATURE_SKT_SCRIPT_IDENTITY_ARCHIVE, on an empty
+// save root. With compatibility disabled the script stops on its notice and
+// the screen never changes. On the implicit handset the same presses move
+// through its menus, and a quickload returns to the saved screen with the
+// session's policy unchanged.
+func TestLocalScriptInstallIdentity(t *testing.T) {
+	path := testlocal.Value(t, "WFEATURE_SKT_SCRIPT_IDENTITY_ARCHIVE", "the registered word-script archive")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := bytes.Clone(data)
+	launch := func(disabled bool, ticks int) (*Session, int) {
+		t.Helper()
+		s, err := Start(t.Context(), data, Options{SaveStore: backend.NewDirectorySaveStore(t.TempDir()), DisableAuthentication: disabled})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.sktScript() == nil {
+			s.Close()
+			t.Fatal("expected an SGS session")
+		}
+		screens := make(map[[32]byte]bool)
+		for tick := range ticks {
+			switch tick % 150 {
+			case 100:
+				if err := s.SendKey(t.Context(), KeyPress, -5); err != nil {
+					t.Fatal(err)
+				}
+			case 103:
+				if err := s.SendKey(t.Context(), KeyRelease, -5); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := s.sktScript().Advance(t.Context(), 16*time.Millisecond); err != nil {
+				t.Fatalf("tick %d: %v", tick, err)
+			}
+			if rgba, _, _, ok := s.Frame(); ok {
+				screens[sha256.Sum256(rgba)] = true
+			}
+		}
+		return s, len(screens)
+	}
+	refused, screens := launch(true, 600)
+	if status := refused.Authentication(); status != backend.AuthenticationOff || screens != 1 {
+		t.Errorf("disabled: status %s with %d screens", status, screens)
+	}
+	refused.Close()
+
+	s, screens := launch(false, 600)
+	defer s.Close()
+	if status := s.Authentication(); status != backend.AuthenticationSKTScriptInstall || screens < 4 {
+		t.Fatalf("implicit handset: status %s with %d screens", status, screens)
+	}
+	saved, _, _, ok := s.Frame()
+	if !ok || !s.Running() {
+		t.Fatal("the script is not running")
+	}
+	slot, err := s.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SendKey(t.Context(), KeyPress, -5); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SendKey(t.Context(), KeyRelease, -5); err != nil {
+		t.Fatal(err)
+	}
+	for range 120 {
+		if _, err := s.sktScript().Advance(t.Context(), 16*time.Millisecond); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if moved, _, _, _ := s.Frame(); bytes.Equal(moved, saved) {
+		t.Fatal("the screen did not change after the quicksave")
+	}
+	if err := s.LoadCheckpoint(t.Context(), data, slot); err != nil {
+		t.Fatal(err)
+	}
+	if restored, _, _, ok := s.Frame(); !ok || !bytes.Equal(restored, saved) {
+		t.Fatal("quickload did not return to the saved screen")
+	}
+	if status := s.Authentication(); status != backend.AuthenticationSKTScriptInstall {
+		t.Fatalf("restored session reports %s", status)
+	}
+	// The slot was taken with the accepted copy. A session that selects the
+	// packaged image restores it with the copy it was taken with, and a slot
+	// taken with the packaged image restores on the implicit handset.
+	packaged, _ := launch(true, 1)
+	defer packaged.Close()
+	if err := packaged.LoadCheckpoint(t.Context(), data, slot); err != nil {
+		t.Fatalf("the implicit handset's slot under disabled compatibility: %v", err)
+	}
+	if restored, _, _, ok := packaged.Frame(); !ok || !bytes.Equal(restored, saved) {
+		t.Fatal("the implicit handset's slot did not return to its screen under disabled compatibility")
+	}
+	if status := packaged.Authentication(); status != backend.AuthenticationOff {
+		t.Fatalf("a session with compatibility disabled reports %s", status)
+	}
+	refusedSlot, err := refusedCheckpoint(t, data, launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LoadCheckpoint(t.Context(), data, refusedSlot); err != nil {
+		t.Fatalf("a slot taken with the packaged image on the implicit handset: %v", err)
+	}
+	if status := s.Authentication(); status != backend.AuthenticationGuestManaged {
+		t.Fatalf("a slot restored with the packaged image reports %s", status)
+	}
+	if !bytes.Equal(data, original) {
+		t.Fatal("original archive changed")
+	}
+}
+
+// refusedCheckpoint is a slot taken by a session that runs the packaged image.
+func refusedCheckpoint(t *testing.T, data []byte, launch func(bool, int) (*Session, int)) ([]byte, error) {
+	t.Helper()
+	s, _ := launch(true, 300)
+	defer s.Close()
+	return s.CaptureCheckpoint(t.Context())
+}

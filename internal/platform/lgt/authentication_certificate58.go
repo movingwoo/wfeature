@@ -267,6 +267,9 @@ func (client *Client) systemProperty(name string) (string, bool) {
 	if name == "PHONENUMBER" || name == "MIN" {
 		return client.subscriberNumber, true
 	}
+	if name == dataServiceLockProperty && client.dataServiceLock {
+		return "1", true
+	}
 	value, ok := wipic.SystemProperties[name]
 	return value, ok
 }

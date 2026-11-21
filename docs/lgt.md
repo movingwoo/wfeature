@@ -513,6 +513,35 @@ in the original reader. A different configured number yielded two mismatches
 and the same final frame as `-no-auth`. See the
 [save-reader evidence](history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison).
 
+The same revision's registration record, and a second recognized revision's
+owner record, name the handset their capture came from and are compared with
+`PHONENUMBER` the same way. A save root with none of the title's own files
+reads them from the capture, so they decide a first launch. The same fix
+accepts each on the implicit handset.
+[Archived subscriber records](authentication.md#archived-subscriber-records)
+
+One registered title gives its one-time network authentication up by itself
+after five failed attempts in one visit of its prompt, and the registry fix
+`lgt.authentication_allowance` makes the first failure the one it lets through.
+[Authentication allowance](authentication.md#lgt-authentication-allowance)
+
+<a id="null-page-memory"></a>
+
+The first page of the guest address space is not mapped, and a read or store
+through a null pointer stops the guest. The registry fix `lgt.null_page_memory`
+maps it read only and zero-filled for the two revisions of one title. During
+the opening of the first game a process starts, that title's weapon key reads
+the equipped item of the next weapon type through a slot it fills only when
+the opening ends. On the page the read answers zeros, the title finds no item
+and goes on, and the key works as packaged once the slots are filled. A store
+through a null pointer still stops the guest. Zeros are not what a handset held
+at address zero: filled the way such a handset is, the page sends the same
+press into the title's own loader following a wild pointer, so this makes a
+check the title is missing harmless rather than reproducing a handset. A quick
+save an earlier build took of these modules records a memory map without the
+page; it restores with the page added, which is the only difference.
+[History](history/lgt.md#lgt-null-read-2026-11-21)
+
 Three file-based authentication contracts can start with guest-managed storage.
 The recognized reader for a 56-byte options file uses its saved success word
 and can clear it through an ordinary write. The standalone certificate reader

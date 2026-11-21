@@ -176,10 +176,21 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 			options.Logger.Debug("authentication compatibility", "status", authentication)
 		}
 		if hasSaveIdentityCompatibility(archive.Module) {
-			authentication, err = applySaveSubscriberIdentity(client.core.Memory(), wipic.ConfiguredSubscriberNumber() != "")
+			authentication, err = applySaveSubscriberIdentity(client.core.Memory(), moduleDigest(archive.Module), wipic.ConfiguredSubscriberNumber() != "")
 			if err != nil {
 				return nil, err
 			}
+			if options.Logger != nil {
+				options.Logger.Debug("authentication compatibility", "status", authentication)
+			}
+		}
+		// A registered title gives its one-time network authentication up
+		// after five failures; the first is made the one it lets through.
+		if authentication == backend.AuthenticationUnsupported && hasAuthenticationAllowance(archive.Module) {
+			if err := applyAuthenticationAllowance(client.core.Memory(), moduleDigest(archive.Module)); err != nil {
+				return nil, err
+			}
+			authentication = backend.AuthenticationLGTAuthenticationAllowance
 			if options.Logger != nil {
 				options.Logger.Debug("authentication compatibility", "status", authentication)
 			}

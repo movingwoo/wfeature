@@ -244,6 +244,16 @@ flush during paint is not overwritten by another implicit full flush. Forced
 worker slices do not request unsolicited Host paints; repaint, yield, and idle
 paths still paint.
 
+One flush is not retained against the paint the title asks for after it: a
+flush of the whole screen out of the screen framebuffer, followed by the
+title's own `MC_grpRepaint` or `Card.repaint`. That paint presents the screen
+whether or not it drew. A title that draws each frame straight into the screen
+from a timer, asks for a repaint and has a paint entry that draws nothing
+depends on this: retained, its one whole-screen flush stayed on the Host for
+the rest of the run. A paint nobody in the title asked for, the Host's round
+paint or the first paint of a card that was shown, still keeps the flush
+([history](history/ktf.md#ktf-whole-screen-flush-2026-11-21)).
+
 Optional intermediate frames reach the Host while guest callbacks are running.
 They are owned copies, sampled at most once per 1/60 wall-clock second and
 sent without waiting for a consumer. The browser uses its existing PNG queue.
@@ -355,6 +365,122 @@ load for either registered module requires the same authentication setting.
 These checks establish an offline match to two archived installations.
 Verification of a newly issued certificate would require the issuer's
 verification mechanism. [Observed status codes](history/ktf.md#implementation-a-certificate-and-the-object-both-later-archives-create)
+
+### Owner record
+
+One registered descriptor package keeps a 12-byte owner record in its record
+container and compares it with `PHONENUMBER` when it starts. Its capture
+carries the container, so a first launch reads the record of the handset it was
+captured from and stops at a failure notice. With the implicit handset the
+session accepts that comparison and reports `ktf-save-subscriber`; a configured
+handset and `-no-auth` run it as packaged.
+[Archived subscriber records](authentication.md#archived-subscriber-records)
+
+### Save owner
+
+Another registered descriptor package begins every save with the 12-byte
+subscriber that wrote it, inside the save's own encryption, and its reader
+compares that field with `PHONENUMBER`. A save of another handset is treated as
+no save: the title deletes the file and writes its defaults in its place,
+without a notice. Its capture carries nine such saves, so a first launch
+replaced all of them. With the implicit handset the session accepts the
+reader's comparison and reports `ktf-save-subscriber`, and the title continues
+from the capture's saves. A configured handset gets the same acceptance: the
+title's answer to a save another number wrote is to delete it without a
+notice, and the handset setting is shared by every title, so a number set for
+another one would delete every save of this one, the player's own among them.
+`-no-auth` runs the comparison as packaged, and the title starts a new game
+over any save written under another number.
+[Archived subscriber records](authentication.md#archived-subscriber-records),
+[history](history/ktf.md#ktf-first-launch-2026-11-21-save-owner)
+
+<a id="save-subscriber-key"></a>
+
+### Save subscriber key
+
+One registered descriptor package enciphers every save under a key it derives
+from `PHONENUMBER`: strtol of the number after its first character. A save that
+does not decipher to a matching CRC is no save, so the options record is
+rewritten with defaults and a slot is offered empty. Its capture's options and
+three saved games are all enciphered under key 0, the key of a handset that
+answered no digits after the first character; the implicit handset's key is
+another. With the implicit handset the registry fix `ktf.save_subscriber_key`
+presents each of the capture's saves that deciphers under key 0 to the guest
+enciphered under the session's key, with the same salt and content, and the
+session reports `ktf-save-subscriber`. The archive is not changed and a save
+the title writes is its own. A configured handset (`guest-managed`) and
+`-no-auth` read the capture as packaged, and the title starts over. A quick
+load presents the capture the way the recorded session was started, whatever
+the handset setting is when it loads. Before anything is presented the session
+checks the title's decoder, the constants of its cipher and the two loaders
+that use it in the packaged client image, whose code the client does not
+relocate, and a registered client whose code differs fails starting. A
+configured handset gives the title another key altogether: it reads neither
+the capture's saves nor the ones written on the implicit handset, rewrites its
+options record and offers empty slots until the setting is cleared.
+[History](history/ktf.md#ktf-first-launch-2026-11-21-save-subscriber-key)
+
+<a id="save-file-time"></a>
+
+### Save file time
+
+One registered descriptor package records in its save the time
+`MC_fsFileAttribute` gave the file when the save was written, and deletes the
+save, writing its defaults, when the file's time differs from that by more
+than 5000 seconds at the next load: a copied save carries a time its file no
+longer has. This platform answers a time of 0 for every file, so the title's
+own saves pass and the one its capture carries, which holds the original
+handset's time, never does; the title reported it as damaged and started over.
+The registry fix `ktf.save_file_time` sends the comparison's delete path to
+the exit a matching time takes. It applies for every handset and with
+`-no-auth`, since nothing on the path concerns a subscriber. Real file times
+are not answered instead: every save this title wrote here holds 0, and the
+first load after such a change would delete them.
+[History](history/ktf.md#ktf-first-launch-2026-11-21-save-file-time)
+
+<a id="withheld-private-files"></a>
+
+### Withheld private files
+
+A capture holds whatever was on the handset when it was taken, and that is not
+always a consistent set. The registry fix `ktf.withheld_private_file` keeps a
+private file from the guest when both its name and its SHA-256 are recorded for
+the client: one capture's options record lists two saves, and the capture
+carries neither. Another capture of the same client keeps its own record. With the record the
+title's menu opens on Continue, and a listed save starts a character without a
+level or health. Without it the menu opens on a new game with every slot empty.
+The archive is not changed, the capture's other private files stay, and a
+record the title writes itself is read as usual.
+[History](history/ktf.md#ktf-whole-screen-flush-2026-11-21)
+
+<a id="null-page-memory"></a>
+
+### Null page memory
+
+The first page of the guest address space is not mapped, and a guest that reads
+or writes through a null pointer stops with the faulting instruction in the
+error. That is the general rule and it stays: such an access is usually this
+platform's own defect showing up late, a call answered with null where a
+handset answers an object.
+
+The registry fix `ktf.null_page_memory` maps that page as zero-filled read-write
+memory for one recognized client, the save-owner package above. The routine
+that writes a save's defaults looks a value up in a data table the title loads
+later, so it reads the table's row count at offset `0xc` of a null pointer,
+fails its own range check, and stores its error code at offset `0x10` of the
+same pointer before answering zero. The title runs that routine inside
+`startApp` for a save it does not accept, which is where the guest stopped. On
+the mapped page the lookup takes its own failure path and the title goes on to
+its first screen with default saves. A read-only page is not enough: the store
+follows the read.
+
+The mapping is selected by the client's digest alone, for every handset and
+with `-no-auth`, because the routine is the title's own answer to a foreign
+save rather than part of a comparison this platform accepts. It is part of the
+session's memory, so a checkpoint carries it. No handset was observed running
+this path; that one completes it is inferred from the title shipping it as its
+ordinary answer to a save it does not accept.
+[History](history/ktf.md#ktf-first-launch-2026-11-21-save-owner)
 
 ## Quick save and quick load
 

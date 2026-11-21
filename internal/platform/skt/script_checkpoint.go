@@ -224,10 +224,19 @@ func PrepareScriptCheckpoint(archive []byte, checkpoint backend.Checkpoint, opti
 	s, g := prepared.session, saved.Graphics
 	s.graphics = &scriptGraphics{width: g.Width, height: g.Height, pixels: slices.Clone(g.Pixels), backup: slices.Clone(g.Backup), lastFrame: slices.Clone(g.Frame), presents: g.Presents,
 		clip: g.Clip, color: g.Color, bank: g.Bank, textStyle: g.TextStyle, textFG: g.TextFG, textBG: g.TextBG, textAlign: g.TextAlign, bitmapQueueScratch: g.Scratch, bitmapQueueOpaque: g.Opaque}
-	var external [][]byte
-	if s.vm, external, err = sgsvm.RestoreState(opened.Script, s, saved.VM); err != nil {
+	type restored struct {
+		vm       *sgsvm.VM
+		external [][]byte
+	}
+	machine, err := restoreProgram(s, func(program *sgsvm.Program) (restored, error) {
+		vm, external, err := sgsvm.RestoreState(program, s, saved.VM)
+		return restored{vm, external}, err
+	})
+	if err != nil {
 		return nil, err
 	}
+	s.vm = machine.vm
+	external := machine.external
 	if len(s.vm.Variables) < 16 {
 		return nil, fmt.Errorf("SGS checkpoint system variable banks are missing")
 	}
@@ -253,6 +262,9 @@ func (saved *scriptCheckpointRecord[V, G]) prepareDevices(opened *Archive, optio
 		return nil, fmt.Errorf("SGS checkpoint random state: %w", err)
 	}
 	s := &ScriptSession{archive: opened, options: options, clock: saved.Clock, paused: saved.Paused, overlayPolicy: saved.OverlayPolicy, sound: saved.Sound, randomSource: source, random: rand.New(source)}
+	if err := s.selectProgram(); err != nil {
+		return nil, err
+	}
 	var err error
 	for i, timer := range saved.Timers {
 		s.timers[i] = scriptTimer{timer.Period, timer.Due, timer.Repeat, timer.Active}

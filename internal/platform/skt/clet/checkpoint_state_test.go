@@ -89,7 +89,7 @@ func TestCheckpointAccountsForEveryField(t *testing.T) {
 			"Platform": rebuilt, "Hooks": rebuilt, "Runtime": recorded, "Prepared": boundary, "SubscriberNumber": recorded, "core": recorded, "Thread": recorded,
 			"Run": host, "Resources": rebuilt, "ResourceOrder": rebuilt, "resourceIndex": rebuilt, "Files": rebuilt, "SaveStore": store, "ProgramName": rebuilt,
 			"FrameRGBA": recorded, "FrameWidth": recorded, "FrameHeight": recorded, "FlushCount": recorded,
-			"FramePending": recorded, "PartialFrame": recorded, "FrameSink": host, "FrameSampleAt": host,
+			"FramePending": recorded, "PartialFrame": recorded, "WholeFrameFlush": reset, "TitleRepaint": reset, "FrameSink": host, "FrameSampleAt": host,
 			"FrameSampleClock": host, "LastSample": host, "ScreenWidth": recorded, "ScreenHeight": recorded,
 			"ThreadSliceSteps": boundary, "Costs": diagnostic, "timePhases": host, "NextRoundPaint": recorded,
 			"PaintsDrop": diagnostic, "PaintLoad": recorded, "PaintCost": recorded, "EntryCost": recorded,

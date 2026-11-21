@@ -1886,6 +1886,7 @@ func (runtime *Runtime) recordScreenFlush() {
 	}
 	runtime.Client.FramePending = true
 	runtime.Client.PartialFrame = false
+	runtime.Client.WholeFrameFlush, runtime.Client.TitleRepaint = false, false
 	runtime.Client.FlushCount++
 	// The cached answers of an operation that reads more than its arguments
 	// last one frame: one title's reads a fade level from a global and

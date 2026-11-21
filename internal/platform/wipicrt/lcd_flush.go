@@ -75,17 +75,30 @@ func (runtime *Runtime) FlushLCDRegion(source WIPICFramebuffer, x, y, w, h int32
 	runtime.Client.FrameRGBA, runtime.Client.FrameWidth, runtime.Client.FrameHeight = frame, width, height
 	runtime.Client.FramePending = false
 	runtime.Client.PartialFrame = true
+	runtime.Client.WholeFrameFlush = source.Pixels == screen.Pixels && x0 == 0 && y0 == 0 && x1 == int64(width) && y1 == int64(height)
+	runtime.Client.TitleRepaint = false
 	return runtime.publishIntermediateFrame()
 }
 
 // BeginCardPaint preserves an explicit flush and avoids replacing a partial
 // LCD image when paint leaves the screen buffer unchanged. Snapshot only while
 // a partial frame is retained; ordinary full-frame painting keeps its old cost.
+//
+// One flush is not retained against the paint the title asks for after it: a
+// flush of the whole screen out of the screen framebuffer, followed by the
+// title's own MC_grpRepaint or Card.repaint. Such a flush keeps nothing of an
+// earlier image, and a title that draws each frame straight into the screen
+// from a timer, asks for a repaint and has a paint entry that draws nothing
+// needs that paint to show the screen; retained, its last whole-screen flush
+// stayed on the Host for the rest of the run. A paint nobody in the title
+// asked for, the Host's own round paint or the first paint of a card that was
+// shown, still keeps the flush: what the title left in the screen after it is
+// not a frame it published.
 func (runtime *Runtime) BeginCardPaint() (func() error, error) {
 	flushes := runtime.Client.FlushCount
 	var before []byte
 	var framebuffer WIPICFramebuffer
-	if runtime.Client.PartialFrame {
+	if runtime.Client.PartialFrame && !(runtime.Client.WholeFrameFlush && runtime.Client.TitleRepaint) {
 		var err error
 		framebuffer, err = runtime.ReadWIPICFramebuffer(runtime.ScreenFramebuffer)
 		if err != nil {
