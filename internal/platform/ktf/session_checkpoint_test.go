@@ -375,10 +375,15 @@ func TestSessionCheckpointKeepsTheGraphicsContextItWasTakenWith(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	third, err := backend.EncodeCheckpointRecord(sessionCheckpointStateV3{Version: 3, TimerLimit: saved.TimerLimit,
+		DisableAuthentication: saved.DisableAuthentication, Client: saved.Client, Adapters: saved.Adapters, GraphicsContext: saved.GraphicsContext})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, test := range map[string]struct {
 		record []byte
 		legacy bool
-	}{"version 2": {earlier, true}, "version 3": {checkpoint.Runtime, false}} {
+	}{"version 2": {earlier, true}, "version 3": {third, false}, "version 4": {checkpoint.Runtime, false}} {
 		changed := checkpoint
 		changed.Runtime = test.record
 		prepared, err := prepareSessionCheckpoint(source.Archive, source.archiveIdentity, changed, source.options)
@@ -404,4 +409,48 @@ func TestSessionCheckpointKeepsTheGraphicsContextItWasTakenWith(t *testing.T) {
 			t.Errorf("%s: an unknown record was read", name)
 		}
 	}
+}
+
+// The flush the Host holds and the title's repaint request since travel with
+// a record, so a session saved between a whole-screen flush and the repaint
+// presents that repaint after a load as it would have. A version 3 record
+// restores holding no whole-screen flush, as it did before.
+func TestSessionCheckpointCarriesTheWholeScreenFlush(t *testing.T) {
+	fixture := newContinuationFixture(t, 1700000000, continuationFixtureOptions{Runnable: true})
+	fixture.start(t)
+	store := backend.NewDirectorySaveStore(filepath.Join(t.TempDir(), "owner"))
+	source := checkpointFixtureSession(t, fixture, store)
+	source.Client.WholeFrameFlush, source.Client.TitleRepaint = true, true
+	checkpoint, err := source.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := prepareSessionCheckpoint(source.Archive, source.archiveIdentity, checkpoint, source.options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client := prepared.session.Client; !client.WholeFrameFlush || !client.TitleRepaint {
+		t.Errorf("restored flags: whole %v, repaint %v", client.WholeFrameFlush, client.TitleRepaint)
+	}
+	prepared.Discard()
+
+	saved, err := decodeSessionCheckpoint(checkpoint.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := backend.EncodeCheckpointRecord(sessionCheckpointStateV3{Version: 3, TimerLimit: saved.TimerLimit,
+		DisableAuthentication: saved.DisableAuthentication, Client: saved.Client, Adapters: saved.Adapters, GraphicsContext: saved.GraphicsContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	earlier := checkpoint
+	earlier.Runtime = third
+	prepared, err = prepareSessionCheckpoint(source.Archive, source.archiveIdentity, earlier, source.options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client := prepared.session.Client; client.WholeFrameFlush || client.TitleRepaint {
+		t.Errorf("a version 3 record restored flags: whole %v, repaint %v", client.WholeFrameFlush, client.TitleRepaint)
+	}
+	prepared.Discard()
 }

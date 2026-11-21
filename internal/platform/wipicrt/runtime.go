@@ -615,6 +615,7 @@ func (runtime *Runtime) HandleWIPICTableCall(thread *armcore.Thread, table, func
 		// MC_grpRepaint(lcd, x, y, w, h) queues a repaint rather than painting
 		// here; the region is discarded because a card is repainted whole.
 		runtime.RepaintPending = true
+		runtime.Client.TitleRepaint = true
 		if timer := runtime.Client.ActiveTimer; timer != nil && runtime.Hooks.RepaintCard != nil {
 			timer.PaintedCard = runtime.Hooks.RepaintCard()
 		}

@@ -108,13 +108,71 @@ func TestCompatibilitySeparatesPlatformsAndFingerprintKinds(t *testing.T) {
 				t.Fatalf("fix leaked to %q", platform)
 			}
 		}
-		for _, kind := range []string{JavaClassSet, NativeModule, "other"} {
+		for _, kind := range []string{JavaClassSet, NativeModule, ScriptImage, "other"} {
 			if kind != key.Kind && HasFix(key.Platform, kind, key.Digest, fix) {
 				t.Fatal("fingerprint kinds collided")
 			}
 		}
 		if HasFix(key.Platform, key.Kind, key.Digest, "unknown") {
 			t.Fatal("unknown fix selected")
+		}
+	}
+}
+
+// A fix is accepted only with the platform and the fingerprint its
+// implementation reads, so an entry cannot select code that never looks.
+func TestCompatibilityBindsIdentityFixes(t *testing.T) {
+	digest := strings.Repeat("ab", 32)
+	for _, tc := range []struct {
+		platform, kind, fix string
+		valid               bool
+	}{
+		{"skt", ScriptImage, SKTScriptInstallIdentity, true},
+		{"skt", NativeModule, SKTScriptInstallIdentity, false},
+		{"skt", JavaClassSet, SKTScriptInstallIdentity, false},
+		{"lgt", ScriptImage, SKTScriptInstallIdentity, false},
+		{"skt", ScriptImage, SKTNativeSaveIdentity, false},
+		{"ktf", NativeModule, KTFSaveSubscriberIdentity, true},
+		{"ktf", JavaClassSet, KTFSaveSubscriberIdentity, false},
+		{"lgt", NativeModule, KTFSaveSubscriberIdentity, false},
+		{"ktf", NativeModule, KTFNullPageMemory, true},
+		{"ktf", JavaClassSet, KTFNullPageMemory, false},
+		{"lgt", NativeModule, KTFNullPageMemory, false},
+		{"ktf", NativeModule, KTFDialFailureNotice, true},
+		{"ktf", JavaClassSet, KTFDialFailureNotice, false},
+		{"lgt", NativeModule, KTFDialFailureNotice, false},
+		{"ktf", NativeModule, KTFWithheldPrivateFile, true},
+		{"ktf", JavaClassSet, KTFWithheldPrivateFile, false},
+		{"lgt", NativeModule, KTFWithheldPrivateFile, false},
+		{"ktf", NativeModule, KTFSaveFileTime, true},
+		{"ktf", JavaClassSet, KTFSaveFileTime, false},
+		{"lgt", NativeModule, KTFSaveFileTime, false},
+		{"ktf", NativeModule, KTFSaveSubscriberKey, true},
+		{"ktf", JavaClassSet, KTFSaveSubscriberKey, false},
+		{"lgt", NativeModule, KTFSaveSubscriberKey, false},
+		{"lgt", NativeModule, LGTDataServiceLock, true},
+		{"lgt", NativeModule, LGTAuthenticationAllowance, true},
+		{"ktf", NativeModule, LGTAuthenticationAllowance, false},
+		{"lgt", NativeModule, LGTNullPageMemory, true},
+		{"lgt", JavaClassSet, LGTNullPageMemory, false},
+		{"ktf", NativeModule, LGTNullPageMemory, false},
+		{"lgt", JavaClassSet, LGTDataServiceLock, false},
+		{"ktf", NativeModule, LGTDataServiceLock, false},
+		{"lgt", NativeModule, LGTSaveSubscriberIdentity, true},
+		{"ktf", NativeModule, LGTSaveSubscriberIdentity, false},
+	} {
+		entry := compatibilityEntry{ID: "candidate", Platform: tc.platform, Fixes: []string{tc.fix}, Evidence: "docs/authentication.md"}
+		entry.Match.Kind, entry.Match.SHA256 = tc.kind, digest
+		data, err := json.Marshal(map[string]any{"version": 1, "entries": []compatibilityEntry{entry}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		registry, err := parseCompatibility(data)
+		if (err == nil) != tc.valid {
+			t.Errorf("%s %s %s: error %v, want valid=%v", tc.platform, tc.kind, tc.fix, err, tc.valid)
+		}
+		if err == nil && !registry.hasFix(target{tc.platform, tc.kind, digest}, tc.fix) {
+			t.Errorf("%s %s %s: accepted entry does not select its fix", tc.platform, tc.kind, tc.fix)
 		}
 	}
 }

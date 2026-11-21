@@ -230,7 +230,19 @@
       "fixes": [
         "lgt.save_subscriber_identity"
       ],
-      "evidence": "docs/history/lgt.md#lgt-qa-2026-09-21-save-subscriber-comparison"
+      "evidence": "docs/history/lgt.md#lgt-first-launch-2026-11-20-registration-record"
+    },
+    {
+      "id": "lgt-save-subscriber-002",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "38baf4aa1f650faaa099eb34071b4938ecf16b422ded84d7717552ded71af31f"
+      },
+      "fixes": [
+        "lgt.save_subscriber_identity"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-first-launch-2026-11-20-owner-record"
     },
     {
       "id": "lgt-certificate-message-001",
@@ -404,6 +416,18 @@
       "evidence": "docs/skt-native.md#skt-native-identity-save"
     },
     {
+      "id": "skt-script-install-identity-001",
+      "platform": "skt",
+      "match": {
+        "kind": "script_image",
+        "sha256": "eab7d4de11fba9a131ec0aef8a7b3947aef41317fc3d23903d0d1a3812cbe9c2"
+      },
+      "fixes": [
+        "skt.script_install_identity"
+      ],
+      "evidence": "docs/history/skt.md#sgs-install-identity-2026-11-20"
+    },
+    {
       "id": "ktf-brew-packaged-certificate-001",
       "platform": "ktf",
       "match": {
@@ -426,6 +450,139 @@
         "ktf.brew_packaged_certificate"
       ],
       "evidence": "docs/ktf.md#brew-packaged-certificate"
+    },
+    {
+      "id": "ktf-save-subscriber-001",
+      "platform": "ktf",
+      "match": {
+        "kind": "native_module",
+        "sha256": "1d34e05b90527ef933fc96e1ca4ddf10857844490ed441bca578767e6a6a289a"
+      },
+      "fixes": [
+        "ktf.save_subscriber_identity"
+      ],
+      "evidence": "docs/history/ktf.md#ktf-first-launch-2026-11-20-owner-record"
+    },
+    {
+      "id": "ktf-save-subscriber-002",
+      "platform": "ktf",
+      "match": {
+        "kind": "native_module",
+        "sha256": "ef321ab32b16f9acf4ad365cef2b1fce89eb6caf6e434a76d5bb29fc623bebb3"
+      },
+      "fixes": [
+        "ktf.save_subscriber_identity",
+        "ktf.null_page_memory"
+      ],
+      "evidence": "docs/history/ktf.md#ktf-first-launch-2026-11-21-save-owner"
+    },
+    {
+      "id": "lgt-data-service-lock-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "1b3e570e1fd0d93b5cd160acb9f21c63ee1ec97ce48b392fba033a353b4615c4"
+      },
+      "fixes": [
+        "lgt.data_service_lock"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-dial-failure-2026-11-21-data-service-lock"
+    },
+    {
+      "id": "ktf-dial-failure-001",
+      "platform": "ktf",
+      "match": {
+        "kind": "native_module",
+        "sha256": "a62730b07a2e540619dafd0395ef884f868a3e76446dbd604c8bc12bf3d71349"
+      },
+      "fixes": [
+        "ktf.dial_failure_notice"
+      ],
+      "evidence": "docs/history/ktf.md#ktf-dial-failure-2026-11-21-saved-file-check"
+    },
+    {
+      "id": "ktf-withheld-private-file-001",
+      "platform": "ktf",
+      "match": {
+        "kind": "native_module",
+        "sha256": "df6a087ca91b09759b9713aa8e040019228154714b1686012e4f1802f9064fe2"
+      },
+      "fixes": [
+        "ktf.withheld_private_file"
+      ],
+      "evidence": "docs/history/ktf.md#ktf-whole-screen-flush-2026-11-21"
+    },
+    {
+      "id": "ktf-save-file-time-001",
+      "platform": "ktf",
+      "match": {
+        "kind": "native_module",
+        "sha256": "fb39fb636a1311480f71123b411e9641a124486401a99faef0a5989a0a0b210b"
+      },
+      "fixes": [
+        "ktf.save_file_time"
+      ],
+      "evidence": "docs/history/ktf.md#ktf-first-launch-2026-11-21-save-file-time"
+    },
+    {
+      "id": "ktf-save-subscriber-key-001",
+      "platform": "ktf",
+      "match": {
+        "kind": "native_module",
+        "sha256": "9be26a6fab3b44ca3e36c19f219bd73f8bcd3a6a224a437dcaf947ae842c0b17"
+      },
+      "fixes": [
+        "ktf.save_subscriber_key"
+      ],
+      "evidence": "docs/history/ktf.md#ktf-first-launch-2026-11-21-save-subscriber-key"
+    },
+    {
+      "id": "lgt-authentication-allowance-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "f159d0d09bb8ae3347e427dea4d0be452d913b64e7d0a6949a955af0a539601b"
+      },
+      "fixes": [
+        "lgt.authentication_allowance"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-authentication-allowance-2026-11-21"
+    },
+    {
+      "id": "lgt-authentication-allowance-002",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "2cac5015ed4a7642d7a2781a30f7fcb9ff764fa7b7850bef6aeb1eea8f22299e"
+      },
+      "fixes": [
+        "lgt.authentication_allowance"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-authentication-allowance-2026-11-21"
+    },
+    {
+      "id": "lgt-null-page-001",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "ed31056996bf2c6893eaa2f74e5b3828a61014da5d2a7d94e081e5ba1d9d5240"
+      },
+      "fixes": [
+        "lgt.null_page_memory"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-null-read-2026-11-21"
+    },
+    {
+      "id": "lgt-null-page-002",
+      "platform": "lgt",
+      "match": {
+        "kind": "native_module",
+        "sha256": "73b14054775519e28de4fd4a9421c7b524cfebc684a3fbcca419ed77dd0778ad"
+      },
+      "fixes": [
+        "lgt.null_page_memory"
+      ],
+      "evidence": "docs/history/lgt.md#lgt-null-read-2026-11-21"
     }
   ]
 }

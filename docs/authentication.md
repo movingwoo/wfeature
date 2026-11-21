@@ -28,16 +28,19 @@ games actually perform.
 | `ktf-certificate-23` | The packaged certificate, checksum, AID, cipher table and executable property/file names match the 23-byte format. The fallback supplies a session-local record for the configured number. |
 | `ktf-certificate-52` | The Thumb reader, decoder and relocated data identify the 52-byte format. The fallback changes only the subscriber field in a session-local copy. |
 | `ktf-subscriber-fallback` | A complete Thumb subscriber accessor matches, alongside a packaged 64-byte `prefs` record and no `cert.c2s`. Resolve its embedded fallback number and use that full number throughout this session. |
+| `ktf-save-subscriber` | A registered client compares an owner record, or the owner field of the saves, its capture carries with `PHONENUMBER`, or enciphers its saves under a key derived from it. With the implicit handset that one comparison is accepted, or the capture's saves are presented under the session's key; a configured handset reads them as packaged. [Archived subscriber records](#archived-subscriber-records) |
 | `lgt-cached-authentication` | Matching Thumb options reader/writer, authentication response handler and startup gate share a buffer. Expose its cached authentication word only within the session. |
 | `lgt-certificate-58` | Complete connected Thumb reader, writer, cipher and subscriber comparison match the 58-byte format. Keep a certificate for the session identity in memory. |
 | `lgt-certificate-100` | Connected embedded-certificate and options contracts match. Keep the certificate and its presence flag private while ordinary progress persists. |
 | `lgt-offline-notification` | Connected Thumb or ARM notification contracts match. Acknowledge the explicit choice locally; the Thumb variant also supports its empty remote-save query. |
 | `lgt-offline-authentication` | Connected packet builder, dial/socket callbacks and response dispatcher match. Answer the exact session-bound authentication request in process. |
-| `lgt-save-subscriber` | With the implicit handset, a recognized native save reader accepts the archived subscriber identity and still checks the record length and checksum. With an explicitly configured number the guest performs the subscriber comparison too. |
+| `lgt-save-subscriber` | With the implicit handset, a recognized native reader accepts the subscriber its capture's own record names: a saved game, a registration record or an owner record. Record lengths, checksums and digests still run. With an explicitly configured number the guest performs the subscriber comparison too. [Archived subscriber records](#archived-subscriber-records) |
 | `lgt-certificate-message` | Five native revisions use this two-stage certificate exchange. Answer it through the bounded local socket service so the guest sets and saves its own certificate-present flag. |
+| `lgt-authentication-allowance` | Two revisions of one title give their one-time network authentication up after five failed attempts. The first failure is made the one they let through. [Authentication allowance](#lgt-authentication-allowance) |
 | `skt-license` | With the implicit handset, a complete normalized Java license-check shape matches a supported compiler/library layout. Adapt only its terminal license comparison in a private class-file copy. |
 | `skt-native-certificate` | On the implicit handset, a validated `usimcert.c2s` and `cert.c2s` pair can supply the session identity. The `cert.c2s` subscriber and ARM `CERTIDATA` comparisons have separate revision-specific fallbacks. [SKT native](skt-native.md#skt-native-identity) |
 | `skt-native-save-subscriber` | A recognized native executable's packaged save names the handset it was written on. Accept that one comparison; the save's own length and checksum checks still run and no file changes. See [SKT native](skt-native.md#skt-native-identity). |
+| `skt-script-install-identity` | A registered version-four script derives a value from `MIN` and compares it with the user ID its installation was issued. With the implicit handset the session runs its own copy of the script with that comparison accepted; a configured handset runs the script as packaged. [Archived subscriber records](#archived-subscriber-records) |
 
 The status constants are in `internal/backend/authentication.go`. Selection is
 not evidence that a game reached playable input. Unknown certificate formats,
@@ -142,6 +145,107 @@ a second fingerprint of the same rule. With the implicit handset the final
 stack effect. Earlier code, library state
 initialization, digest calculation, exception handling and every other equality
 comparison execute normally. The archive and JVM implementation are unchanged.
+
+<a id="archived-subscriber-records"></a>
+
+## Archived subscriber records
+
+A capture of a handset carries what the title had stored there: private files
+under `P/`, a record container, the user ID an installation was issued. Some of
+that state names the handset it was captured from, and a title that compares it
+with `PHONENUMBER` or `MIN` refuses every other handset. Which copy the title
+reads decides whether the comparison is reached. For a file or a record, one
+the title has written into the save root shadows the capture's, and an empty
+save root shadows nothing, so this is a first-launch failure: a save root an
+earlier build left, or one the title populated before its capture became
+visible, starts normally and hides it. An installation's user ID is read from
+the descriptor at every start, so that comparison refuses every launch. On LGT the capture's private files have been
+visible since the lookup of 2026-09-17, which is when two titles that had
+started offline began to refuse a clean installation.
+[History](history/lgt.md#lgt-first-launch-2026-11-20)
+
+The registry selects each revision by the digest of its executable, and the
+platform accepts the archived subscriber at the recognized comparison only:
+
+| Status | Executable | Record | Comparison accepted |
+|---|---|---|---|
+| `lgt-save-subscriber` | LGT native module | Saved games and a 60-byte registration record | The save reader's 12-byte subscriber field, and the registration check's answer for a subscriber that is neither `PHONENUMBER` nor the constant a pending registration is written with |
+| `lgt-save-subscriber` | LGT native module | A 32-byte owner record in the title's record container | The owner check's string comparison with `PHONENUMBER` |
+| `ktf-save-subscriber` | KTF client image | A 12-byte owner record in the title's record container | The owner check's string comparison with `PHONENUMBER` |
+| `ktf-save-subscriber` | KTF client image | Saved games that each begin with the 12-byte subscriber that wrote them | The save reader's string comparison of that field with `PHONENUMBER` |
+| `ktf-save-subscriber` | KTF client image | Saved games enciphered under a key derived from `PHONENUMBER` | None: the capture's saves are presented to the guest under the session's key ([Save subscriber key](ktf.md#save-subscriber-key)) |
+| `skt-script-install-identity` | SKT version-four script image | The installation's user ID in the download descriptor | The script's comparison of that ID with the value it derives from `MIN` |
+
+Every site is checked against the code that was examined before anything is
+changed: in mapped memory for the native revisions, and in a session-owned copy
+of the image for the script. A registered digest whose code differs fails the
+start. Nothing else moves. The guest still checks record lengths, checksums and
+digests, a pending registration keeps its own path, and a missing owner record
+is still written for the session's handset. Archive bytes are never rewritten.
+The one client that enciphers its saves under the handset's key has no
+comparison to accept: its capture's saves are presented to the guest
+enciphered under the session's key instead, with the same content, and only
+those that decipher under the capture's key. What the title saves afterwards
+persists through the ordinary save boundary and shadows the capture from then
+on.
+
+A handset supplied through `WFEATURE_PHONE_NUMBER` or the server's `-number`
+runs every comparison as packaged and reports `guest-managed`, except in the
+client whose refusal deletes the saves (below); `-no-auth`
+leaves the code untouched and reports `off`. Both reproduce the original
+refusal on a clean save root. One KTF client's refusal is silent: it deletes
+each save it does not accept and writes its defaults. Its comparison is
+accepted for a configured handset as well, because the handset setting is the
+Host's, shared by every title, and a number set for another title would
+otherwise delete every save of this one, those made on the implicit handset
+among them; it reports `ktf-save-subscriber` either way. `-no-auth` runs it as
+packaged and replaces any save written under another number. That routine goes
+through a null pointer, and the registry maps
+[null page memory](ktf.md#null-page-memory) for the client so that it completes
+as it does on a handset. A quick save holds a native session's memory, so
+it restores with the comparison it started with. A script session restores with
+the program its record was taken with, the accepted copy or the packaged image
+whichever the handset setting is now, and reports that program's status; the
+two differ in one word of the start event, which a recorded machine has already
+run, and quick saves of earlier builds, taken with the packaged image, load
+too. The client whose saves are keyed by the handset presents the capture the
+way its record was started, whatever handset the Host is set to when it loads.
+
+Started on an empty save root with the implicit handset, each of the six
+reaches play on the capture's own data, quick saves, quick loads in the same
+and in a new process, and starts again on what it saved.
+[LGT](history/lgt.md#lgt-first-launch-2026-11-20),
+[KTF owner record](history/ktf.md#ktf-first-launch-2026-11-20-owner-record),
+[KTF save owner](history/ktf.md#ktf-first-launch-2026-11-21-save-owner),
+[KTF save key](history/ktf.md#ktf-first-launch-2026-11-21-save-subscriber-key),
+[SKT](history/skt.md#sgs-install-identity-2026-11-20),
+[clean-launch survey](history/authentication.md#first-launch-survey-2026-11-20)
+
+<a id="lgt-authentication-allowance"></a>
+
+## Authentication allowance
+
+Two revisions of one LGT title ask once, at the first launch, whether to
+authenticate through the network. Yes fails here, because nothing answers the
+title's server, and the title shows that the network is unstable and returns to
+the prompt. It counts the failures, and the fifth in one visit of the prompt
+calls the routine a successful reply reaches: the title records the
+authentication in its setup file and goes on, as it would have on a handset out
+of service. No answers that play needs the authentication and returns to the
+prompt every time. The title is not blocked, but a player who sees the same
+failure notice repeat reads it as one that cannot be started.
+
+The registry fix `lgt.authentication_allowance` checks the 24 bytes that
+handle OK on the failure notice and changes its comparison of the count from 4
+to 0, so the first failure is the one the title lets through. The prompt, the
+attempt, one failure notice and the refusal of No stay, and the title writes its
+own record. The session reports `lgt-authentication-allowance`. A configured
+handset gets the same change, since the title compares no subscriber locally;
+`-no-auth` leaves the module as packaged. Once the setup file is written later
+launches skip the prompt in every mode. A quick save an earlier build took at
+the prompt restores the packaged count. The consent prompt that follows has no
+allowance of its own: No, the preselected answer, goes on.
+[History](history/lgt.md#lgt-authentication-allowance-2026-11-21)
 
 ## Validation scope
 

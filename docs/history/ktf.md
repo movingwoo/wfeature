@@ -80,6 +80,12 @@ This consolidation adds no execution or acceptance evidence.
 - [KTF dialogue clipping and deferred text input](#ktf-graphics-input-qa-2026-09-23)
 - [KTF input availability after rejected confirmation](#ktf-input-lifetime-2026-09-23)
 - [KTF slot creation and save overlay reads](#ktf-save-slots-2026-09-23)
+- [An owner record refuses a first launch — 2026-11-20](#ktf-first-launch-2026-11-20-owner-record)
+- [A save's owner field replaces a first launch's saves — 2026-11-21](#ktf-first-launch-2026-11-21-save-owner)
+- [A saved-file check that waits on a failed dial — 2026-11-21](#ktf-dial-failure-2026-11-21-saved-file-check)
+- [A whole-screen flush that was kept as a partial one — 2026-11-21](#ktf-whole-screen-flush-2026-11-21)
+- [A save's recorded file time replaces a first launch's save — 2026-11-21](#ktf-first-launch-2026-11-21-save-file-time)
+- [Saves enciphered under the handset's key — 2026-11-21](#ktf-first-launch-2026-11-21-save-subscriber-key)
 
 <a id="implementation-ktf-platform-implementation-status"></a>
 
@@ -10506,3 +10512,405 @@ clipping now reads the clip it set, and the fade above.
 A checkpoint each of three titles took under the earlier build loads under this
 one and goes on with the earlier record; one taken under this build loads and
 saves again.
+
+<a id="ktf-first-launch-2026-11-20-owner-record"></a>
+
+## An owner record refuses a first launch — 2026-11-20
+
+One descriptor package (client image digest prefix `1d34e05b9052`) stops at a
+failure notice when it is started on an empty save root. Its capture carries a
+142,884-byte record container under `P/`, with 20 records. Two of them are 12
+bytes long, and one of those is named for a certification.
+
+The relocated image holds `PHONENUMBER` and that record's name side by side.
+The one request for the property comes from the routine at `0x13ad78`, which
+reads `PHONENUMBER` into 12 bytes, loads the 12-byte record, writes it when the
+load answers nothing, and otherwise compares the two as strings. A difference
+answers 0, and the caller shows the notice. It is the check one LGT revision
+makes on its own owner record
+([LGT](lgt.md#lgt-first-launch-2026-11-20-owner-record)).
+
+`ktf.save_subscriber_identity` selects the client by the digest of its
+`client.bin` entry as the JAR packages it. Once the client has relocated itself
+the session checks the 26 bytes at `0x13adc2` and replaces the `bne` at
+`0x13add6` with a `nop`. A configured handset keeps the comparison and reports
+`guest-managed`.
+
+On an empty save root with the implicit handset the session reports
+`ktf-save-subscriber`. The title passes its notices, opens its main menu and its
+play menu, and shows the capture's player and schedule. It quick saves, quick
+loads to the same frame in the same and in a new process, and starts again on
+the container it wrote. `TestLocalOwnerRecordArchive` starts the archive three
+ways: disabled and with a configured handset it holds one screen from round 900
+on, and on the implicit handset the same presses keep changing it.
+
+<a id="ktf-first-launch-2026-11-21-save-owner"></a>
+
+## A save's owner field replaces a first launch's saves — 2026-11-21
+
+One descriptor package (archive `ede413b11554`, client image digest prefix
+`ef321ab32b16`) failed inside `startApp` on an empty save root: the Thumb
+`ldrh r3, [r0, #0xc]` at `0x16dd46` read through a null pointer. The
+[first-launch survey](authentication.md#first-launch-survey-2026-11-20)
+recorded it as a guest fault and noted that hiding the capture's season save
+started the title. The fault is the end of a chain that begins at a comparison.
+
+**The reader.** The capture carries nine saves under `P/`, from 112 to 51,896
+bytes. Each is a 4-byte length equal to the file's size, a 4-byte key, and a
+body encrypted under that key which begins with 12 bytes and ends with a 4-byte
+checksum. The reader at `0x10fcc0` checks the length, decrypts the body and
+copies the 12 bytes. When its caller passes a nonzero third argument it reads
+`PHONENUMBER` into 12 bytes through `0x119398` and compares the two as strings;
+a difference leaves by the `bne` at `0x10fda2` and answers 0, before the
+checksum is looked at. The wrapper at `0x10fdf0` reports that 0 as -100.
+
+**The answer to -100.** A loader that gets -100 deletes the file, calls the
+routine that fills in that save's defaults, and writes the result. The season
+save's loader is at `0x21126c` and its defaults routine at `0x210bf4`. That
+routine takes one value from a data table: `0x20ed50` fetches entry 49 of the
+title's table array and `0x16dd28` looks up row 3, column 21 in it. The title
+loads its tables scene by scene after `startApp`'s pass over the saves (the
+loader at `0x20de34` fills an entry whose flag a scene has set), so entry 49 is
+still null. The lookup reads the row count at offset `0xc` of that null
+pointer; on a count that is not above 3 it stores the error code `0x100` at
+offset `0x10` of the same pointer and answers 0. Two saves are replaced before
+the season save, by defaults routines that read no table, which is why hiding
+the season save alone was enough to start the title.
+
+The title shows no notice anywhere on this path. On a handset it is how a save
+written under another number is discarded.
+
+**Three changes, one at a time,** on an empty save root with the implicit
+handset:
+
+| Change | Result |
+| --- | --- |
+| The first page mapped read-only, zero-filled | The read is answered and the store at `0x16dd50` stops the guest |
+| The first page mapped read-write, zero-filled | The title reaches its menu with every save replaced: no points, the first-run tutorial offer, a new season. One word is written to the page, `0x100` at `0x10` |
+| The `bne` at `0x10fda2` replaced with a `nop`, no page | No fault. The menu shows the capture's 8,431 points, season mode offers to continue, and the continued season stands at match 4 of 38 in its first year |
+
+**The fix is both, selected by the client's digest.**
+`ktf.save_subscriber_identity` checks the 32 bytes at `0x10fd84` once the
+client has relocated itself and replaces that `bne`; the length check before it
+and the checksum after it run as packaged. Unlike the other comparisons it
+accepts, this one is accepted for a configured handset too. The title's answer
+to a save another number wrote is to delete it, and the handset setting is the
+Host's for every title: as first written, a number set for another title
+deleted all nine saves on the next launch of this one, the ones the player had
+made on the implicit handset among them, and going back to the implicit
+handset did not bring them back.
+`ktf.null_page_memory` maps the first page read-write for every handset, so
+that the title's own answer to a foreign save completes where the comparison
+is left in place ([Null page memory](../ktf.md#null-page-memory)).
+
+| Launch on an empty save root | Status | Saves written by `startApp` | Play |
+| --- | --- | ---: | --- |
+| Implicit handset | `ktf-save-subscriber` | 0 | The capture's points and season |
+| Configured handset | `ktf-save-subscriber` | 0 | The capture's points and season |
+| `-no-auth` | `off` | 7 | A new game |
+
+On the implicit handset the title quick saves, quick loads to the same frame in
+the same and in a new process, and starts again on what it saved.
+`TestLocalSaveOwnerArchive` starts the archive the three ways and checks the
+status, the branch, the page, the saves `startApp` left and that the screens
+keep changing under the same presses.
+
+**Limits.** No handset was observed on the defaults path. That one completes
+it is inferred from the title shipping it as its ordinary answer to a foreign
+save, and what a handset holds at address zero is not known: a row count above
+3 there would send the lookup on through the null table's other fields. Zeroes
+take the lookup's own failure path, which is the only outcome this record
+establishes. With `-no-auth` the title discards every save another number
+wrote, as packaged; before this change it had replaced two of them and then
+stopped.
+
+<a id="ktf-dial-failure-2026-11-21-saved-file-check"></a>
+
+## A saved-file check that waits on a failed dial — 2026-11-21
+
+One descriptor package (archive `7344e0759c9e`, client image digest prefix
+`a62730b07a2e`) shows, after its logos, a notice that it is checking for a
+stored saved file and waits there without end, on `v0.6.0` as on the current
+build. The [first-launch survey](authentication.md#first-launch-survey-2026-11-20)
+recorded the wait.
+
+**Why a first launch gets there.** The capture carries the title's ten-byte
+options record under `P/` and not the save it belongs to. Byte 6 of the record
+says the user was authenticated, byte 9 that the saved-file check was done,
+and byte 5 is a launch counter standing at 48. At start the title loads the
+record, fails to open its save, writes a default one and clears byte 9. Options
+without a save is the case the check exists for, so after the logos it asks the
+server for the backup.
+
+**What it waits for.** The check's paint calls `MC_netConnect` with the
+callback at `0x118c10`. The dial is accepted, the network state word becomes 1,
+and the callback is given `M_E_ERROR`. Its failure branch at `0x118c7e` loads a
+text, prints it and leaves; only the success branch writes the state word. The
+screen's switch does nothing for state 1, its key handler ignores every key in
+it, and the bar it shows is a free-running counter.
+
+The title has a failure state: 100, stored by its own write and read callbacks,
+which eleven screens send to a failure branch. Nothing sets it for a dial that
+fails. Three other answers were run in a scratch build and none helps:
+
+| Answer | Result |
+| --- | --- |
+| Refusal by return value | The state stays 0 and the paint dials again every frame, 211 calls |
+| Dial success, socket connect refused | The socket-connect callback is print-only too; the title waits in state 15 |
+| A connection whose write fails | The send routine stores 100 and then loops for good on a length it never clears |
+
+**The fix.** `ktf.dial_failure_notice` checks five windows once the client has
+relocated itself and writes two of them:
+
+| Address | Bytes | Change |
+| --- | ---: | --- |
+| `0x118c10` | 168 | The dial callback with its literal pool. 12 bytes at `0x118c7e`: the failure branch stores 100 in the state word and leaves by the function's epilogue. The debug print is lost |
+| `0x194620` | 20 | Entries 96 to 100 of the check's 101-entry jump table at `0x1944a0`. Entry 100 takes the offset entry 31 holds |
+| `0x19451c`, `0x1296c4`, `0x129812` | 4, 38, 58 | Entry 31, the dispatch through the table and the branch it selects; checked only |
+
+Entry 31 is the title's branch for a server that answered with no saved file:
+one notice with OK, after which the title sets byte 9 and saves the record. No
+server was asked, so that notice is a local answer. Without the second write
+the title plays too, but the check returns at every start as a failure notice
+and a question, and answering No there deletes the save.
+
+On an empty save root the title shows the notice once, then its title screen,
+menu and mode list, and a mini-game plays. The options record ends
+`…01`, a second launch makes no dial and offers to continue the saved game,
+and quick save and quick load return to the same frame in the same and in a
+new process. The ranking screen, which waited the same way, shows the title's
+failure notice. A first installation without the options record, which this
+capture never reaches, was run on a scratch copy: its network authentication
+waited without end as packaged and ends at the title's own "failed, try again
+at the next run" notice with the first write.
+
+It applies for every handset and with `-no-auth`; frames are identical under an
+explicit number. `TestLocalDialFailureArchive` starts the archive on an empty
+root and reads the rewritten branch and the options record.
+
+**Limits.** The writes are guest memory: a quick save taken by an earlier build
+restores the packaged callback and waits, whenever it was taken. The title's
+shop, gift, friend, event and save-upload screens were read, not driven. No
+handset was observed; the title's server no longer answers.
+
+<a id="ktf-whole-screen-flush-2026-11-21"></a>
+
+## A whole-screen flush that was kept as a partial one — 2026-11-21
+
+One descriptor package (archive `e40b5b8196d2`, client image digest prefix
+`df6a087ca91b`) seemed to wait on its loading screen: on an empty save root the
+frame was identical from about tick 1,020 through tick 21,360. The
+[first-launch survey](authentication.md#first-launch-survey-2026-11-20) tied
+the wait to the capture's options record. The title was not waiting.
+
+**The title runs behind the picture.** Every step answered that the guest had
+progressed. Over 300 ticks of the frozen picture `MC_grpRepaint` went from 249
+calls to 549, the card's paint from 251 to 551 and `MC_knlSetTimer` from 273 to
+573, with no file or network call; the screen-flush count stayed at 257.
+
+Its frame routine runs from a 10 ms timer. A normal frame is drawn straight
+into the screen framebuffer and ends in `MC_grpRepaint(0, 0, 0, width, height)`
+(the call at `0x1028dc`, the only one in the image), and the paint entry that
+request leads to is a bare `bx lr` at `0x1014c4`. Only its blocking screens
+publish themselves: the loading routine ends in
+`MC_grpFlushLcd(0, screen framebuffer, 0, 0, width, height)` at `0x102ac8`, and
+a second site of the same shape is at `0x12147a`. So the title needs a
+requested paint to show the screen framebuffer whether or not the paint drew.
+
+**The rule that froze it.** Since the commit of 2026-09-17 every
+`MC_grpFlushLcd` marked the Host image as a retained partial flush, the whole
+screen included, and while that marker is set a card paint that leaves the
+screen framebuffer unchanged presents nothing. This title's paint never changes
+anything, and only a present clears the marker, so after its first loading
+screen no frame was presented again: 212 paints presented, then 45 flushes,
+then every paint skipped. The commit before that one shows the scene on the
+same keys. The options record only decided when the first loading screen came:
+with it the menu opens on Continue and a save is loaded at once, without it
+the same freeze arrived at the first map change of a new game.
+
+**The rule now.** The flush stays retained, except against the paint the title
+itself asks for after it: when the last explicit flush covered the whole screen
+out of the screen framebuffer, and the title has called `MC_grpRepaint` or
+`Card.repaint` since, the paint presents the screen whether or not it drew. A
+paint nobody in the title asked for, the Host's round paint or the first paint
+of a card that was shown, keeps the flush, and so does every paint after a
+flush that leaves other pixels in place or shows another framebuffer. The
+fixture that pins partial flushes
+(`TestPartialLCDFlushRetainsOutsideAndDoesNotMutateSource`) is unchanged, and
+`TestWholeScreenFlushPresentsTheRepaintTheTitleAsksFor` pins the three new
+cases.
+
+The first form of the rule made a whole-screen flush of the screen not partial
+for every later paint. Review found two titles it moved where no handset is
+known to: one opened for 17 ticks on a picture it had put into the screen after
+its first flush and before its second, shown by the first paint of its card;
+the other showed three ticks of black where a key cleared its screen behind
+its logo and the Host's round paints presented it. Neither picture was flushed
+by the title, and neither paint was one the title asked for. With the narrower
+rule both show the frames they showed before, tick for tick.
+
+Three more rules were tried in a scratch build. "A requested paint always
+presents" fails the partial-flush fixture. "A requested paint presents when the
+screen changed since the flush" gives this title the same frames but needs what
+the screen held at the flush to travel in a checkpoint. A title-limited
+exception for this client alone gives the same frames and leaves the rule as it
+was for every other title.
+
+**What moved.** 345 KTF archives were run through the survey's script, 17
+frame digests each, on a build without any of this record's changes and on the
+final build:
+
+| Archives | Result |
+| ---: | --- |
+| 340 | The same 17 digests |
+| 1 | This title: 15 digests differ, and the last six are six frames where they were one |
+| 3 | Titles with registry fixes of the same day, each changed as its own record describes |
+| 1 | Differs between sweeps whatever the rule: run eight at once, the old rule and the new one each produce both of its two sequences, and run alone they agree |
+
+The last row is a title whose frames at a tick depend on host load even in a
+stepped run; it is noise in any comparison of this kind and is not a result of
+this change.
+
+**The saves the capture lists.** With frames presented, the default path of
+the capture is still not playable. Its options record holds three slot
+records, two of them marked used (level 5 and level 32, with their dates),
+and the capture carries no save file. Continue opens a listed slot, the loader
+returns without a word when the file cannot be opened, and the game starts a
+character with no level and no health whose sprite leaves the view after a
+step or two. `ktf.withheld_private_file` keeps that one record from the guest:
+the menu opens on a new game with three empty slots, the opening plays, and
+the first room and the field are reached. The capture's download record and
+the resources it names stay; without the download record the title asks to
+fetch them and reports the connection lost.
+
+On an empty save root a new game reaches the field, a changed setting is
+written to an options record of the title's own, and a quick save loads to the
+same frame in the same and in a new process. An explicit handset and `-no-auth`
+change nothing here.
+
+**Quick saves.** Both flags travel with a quick save: the KTF session record is
+version 4, and version 3 and 2 records restore with neither set, as they did
+before. As first written they were not recorded, and a quick save taken in the
+few ticks between the title's last loading flush and its first repaint request
+restored behind the loading picture, which held until the next map change;
+the version 4 record restores that slot to the same frames as a run that was
+never saved. A version 4 record is refused by earlier builds, as every step
+of the record is.
+
+**Limits.** A quick save an earlier build took after the title froze restores
+frozen, and holds the flush until the title's next whole-screen flush and
+repaint, its next map load. The title refuses to save during its opening, so its
+own save file was not written and read back. No handset was observed: that a
+requested paint shows the screen framebuffer is read from the title's code,
+which draws nothing in its paint and begins each frame with two one-pixel
+fills at opposite corners of the screen.
+
+<a id="ktf-first-launch-2026-11-21-save-file-time"></a>
+
+## A save's recorded file time replaces a first launch's save — 2026-11-21
+
+One descriptor package (archive `8f0532bf3208`, client image digest prefix
+`fb39fb636a13`) opens with the notice that its save file is damaged and will be
+initialized, on an empty save root. It was found by a scan of the archives that
+carry private files: each was started on an empty save root and stepped 400
+ticks without input, and the files the title wrote were compared with the
+capture's copies. Of 117, this title and one other rewrote a capture's save
+with different content; the rest wrote nothing, wrote the same bytes, or
+changed a few bytes of a counter.
+
+**The check.** The capture carries two saves, a 16-byte header and a 766-byte
+save of the player's progress, run-length packed. The loader at `0x13febc`
+reads the progress save, unpacks it (`0x1641d8`) and requires 1,552 bytes,
+which the capture's copy has. The start routine then asks
+`MC_fsFileAttribute` for the file and compares the time it reports with a
+64-bit time stored at offset `0x5e0` of the unpacked save; a difference of more
+than 5000 seconds either way (`0x149788` to `0x1497d8`) deletes the save
+(`0x163788`) and marks it for defaults. The writer at `0x13fd38` stores the
+time the platform reports for the file it has just written. The capture's copy
+holds a time on 2011-07-19, in Unix seconds; this platform answers 0 for every
+file, so that copy never passes and every save the title writes here holds 0
+and always does. No subscriber is involved: the title reads `MIN` at start
+for its network prompts, and nothing on this path uses it.
+
+**The fix.** `ktf.save_file_time` checks the 106 bytes of the comparison and
+replaces `ldr r3, [sp]` at `0x149794`, the first instruction of the delete
+path that every difference above the threshold reaches, with `b 0x149536`,
+the exit the matching path takes at `0x1497ae`. The unpacking and its length
+check run as packaged. Reporting real file times would not reach the capture's
+time and would make the first load after the change delete every save this
+title wrote under this platform, so the platform's answer stays.
+
+On an empty save root the notice is gone and the title, past its network
+prompts, shows the capture's progress: its selected character, 228 diamonds
+and no revivals, where the reset showed the defaults of 6000 and 10. It applies
+for every handset and with `-no-auth`. Quick save and quick load return to the
+same frame in the same and in a new process. `TestSaveFileTimeAcceptsTheRecordedTime`
+runs the comparison over four pairs of times as packaged and with the fix, and
+`TestLocalSaveFileTimeArchive` starts the archive on an empty root in both
+modes and finds no replaced save.
+
+The other title of the scan rewrote its 68-byte options record:
+[Saves enciphered under the handset's key](#ktf-first-launch-2026-11-21-save-subscriber-key).
+
+<a id="ktf-first-launch-2026-11-21-save-subscriber-key"></a>
+
+## Saves enciphered under the handset's key — 2026-11-21
+
+One descriptor package (archive `1ededc30b655`, client image digest prefix
+`9be26a6fab3b`) rewrites its 68-byte options record on every first launch, and
+its slot screen offers three empty slots although its capture carries three
+10,000-byte saved games. It was the second title the replacement scan found
+([A save's recorded file time](#ktf-first-launch-2026-11-21-save-file-time)).
+
+**The cipher.** The title reads `PHONENUMBER` once and keys every private file
+by strtol of the number after its first character (`0x10407a`). Its encoder
+(`0x103fcc`) writes a salt, the current time in seconds, into the first four
+bytes, a CRC of everything before the last four into the last four (table at
+`0x103dfc`, built with arithmetic shifts of a signed word from the polynomial
+`0xedb88320`), shuffles everything after the salt under the salt (constant
+`0xd431`), and combines the whole with a stream that a linear congruential
+generator (`x * 0x41c64e6d + 0x12d687`) draws from the key. The decoder
+(`0x104070`) undoes this and answers whether the CRC matches. The options
+loader (`0x107cc0`) deciphers 68 bytes and on a mismatch writes defaults
+(`0x12b2b8`); the slot loader (`0x107dd4`) deciphers the length a slot file
+begins with and also requires the slot's number at byte 5.
+
+The capture's four files all decipher under key 0, with salts in October 2016
+and slot numbers 0, 1 and 2: the handset they were written on answered
+`PHONENUMBER` with no digits after its first character. No subscriber number
+is involved anywhere, and the implicit handset's `01000000000` gives the key
+1,000,000,000. Accepting the CRC comparison would load garbage, because the
+handset is the key rather than a field.
+
+**The fix.** `ktf.save_subscriber_key` builds the session's view of the
+capture with each of those files enciphered under the session's key instead:
+the options record if it deciphers under key 0, and each slot whose content
+deciphers under key 0 and names its own slot, with the length word and the
+bytes after the content unchanged. The salt and the content stay, so the CRC
+is the title's own. Anything that does not decipher is presented as packaged.
+The session first checks the decoder, the encoder's key and salt, the three
+constants and the two loaders in the client image, and a registered client
+whose code differs fails starting.
+
+Reporting a number without digits for this title instead would make every
+save it wrote under this platform, keyed by 1,000,000,000, unreadable.
+
+On an empty save root with the implicit handset the title writes nothing at
+start and its slot screen offers the capture's three characters (levels 52, 5
+and 56, one in the hard mode); the first loads into a town with the capture's
+money, items, pet and quests. The session reports `ktf-save-subscriber`. With a
+configured handset (`guest-managed`) or `-no-auth` the options record is
+rewritten and the slots are empty, as before. Quick save and quick load return
+to the same frame in the same and in a new process, and a quick save the
+earlier build took restores. A save root an earlier build left keeps its
+default options record, which shadows the capture's; the capture's slots are
+still offered unless the player saved over them. The capture's options apply
+as the previous owner left them, the slot screen opens on the slot that owner
+used last, and the capture's slots can be deleted from it like the title's
+own. A quick save an earlier build took on the slot screen shows the slots
+empty until the title reads the files again.
+`TestSaveKeyPresentsTheCaptureUnderTheSessionKey` enciphers authored saves
+under key 0 and reads them back under the session's key,
+`TestSaveKeyCipherRoundTrips` and `TestSaveKeyFromNumber` pin the cipher and
+the key, and `TestLocalSaveSubscriberKeyArchive` starts the archive in the
+three modes and checks the status and whether the options record was rewritten.

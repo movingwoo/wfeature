@@ -48,12 +48,19 @@ type Client struct {
 
 	// Frame plumbing: the converted RGBA frame, its size, and the sink the Host
 	// collects it through. See the frame methods below.
-	FrameRGBA        []byte
-	FrameWidth       int
-	FrameHeight      int
-	FlushCount       uint32
-	FramePending     bool
-	PartialFrame     bool
+	FrameRGBA    []byte
+	FrameWidth   int
+	FrameHeight  int
+	FlushCount   uint32
+	FramePending bool
+	PartialFrame bool
+	// WholeFrameFlush is that the last explicit flush covered the whole
+	// screen out of the screen framebuffer, and TitleRepaint that the title
+	// has asked for a repaint since then. Together they let the paint the
+	// title asked for present the screen after such a flush; see
+	// Runtime.BeginCardPaint.
+	WholeFrameFlush  bool
+	TitleRepaint     bool
 	FrameSink        backend.FrameSink
 	FrameSampleAt    time.Time
 	FrameSampleClock func() time.Time

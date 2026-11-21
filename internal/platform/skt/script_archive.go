@@ -48,7 +48,7 @@ func openScript(data []byte) (*Archive, error) {
 	// Some carrier descriptors have been reused for unrelated games. The
 	// executable digest keeps their persistent storage separate.
 	identity := sha256.Sum256(program.Data)
-	archive := &Archive{Script: program, Descriptor: Descriptor{Name: program.Name}, ScriptSaveOwner: fmt.Sprintf("sgs-%x", identity[:16])}
+	archive := &Archive{Script: program, scriptDigest: hex.EncodeToString(identity[:]), Descriptor: Descriptor{Name: program.Name}, ScriptSaveOwner: fmt.Sprintf("sgs-%x", identity[:16])}
 	if program.Wide != nil {
 		archive.Entries, err = scriptInstalledFiles(reader, path.Dir(scriptName))
 		if err != nil {

@@ -72,10 +72,14 @@ Random integers use the session's seeded generator with an exclusive upper bound
 One local installation reaches its third stage in the browser with its original
 save. Numeric input draws obstacles. Completing the stage records progress
 in user NV, and a fresh process resumes the fourth stage. A changed sound
-setting also persists. A second installation displays an authentication error
-with the default handset profile. The MOD descriptor supplies the script's
-install user ID. The configured subscriber number supplies the handset MIN.
-See [the two installation checks](history/skt.md#sgs-word-qa).
+setting also persists. A second installation compares a value it derives from
+the handset MIN with the install user ID in its MOD descriptor, and stops on a
+notice when they differ. The registry recognizes its script image: on the
+implicit handset the session accepts that comparison and reports
+`skt-script-install-identity`, and the title reaches its menus and a game from
+its packaged preferences. A configured subscriber number runs the comparison as
+packaged. See [the two installation checks](history/skt.md#sgs-word-qa) and
+[archived subscriber records](authentication.md#archived-subscriber-records).
 
 ## Execution and events
 

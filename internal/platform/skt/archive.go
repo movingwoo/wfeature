@@ -74,6 +74,7 @@ func openWithin(data []byte, what string, limits archiveLimits) (*zip.Reader, *b
 type Archive struct {
 	identity        [32]byte
 	Script          *sgsvm.Program
+	scriptDigest    string
 	ScriptSaveOwner string
 	ScriptUserID    string
 	Descriptor      Descriptor

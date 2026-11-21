@@ -116,7 +116,9 @@ func prepareWideCheckpoint(archive *Archive, data []byte, options ScriptOptions)
 	if s.screen, err = saved.Graphics.restore(); err != nil {
 		return nil, err
 	}
-	if s.wide, err = sgsvm.RestoreWideState(archive.Script, s.wideService, v.Machine); err != nil {
+	if s.wide, err = restoreProgram(s, func(program *sgsvm.Program) (*sgsvm.WideVM, error) {
+		return sgsvm.RestoreWideState(program, s.wideService, v.Machine)
+	}); err != nil {
 		return nil, err
 	}
 	if err := validateWideSystem(s.wide); err != nil {

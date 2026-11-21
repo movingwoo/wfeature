@@ -229,6 +229,14 @@ comma-separated guest addresses, and the others an absolute path.
 | `TestLocalKTFArchivesAnswerAKey` | `internal/platform/ktf` | `WFEATURE_KTF_INTERACTIVE_ACCEPTANCE=1` | rung 8 |
 | `TestLocalKTFStoppedScreenAnswersEveryKey` | `internal/platform/ktf` | `WFEATURE_KTF_STOPPED_PROBE=1`, `WFEATURE_KTF_STOPPED_ARCHIVE` | every key against one archive's settled screen |
 | `TestLocalSubscriberReceiptRecognition` | `internal/platform/ktf` | `WFEATURE_KTF_RECEIPT_ARCHIVE` | the recognized subscriber-receipt revision against its archive |
+| `TestLocalOwnerRecordArchive` | `internal/platform/ktf`, `internal/platform/lgt` | `WFEATURE_KTF_OWNER_RECORD_ARCHIVE`, `WFEATURE_LGT_OWNER_RECORD_ARCHIVE` | registry entries `ktf.save_subscriber_identity` and the second `lgt.save_subscriber_identity`: selection for each handset, and for KTF a first launch on an empty save root |
+| `TestLocalSaveOwnerArchive` | `internal/platform/ktf` | `WFEATURE_KTF_SAVE_OWNER_ARCHIVE` | the second `ktf.save_subscriber_identity` entry and `ktf.null_page_memory`: selection for each handset, the saves a first launch replaces, and play on an empty save root |
+| `TestLocalDialFailureArchive` | `internal/platform/ktf` | `WFEATURE_KTF_DIAL_FAILURE_ARCHIVE` | registry entry `ktf.dial_failure_notice`: the rewritten dial callback and the options record a first launch leaves |
+| `TestLocalDataServiceLockArchive` | `internal/platform/lgt` | `WFEATURE_LGT_DATA_SERVICE_LOCK_ARCHIVE` | registry entry `lgt.data_service_lock`: the network scene's state after agreeing, answered and not |
+| `TestLocalSaveSubscriberKeyArchive` | `internal/platform/ktf` | `WFEATURE_KTF_SAVE_SUBSCRIBER_KEY_ARCHIVE` | registry entry `ktf.save_subscriber_key`: the capture's options read as the title's own on the implicit handset, rewritten with a configured handset and with compatibility disabled |
+| `TestLocalSaveFileTimeArchive` | `internal/platform/ktf` | `WFEATURE_KTF_SAVE_FILE_TIME_ARCHIVE` | registry entry `ktf.save_file_time`: the capture's save survives a first launch with compatibility enabled and disabled |
+| `TestLocalNullPageArchive` | `internal/platform/lgt` | `WFEATURE_LGT_NULL_PAGE_ARCHIVES` (a path list) | registry entries `lgt.null_page_memory`: the weapon key in the opening, and a record without the page restoring with it |
+| `TestLocalAuthenticationAllowanceArchive` | `internal/platform/lgt` | `WFEATURE_LGT_AUTHENTICATION_ALLOWANCE_ARCHIVES` (a path list) | registry entries `lgt.authentication_allowance`: the setup record after one failure, and none with compatibility disabled |
 | `TestLocalKTFClientCheckpoint` | `internal/platform/ktf` | `WFEATURE_KTF_CALL_ARCHIVE` | a restored client against its source over later rounds |
 | `TestLocalKTFCallCheckpointInventory` | `internal/platform/ktf` | `WFEATURE_KTF_CALL_ARCHIVE` | the pending call shapes of an archive (report) |
 | `TestLocalNativeCheckpointContinuation` | `internal/platform/ktf` | `WFEATURE_KTF_NATIVE_CHECKPOINT_ACCEPTANCE=1` | native-package checkpoints continue as the run did |
@@ -250,6 +258,7 @@ comma-separated guest addresses, and the others an absolute path.
 | `TestLocalLGTStorageInventory` | `internal/platform/lgt` | `WFEATURE_LGT_STORAGE_INVENTORY=1` | storage tables of the local archives (report) |
 | `TestLocalCertificateMessageSelection` | `internal/platform/lgt` | `WFEATURE_LGT_CERTIFICATE_MESSAGE_ARCHIVE` | registry entry `lgt.certificate_message` against its archive |
 | `TestLocalSaveSubscriberArchive` | `internal/platform/lgt` | `WFEATURE_LGT_SAVE_SUBSCRIBER_ARCHIVE` | registry entry `lgt.save_subscriber_identity` |
+| `TestLocalArchivedSubscriberFirstLaunch` | `internal/platform/lgt` | `WFEATURE_LGT_SAVE_SUBSCRIBER_ARCHIVE`, `WFEATURE_LGT_OWNER_RECORD_ARCHIVE` | both recognized archives started on an empty save root, with the comparison as packaged and accepted |
 | `TestLocalColorKeyCalibrationArchive` | `internal/platform/lgt` | `WFEATURE_LGT_COLOR_KEY_ARCHIVE` | registry entry `lgt.color_key_sample_origin` |
 | `TestLocalDirectFramebufferOriginArchive` | `internal/platform/lgt` | `WFEATURE_LGT_DIRECT_ORIGIN_ARCHIVE` | registry entry `lgt.direct_framebuffer_origin` |
 | `TestLocalImageFramebufferOriginArchive` | `internal/platform/lgt` | `WFEATURE_LGT_IMAGE_ORIGIN_ARCHIVE` | registry entry `lgt.image_framebuffer_origin` |
@@ -269,6 +278,7 @@ comma-separated guest addresses, and the others an absolute path.
 | `TestLocalSKTArchiveCost` | `internal/platform/skt` | `WFEATURE_SKT_COST_ARCHIVE` | a run for the Go profiler ([JVM](jvm.md)) |
 | `TestLocalSKTCheckpoint` | `internal/session` | `WFEATURE_SKT_CHECKPOINT_ACCEPTANCE=1` | SKT checkpoints over the local archives ([SKT checkpoints](skt-checkpoints.md)) |
 | `TestLocalEarlierKTFPackageIsOnePlatformNeutralSession` | `internal/session` | `WFEATURE_KTF_NATIVE_ACCEPTANCE=1` | the earlier KTF package through the shared session |
+| `TestLocalScriptInstallIdentity` | `internal/session` | `WFEATURE_SKT_SCRIPT_IDENTITY_ARCHIVE` | registry entry `skt.script_install_identity` through the shared session: a first launch on an empty save root, with compatibility disabled and enabled, and a quick load |
 | `TestLocalSessionRunsTheEarlierKTFPackage` | `internal/webhost` | `WFEATURE_KTF_NATIVE_ACCEPTANCE=1` | the earlier KTF package over the page's protocol |
 | `TestLocalCheatProbe` | `internal/webhost` | `WFEATURE_CHEAT_ARCHIVE` | the page's cheat path against a real archive ([CLI](cli.md)) |
 | `TestLocalStartEndingProbe` | `internal/webhost` | `WFEATURE_ENDING_ARCHIVE` | the two runs a self-installing title takes ([CLI](cli.md)) |

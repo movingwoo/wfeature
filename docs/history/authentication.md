@@ -20,6 +20,8 @@ This consolidation adds no execution or acceptance evidence.
 - [Final SKT checkpoint acceptance](#cases-final-skt-checkpoint-acceptance)
 - [Existing empty certificate and automatic defaults](#cases-existing-empty-certificate-and-automatic-defaults)
 - [Acceptance records formerly in the reference](#cases-reference-acceptance-records)
+- [An LGT Clet continues after registration fails](#lgt-registration-retry-2026-11-19)
+- [First-launch survey — 2026-11-20](#first-launch-survey-2026-11-20)
 
 <a id="cases-authentication-case-inventory"></a>
 
@@ -844,3 +846,127 @@ that branch, but its shortened run reported one Blob access-control error from
 `createImageBitmap`, so the final no-page-error assertion failed. The error
 remains an open frame-decoding issue, not a clean WebKit acceptance result; its
 stack and route observations are retained beside the Chromium evidence.
+
+<a id="lgt-registration-retry-2026-11-19"></a>
+
+## An LGT Clet continues after registration fails — 2026-11-19
+
+The local archive with module digest prefix `400a804bcbc76a69` contains
+`binary.mod` and the resources at its root. Placing the entire original
+archive inside an outer ZIP as `WEBSYNC1.jar` lets the shared session load it.
+On revision `ed6ad54`, a debug run from an empty save root reported
+`unsupported`. Choosing Yes at tick 300 produced three `netConnect` calls
+and a registration failure. With `-no-auth`, the same input produced the
+same calls and an identical failure screen at tick 650. Restarting with the
+60-byte `certi.crc` the guest wrote brought back the registration prompt.
+
+Confirming the failure in the same session advanced to the usage notices.
+At the remote saved-data prompt, Left then OK selected Cancel and opened
+the title. A fresh release run repeated that route, started a new game with
+the swordsman, used the # key to skip opening scenes and reached the first
+quest. In the first dungeon, OK swung the sword and Right moved the character.
+A new release process quickloaded the field with the same frame SHA-256.
+These checks cover early offline play and quickload.
+
+<a id="first-launch-survey-2026-11-20"></a>
+
+## First-launch survey — 2026-11-20
+
+A title that plays from an existing save says nothing about a clean
+installation, and two refusals reached a player that way. Every archive of the
+curated local corpus was therefore started on its own empty save root with the
+implicit handset: 606 archives by content, through the shared session
+(`run -serve`), on the build that accepts
+[archived subscriber records](../authentication.md#archived-subscriber-records).
+Each run stepped 250 ticks and then pressed sixteen keys 110 ticks apart — OK
+ten times, both soft keys, 5, 1, right and down — about 2,050 ticks in all.
+
+| Platform | Archives | Kept drawing new screens | Ended | Held one screen | Failed to start | Timed out or errored |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| KTF | 345 | 298 | 11 | 30 | 4 | 2 |
+| LGT | 154 | 116 | 30 | 6 | 2 | 0 |
+| SKT | 107 | 98 | 0 | 6 | 0 | 3 |
+
+The 94 archives outside the first column were followed up three ways: a second
+launch on the same root for each that ended, the same script on clones of the
+two existing local save trees for each of them, and the frames themselves.
+The final frames of the 512 in the first column were read as well, because a
+notice that blinks or a progress bar that cycles keeps drawing new screens.
+
+**Refused because of what the capture carries.** Four archives, one LGT pair,
+one KTF and one SKT script, stopped on a comparison of an archived record with
+the handset. They are the four the survey build already accepts, and each is in
+the first column.
+
+A fifth was found behind a guest fault. KTF archive `ede413b11554` failed
+inside `startApp`, reading through a null pointer at offset `0xc`, and the
+survey first recorded it as a fault that hiding the capture's season save
+avoided. The read is the end of the title's answer to a save another handset
+wrote: its reader compares the owner each save begins with, and a difference
+deletes the save and writes defaults through a routine that uses a table not
+loaded yet. The comparison is accepted for the implicit handset since
+2026-11-21, and the routine completes on a page mapped for that client when the
+comparison is left in place.
+[KTF](ktf.md#ktf-first-launch-2026-11-21-save-owner)
+
+**Stopped on a clean root for another reason.** Five more archives were
+followed up on 2026-11-21. None of them stops at a comparison, and two of
+them, the revisions of one title, do not stop at all:
+
+- KTF archive `e40b5b8196d2` seemed to wait on its loading screen. The title
+  was running behind a stale picture: its whole-screen flush was retained
+  against paints that draw nothing, a rule this platform had applied since
+  2026-09-17 and no longer applies to the repaint a title asks for after
+  such a flush. Its capture also lists
+  saves it does not carry, and that options record is withheld from the title.
+  [KTF](ktf.md#ktf-whole-screen-flush-2026-11-21)
+- KTF archive `7344e0759c9e` waits on a server check for a saved file because
+  its dial callback drops the failure of the dial. A registry entry rewrites
+  that branch of the callback.
+  [KTF](ktf.md#ktf-dial-failure-2026-11-21-saved-file-check)
+- LGT archive `6323013d2829` waits after its consent is agreed to, for the same
+  reason, while refusing reaches the menu. A registry entry answers that its
+  data service is locked, which the title has a notice for.
+  [LGT](lgt.md#lgt-dial-failure-2026-11-21-data-service-lock)
+- LGT archives `a1236d01a98c` and `8763ef61b3ad` ask for a one-time user
+  authentication through the network and are not stopped by it. Yes fails
+  with a network notice and returns to the prompt four times, and the fifth
+  failure is accepted by the title's own allowance: it writes its setup record
+  and goes on, on `v0.6.0` as on this build. The survey's script stopped one
+  dismissal short. No answers that authentication is required and returns to
+  the prompt every time. A registry entry makes the first failure the one the
+  title lets through.
+  [Authentication allowance](../authentication.md#lgt-authentication-allowance)
+
+**A save the capture carries, replaced without stopping.** The archives that
+carry private files were also started on an empty save root and stepped 400
+ticks without input, and each file the title wrote was compared with the
+capture's copy. Of 117, two rewrote a capture's save with different content.
+KTF archive `8f0532bf3208` deleted its progress save because the save records
+a file time this platform does not report; a registry entry accepts the
+recorded time. [KTF](ktf.md#ktf-first-launch-2026-11-21-save-file-time)
+KTF archive `1ededc30b655` enciphers its saves under a key derived from
+`PHONENUMBER`, and its capture's are under the key of a handset that answered
+no digits; the session presents them under its own key.
+[KTF](ktf.md#ktf-first-launch-2026-11-21-save-subscriber-key)
+The same scan driven by the survey's keys found more rewritten saves, all after
+the script had chosen a menu entry; whether any of those began a new game in
+place of a capture's was not followed up.
+
+**Stopped once by the title's own design.** 25 LGT and 5 KTF archives end
+their first launch at a notice that the title has to be started again, and
+start normally the second time; one more LGT archive shows that notice without
+ending.
+
+**Passed by the other answer.** Seven archives stop the script at a first-run
+consent or authentication prompt whose default answer loops or waits, and go
+on with the other one; one of them is answered by the certificate-message
+service. Two more archives at such a prompt were driven through both answers
+on 2026-11-21: in each the preselected No returns to the prompt and Yes
+reaches play, one through the certificate-message service and one without a
+network call.
+
+**Not a first-launch matter.** The remaining archives behave the same on the
+cloned saves or have none: three KTF and two LGT that do not start, guest faults
+and exits in play, and titles that hold a logo, a black screen or a loading
+screen. Their names and frames are in the local survey record.

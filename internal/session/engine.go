@@ -632,9 +632,8 @@ func (e sktScriptEngine) virtualClock() bool             { return false }
 func (e sktScriptEngine) cheat() *cheat.Session        { return nil }
 func (e sktScriptEngine) cheatConsole() *cheat.Console { return nil }
 
-// authentication is unsupported: a script title carries no check to adapt.
 func (e sktScriptEngine) authentication() backend.AuthenticationStatus {
-	return backend.AuthenticationUnsupported
+	return e.script.Authentication()
 }
 
 func (e sktScriptEngine) uncaughtCallbacks() (uint64, string) { return 0, "" }

@@ -32,7 +32,7 @@ func sessionCoreOptions(options SessionOptions) armcore.CoreOptions {
 // newSessionClient attaches the archive and Host boundaries without running
 // guest code or creating per-run authentication adapters. Startup and detached
 // restoration use the same construction path.
-func newSessionClient(archive *Archive, options SessionOptions) (*Client, error) {
+func newSessionClient(archive *Archive, options SessionOptions, keyNumber string) (*Client, error) {
 	if archive == nil || archive.JAR == nil {
 		return nil, fmt.Errorf("KTF session archive is missing")
 	}
@@ -61,7 +61,12 @@ func newSessionClient(archive *Archive, options SessionOptions) (*Client, error)
 	client.SetProgramName(ProgramNameForAID(archive.Descriptor.AID))
 	client.AttachAppProperties(archive.Descriptor.Properties)
 	client.AttachResources(archive.JAR.Entries)
-	client.AttachFilesystem(archive.GuestFiles())
+	files, err := sessionGuestFiles(archive, keyNumber)
+	if err != nil {
+		client.StopThreads()
+		return nil, err
+	}
+	client.AttachFilesystem(files)
 	if options.SaveStore != nil {
 		client.AttachSaveStore(options.SaveStore)
 	} else if options.SaveRoot != "" {
@@ -96,7 +101,13 @@ func restoreSessionClientForActivation(archive *Archive, saved clientState, opti
 	// that final core once, after every record has passed validation.
 	debug := options.Debug
 	options.Debug = nil
-	client, err := newSessionClient(archive, options)
+	// The capture's saves are presented the way the recorded session had
+	// them, whatever handset the Host is set to now.
+	keyNumber := ""
+	if saved.Authentication == backend.AuthenticationKTFSaveSubscriber {
+		keyNumber = saved.Subscriber
+	}
+	client, err := newSessionClient(archive, options, keyNumber)
 	if err != nil {
 		return nil, err
 	}

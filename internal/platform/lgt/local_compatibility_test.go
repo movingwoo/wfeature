@@ -3,8 +3,15 @@ package lgt
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
+	"github.com/movingwoo/wfeature/internal/armcore"
+	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
@@ -58,11 +65,12 @@ func TestLocalSaveSubscriberArchive(t *testing.T) {
 		configured bool
 		disabled   bool
 		status     backend.AuthenticationStatus
-		branch     byte
+		reader     [2]byte
+		record     [2]byte
 	}{
-		{false, false, backend.AuthenticationLGTSaveSubscriber, 0xe0},
-		{true, false, backend.AuthenticationGuestManaged, 0xd0},
-		{true, true, backend.AuthenticationOff, 0xd0},
+		{false, false, backend.AuthenticationLGTSaveSubscriber, [2]byte{0x02, 0xe0}, [2]byte{0x02, 0xd1}},
+		{true, false, backend.AuthenticationGuestManaged, [2]byte{0x02, 0xd0}, [2]byte{0x06, 0xd1}},
+		{true, true, backend.AuthenticationOff, [2]byte{0x02, 0xd0}, [2]byte{0x06, 0xd1}},
 	} {
 		wipic.ResetSubscriberNumber()
 		if tc.configured {
@@ -77,12 +85,15 @@ func TestLocalSaveSubscriberArchive(t *testing.T) {
 		}
 		check := func(s *Session) {
 			t.Helper()
-			var code [2]byte
-			if err := s.client.core.Memory().Read(0x69d9a, code[:]); err != nil {
+			var reader, record [2]byte
+			if err := s.client.core.Memory().Read(0x69d9a, reader[:]); err != nil {
 				t.Fatal(err)
 			}
-			if code != [2]byte{2, tc.branch} || s.Authentication() != tc.status {
-				t.Fatalf("configured=%v disabled=%v code=%x status=%s", tc.configured, tc.disabled, code, s.Authentication())
+			if err := s.client.core.Memory().Read(0x682da, record[:]); err != nil {
+				t.Fatal(err)
+			}
+			if reader != tc.reader || record != tc.record || s.Authentication() != tc.status {
+				t.Fatalf("configured=%v disabled=%v reader=%x record=%x status=%s", tc.configured, tc.disabled, reader, record, s.Authentication())
 			}
 		}
 		check(session)
@@ -118,6 +129,107 @@ func TestLocalSaveSubscriberArchive(t *testing.T) {
 	}
 	if !bytes.Equal(data, original) {
 		t.Fatal("original archive changed")
+	}
+}
+
+// TestLocalOwnerRecordArchive checks the second recognized revision, from the
+// absolute path in WFEATURE_LGT_OWNER_RECORD_ARCHIVE: the implicit handset
+// accepts its owner record's subscriber, and a configured handset or disabled
+// compatibility leaves the comparison as packaged.
+func TestLocalOwnerRecordArchive(t *testing.T) {
+	path := testlocal.Value(t, "WFEATURE_LGT_OWNER_RECORD_ARCHIVE", "a local archive")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := bytes.Clone(data)
+	originalNumber := wipic.ConfiguredSubscriberNumber()
+	t.Cleanup(func() { setTestHandset(t, originalNumber) })
+	for _, tc := range []struct {
+		configured bool
+		disabled   bool
+		status     backend.AuthenticationStatus
+		branch     [2]byte
+	}{
+		{false, false, backend.AuthenticationLGTSaveSubscriber, [2]byte{0xc0, 0x46}},
+		{true, false, backend.AuthenticationGuestManaged, [2]byte{0x0b, 0xd1}},
+		{false, true, backend.AuthenticationOff, [2]byte{0x0b, 0xd1}},
+	} {
+		wipic.ResetSubscriberNumber()
+		if tc.configured {
+			setTestHandset(t, wipic.SubscriberNumber())
+		}
+		session, err := StartSession(context.Background(), data, SessionOptions{DisableAuthentication: tc.disabled, SaveRoot: t.TempDir(), Width: 240, Height: 320})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var branch [2]byte
+		if err := session.client.core.Memory().Read(0x70eb2, branch[:]); err != nil {
+			t.Fatal(err)
+		}
+		if branch != tc.branch || session.Authentication() != tc.status {
+			t.Errorf("configured=%v disabled=%v branch=%x status=%s", tc.configured, tc.disabled, branch, session.Authentication())
+		}
+		if err := session.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !bytes.Equal(data, original) {
+		t.Fatal("original archive changed")
+	}
+}
+
+// TestLocalArchivedSubscriberFirstLaunch starts both recognized archives on an
+// empty save root, where every private file the title reads is the capture's.
+// With the comparison as packaged one title ends itself at its failure notice
+// and the other stays on it; accepted, both keep drawing new screens under
+// the same presses.
+func TestLocalArchivedSubscriberFirstLaunch(t *testing.T) {
+	for _, variable := range []string{"WFEATURE_LGT_SAVE_SUBSCRIBER_ARCHIVE", "WFEATURE_LGT_OWNER_RECORD_ARCHIVE"} {
+		t.Run(variable, func(t *testing.T) {
+			path := testlocal.Value(t, variable, "a local archive")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalNumber := wipic.ConfiguredSubscriberNumber()
+			t.Cleanup(func() { setTestHandset(t, originalNumber) })
+			wipic.ResetSubscriberNumber()
+			launch := func(disabled bool) (exited bool, screens int) {
+				t.Helper()
+				session, err := StartSession(context.Background(), data, SessionOptions{DisableAuthentication: disabled, SaveRoot: t.TempDir(), Width: 240, Height: 320})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer session.Close(context.Background())
+				const confirm = 0xFFFFFFFB
+				late := make(map[uint64]bool)
+				for tick := 0; tick < 1500; tick++ {
+					switch tick % 150 {
+					case 100:
+						session.SendKey(true, confirm)
+					case 103:
+						session.SendKey(false, confirm)
+					}
+					if err := session.Tick(context.Background()); err != nil {
+						if errors.Is(err, ErrGuestExited) {
+							return true, len(late)
+						}
+						t.Fatal(err)
+					}
+					if tick >= 900 {
+						late[session.FrameDigest()] = true
+					}
+				}
+				return false, len(late)
+			}
+			if exited, screens := launch(true); !exited && screens != 1 {
+				t.Fatalf("the packaged comparison neither ended the title nor held one screen (%d screens)", screens)
+			}
+			if exited, screens := launch(false); exited || screens < 2 {
+				t.Fatalf("first launch: exited=%v with %d screens after tick 900", exited, screens)
+			}
+		})
 	}
 }
 
@@ -337,5 +449,191 @@ func TestLocalPackagedCertificateArchive(t *testing.T) {
 	changed[len(changed)/2] ^= 0xff
 	if packagedCertificateRecognized(changed) {
 		t.Fatal("a changed module is still recognized")
+	}
+}
+
+// TestLocalDataServiceLockArchive checks the registered module itself, from the
+// absolute path in WFEATURE_LGT_DATA_SERVICE_LOCK_ARCHIVE. Agreeing to its
+// first-run consent opens the network scene. Answered a locked data service,
+// the scene takes state 9 and sets its lock word, the title's own notice, and
+// OK clears the word and leaves; answered as every other title is, it dials
+// and stays in state 7 with the same key ignored. Compatibility that is
+// disabled changes neither.
+func TestLocalDataServiceLockArchive(t *testing.T) {
+	path := testlocal.Value(t, "WFEATURE_LGT_DATA_SERVICE_LOCK_ARCHIVE", "a local archive")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		confirm, agree = 0xFFFFFFFB, 0x31
+		sceneState     = 0x0156dad0
+		lockWord       = 0x015078a0
+		locked, dialed = 9, 7
+	)
+	launch := func(disabled, answered bool) (state, notice, left uint32) {
+		t.Helper()
+		session, err := StartSession(context.Background(), data, SessionOptions{DisableAuthentication: disabled, SaveRoot: t.TempDir(), Width: 240, Height: 320})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer session.Close(context.Background())
+		if !session.client.dataServiceLock {
+			t.Fatal("the registered module was not selected")
+		}
+		session.client.dataServiceLock = answered
+		read := func(address uint32) uint32 {
+			t.Helper()
+			var word [4]byte
+			if err := session.client.core.Memory().Read(address, word[:]); err != nil {
+				t.Fatal(err)
+			}
+			return binary.LittleEndian.Uint32(word[:])
+		}
+		press := func(key uint32, ticks int) {
+			t.Helper()
+			session.SendKey(true, key)
+			for tick := 0; tick < ticks; tick++ {
+				if tick == 3 {
+					session.SendKey(false, key)
+				}
+				if err := session.Tick(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		for tick := 0; tick < 250; tick++ {
+			if err := session.Tick(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		press(confirm, 150)
+		press(agree, 200)
+		state, notice = read(sceneState), read(lockWord)
+		press(confirm, 200)
+		return state, notice, read(lockWord)
+	}
+	for _, disabled := range []bool{false, true} {
+		if state, notice, left := launch(disabled, true); state != locked || notice != 1 || left != 0 {
+			t.Errorf("disabled=%v, answered: scene state %d, lock word %d at the notice and %d after OK", disabled, state, notice, left)
+		}
+		if state, notice, left := launch(disabled, false); state != dialed || notice != 0 || left != 0 {
+			t.Errorf("disabled=%v, not answered: scene state %d, lock word %d and %d", disabled, state, notice, left)
+		}
+	}
+}
+
+// TestLocalNullPageArchive checks the registered modules themselves, from the
+// absolute paths in WFEATURE_LGT_NULL_PAGE_ARCHIVES (separated by the system's
+// path-list separator). The weapon key pressed in the opening of a new game
+// reads through a null pointer; the run goes on, and a record without the page
+// in its memory map, which an earlier build took, restores with it.
+func TestLocalNullPageArchive(t *testing.T) {
+	paths := testlocal.Value(t, "WFEATURE_LGT_NULL_PAGE_ARCHIVES", "local archives")
+	for _, path := range filepath.SplitList(paths) {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, err := StartSession(context.Background(), data, SessionOptions{SaveRoot: t.TempDir(), Width: 240, Height: 320})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer session.Close(context.Background())
+			const confirm, weapon = 0xFFFFFFFB, 0x31
+			press := func(key uint32, ticks int) {
+				t.Helper()
+				session.SendKey(true, key)
+				for tick := 0; tick < ticks; tick++ {
+					if tick == 3 {
+						session.SendKey(false, key)
+					}
+					if err := session.Tick(context.Background()); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			for tick := 0; tick < 250; tick++ {
+				if err := session.Tick(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range 9 {
+				press(confirm, 110)
+			}
+			press(weapon, 200)
+			saved, err := session.client.captureClientState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(saved.Core.Memory.Mappings, nullPageMapping) {
+				t.Fatal("the record has no null page")
+			}
+			saved.Core.Memory.Mappings = slices.DeleteFunc(slices.Clone(saved.Core.Memory.Mappings), func(mapping armcore.MappingState) bool {
+				return mapping == nullPageMapping
+			})
+			restored, err := restoreClientState(session.archive, saved, Options{SaveStore: backend.NewDetachedSaveStore(), MaxSteps: session.client.core.MaxSteps()})
+			if err != nil {
+				t.Fatalf("a record without the page: %v", err)
+			}
+			if err := restored.core.Memory().Read(0, make([]byte, 4)); err != nil {
+				t.Fatalf("the restored client has no null page: %v", err)
+			}
+		})
+	}
+}
+
+// TestLocalAuthenticationAllowanceArchive checks the registered modules from
+// the absolute paths in WFEATURE_LGT_AUTHENTICATION_ALLOWANCE_ARCHIVES. Yes on
+// the one-time authentication prompt fails, and OK on the failure notice lets
+// the title record the authentication in its setup file; with compatibility
+// disabled the same keys bring the prompt back and nothing is recorded.
+func TestLocalAuthenticationAllowanceArchive(t *testing.T) {
+	paths := testlocal.Value(t, "WFEATURE_LGT_AUTHENTICATION_ALLOWANCE_ARCHIVES", "local archives")
+	for _, path := range filepath.SplitList(paths) {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch := func(disabled bool) (backend.AuthenticationStatus, bool) {
+				t.Helper()
+				root := t.TempDir()
+				session, err := StartSession(context.Background(), data, SessionOptions{DisableAuthentication: disabled, SaveRoot: root, Width: 240, Height: 320})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer session.Close(context.Background())
+				const confirm = 0xFFFFFFFB
+				for tick := 0; tick < 250+2*110; tick++ {
+					switch tick {
+					case 250, 360:
+						session.SendKey(true, confirm)
+					case 253, 363:
+						session.SendKey(false, confirm)
+					}
+					if err := session.Tick(context.Background()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				recorded := false
+				if err := filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
+					if err == nil && entry.Type().IsRegular() && strings.EqualFold(strings.ReplaceAll(entry.Name(), "#", ""), "setup.dat") {
+						recorded = true
+					}
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				return session.Authentication(), recorded
+			}
+			if status, recorded := launch(false); status != backend.AuthenticationLGTAuthenticationAllowance || !recorded {
+				t.Errorf("compatibility: status %s, setup recorded %v", status, recorded)
+			}
+			if status, recorded := launch(true); status != backend.AuthenticationOff || recorded {
+				t.Errorf("disabled: status %s, setup recorded %v", status, recorded)
+			}
+		})
 	}
 }

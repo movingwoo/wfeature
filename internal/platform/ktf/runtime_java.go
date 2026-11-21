@@ -3336,6 +3336,7 @@ func runtimeCardRepaint(runtime *initializationRuntime, _ *jvm.VM, arguments []j
 		}
 	}
 	runtime.RepaintPending = true
+	runtime.Client.TitleRepaint = true
 	// A game driving its own event loop is waiting in getNextEvent, so the
 	// repaint request has to reach it as an event too.
 	runtime.PostRepaintEvent()

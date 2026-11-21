@@ -354,7 +354,7 @@ func runSKT(path string, args []string, stdout, stderr io.Writer) int {
 		if !screenChosen {
 			screenWidth, screenHeight = 0, 0
 		}
-		return runScript(archive, scriptCLIRun{ticks: ticks, width: screenWidth, height: screenHeight, hold: keyHold, frame: framePath, frameDir: frameDir, saveRoot: saveRoot, diag: diagPath, audio: audioPrefix, keys: keyEvents, route: script, serve: serveSession}, stdout, stderr)
+		return runScript(archive, scriptCLIRun{ticks: ticks, width: screenWidth, height: screenHeight, hold: keyHold, frame: framePath, frameDir: frameDir, saveRoot: saveRoot, diag: diagPath, audio: audioPrefix, keys: keyEvents, route: script, serve: serveSession, disableAuth: !authentication}, stdout, stderr)
 	}
 	// Without -screen the archive decides, the same way a server session lets
 	// it: this vendor's descriptor declares no size and one local title's

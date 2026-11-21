@@ -955,6 +955,9 @@ func restoreClientState(archive *Archive, saved clientState, options Options) (*
 	if err != nil {
 		return nil, err
 	}
+	if hasNullPageMemory(archive.Module) {
+		saved.Core.Memory.Mappings = withNullPage(saved.Core.Memory.Mappings)
+	}
 	if !slices.Equal(saved.Core.Memory.Mappings, mappings) {
 		return nil, fmt.Errorf("LGT checkpoint changes memory mapping policy")
 	}

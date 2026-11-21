@@ -19,8 +19,37 @@ const JavaClassSet = "java_class_set"
 // NativeModule identifies the SHA-256 digest of a complete native module.
 const NativeModule = "native_module"
 
+// ScriptImage identifies the SHA-256 digest of a complete SGS script image.
+const ScriptImage = "script_image"
+
 // KTFBREWPackagedCertificate identifies a BREW module with a known packaged certificate.
 const KTFBREWPackagedCertificate = "ktf.brew_packaged_certificate"
+
+// KTFSaveSubscriberIdentity permits a recognized client's archived subscriber record.
+const KTFSaveSubscriberIdentity = "ktf.save_subscriber_identity"
+
+// KTFNullPageMemory gives a recognized client zero-filled memory at address
+// zero, for a title whose own code reads and stores through a null pointer on
+// a path a handset completes.
+const KTFNullPageMemory = "ktf.null_page_memory"
+
+// KTFDialFailureNotice makes a recognized client's failed dial reach the
+// notice the title has for a network failure, for a title whose dial callback
+// drops the failure and waits without end.
+const KTFDialFailureNotice = "ktf.dial_failure_notice"
+
+// KTFWithheldPrivateFile keeps a named private file of a recognized capture
+// from the guest, for a capture whose file lists saves it does not carry.
+const KTFWithheldPrivateFile = "ktf.withheld_private_file"
+
+// KTFSaveFileTime accepts a recognized client's comparison of the file time
+// its save records with the file's time now, for a save a capture carries.
+const KTFSaveFileTime = "ktf.save_file_time"
+
+// KTFSaveSubscriberKey presents a recognized capture's saves enciphered under
+// the key the session's handset gives, for a client that enciphers its saves
+// under a key it derives from PHONENUMBER.
+const KTFSaveSubscriberKey = "ktf.save_subscriber_key"
 
 // SKTInclusiveSetClip selects the SKT runtime's inclusive clip correction.
 const SKTInclusiveSetClip = "skt.inclusive_set_clip"
@@ -74,6 +103,23 @@ const LGTWideGraphicsContext = "lgt.wide_graphics_context"
 
 // LGTRecordTableTerminator ends a recognized record table its search runs off.
 const LGTRecordTableTerminator = "lgt.record_table_terminator"
+
+// LGTDataServiceLock answers a recognized module that its handset has wireless
+// internet locked, for a title that leaves its own notice for that answer and
+// has no way out of a dial that fails.
+const LGTDataServiceLock = "lgt.data_service_lock"
+
+// LGTAuthenticationAllowance lets a recognized title give its one-time network
+// authentication up after the first failed attempt rather than the fifth.
+const LGTAuthenticationAllowance = "lgt.authentication_allowance"
+
+// LGTNullPageMemory maps the first page read only and zero-filled for a
+// recognized module whose own code reads through a null pointer.
+const LGTNullPageMemory = "lgt.null_page_memory"
+
+// SKTScriptInstallIdentity accepts a recognized script's comparison of the
+// handset with the user ID its installation was issued.
+const SKTScriptInstallIdentity = "skt.script_install_identity"
 
 // SKTNativeSaveIdentity accepts a recognized native executable's packaged
 // save, which names the handset it was written on.
@@ -157,7 +203,7 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		if entry.Platform != "skt" && entry.Platform != "ktf" && entry.Platform != "lgt" {
 			return nil, fmt.Errorf("entry %q has unsupported platform %q", entry.ID, entry.Platform)
 		}
-		if entry.Match.Kind != JavaClassSet && entry.Match.Kind != NativeModule {
+		if entry.Match.Kind != JavaClassSet && entry.Match.Kind != NativeModule && entry.Match.Kind != ScriptImage {
 			return nil, fmt.Errorf("entry %q has unsupported fingerprint kind %q", entry.ID, entry.Match.Kind)
 		}
 		digest := entry.Match.SHA256
@@ -178,9 +224,10 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		seen := make(map[string]bool)
 		for _, fix := range entry.Fixes {
 			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache || fix == SKTResumeWithoutStart || fix == SKTResumeThroughStart) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
-				(fix == LGTCertificateMessage || fix == LGTPackagedCertificate || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTScreenStripConstant || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule ||
+				(fix == LGTCertificateMessage || fix == LGTPackagedCertificate || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTScreenStripConstant || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator || fix == LGTDataServiceLock || fix == LGTAuthenticationAllowance || fix == LGTNullPageMemory) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule ||
 				(fix == SKTNativeSaveIdentity || fix == SKTNativeCertSubscriber || fix == SKTNativePairedCertificate || fix == SKTNativeCertDataSubscriber || fix == SKTNativeDiscardOwnerState || fix == SKTNativeServiceAllowance) && entry.Platform == "skt" && entry.Match.Kind == NativeModule ||
-				fix == KTFBREWPackagedCertificate && entry.Platform == "ktf" && entry.Match.Kind == NativeModule
+				fix == SKTScriptInstallIdentity && entry.Platform == "skt" && entry.Match.Kind == ScriptImage ||
+				(fix == KTFBREWPackagedCertificate || fix == KTFSaveSubscriberIdentity || fix == KTFNullPageMemory || fix == KTFDialFailureNotice || fix == KTFWithheldPrivateFile || fix == KTFSaveFileTime || fix == KTFSaveSubscriberKey) && entry.Platform == "ktf" && entry.Match.Kind == NativeModule
 			if !supported {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)
 			}

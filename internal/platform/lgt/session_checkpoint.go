@@ -78,7 +78,8 @@ func validAuthentication(status string) bool {
 	case backend.AuthenticationOff, backend.AuthenticationUnsupported, backend.AuthenticationGuestManaged, backend.AuthenticationLGTOptions,
 		backend.AuthenticationLGTCertificate100, backend.AuthenticationLGTCertificate58,
 		backend.AuthenticationLGTNotification, backend.AuthenticationLGTHandshake,
-		backend.AuthenticationLGTSaveSubscriber, backend.AuthenticationLGTCertificateMessage:
+		backend.AuthenticationLGTSaveSubscriber, backend.AuthenticationLGTCertificateMessage,
+		backend.AuthenticationLGTAuthenticationAllowance:
 		return true
 	}
 	return false

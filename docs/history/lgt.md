@@ -62,6 +62,10 @@ This consolidation adds no execution or acceptance evidence.
 - [A Clet's timer comes due while it is paused — 2026-11-10](#lgt-paused-timer-2026-11-10)
 - [Five more Clets built for a strip above the screen — 2026-11-17](#lgt-new-archives-2026-11-17)
 - [Sync export and three certificate clients — 2026-11-19](#lgt-puzzle-archives-2026-11-18)
+- [First launch on an empty save root — 2026-11-20](#lgt-first-launch-2026-11-20)
+- [A consent that waits on a failed dial — 2026-11-21](#lgt-dial-failure-2026-11-21-data-service-lock)
+- [A one-time authentication the title gives up after five failures — 2026-11-21](#lgt-authentication-allowance-2026-11-21)
+- [A weapon key that reads an empty equipment slot — 2026-11-21](#lgt-null-read-2026-11-21)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -8936,3 +8940,265 @@ archives before and after the change.
 A checkpoint created before the correction restores the old display state.
 Starting a new session runs the corrected initialization with the ordinary
 game save.
+
+<a id="lgt-first-launch-2026-11-20"></a>
+
+## First launch on an empty save root — 2026-11-20
+
+Two native revisions that play from an existing save refused a first launch on
+revision `d2fb661`: module digest prefixes `b2437411838c` and `38baf4aa1f65`.
+Both captures carry the files their title wrote on the handset, under `P/`.
+
+The cause is the lookup that made those files visible, not their absence. Until
+`a1b1bfd` (2026-09-17) a private name did not resolve to the capture's copy
+under `P/`, so on an empty save root each title found no private file, wrote
+its own, failed its network registration and continued offline. Since that
+revision the capture's copy is read whenever the save root has no file of that
+name. A save root from before then, or one the title has since written into,
+shadows the capture's copy of every file the title rewrote, which is why the
+refusal appeared only on a clean installation. With copies of two such save
+roots, the baseline and the corrected build draw the same seven frames under
+the same presses for both revisions.
+
+<a id="lgt-first-launch-2026-11-20-registration-record"></a>
+
+### Registration record
+
+Substituting one private file at a time on `d2fb661` isolates the first
+revision's refusal to a single 60-byte file of the nine its capture carries.
+With a save root that holds only that file as the title itself writes it, the
+title asks to register, fails, announces a retry on the next launch and opens
+its title screen. The other eight, substituted alone or together, leave the
+refusal in place.
+
+The reader at `0x681e8` reads the 60 bytes and decodes them with a linear
+congruential keystream. The check at `0x68280` copies an attempt count from
+offset `0x34`, reads `PHONENUMBER` into 12 bytes and compares them with the 12
+bytes at offset `0x28`:
+
+| The record names | Answer | The caller at `0x69532` |
+| --- | --- | --- |
+| nothing: there is no record | 0 | asks to start registration |
+| `PHONENUMBER` | 1 | continues to the title |
+| the constant written while registration is pending | 0 through the ninth attempt, then 1 | as above |
+| anything else | -1 | shows the failure notice, then calls `MC_knlExit` |
+
+The writer at `0x692e4` stores a 40-byte key, the 12-byte subscriber, the
+attempt count and a date. The pending writer at `0x693a4` stores a zero key and
+the constant. The capture's record is a completed registration for the handset
+it was captured from, so it takes the last row everywhere else.
+
+`lgt.save_subscriber_identity` already selected this module for its save
+reader ([save-reader evidence](#lgt-qa-2026-09-21-save-subscriber-comparison)),
+and the registry entry now points here. Its second site is the branch at
+`0x682da` that separates the pending
+constant from every other subscriber: `bne` to the -1 answer becomes `bne` to
+the answer for `PHONENUMBER`. The pending record keeps its attempt count, and
+the record's bytes are neither changed nor rewritten.
+
+<a id="lgt-first-launch-2026-11-20-owner-record"></a>
+
+### Owner record
+
+The second revision keeps its records in one container file. Of its capture's
+two private files, replacing the 63-byte one alone leaves the refusal and
+replacing the container alone removes it. Within the container, replacing only
+the 32-byte record named for the title, 16 bytes of digest and 16 of payload,
+with the one the title writes itself removes it too, with the capture's save
+slots still in place.
+
+The loader at `0x6f8b0` reads a record, decrypts its payload in 8-byte blocks
+and checks the 16-byte digest stored in front of it. The check at `0x70df0`
+reads `PHONENUMBER`, writes the record when it is missing, and otherwise
+compares the payload with it by `strcmp`. A difference answers 0 and the title
+stays on its failure notice. The capture's 11,696-byte slot record passes its
+digest on the default handset and is deserialized, so the cipher does not
+depend on the subscriber and accepting the comparison leaves nothing
+unreadable.
+
+The registry selects the module for `lgt.save_subscriber_identity`. The site is
+the `bne` after that `strcmp`, at `0x70eb2`, which becomes a `nop`.
+
+### Result
+
+On an empty save root with the implicit handset both revisions report
+`lgt-save-subscriber`. The first reaches its title without a registration
+prompt, opens the most recent game of its capture and takes pitches. The second
+passes its notices, lists the capture's slot, loads it after the confirmation
+and stands in the field with its interface drawn. Each quick saves, quick loads
+to the same frame in the same and in a new process, and starts again on the
+files it wrote. With `-no-auth` the first ends itself at its notice and the
+second holds one screen, as before. The authored tests execute every answer of
+both checks with the comparison as packaged and accepted, and
+`TestLocalSaveSubscriberArchive`, `TestLocalOwnerRecordArchive` and
+`TestLocalArchivedSubscriberFirstLaunch` check the archives themselves.
+
+All 17 local LGT archives that carry private files were started the same way
+on the corrected build. None stops at a refusal: fifteen are in play or on a
+menu, one asks for consent to use customer information and one asks whether to
+download a saved game.
+
+<a id="lgt-dial-failure-2026-11-21-data-service-lock"></a>
+
+## A consent that waits on a failed dial — 2026-11-21
+
+One Clet (archive `6323013d2829`, module digest prefix `1b3e570e1fd0`) shows a
+first-run consent with two answers. Refusing reaches the menu and the game.
+Agreeing shows a connecting notice and waits without end, on `v0.6.0` as on the
+current build; the
+[first-launch survey](authentication.md#first-launch-survey-2026-11-20)
+recorded it as a prompt whose other answer passes.
+
+**What the title does.** The key handler of the consent scene stores purpose 5
+and opens the network scene. That scene's initializer asks
+`MC_knlGetSystemProperty` for `DS_LOCK`, `ROAMING_AREA` and `AIRPLANE_MODE`
+through one helper (`0x3427c`, called from `0x34622`, `0x3462e` and `0x3463c`)
+and takes state 9 for a nonzero answer. With `0` for all three the state word
+at `0x0156dad0` is 0, and the draw routine calls `MC_netConnect` with the
+callback at `0x57400`. The dial is accepted, the state becomes 7, and 250 ms of
+guest time later the callback is given `M_E_ERROR` once. Its failure branch
+(`0x5743a` to `0x57444`) prints and returns. Nothing writes the state word
+again: the key handler ignores every key in states 7 and 8, the draw case only
+draws, and the bar on the notice is a cycling animation counter.
+
+**No answer of the dial moves it.** Each was run in a scratch build with the
+one answer changed:
+
+| Answer | Result |
+| --- | --- |
+| Refusal by return value | The state stays 0 and the title dials again every frame, 75 calls in 300 ticks |
+| Callback success | `MC_netSocket` is refused in a branch that only prints; state 7 |
+| Return values for "in progress" and "already connected" | The callback is entered with 0, the same path |
+| Another callback error | Returns without printing; state 7 |
+
+The scene has two exits of its own that go on into the game: state 6, a failure
+notice entered only after a send or receive failure, and state 9, entered
+without a dial. In state 9 only `DS_LOCK` leads to a notice a key leaves;
+`ROAMING_AREA` and `AIRPLANE_MODE` select notices no key leaves.
+
+**The fix.** `lgt.data_service_lock` answers `DS_LOCK` with `1` for this module.
+At load the 46 bytes at `0x3461e` that read the three answers are compared with
+what was examined, and a registered module whose code differs fails loading.
+No guest byte changes and no dial is made. Agreeing then shows the title's
+notice that wireless internet is locked; OK clears the title's lock word
+(`0x015078a0`) and goes on through the logos to the title screen, the menu and
+a new game. The same scene serves ranking registration and coin purchase from
+the menu, which now end at the notice and return to their screens.
+
+It applies for every handset and with `-no-auth`: nothing on the path compares
+a subscriber, frames are identical under an explicit number, and the status
+stays `unsupported`. The answer is derived from the module at load, so a
+record an earlier build took at the consent screen loads and takes the same
+path. Two other titles that dial at start and handle the failure give
+identical frames and network traces with and without the entry.
+
+A six-byte change in the callback's failure branch that enters state 6 was
+verified on a fresh session and not taken: it changes guest code, and a quick
+load of a record written without it restores the packaged callback.
+
+`TestLocalDataServiceLockArchive` starts the archive, agrees, and reads the
+state word and the lock word: 9 and 1 at the notice and 0 after OK when the
+module is answered, 7 with nothing set when it is answered as other titles are.
+
+**Limits.** The notice asks the player to unlock wireless internet, which
+cannot be done here; OK dismisses it. The consent returns at each start until
+it is refused once, because the title stores an agreement only after its
+server answered. A quick save taken while the title is already parked in state
+7 stays parked. What a handset whose dial failed delivered to this title was
+not observed.
+
+<a id="lgt-authentication-allowance-2026-11-21"></a>
+
+## A one-time authentication the title gives up after five failures — 2026-11-21
+
+Two revisions of one Clet (archives `a1236d01a98c` and `8763ef61b3ad`; module
+digest prefixes `f159d0d09bb8` and `2cac5015ed4a`, identical apart from five
+windows of the second's network start) ask once for a user authentication
+through the network. The
+[first-launch survey](authentication.md#first-launch-survey-2026-11-20)
+recorded both answers as returning to the prompt.
+
+**The title gives up by itself.** Yes builds request `0x23`, sets the endpoint
+and calls `MC_netConnect`; every failure of the title's transport ends in state
+`0x1f`, which the scene shows as a notice that the network is unstable. OK on
+that notice (`0x19cb4`) clears the sub-state, adds one to a count at offset
+`0x28` of the scene's record and, once the count exceeds 4, calls `0x19bec`:
+the routine a successful reply reaches, which stores 2 in the state word and
+writes the title's 52-byte setup file. The count is zeroed when the scene is
+entered, so it counts failures within one visit. No leads to a notice that play
+needs the authentication and returns to the prompt with no count. Five rounds
+of Yes and OK complete it on `v0.6.0`, the build without the day's changes and
+the current one; the survey's script pressed OK one time too few. The existing
+debug save of the title holds exactly the record that route writes.
+
+No platform answer was at fault: a refused dial, a failed callback and a failed
+socket all end in the same state, and only a reply from the title's server
+changes the first attempt. The title also swaps its subscriber field for a
+built-in constant when `PHONEMODEL` is this platform's answer, which matters
+only to requests that are never sent.
+
+**The fix.** `lgt.authentication_allowance` checks the 24 bytes of the
+dismissal and writes `00 2b` at `0x19cc2`: `cmp r3, #4` becomes `cmp r3, #0`.
+On an empty save root Yes fails once, OK goes on to the consent prompt, and the
+title writes its setup file, then its notices, logo, title and menu follow, on
+both revisions. The session reports `lgt-authentication-allowance`, and the
+status is accepted by the quick-save restore. `-no-auth` keeps the packaged
+count. A save root that holds the setup file skips the prompt in every mode.
+Quick save and quick load return to the same frame.
+`TestAuthenticationAllowanceLetsTheFirstFailureThrough` runs the dismissal
+five times as packaged and once with the fix, and
+`TestLocalAuthenticationAllowanceArchive` checks the setup file on both
+revisions with compatibility enabled and disabled.
+
+Two other sites were verified and not taken: answering the failed connection
+with the title's success sub-state, which shows a thanks no server gave, and
+skipping the prompt at the scene's entry (`0x19c1c`), which needs no attempt
+and no answer from the player.
+
+<a id="lgt-null-read-2026-11-21"></a>
+
+## A weapon key that reads an empty equipment slot — 2026-11-21
+
+Two revisions of one Clet (archives `74b0ff2230f7` and `3ae2d591eb76`; module
+digest prefixes `ed31056996bf` and `73b140547755`, byte-identical in every
+routine named here) stop when 1 is pressed during the scrolling text that opens
+a new game: `ldrsh r1, [r3, r2]` at `0x344f0` reads address zero. It happens on
+an existing save as well, so it is not a first-launch matter; the survey's
+script pressed 1 at that point.
+
+**The title's own missing check.** 1 is the title's weapon key. Its event
+dispatcher passes every key of the opening to the in-game key handler, whose
+case for `0x31` (`0x17440`) selects the next weapon type and calls `0x34410`.
+That routine loads the equipped item of the type from the player record and
+reads its id and kind with no check. The four slots are written by the equip
+routine when the player is set up, after the opening ends, so in the opening
+of the first game a process starts they are null; a later new game keeps the
+previous game's pointers. The stat routine `0x342cc`, which reads the same
+pointer, does check it.
+
+**What zeros do.** On a zero-filled page the routine looks up a missing item,
+three resource lookups answer that nothing is there, the title's decompressor
+reads its header from address zero and copies `0x2000` bytes from `0xc` (which
+runs on into the module), and `MC_knlCalloc(0)` hands out granules whose stale
+bytes are parsed as an empty image. The opening continues with the weapon sound,
+and from the end of the opening the frames equal a run that never pressed 1
+(55 of 55 and 52 of 55 at the sampled points, the three differences inside the
+opening). Thirteen forced contents of those granules changed nothing. Filled
+the way a handset's first page is, the same press ends in the title's loader
+following a wild pointer, so a handset was not reproduced and probably
+misbehaved too.
+
+**The fix.** `lgt.null_page_memory` maps `0x0`–`0xfff` read only at load for
+the two digests. Read only is enough, every access on the path being a read,
+and it keeps the page zero; a store through null still stops the guest. The
+LGT restore compares a record's memory map with the one it expects, so a
+record an earlier build took of these modules has the page added on restore,
+the only difference it can have. Pressing 1 in the opening, finishing it and
+pressing 1 in play work on both revisions, a quick save taken before the fix
+loads to the same frame and the key works after it, and
+`TestLocalNullPageArchive` checks both, with a record whose page was removed.
+
+An input filter that drops the key while the slot is null was verified as an
+alternative. It changes no mapping and leaves every other null read stopping
+the guest, at the price of a host-side rule that reads three of the title's
+words; the page follows the KTF precedent instead.
