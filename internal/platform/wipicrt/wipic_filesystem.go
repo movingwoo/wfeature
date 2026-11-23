@@ -546,14 +546,47 @@ func (runtime *Runtime) bindDetachedCFile(store *RuntimeCFile) {
 }
 
 func (runtime *Runtime) DatabaseSeed(name string) ([]byte, bool) {
+	return runtime.databaseSeedThrough(name, runtime.LoadSave)
+}
+
+func (runtime *Runtime) databaseSeedThrough(name string, load func(string) ([]byte, bool)) ([]byte, bool) {
 	if runtime.RemovedDatabases()[name] {
 		return nil, false
 	}
-	if saved, exists := runtime.LoadSave("db/" + name); exists {
+	if saved, exists := load("db/" + name); exists {
 		// A persisted save takes precedence over packaged initial data.
 		return saved, true
 	}
-	return runtime.PackagedDatabase(name)
+	return runtime.guestFileThrough(name, load)
+}
+
+// SizedCFile reads a fixed-size record as MC_fsOpen would see it. Missing
+// and differently sized records return nil. An oversized saved record still
+// shadows its packaged copy, without needing to read it from disk.
+func (runtime *Runtime) SizedCFile(name string, size int) ([]byte, error) {
+	var data []byte
+	var readErr error
+	if file := runtime.CFiles[name]; file != nil {
+		data = file.Data
+	} else {
+		data, _ = runtime.databaseSeedThrough(name, func(key string) ([]byte, bool) {
+			saved, present, err := backend.ReadSaveLimit(runtime.Client.SaveStore, key, int64(size))
+			if err != nil {
+				if !backend.SaveOverLimit(err) {
+					readErr = err
+				}
+				return nil, true
+			}
+			return saved, present
+		})
+	}
+	if runtime.SaveReadError != nil {
+		return nil, runtime.SaveReadError
+	}
+	if readErr != nil || len(data) != size {
+		return nil, readErr
+	}
+	return data, nil
 }
 
 // PackagedDatabase is the archive's own initial content for a database, which

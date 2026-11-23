@@ -125,7 +125,7 @@ func TestOwnerRecordRejectsUnexpectedCode(t *testing.T) {
 	if _, err := applySaveSubscriberIdentity(ownerRecordFixture(t), "unknown", false); err == nil {
 		t.Fatal("client without recorded comparisons accepted")
 	}
-	if hasSaveIdentityCompatibility([]byte("unrecognized client")) {
+	if hasSaveIdentityCompatibility(clientDigest([]byte("unrecognized client"))) {
 		t.Fatal("unknown revision matched")
 	}
 }

@@ -51,13 +51,14 @@ SKT, LGT and KTF native fixes require `native_module`.
 
 ### Registered fixes
 
-The registry holds 48 entries (last changed 2026-11-21). The `evidence` field of
+The registry holds 49 entries (last changed 2026-11-23). The `evidence` field of
 each entry is the authoritative index; this table groups them by fix.
 
 | Fix | Entries | Effect | Evidence |
 | --- | --- | --- | --- |
 | `ktf.brew_packaged_certificate` | 2 | Checks the guest-supplied record against the certificate bound to this installation | [KTF BREW](ktf.md#brew-packaged-certificate) |
 | `ktf.save_subscriber_identity` | 2 | Lets the implicit default handset read the owner record, or the saves, its capture carries. An explicitly configured handset uses the guest's comparison | [KTF owner record](history/ktf.md#ktf-first-launch-2026-11-20-owner-record), [KTF save owner](history/ktf.md#ktf-first-launch-2026-11-21-save-owner) |
+| `ktf.save_owner_handset` | 1 | Uses the subscriber recorded by two checksum-verified private saves as this session's implicit handset | [KTF save owner handset](ktf.md#save-owner-handset) |
 | `ktf.dial_failure_notice` | 1 | Rewrites a client's dial callback so that a failed dial stores the title's own network-error state, and answers its saved-file check with the title's branch for a server that holds nothing. As packaged the callback drops the failure and the title waits without end | [KTF dial failure](network.md#ktf-dial-failure-notice) |
 | `ktf.withheld_private_file` | 1 | Keeps a capture's options record from the guest: it lists saves the capture does not carry, and the title starts a reset character from them | [KTF withheld files](ktf.md#withheld-private-files) |
 | `ktf.save_subscriber_key` | 1 | With the implicit handset, presents a capture's saves, which the client enciphers under a key derived from `PHONENUMBER`, under the session's key. An explicitly configured handset reads them as packaged | [KTF save key](ktf.md#save-subscriber-key) |

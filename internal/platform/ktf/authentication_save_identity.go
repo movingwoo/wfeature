@@ -65,8 +65,8 @@ func clientDigest(image []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func hasSaveIdentityCompatibility(image []byte) bool {
-	return compatibility.HasFix("ktf", compatibility.NativeModule, clientDigest(image), compatibility.KTFSaveSubscriberIdentity)
+func hasSaveIdentityCompatibility(digest string) bool {
+	return compatibility.HasFix("ktf", compatibility.NativeModule, digest, compatibility.KTFSaveSubscriberIdentity)
 }
 
 // applySaveSubscriberIdentity accepts the archived subscriber at each of the

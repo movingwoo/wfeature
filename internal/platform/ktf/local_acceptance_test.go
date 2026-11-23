@@ -375,57 +375,30 @@ func TestLocalKTFArchivesStartMainClass(t *testing.T) {
 			if isNativePackageArchive(data) {
 				t.Skip("the earlier KTF package, which these probes do not drive")
 			}
-			archive, err := Open(data)
-			if err != nil {
-				t.Fatal(err)
-			}
-			client, err := LoadClient(archive.JAR.Client, armcore.CoreOptions{MaxSteps: localAcceptanceMaxSteps(t)})
-			if err != nil {
-				t.Fatal(err)
-			}
-			client.SetProgramName(ProgramNameForAID(archive.Descriptor.AID))
-			client.AttachResources(archive.JAR.Entries)
-			client.AttachFilesystem(archive.GuestFiles())
-			if err := runClientEntry(context.Background(), client); err != nil {
-				t.Fatal(err)
-			}
 			// As startSession does: the constructor and startApp are the first
 			// Host service call, under the allowance every later one gets. A
 			// title that unpacks its resources in startApp needs more than the
 			// single window a bounded run has, and this probe called two such
 			// titles broken while a session started them.
-			defer client.BeginHostService(context.Background())()
-			object, _, err := client.NewObject(context.Background(), archive.Descriptor.MainClass, "()V")
-			if err != nil {
-				t.Fatal(withDiagnosticCounts(client.runtime.DiagnosticCounts(), 2000, "construct: %v", err))
-			}
-			classAddress, err := client.runtime.ensureJavaClass("[Ljava/lang/String;")
-			if err != nil {
-				t.Fatal(err)
-			}
-			metadata, ok := client.JVM().AOTClassAt(classAddress)
-			if !ok {
-				t.Fatal("[Ljava/lang/String; is not registered")
-			}
-			argumentsAddress, err := client.runtime.allocateAOTArrayObject(metadata, 0)
+			// Use the launcher's handset and the title's own fresh save root
+			// too. Keep the loaded client for symbolizing startup failures.
+			session, err := loadSession(data, SessionOptions{
+				MaxSteps: localAcceptanceMaxSteps(t),
+				Clock:    wipicrt.NewManualClock(time.Time{}),
+				SaveRoot: t.TempDir(),
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			argumentsObject, ok := client.JVM().AOTObject(argumentsAddress)
-			if !ok {
-				t.Fatal("startApp arguments array is not bound")
+			client := session.Client
+			if err := session.start(t.Context(), nil); err != nil {
+				diagnostics, _ := StartDiagnostics(err)
+				t.Fatal(withDiagnosticCounts(diagnostics.Counts, 2000,
+					"site hints:\n%s\nstart: %v", errorSiteHints(client.JVM(), err), err))
 			}
-			started, err := client.InvokeVirtual(context.Background(), object, "startApp", "([Ljava/lang/String;)V", jvm.ReferenceValue(argumentsObject))
-			if err != nil {
-				t.Fatal(withDiagnosticCounts(client.runtime.DiagnosticCounts(), 2000,
-					"site hints:\n%s\nstartApp: %v; runs=%d",
-					errorSiteHints(client.JVM(), err), err, len(started.Runs)))
-			}
-			steps := uint64(0)
-			for _, run := range started.Runs {
-				steps += run.Steps
-			}
-			t.Logf("started MClass %s: runs=%d steps=%d callbacks=%+v", object.ClassName, len(started.Runs), steps, client.runtime.callbacks)
+			defer session.Close()
+			t.Logf("started MClass %s: steps=%d callbacks=%+v", session.Archive.Descriptor.MainClass,
+				client.Core().Steps(), client.runtime.callbacks)
 		})
 		executed++
 	}

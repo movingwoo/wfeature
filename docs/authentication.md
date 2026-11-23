@@ -28,7 +28,7 @@ games actually perform.
 | `ktf-certificate-23` | The packaged certificate, checksum, AID, cipher table and executable property/file names match the 23-byte format. The fallback supplies a session-local record for the configured number. |
 | `ktf-certificate-52` | The Thumb reader, decoder and relocated data identify the 52-byte format. The fallback changes only the subscriber field in a session-local copy. |
 | `ktf-subscriber-fallback` | A complete Thumb subscriber accessor matches, alongside a packaged 64-byte `prefs` record and no `cert.c2s`. Resolve its embedded fallback number and use that full number throughout this session. |
-| `ktf-save-subscriber` | A registered client compares an owner record, or the owner field of the saves, its capture carries with `PHONENUMBER`, or enciphers its saves under a key derived from it. With the implicit handset that one comparison is accepted, or the capture's saves are presented under the session's key; a configured handset reads them as packaged. [Archived subscriber records](#archived-subscriber-records) |
+| `ktf-save-subscriber` | A revision-specific rule selects the handset recorded in two verified saves, accepts a save-owner comparison, or presents the capture's saves under the session's key. [Archived subscriber records](#archived-subscriber-records) |
 | `lgt-cached-authentication` | Matching Thumb options reader/writer, authentication response handler and startup gate share a buffer. Expose its cached authentication word only within the session. |
 | `lgt-certificate-58` | Complete connected Thumb reader, writer, cipher and subscriber comparison match the 58-byte format. Keep a certificate for the session identity in memory. |
 | `lgt-certificate-100` | Connected embedded-certificate and options contracts match. Keep the certificate and its presence flag private while ordinary progress persists. |
@@ -164,15 +164,16 @@ visible since the lookup of 2026-09-17, which is when two titles that had
 started offline began to refuse a clean installation.
 [History](history/lgt.md#lgt-first-launch-2026-11-20)
 
-The registry selects each revision by the digest of its executable, and the
-platform accepts the archived subscriber at the recognized comparison only:
+The registry selects each revision's save-handling rule by the digest of
+its executable.
 
-| Status | Executable | Record | Comparison accepted |
+| Status | Executable | Record | Accepted comparison or handset adaptation |
 |---|---|---|---|
 | `lgt-save-subscriber` | LGT native module | Saved games and a 60-byte registration record | The save reader's 12-byte subscriber field, and the registration check's answer for a subscriber that is neither `PHONENUMBER` nor the constant a pending registration is written with |
 | `lgt-save-subscriber` | LGT native module | A 32-byte owner record in the title's record container | The owner check's string comparison with `PHONENUMBER` |
 | `ktf-save-subscriber` | KTF client image | A 12-byte owner record in the title's record container | The owner check's string comparison with `PHONENUMBER` |
 | `ktf-save-subscriber` | KTF client image | Saved games that each begin with the 12-byte subscriber that wrote them | The save reader's string comparison of that field with `PHONENUMBER` |
+| `ktf-save-subscriber` | KTF client image | Two private saves with matching owner fields and valid checksums | The implicit handset takes their common subscriber. The guest checks both files. [Save owner handset](ktf.md#save-owner-handset) |
 | `ktf-save-subscriber` | KTF client image | Saved games enciphered under a key derived from `PHONENUMBER` | None: the capture's saves are presented to the guest under the session's key ([Save subscriber key](ktf.md#save-subscriber-key)) |
 | `skt-script-install-identity` | SKT version-four script image | The installation's user ID in the download descriptor | The script's comparison of that ID with the value it derives from `MIN` |
 
@@ -211,9 +212,9 @@ run, and quick saves of earlier builds, taken with the packaged image, load
 too. The client whose saves are keyed by the handset presents the capture the
 way its record was started, whatever handset the Host is set to when it loads.
 
-Started on an empty save root with the implicit handset, each of the six
-reaches play on the capture's own data, quick saves, quick loads in the same
-and in a new process, and starts again on what it saved.
+The six revisions exercised on November 20–21 reached play on the capture's
+own data from an empty save root with the implicit handset. Each quick saved,
+quick loaded in the same and in a new process, and started again on its saves.
 [LGT](history/lgt.md#lgt-first-launch-2026-11-20),
 [KTF owner record](history/ktf.md#ktf-first-launch-2026-11-20-owner-record),
 [KTF save owner](history/ktf.md#ktf-first-launch-2026-11-21-save-owner),

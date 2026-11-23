@@ -11,6 +11,28 @@ import (
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
 )
 
+func TestSizedCFileUsesTheOpenFileOrABoundedRead(t *testing.T) {
+	_, runtime := wipicrttest.NewRuntime(t)
+	store := &wipicrttest.UnreadableSaves{
+		DirectorySaveStore: wipicrt.NewDirectorySaveStore(t.TempDir()),
+		Whole:              map[string]bool{"db/state": true},
+	}
+	runtime.Client.SaveStore = store
+	if err := store.StoreSave("db/state", []byte("disk")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := runtime.SizedCFile("state", 4); err != nil || string(got) != "disk" {
+		t.Fatalf("persisted record = %q, %v", got, err)
+	}
+	runtime.CFiles = map[string]*wipicrt.RuntimeCFile{"state": {Name: "state", Data: []byte("open")}}
+	if got, err := runtime.SizedCFile("state", 4); err != nil || string(got) != "open" {
+		t.Fatalf("live record = %q, %v", got, err)
+	}
+	if got, err := runtime.SizedCFile("state", 3); err != nil || got != nil {
+		t.Fatalf("oversized live record = %q, %v", got, err)
+	}
+}
+
 // TestDeletedDatabaseStaysDeleted is the whole reason the delete needs a
 // removal list. The save store has no delete of its own, so a name whose
 // persisted copy is still readable comes straight back on the next question —

@@ -537,6 +537,18 @@
       "evidence": "docs/history/ktf.md#ktf-first-launch-2026-11-21-save-subscriber-key"
     },
     {
+      "id": "ktf-save-owner-handset-001",
+      "platform": "ktf",
+      "match": {
+        "kind": "native_module",
+        "sha256": "0324122a4015ed83c274c01ae15198d69240f971825ee583b15100ea31d4077b"
+      },
+      "fixes": [
+        "ktf.save_owner_handset"
+      ],
+      "evidence": "docs/ktf.md#save-owner-handset"
+    },
+    {
       "id": "lgt-authentication-allowance-001",
       "platform": "lgt",
       "match": {
