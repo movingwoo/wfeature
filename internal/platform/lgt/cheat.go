@@ -49,10 +49,10 @@ func (client *Client) cheatLabel(base uint32) (string, bool) {
 // what identifies it instead; that is not a gap to be filled in with a hash of
 // something arbitrary.
 func (session *Session) ImageHash() string {
-	if session == nil || session.archive == nil {
+	if session == nil || session.client == nil || session.client.module == nil {
 		return ""
 	}
-	return armcheat.ImageHash(session.archive.Module)
+	return session.client.revision.Digest()
 }
 
 // Cheat returns the session's attached cheat engine, creating it on first use.

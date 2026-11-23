@@ -123,8 +123,16 @@ func TestScreenStripConstantRejectsUnexpectedCode(t *testing.T) {
 func TestScreenStripConstantSitesAreRegistered(t *testing.T) {
 	registered := compatibility.DigestsForFix(compatibility.LGTScreenStripConstant)
 	sites := slices.Sorted(maps.Keys(screenStripSites))
+	if len(sites) == 0 {
+		t.Fatal("no screen strip modules to check")
+	}
 	if !slices.Equal(registered, sites) {
 		t.Errorf("screen strip digests: registry %v, Go sites %v", registered, sites)
+	}
+	for _, digest := range sites {
+		if !compatibility.HasFix("lgt", compatibility.NativeModule, digest, compatibility.LGTScreenStripConstant) {
+			t.Errorf("LGT native module %s does not select the screen strip fix", digest)
+		}
 	}
 }
 

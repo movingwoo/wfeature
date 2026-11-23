@@ -1,13 +1,47 @@
 package ktf
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"strings"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
+	"github.com/movingwoo/wfeature/internal/testfixture"
 )
+
+// Opening the console used to hash edits made to the exposed image after load.
+func TestCheatTableKeepsLoadedImageHash(t *testing.T) {
+	archive, err := testfixture.KTFCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := StartSession(t.Context(), archive, SessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	image := session.Client.Image().Data
+	loaded := sha256.Sum256(image)
+	image[0] ^= 1
+	state, err := session.Client.captureClientState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := session.CheatConsole().Session().TableKey()
+	if state.ImageHash != loaded || key.Image != hex.EncodeToString(loaded[:]) {
+		t.Fatalf("checkpoint image %x, cheat table image %s, want %x", state.ImageHash, key.Image, loaded)
+	}
+}
+
+func TestSessionImageHashIsEmptyBeforeLoad(t *testing.T) {
+	if got := (&Session{Client: &Client{}}).ImageHash(); got != "" {
+		t.Fatalf("unloaded image hash = %q", got)
+	}
+}
 
 func TestSessionCheatScansAndFreezesGuestMemory(t *testing.T) {
 	client := syntheticLifecycleClient(t)

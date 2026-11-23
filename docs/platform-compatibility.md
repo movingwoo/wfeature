@@ -144,17 +144,24 @@ full-game playthrough claim.
 
 KTF and LGT share the original native module fingerprint across a load.
 `NativeRevision` holds its SHA-256 and the fixes selected for those bytes.
+Checkpoints and cheat table keys use that fingerprint for the life of the client.
 KTF uses the packaged client image for identification, including for a module
 whose pointers are relocated in memory. LGT computes the fingerprint on first
 use, which can be while opening a sync export, resolving a packaged certificate,
-loading the client or validating a checkpoint. A new public `Load` identifies
-the current module bytes even if its caller edited the archive after `Open`.
+loading the client or validating a checkpoint.
+
+A standalone LGT `Load` fingerprints the current `Archive.Module`. It reuses
+the packaged certificate alias and the sync export's save directory name
+(`syncOwner`) from `Open`. If either needs to match a replacement module,
+call `Open` on the updated archive bytes before calling `Load`.
 
 On November 23, 2026, the registry contained 49 code revisions and 33 fixes.
 The platform tests compared 12 revision tables against the registry. In
 separate test overlays, each table check caught both an extra JSON digest and
 a Go digest whose registration was removed. The parser tests exercised each
 registered fix under all three platforms and all three fingerprint kinds.
+The LGT screen strip test also checks that each revision in its site table
+selects the fix through the loader's `native_module` lookup.
 
 Coverage counters on the same authored session fixtures before and after this
 change recorded a drop from ten full-module hashes to one for LGT startup and

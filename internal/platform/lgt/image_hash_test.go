@@ -49,12 +49,34 @@ func TestSessionImageHashNamesTheModuleRatherThanTheArchive(t *testing.T) {
 	}
 }
 
+// Opening the console used to hash edits made to Archive.Module after load.
+func TestCheatTableKeepsLoadedImageHash(t *testing.T) {
+	session, err := StartSession(t.Context(), fixtureArchive(t), SessionOptions{Width: 16, Height: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(t.Context())
+
+	module := session.Archive().Module
+	loaded := sha256.Sum256(module)
+	module[0] ^= 1
+	state, err := session.client.captureClientState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := session.CheatConsole().Session().TableKey()
+	if state.ModuleHash != loaded || key.Image != hex.EncodeToString(loaded[:]) {
+		t.Fatalf("checkpoint module %x, cheat table image %s, want %x", state.ModuleHash, key.Image, loaded)
+	}
+}
+
 // A session that was never started answers nothing rather than the hash of an
 // empty slice, so a caller can tell "no image" from "an image of no bytes".
 func TestSessionImageHashIsEmptyWithoutAnArchive(t *testing.T) {
-	var session *Session
-	if got := session.ImageHash(); got != "" {
-		t.Fatalf("image hash of nothing is %q", got)
+	for _, session := range []*Session{nil, {}, {client: &Client{}}} {
+		if got := session.ImageHash(); got != "" {
+			t.Fatalf("unloaded image hash = %q", got)
+		}
 	}
 	if got := armcheat.ImageHash(nil); got != "" {
 		t.Fatalf("image hash of no bytes is %q", got)
