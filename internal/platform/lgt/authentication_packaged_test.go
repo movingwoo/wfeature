@@ -12,14 +12,14 @@ func TestUnassignedPackagedCertificateAllowsLocalEnrollment(t *testing.T) {
 	client.archive.supplemental = map[string][]byte{"cert.c2s": cert}
 	original := client.archive
 
-	for _, digest := range []string{"", moduleDigest([]byte("another record"))} {
+	for _, digest := range []string{"", certificateDigest([]byte("another record"))} {
 		client.omitUnassignedCertificate(digest)
 		if got, ok := client.titleFile("cert.c2s"); !ok || !bytes.Equal(got, cert) {
 			t.Fatal("a certificate outside the selected record disappeared")
 		}
 	}
 
-	client.omitUnassignedCertificate(moduleDigest(cert))
+	client.omitUnassignedCertificate(certificateDigest(cert))
 	if _, ok := client.titleFile("cert.c2s"); ok {
 		t.Fatal("an unassigned packaged record prevented enrollment")
 	}

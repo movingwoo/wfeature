@@ -2,8 +2,6 @@ package lgt
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"strings"
 
 	"github.com/movingwoo/wfeature/internal/platform/compatibility"
@@ -30,11 +28,6 @@ const recordTableName = "scp_port.scp"
 // bytes complete the sequence, and none of them is 0x23, which would be read
 // as a record.
 var recordTableEnd = []byte{0x24, 0x24, 0x8a, 0x24, 0x8a}
-
-func hasRecordTableTerminator(module []byte) bool {
-	digest := sha256.Sum256(module)
-	return compatibility.HasFix("lgt", compatibility.NativeModule, hex.EncodeToString(digest[:]), compatibility.LGTRecordTableTerminator)
-}
 
 // packagedResource is a file the archive ships, as the title's file and
 // resource calls read it. Only the archive's copy is corrected: a file the

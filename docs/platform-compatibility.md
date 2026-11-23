@@ -42,12 +42,11 @@ Archive filenames, display names, descriptors, ZIP metadata and resources select
 nothing, so identical code repackaged with different resources receives the same
 exception.
 
-Matching always includes the platform and fingerprint kind, not only the hash.
-The shared package owns metadata validation and matching; each platform owns
-fingerprint calculation and correction behavior. Fix names are
-platform-prefixed and accepted only with their platform and kind: SKT's Java
-fixes require `java_class_set`, its script fix requires `script_image`, and
-SKT, LGT and KTF native fixes require `native_module`.
+Matching uses the platform, fingerprint kind and digest together. The shared
+package validates the metadata and looks up the fixes. Each platform supplies
+the original code and applies its selected fixes. SKT Java uses
+`java_class_set`, SKT scripts use `script_image`, and native fixes on all
+three platforms use `native_module`.
 
 ### Registered fixes
 
@@ -111,8 +110,12 @@ verified revision's fingerprint and fix names to the JSON. Fixes for the same
 platform, fingerprint kind and digest share one entry. A different code revision
 requires its own evidence and entry; never match by title or filename.
 
-A new fix name also requires a Go implementation and tests proving both the
-selected behavior and the preservation of normal behavior. JSON cannot express
+For a new fix, add its platform and fingerprint kind to `fixScopes` in
+`registry.go`. Add the platform implementation and tests for the selected and
+ordinary paths. If the implementation needs a table of data for each code
+revision, compare its digest set with `compatibility.DigestsForFix(fix)` in
+the platform tests. This catches both a registration missing its implementation
+data and a Go table entry missing its registration. JSON cannot express
 bytecode patches, addresses or scripts. When a general platform fix makes an
 exception unnecessary, remove the entry or its obsolete fix.
 
@@ -126,7 +129,7 @@ errors fail initialization and are caught by the registry tests, which also chec
 that every evidence document exists.
 
 After editing the registry, run
-`go test ./internal/platform/compatibility ./internal/platform/skt ./internal/platform/lgt`.
+`go test ./internal/platform/compatibility ./internal/platform/ktf ./internal/platform/lgt ./internal/platform/skt`.
 The optional `TestLocalClipCompatibilityArchive` uses `WFEATURE_SKT_CLIP_ARCHIVE`
 with an absolute local archive path to verify the current original and its
 rejection after class mutations. Real archives remain outside Git.
@@ -136,6 +139,33 @@ registry validation, the local original fingerprint and class-mutation checks,
 `make test`, `make test-debug`, `go test -race ./internal/...` and `go vet ./...`.
 It preserved the previously verified clip behavior and added no browser or
 full-game playthrough claim.
+
+## Registry maintenance
+
+KTF and LGT share the original native module fingerprint across a load.
+`NativeRevision` holds its SHA-256 and the fixes selected for those bytes.
+KTF uses the packaged client image for identification, including for a module
+whose pointers are relocated in memory. LGT computes the fingerprint on first
+use, which can be while opening a sync export, resolving a packaged certificate,
+loading the client or validating a checkpoint. A new public `Load` identifies
+the current module bytes even if its caller edited the archive after `Open`.
+
+On November 23, 2026, the registry contained 49 code revisions and 33 fixes.
+The platform tests compared 12 revision tables against the registry. In
+separate test overlays, each table check caught both an extra JSON digest and
+a Go digest whose registration was removed. The parser tests exercised each
+registered fix under all three platforms and all three fingerprint kinds.
+
+Coverage counters on the same authored session fixtures before and after this
+change recorded a drop from ten full-module hashes to one for LGT startup and
+from nine to one for KTF startup. Restoring a checkpoint took one new module
+hash on each platform. The shared CLI ran all 36 registered KTF
+and LGT revisions and one unregistered revision from each platform with the
+implicit handset. Each archive started with its own empty save root, then
+launched again on its own saves. All 76 final frames at 120 ticks matched the
+previous build byte for byte. Two revisions per platform also passed every
+acceptance stage through input. One KTF and one LGT checkpoint restored in
+both directions between the builds with matching final frames.
 
 <a id="skt-skt-original-specific-clip-compatibility"></a>
 

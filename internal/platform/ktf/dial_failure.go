@@ -1,9 +1,6 @@
 package ktf
 
-import (
-	"github.com/movingwoo/wfeature/internal/armcore"
-	"github.com/movingwoo/wfeature/internal/platform/compatibility"
-)
+import "github.com/movingwoo/wfeature/internal/armcore"
 
 // dialFailureRewrites are, by the digest of the client image as the JAR
 // packages it, what ktf.dial_failure_notice changes. MC_netConnect answers a
@@ -61,10 +58,6 @@ var dialFailureRewrites = map[string][]codeRewrite{
 			0x53, 0x46, 0x43, 0x44, 0x1a, 0x68, 0x04, 0x23, 0x90, 0xe7,
 		}},
 	},
-}
-
-func hasDialFailureCompatibility(image []byte) bool {
-	return compatibility.HasFix("ktf", compatibility.NativeModule, clientDigest(image), compatibility.KTFDialFailureNotice)
 }
 
 // applyDialFailureNotice makes a recognized client's failed dial reach the

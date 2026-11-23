@@ -3,7 +3,6 @@ package lgt
 import (
 	"bytes"
 	"cmp"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 // What a checkpoint holds of a running title
@@ -501,7 +501,7 @@ func (client *Client) captureClientState() (clientState, error) {
 	}
 	budget := &stateBudget{}
 	saved := clientState{
-		Version: clientStateVersion, ModuleHash: sha256.Sum256(client.archive.Module),
+		Version: clientStateVersion, ModuleHash: client.revision.Hash(),
 		Subscriber: []byte(client.subscriberNumber),
 		Arena:      client.arena.captureState(), Surfaces: client.surfaces.captureState(), Heap: client.heap.captureState(),
 		Volume: client.volume, TimeStorage: client.tmStorage, StrtokScan: client.strtokScan,
@@ -932,15 +932,15 @@ func expectedMappings(fresh *armcore.Core, stacks int) ([]armcore.MappingState, 
 // Nothing of the guest's runs: no entry point, no initializer, no startClet.
 // The save store is the caller's to attach, and it is an isolated one until
 // the load is committed.
-func restoreClientState(archive *Archive, saved clientState, options Options) (*Client, error) {
+func restoreClientState(load *moduleLoad, saved clientState, options Options) (*Client, error) {
 	if err := saved.validate(); err != nil {
 		return nil, err
 	}
-	if saved.ModuleHash != sha256.Sum256(archive.Module) {
+	if saved.ModuleHash != load.identify().Hash() {
 		return nil, fmt.Errorf("LGT checkpoint belongs to another module")
 	}
 	options.Width, options.Height = saved.Width, saved.Height
-	client, err := Load(archive, options)
+	client, err := load.newClient(options)
 	if err != nil {
 		return nil, err
 	}
@@ -955,7 +955,7 @@ func restoreClientState(archive *Archive, saved clientState, options Options) (*
 	if err != nil {
 		return nil, err
 	}
-	if hasNullPageMemory(archive.Module) {
+	if client.revision.Has(compatibility.LGTNullPageMemory) {
 		saved.Core.Memory.Mappings = withNullPage(saved.Core.Memory.Mappings)
 	}
 	if !slices.Equal(saved.Core.Memory.Mappings, mappings) {

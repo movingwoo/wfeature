@@ -2,9 +2,7 @@ package lgt
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 
 	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/wipic"
@@ -69,14 +67,9 @@ var certificateMessageRevisions = map[string]certificateMessageRevision{
 	},
 }
 
-func newCertificateMessageNetwork(archive *Archive, identity, model string) *notificationNetwork {
-	if archive == nil {
-		return nil
-	}
-	digest := sha256.Sum256(archive.Module)
-	module := hex.EncodeToString(digest[:])
-	revision, known := certificateMessageRevisions[module]
-	if !known || !compatibility.HasFix("lgt", compatibility.NativeModule, module, compatibility.LGTCertificateMessage) {
+func newCertificateMessageNetwork(module compatibility.NativeRevision, identity, model string) *notificationNetwork {
+	revision, known := certificateMessageRevisions[module.Digest()]
+	if !known || !module.Has(compatibility.LGTCertificateMessage) {
 		return nil
 	}
 	return certificateMessageNetwork(revision, identity, model)

@@ -11,6 +11,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
@@ -352,7 +353,7 @@ func (session *Session) start(ctx context.Context, startupHook func(context.Cont
 					}
 				} else if number, ok := authenticationSubscriber(archive, image); ok {
 					client.SubscriberNumber = number
-					client.AttachSaveStore(authenticationSubscriberReceipt(client.SaveStore, archive, number))
+					client.AttachSaveStore(authenticationSubscriberReceipt(client.SaveStore, archive, client.revision.Digest(), number))
 					client.authentication = backend.AuthenticationKTFSubscriber
 				}
 			}
@@ -361,21 +362,23 @@ func (session *Session) start(ctx context.Context, startupHook func(context.Cont
 		// handset. The client has relocated itself by now, so the comparison
 		// is where it will execute.
 		if client.authentication == backend.AuthenticationUnsupported {
-			digest := clientDigest(archive.JAR.Client.Data)
 			configured := wipic.ConfiguredSubscriberNumber() != ""
-			if hasSaveIdentityCompatibility(digest) {
-				status, err := applySaveSubscriberIdentity(client.Core().Memory(), digest, configured)
+			switch {
+			case client.revision.Has(compatibility.KTFSaveSubscriberIdentity):
+				status, err := applySaveSubscriberIdentity(client.Core().Memory(), client.revision.Digest(), configured)
 				if err != nil {
 					return failed(err)
 				}
 				client.authentication = status
-			} else if err := client.selectSaveOwnerHandset(digest, configured); err != nil {
-				return failed(err)
+			case client.revision.Has(compatibility.KTFSaveOwnerHandset):
+				if err := client.selectSaveOwnerHandset(configured); err != nil {
+					return failed(err)
+				}
 			}
 		}
 		// A registered client's saves are keyed by the handset; the session
 		// presented the capture's under its own key when it was built.
-		if client.authentication == backend.AuthenticationUnsupported && hasSaveSubscriberKey(archive.JAR.Client.Data) {
+		if client.authentication == backend.AuthenticationUnsupported && client.revision.Has(compatibility.KTFSaveSubscriberKey) {
 			client.authentication = backend.AuthenticationKTFSaveSubscriber
 			if wipic.ConfiguredSubscriberNumber() != "" {
 				client.authentication = backend.AuthenticationGuestManaged
@@ -385,22 +388,22 @@ func (session *Session) start(ctx context.Context, startupHook func(context.Cont
 	}
 	// A registered client answers a save it does not accept by writing its
 	// defaults, and that routine goes through a null pointer.
-	if hasNullPageCompatibility(archive.JAR.Client.Data) {
+	if client.revision.Has(compatibility.KTFNullPageMemory) {
 		if err := mapNullPage(client.Core().Memory()); err != nil {
 			return failed(err)
 		}
 	}
 	// A registered client's dial callback drops the failure every dial gets
 	// here, and the title waits on it without end.
-	if hasDialFailureCompatibility(archive.JAR.Client.Data) {
-		if err := applyDialFailureNotice(client.Core().Memory(), clientDigest(archive.JAR.Client.Data)); err != nil {
+	if client.revision.Has(compatibility.KTFDialFailureNotice) {
+		if err := applyDialFailureNotice(client.Core().Memory(), client.revision.Digest()); err != nil {
 			return failed(err)
 		}
 	}
 	// A registered client deletes a save whose recorded file time is not the
 	// file's time now, which no save a capture carries can match here.
-	if hasSaveFileTimeCompatibility(archive.JAR.Client.Data) {
-		if err := applySaveFileTime(client.Core().Memory(), clientDigest(archive.JAR.Client.Data)); err != nil {
+	if client.revision.Has(compatibility.KTFSaveFileTime) {
+		if err := applySaveFileTime(client.Core().Memory(), client.revision.Digest()); err != nil {
 			return failed(err)
 		}
 	}

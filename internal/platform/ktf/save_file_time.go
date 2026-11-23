@@ -1,9 +1,6 @@
 package ktf
 
-import (
-	"github.com/movingwoo/wfeature/internal/armcore"
-	"github.com/movingwoo/wfeature/internal/platform/compatibility"
-)
+import "github.com/movingwoo/wfeature/internal/armcore"
 
 // saveFileTimeRewrites are, by the digest of the client image as the JAR
 // packages it, what ktf.save_file_time changes. A recognized client writes its
@@ -41,10 +38,6 @@ var saveFileTimeRewrites = map[string][]codeRewrite{
 			0x18, 0x4a, 0x93, 0x42, 0x00, 0xd8, 0xae, 0xe6, 0xdc, 0xe7,
 		}, offset: 0x24, replace: []byte{0xcf, 0xe6}},
 	},
-}
-
-func hasSaveFileTimeCompatibility(image []byte) bool {
-	return compatibility.HasFix("ktf", compatibility.NativeModule, clientDigest(image), compatibility.KTFSaveFileTime)
 }
 
 // applySaveFileTime makes a recognized client accept the time its save

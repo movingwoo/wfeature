@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
@@ -149,7 +150,7 @@ func TestSaveKeyRejectsUnexpectedCode(t *testing.T) {
 	if _, err := rekeySaves(map[string][]byte{}, saveKeyImage(), "unknown", "01000000000"); err == nil {
 		t.Fatal("a client without recorded code was accepted")
 	}
-	if hasSaveSubscriberKey([]byte("unrecognized client")) {
+	if compatibility.IdentifyNative("ktf", []byte("unrecognized client")).Has(compatibility.KTFSaveSubscriberKey) {
 		t.Fatal("unknown revision matched")
 	}
 }

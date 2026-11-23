@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 const saveFileTimeClient = "fb39fb636a1311480f71123b411e9641a124486401a99faef0a5989a0a0b210b"
@@ -114,7 +115,7 @@ func TestSaveFileTimeRejectsUnexpectedCode(t *testing.T) {
 	if err := applySaveFileTime(memory, "unknown"); err == nil {
 		t.Fatal("client without recorded code accepted")
 	}
-	if hasSaveFileTimeCompatibility([]byte("unrecognized client")) {
+	if compatibility.IdentifyNative("ktf", []byte("unrecognized client")).Has(compatibility.KTFSaveFileTime) {
 		t.Fatal("unknown revision matched")
 	}
 }

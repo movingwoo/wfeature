@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"github.com/movingwoo/wfeature/internal/armcore"
 	"io/fs"
 	"os"
 	"path"
@@ -14,7 +13,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/testlocal"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
@@ -331,7 +332,7 @@ func TestLocalFramebufferOriginArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := bytes.Clone(archive.Module)
-	if !hasFramebufferOriginCorrection(original) {
+	if !compatibility.IdentifyNative("lgt", original).Has(compatibility.LGTVisibleFramebufferOrigin) {
 		t.Fatal("original module did not select correction")
 	}
 	check := func(want byte) {
@@ -359,7 +360,7 @@ func TestLocalFramebufferOriginArchive(t *testing.T) {
 	// Even a change outside loadable code must reject this exact-module fix.
 	archive.Module = bytes.Clone(original)
 	archive.Module[15] ^= 1 // ELF identification padding, ignored by the loader.
-	if hasFramebufferOriginCorrection(archive.Module) {
+	if compatibility.IdentifyNative("lgt", archive.Module).Has(compatibility.LGTVisibleFramebufferOrigin) {
 		t.Fatal("module with changed padding selected correction")
 	}
 	check(24)
@@ -367,7 +368,7 @@ func TestLocalFramebufferOriginArchive(t *testing.T) {
 	// descriptor and resources. It must retain its own initialization.
 	archive.Module = bytes.Clone(original)
 	archive.Module[0x1dfc4] = 25
-	if hasFramebufferOriginCorrection(archive.Module) {
+	if compatibility.IdentifyNative("lgt", archive.Module).Has(compatibility.LGTVisibleFramebufferOrigin) {
 		t.Fatal("changed module selected correction")
 	}
 	check(25)
@@ -387,7 +388,7 @@ func TestLocalRecordTableArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hasRecordTableTerminator(archive.Module) {
+	if !compatibility.IdentifyNative("lgt", archive.Module).Has(compatibility.LGTRecordTableTerminator) {
 		t.Fatal("the archive's module is not selected")
 	}
 	packaged, ok := archive.Resource(recordTableName)
@@ -442,12 +443,12 @@ func TestLocalPackagedCertificateArchive(t *testing.T) {
 	if packaged == nil || string(served) != string(packaged) {
 		t.Fatalf("%q is not served from the packaged certificate", certificateBareName)
 	}
-	if !packagedCertificateRecognized(archive.Module) {
+	if !compatibility.IdentifyNative("lgt", archive.Module).Has(compatibility.LGTPackagedCertificate) {
 		t.Fatal("the original module is not recognized")
 	}
 	changed := append([]byte(nil), archive.Module...)
 	changed[len(changed)/2] ^= 0xff
-	if packagedCertificateRecognized(changed) {
+	if compatibility.IdentifyNative("lgt", changed).Has(compatibility.LGTPackagedCertificate) {
 		t.Fatal("a changed module is still recognized")
 	}
 }
@@ -573,7 +574,7 @@ func TestLocalNullPageArchive(t *testing.T) {
 			saved.Core.Memory.Mappings = slices.DeleteFunc(slices.Clone(saved.Core.Memory.Mappings), func(mapping armcore.MappingState) bool {
 				return mapping == nullPageMapping
 			})
-			restored, err := restoreClientState(session.archive, saved, Options{SaveStore: backend.NewDetachedSaveStore(), MaxSteps: session.client.core.MaxSteps()})
+			restored, err := restoreClientState(&moduleLoad{archive: session.archive}, saved, Options{SaveStore: backend.NewDetachedSaveStore(), MaxSteps: session.client.core.MaxSteps()})
 			if err != nil {
 				t.Fatalf("a record without the page: %v", err)
 			}

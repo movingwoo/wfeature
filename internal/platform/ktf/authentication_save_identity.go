@@ -2,13 +2,10 @@ package ktf
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
-	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 // A subscriberSite is one conditional branch a recognized client takes when a
@@ -58,15 +55,6 @@ var subscriberSites = map[string][]subscriberSite{
 // player made on the implicit handset among them.
 var deletingClients = map[string]bool{
 	"ef321ab32b16f9acf4ad365cef2b1fce89eb6caf6e434a76d5bb29fc623bebb3": true,
-}
-
-func clientDigest(image []byte) string {
-	sum := sha256.Sum256(image)
-	return hex.EncodeToString(sum[:])
-}
-
-func hasSaveIdentityCompatibility(digest string) bool {
-	return compatibility.HasFix("ktf", compatibility.NativeModule, digest, compatibility.KTFSaveSubscriberIdentity)
 }
 
 // applySaveSubscriberIdentity accepts the archived subscriber at each of the

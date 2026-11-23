@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
-	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 // An allowanceSite is one instruction of a recognized module's first-run
@@ -46,10 +45,6 @@ var allowanceSites = map[string]allowanceSite{
 	"f159d0d09bb8ae3347e427dea4d0be452d913b64e7d0a6949a955af0a539601b": allowanceDismissal,
 	// A modification of the same title whose network start differs elsewhere.
 	"2cac5015ed4a7642d7a2781a30f7fcb9ff764fa7b7850bef6aeb1eea8f22299e": allowanceDismissal,
-}
-
-func hasAuthenticationAllowance(module []byte) bool {
-	return compatibility.HasFix("lgt", compatibility.NativeModule, moduleDigest(module), compatibility.LGTAuthenticationAllowance)
 }
 
 // applyAuthenticationAllowance checks the recognized dismissal and then

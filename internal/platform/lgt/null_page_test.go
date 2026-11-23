@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 // A read through a null pointer answers zero on the page, and a store through
@@ -54,7 +55,7 @@ func TestNullPageAnswersReadsAndStopsStores(t *testing.T) {
 	if _, err := run(true, store); err == nil {
 		t.Fatal("a store through a null pointer was accepted")
 	}
-	if hasNullPageMemory([]byte("unrecognized module")) {
+	if compatibility.IdentifyNative("lgt", []byte("unrecognized module")).Has(compatibility.LGTNullPageMemory) {
 		t.Fatal("an unknown revision was selected")
 	}
 }

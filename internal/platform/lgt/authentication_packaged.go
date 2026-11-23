@@ -1,6 +1,8 @@
 package lgt
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"maps"
 	"path"
 	"strings"
@@ -24,7 +26,7 @@ func (client *Client) omitUnassignedCertificate(digest string) {
 func omitPackagedCertificate(files map[string][]byte, digest string) map[string][]byte {
 	var filtered map[string][]byte
 	for name, data := range files {
-		if len(data) != 76 || !strings.EqualFold(path.Base(name), "cert.c2s") || moduleDigest(data) != digest {
+		if len(data) != 76 || !strings.EqualFold(path.Base(name), "cert.c2s") || certificateDigest(data) != digest {
 			continue
 		}
 		if filtered == nil {
@@ -36,4 +38,9 @@ func omitPackagedCertificate(files map[string][]byte, digest string) map[string]
 		return files
 	}
 	return filtered
+}
+
+func certificateDigest(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }

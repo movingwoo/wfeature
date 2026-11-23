@@ -37,18 +37,14 @@ var dataServiceLockReaders = map[string]dataServiceLockReader{
 	},
 }
 
-func hasDataServiceLock(module []byte) bool {
-	return compatibility.HasFix("lgt", compatibility.NativeModule, moduleDigest(module), compatibility.LGTDataServiceLock)
-}
-
 // selectDataServiceLock records whether this client's module is answered a
 // locked data service, after checking the code that reads the answer. Nothing
 // in the guest is changed.
 func (client *Client) selectDataServiceLock() error {
-	if !hasDataServiceLock(client.archive.Module) {
+	if !client.revision.Has(compatibility.LGTDataServiceLock) {
 		return nil
 	}
-	digest := moduleDigest(client.archive.Module)
+	digest := client.revision.Digest()
 	reader, ok := dataServiceLockReaders[digest]
 	if !ok {
 		return fmt.Errorf("LGT data service lock compatibility: no reader is known for module %s", digest)

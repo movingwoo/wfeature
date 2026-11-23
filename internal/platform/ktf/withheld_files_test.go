@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 const withheldOptionsClient = "df6a087ca91b09759b9713aa8e040019228154714b1686012e4f1802f9064fe2"
@@ -41,7 +43,7 @@ func TestWithheldPrivateFilesLeaveTheGuestView(t *testing.T) {
 	if files := withholdPrivateFiles(view(recorded), "unknown"); len(files) != 4 {
 		t.Fatalf("a client without a record lost files: %d left", len(files))
 	}
-	if hasWithheldFiles([]byte("unrecognized client")) {
+	if compatibility.IdentifyNative("ktf", []byte("unrecognized client")).Has(compatibility.KTFWithheldPrivateFile) {
 		t.Fatal("unknown revision matched")
 	}
 }

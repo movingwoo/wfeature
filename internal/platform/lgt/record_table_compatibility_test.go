@@ -3,6 +3,8 @@ package lgt
 import (
 	"bytes"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 // searchRecord follows the recognized revision's record search over data from
@@ -61,7 +63,7 @@ func TestRecordTableTerminatorCorrectsOnlyTheSelectedArchiveCopy(t *testing.T) {
 	if client.recordTableTerminator {
 		t.Fatal("the fixture module was selected")
 	}
-	if hasRecordTableTerminator([]byte("unrecognized module")) {
+	if compatibility.IdentifyNative("lgt", []byte("unrecognized module")).Has(compatibility.LGTRecordTableTerminator) {
 		t.Fatal("an unknown revision was selected")
 	}
 	table := []byte{0x23, 0x00, 0x1c, 0xf1, 0x24, 0x00, 0x23, 0x95, 0x24, 0x95}

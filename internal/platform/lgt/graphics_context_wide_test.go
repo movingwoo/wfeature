@@ -3,6 +3,8 @@ package lgt
 import (
 	"context"
 	"testing"
+
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 func TestWideContextKeepsSignedOffsetsAndDirectCallbackSeparate(t *testing.T) {
@@ -88,7 +90,7 @@ func TestWideContextClipRoundTripAndEmptyRegion(t *testing.T) {
 }
 
 func TestWideContextDoesNotSelectUnregisteredModules(t *testing.T) {
-	if hasWideGraphicsContexts([]byte("authored module")) {
+	if compatibility.IdentifyNative("lgt", []byte("authored module")).Has(compatibility.LGTWideGraphicsContext) {
 		t.Fatal("unknown module selected wide ABI")
 	}
 	client := fixtureClient(t)

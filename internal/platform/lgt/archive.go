@@ -7,8 +7,6 @@ package lgt
 import (
 	"archive/zip"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"path"
@@ -185,8 +183,32 @@ func (descriptor Descriptor) Property(name string) (string, bool) {
 	return descriptor.Fields[match], true
 }
 
+// moduleLoad shares one identification between archive processing, client
+// construction and checkpoint validation. A standalone Load starts a new one
+// because callers can edit Archive.Module after Open.
+type moduleLoad struct {
+	archive  *Archive
+	revision *compatibility.NativeRevision
+}
+
+func (load *moduleLoad) identify() compatibility.NativeRevision {
+	if load.revision == nil {
+		revision := compatibility.IdentifyNative("lgt", load.archive.Module)
+		load.revision = &revision
+	}
+	return *load.revision
+}
+
 // Open reads an LGT archive: a zip holding app_info and the game's JAR.
 func Open(data []byte) (*Archive, error) {
+	load, err := openModule(data)
+	if err != nil {
+		return nil, err
+	}
+	return load.archive, nil
+}
+
+func openModule(data []byte) (*moduleLoad, error) {
 	files, err := readZIP(data, "LGT archive")
 	if err != nil {
 		return nil, err
@@ -230,12 +252,14 @@ func Open(data []byte) (*Archive, error) {
 	if !ok {
 		return nil, fmt.Errorf("LGT JAR has no %s", binaryModuleName)
 	}
+	archive := &Archive{Module: module, Resources: entries}
+	load := &moduleLoad{archive: archive}
 	if !described {
 		if !detect.LGTSyncModule(module) {
 			return nil, fmt.Errorf("LGT sync JAR has no ARM executable")
 		}
 		descriptor.AID = "WEBSYNC1"
-		descriptor.syncOwner = "sync-" + moduleDigest(module)[:32]
+		descriptor.syncOwner = "sync-" + load.identify().Digest()[:32]
 	}
 	delete(entries, binaryModuleName)
 	// The JAR itself is not a file the game opens, and neither is the
@@ -251,14 +275,12 @@ func Open(data []byte) (*Archive, error) {
 	if err != nil {
 		return nil, err
 	}
-	supplemental = aliasPackagedCertificate(packaged, supplemental, func() bool { return packagedCertificateRecognized(module) })
-	return &Archive{
-		Descriptor:   descriptor,
-		Module:       module,
-		Resources:    entries,
-		Packaged:     packaged,
-		supplemental: supplemental,
-	}, nil
+	archive.Descriptor = descriptor
+	archive.Packaged = packaged
+	archive.supplemental = aliasPackagedCertificate(packaged, supplemental, func() bool {
+		return load.identify().Has(compatibility.LGTPackagedCertificate)
+	})
+	return load, nil
 }
 
 // Supplemental handset files may be preserved in one containing directory
@@ -297,19 +319,6 @@ func supplementalFiles(files map[string][]byte, aid string) (map[string][]byte, 
 // which its archive ships under a directory rather than at this bare name.
 const certificateBareName = "c.nm"
 
-// moduleDigest is the lowercase hex SHA-256 the compatibility registry keys a
-// native module by.
-func moduleDigest(module []byte) string {
-	sum := sha256.Sum256(module)
-	return hex.EncodeToString(sum[:])
-}
-
-// packagedCertificateRecognized reports whether the registry selects the
-// packaged-certificate fix for this module.
-func packagedCertificateRecognized(module []byte) bool {
-	return compatibility.HasFix("lgt", compatibility.NativeModule, moduleDigest(module), compatibility.LGTPackagedCertificate)
-}
-
 // aliasPackagedCertificate adds the recognized archive's shipped certificate at
 // the bare name the title opens it by. A title whose online certificate
 // exchange cannot complete offline reads its certificate from a bare name its
@@ -323,9 +332,9 @@ func packagedCertificateRecognized(module []byte) bool {
 // supplementalFiles never does, and what keeps that narrow is the order of the
 // checks: a certificate the declared application's directory already mounts
 // stays, the archive has to ship exactly one file of that name inside a
-// directory, and only then is the module hashed and the registry asked, so an
-// archive that is not a candidate costs nothing. recognized makes that last
-// check. See docs/history/lgt.md#lgt-new-archives-2026-11-03-packaged-certificate.
+// directory, and only then does recognized check the module revision. The
+// loader reuses an identity already calculated for a sync export.
+// See docs/history/lgt.md#lgt-new-archives-2026-11-03-packaged-certificate.
 func aliasPackagedCertificate(packaged, supplemental map[string][]byte, recognized func() bool) map[string][]byte {
 	if _, mounted := supplemental[certificateBareName]; mounted {
 		return supplemental

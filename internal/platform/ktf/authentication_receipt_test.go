@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
@@ -170,7 +171,7 @@ func TestSubscriberReceiptPreservesReadErrors(t *testing.T) {
 func TestSubscriberReceiptRequiresRecognizedExecutable(t *testing.T) {
 	base, table, files, _ := receiptFixture(t)
 	a := &Archive{Files: files, JAR: &JAR{Client: ClientImage{Data: []byte("unrecognized")}, Entries: map[string][]byte{"work.bar": table}}}
-	if got := authenticationSubscriberReceipt(base, a, "01024681357"); got != base {
+	if got := authenticationSubscriberReceipt(base, a, compatibility.IdentifyNative("ktf", a.JAR.Client.Data).Digest(), "01024681357"); got != base {
 		t.Fatal("unrecognized executable adapted")
 	}
 }

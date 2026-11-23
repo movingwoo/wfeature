@@ -2,6 +2,8 @@ package lgt
 
 import (
 	"bytes"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -119,13 +121,10 @@ func TestScreenStripConstantRejectsUnexpectedCode(t *testing.T) {
 // Every module with sites is one the registry selects the fix for, so no
 // table entry is dead and no registered module is without its sites.
 func TestScreenStripConstantSitesAreRegistered(t *testing.T) {
-	if len(screenStripSites) == 0 {
-		t.Fatal("no sites")
-	}
-	for digest := range screenStripSites {
-		if !compatibility.HasFix("lgt", compatibility.NativeModule, digest, compatibility.LGTScreenStripConstant) {
-			t.Errorf("%s has sites but no registry entry", digest[:8])
-		}
+	registered := compatibility.DigestsForFix(compatibility.LGTScreenStripConstant)
+	sites := slices.Sorted(maps.Keys(screenStripSites))
+	if !slices.Equal(registered, sites) {
+		t.Errorf("screen strip digests: registry %v, Go sites %v", registered, sites)
 	}
 }
 
@@ -133,6 +132,9 @@ func TestScreenStripConstantSitesAreRegistered(t *testing.T) {
 // another instruction, or a movs of another value, is not a site.
 func TestScreenStripSitesNameAStripImmediate(t *testing.T) {
 	for digest, sites := range screenStripSites {
+		if len(sites) == 0 {
+			t.Errorf("%s has no screen strip sites", digest)
+		}
 		for _, site := range sites {
 			if !stripImmediate(site) {
 				t.Errorf("%s at %#x does not name a strip immediate", digest[:8], site.at)

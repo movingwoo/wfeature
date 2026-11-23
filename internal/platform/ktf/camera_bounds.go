@@ -22,7 +22,7 @@ const (
 )
 
 func (runtime *initializationRuntime) installCameraBoundsCompatibility() error {
-	if fmt.Sprintf("%x", sha256.Sum256(runtime.client.image.Data)) != cameraBoundsImage {
+	if runtime.client.revision.Digest() != cameraBoundsImage {
 		return nil
 	}
 	code := make([]byte, cameraBoundsEnd-cameraBoundsStart)

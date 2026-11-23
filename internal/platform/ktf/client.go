@@ -9,6 +9,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/jvm"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/textinput"
 )
@@ -22,6 +23,7 @@ type Client struct {
 
 	authentication backend.AuthenticationStatus
 	image          ClientImage
+	revision       compatibility.NativeRevision
 	// mapped is what the image occupies in guest memory, entry is the address
 	// ExecuteEntry calls, and argument is the single word it is called with.
 	// The current generation of client images enters at its first byte with
@@ -728,6 +730,7 @@ func LoadClient(image ClientImage, options armcore.CoreOptions) (*Client, error)
 	client := &Client{
 		Client:   engine,
 		image:    image,
+		revision: compatibility.IdentifyNative("ktf", image.Data),
 		mapped:   mappedSize,
 		entry:    entry,
 		argument: argument,

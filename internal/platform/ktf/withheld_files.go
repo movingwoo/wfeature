@@ -34,10 +34,6 @@ var withheldFiles = map[string][]withheldFile{
 	},
 }
 
-func hasWithheldFiles(image []byte) bool {
-	return compatibility.HasFix("ktf", compatibility.NativeModule, clientDigest(image), compatibility.KTFWithheldPrivateFile)
-}
-
 // withholdPrivateFiles removes a recognized client's withheld files from the
 // guest's view of its archive, matched by name whatever its case and by
 // content. The archive itself is not changed, and a file the title writes
@@ -57,14 +53,14 @@ func withholdPrivateFiles(files map[string][]byte, digest string) map[string][]b
 // sessionGuestFiles is the archive as the session's guest reads it. keyNumber
 // is the handset whose key a registered client's capture saves are presented
 // under, or "" for none (see saveKeyNumber).
-func sessionGuestFiles(archive *Archive, keyNumber string) (map[string][]byte, error) {
+func sessionGuestFiles(archive *Archive, revision compatibility.NativeRevision, keyNumber string) (map[string][]byte, error) {
 	files := archive.GuestFiles()
 	image := archive.JAR.Client.Data
-	if hasWithheldFiles(image) {
-		files = withholdPrivateFiles(files, clientDigest(image))
+	if revision.Has(compatibility.KTFWithheldPrivateFile) {
+		files = withholdPrivateFiles(files, revision.Digest())
 	}
-	if keyNumber != "" && hasSaveSubscriberKey(image) {
-		return rekeySaves(files, image, clientDigest(image), keyNumber)
+	if keyNumber != "" && revision.Has(compatibility.KTFSaveSubscriberKey) {
+		return rekeySaves(files, image, revision.Digest(), keyNumber)
 	}
 	return files, nil
 }

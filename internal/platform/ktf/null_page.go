@@ -1,16 +1,9 @@
 package ktf
 
-import (
-	"github.com/movingwoo/wfeature/internal/armcore"
-	"github.com/movingwoo/wfeature/internal/platform/compatibility"
-)
+import "github.com/movingwoo/wfeature/internal/armcore"
 
 // nullPageSize is the first page of the guest address space.
 const nullPageSize = 0x1000
-
-func hasNullPageCompatibility(image []byte) bool {
-	return compatibility.HasFix("ktf", compatibility.NativeModule, clientDigest(image), compatibility.KTFNullPageMemory)
-}
 
 // mapNullPage gives a recognized client zero-filled memory at address zero.
 //

@@ -825,7 +825,7 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 	)
 	policy := map[string]map[string]string{
 		"Client": {
-			"wideGraphicsContexts": rebuilt, "wideExclusiveClip": rebuilt, "recordTableTerminator": rebuilt, "dataServiceLock": rebuilt,
+			"revision": rebuilt, "wideGraphicsContexts": rebuilt, "wideExclusiveClip": rebuilt, "recordTableTerminator": rebuilt, "dataServiceLock": rebuilt,
 			"core": recorded, "thread": recorded,
 			"archive": rebuilt, "module": rebuilt, "logger": host, "saveStore": recorded, "saveReadError": boundary,
 			"subscriberNumber": recorded, "notificationNetwork": recorded, "mu": rebuilt,

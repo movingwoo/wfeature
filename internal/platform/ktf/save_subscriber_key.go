@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
@@ -187,10 +186,6 @@ func saveKeyFromNumber(number string) uint32 {
 	}
 	value = max(min(value, 1<<31-1), -1<<31)
 	return uint32(int32(value))
-}
-
-func hasSaveSubscriberKey(image []byte) bool {
-	return compatibility.HasFix("ktf", compatibility.NativeModule, clientDigest(image), compatibility.KTFSaveSubscriberKey)
 }
 
 // rekeySaves answers files with each of the capture's saves that deciphers

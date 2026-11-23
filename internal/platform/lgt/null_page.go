@@ -1,9 +1,6 @@
 package lgt
 
-import (
-	"github.com/movingwoo/wfeature/internal/armcore"
-	"github.com/movingwoo/wfeature/internal/platform/compatibility"
-)
+import "github.com/movingwoo/wfeature/internal/armcore"
 
 // nullPageMapping is the first page of the guest address space as
 // lgt.null_page_memory maps it: zero-filled and read only.
@@ -26,10 +23,6 @@ import (
 // the title harmless.
 // See docs/lgt.md#null-page-memory.
 var nullPageMapping = armcore.MappingState{Address: 0, Size: 0x1000, Permission: armcore.PermissionRead}
-
-func hasNullPageMemory(module []byte) bool {
-	return compatibility.HasFix("lgt", compatibility.NativeModule, moduleDigest(module), compatibility.LGTNullPageMemory)
-}
 
 func mapNullPage(memory *armcore.Memory) error {
 	return memory.Map(nullPageMapping.Address, nullPageMapping.Size, nullPageMapping.Permission)

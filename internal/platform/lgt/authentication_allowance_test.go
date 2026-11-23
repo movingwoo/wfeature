@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 const allowanceModule = "f159d0d09bb8ae3347e427dea4d0be452d913b64e7d0a6949a955af0a539601b"
@@ -95,7 +96,7 @@ func TestAuthenticationAllowanceRejectsUnexpectedCode(t *testing.T) {
 	if err := applyAuthenticationAllowance(allowanceFixture(t), "unknown"); err == nil {
 		t.Fatal("a module without a recorded site was accepted")
 	}
-	if hasAuthenticationAllowance([]byte("unrecognized module")) {
+	if compatibility.IdentifyNative("lgt", []byte("unrecognized module")).Has(compatibility.LGTAuthenticationAllowance) {
 		t.Fatal("an unknown revision was selected")
 	}
 }

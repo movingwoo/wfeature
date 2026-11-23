@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 // A routine handed a null pointer reads a count through it, stores a code
@@ -49,7 +50,7 @@ func TestNullPageMemory(t *testing.T) {
 	if state.Registers[3] != 0 || state.Registers[2] != 0x100 {
 		t.Fatalf("count = %#x, stored code = %#x; want 0 and 0x100", state.Registers[3], state.Registers[2])
 	}
-	if hasNullPageCompatibility([]byte("unrecognized client")) {
+	if compatibility.IdentifyNative("ktf", []byte("unrecognized client")).Has(compatibility.KTFNullPageMemory) {
 		t.Fatal("unknown revision matched")
 	}
 }
