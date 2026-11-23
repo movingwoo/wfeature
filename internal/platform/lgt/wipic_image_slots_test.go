@@ -65,6 +65,106 @@ func TestDestroyImageAtSlot0xebGivesTheSurfaceBack(t *testing.T) {
 	}
 }
 
+// MC_grpCreateImage's buffer is the platform's to release, and titles count on
+// it: one allocates a buffer for every glyph it draws and frees none. With the
+// buffers never given back, that title filled the 32 MiB heap while one of its
+// prompts was open, was answered null by its next allocation and died writing
+// through it. MC_knlAlloc is here beside MC_knlCalloc because that title uses it.
+func TestAnImageSourceGoesBackToTheGuestHeap(t *testing.T) {
+	for name, allocator := range map[string]uint32{"MC_knlAlloc": slotAlloc, "MC_knlCalloc": slotCalloc} {
+		t.Run(name, func(t *testing.T) {
+			client := fixtureClient(t)
+			encoded := encodedTestImage(t, 8, 8)
+			out := writeGuest(t, client, make([]byte, 4))
+			settled := client.heap.used()
+			for round := 0; round < 64; round++ {
+				source := callSlot(t, client, allocator, uint32(len(encoded)))
+				if source == 0 {
+					t.Fatalf("round %d: the source allocation answered null", round)
+				}
+				if err := client.core.Memory().Write(source, encoded); err != nil {
+					t.Fatal(err)
+				}
+				if status := int32(callSlot(t, client, slotCreateImage, out, source, 0, uint32(len(encoded)))); status != imageDone {
+					t.Fatalf("round %d: createImage = %d", round, status)
+				}
+				handle, err := client.readWord(out)
+				if err != nil {
+					t.Fatal(err)
+				}
+				callSlot(t, client, slotDestroyImage, handle)
+				if used := client.heap.used(); used != settled {
+					t.Fatalf("round %d left %d bytes of the guest heap handed out, want %d", round, used, settled)
+				}
+			}
+		})
+	}
+}
+
+func imageFromGuestBuffer(t *testing.T, client *Client, buffer, offset, length uint32) uint32 {
+	t.Helper()
+	out := writeGuest(t, client, make([]byte, 4))
+	if status := int32(callSlot(t, client, slotCreateImage, out, buffer, offset, length)); status != imageDone {
+		t.Fatalf("createImage = %d", status)
+	}
+	handle, err := client.readWord(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handle
+}
+
+func TestImageDestroyPreservesAReusedHeapAddress(t *testing.T) {
+	for _, free := range []string{"MC_knlFree", "free"} {
+		t.Run(free, func(t *testing.T) {
+			client := fixtureClient(t)
+			encoded := encodedTestImage(t, 8, 8)
+			size := uint32(len(encoded))
+			source := callSlot(t, client, slotAlloc, size)
+			if err := client.core.Memory().Write(source, encoded); err != nil {
+				t.Fatal(err)
+			}
+			first := imageFromGuestBuffer(t, client, source, 0, size)
+			if free == "MC_knlFree" {
+				callSlot(t, client, slotFree, source)
+			} else {
+				callStdlib(t, client, stdlibFree, source)
+			}
+			replacement := callSlot(t, client, slotAlloc, size)
+			if replacement != source {
+				t.Fatalf("replacement address = %#x, want %#x", replacement, source)
+			}
+			if err := client.core.Memory().Write(replacement, encoded); err != nil {
+				t.Fatal(err)
+			}
+			second := imageFromGuestBuffer(t, client, replacement, 0, size)
+			callSlot(t, client, slotDestroyImage, first)
+			if client.heap.sizes[replacement] == 0 {
+				t.Fatal("destroying the old image freed the replacement allocation")
+			}
+			callSlot(t, client, slotDestroyImage, second)
+			if client.heap.sizes[replacement] != 0 {
+				t.Fatal("destroying the new image kept its source")
+			}
+		})
+	}
+}
+
+func TestImageFromInsideAGuestPoolLeavesThePoolLive(t *testing.T) {
+	client := fixtureClient(t)
+	encoded := encodedTestImage(t, 8, 8)
+	size := uint32(len(encoded))
+	pool := callSlot(t, client, slotAlloc, size+8)
+	if err := client.core.Memory().Write(pool+8, encoded); err != nil {
+		t.Fatal(err)
+	}
+	handle := imageFromGuestBuffer(t, client, pool+8, 0, size)
+	callSlot(t, client, slotDestroyImage, handle)
+	if client.heap.sizes[pool] == 0 {
+		t.Fatal("destroying an image from an interior pointer freed the pool")
+	}
+}
+
 // callCreateSubImage runs MC_grpCreateSubImage(src, x, y, w, h) with the
 // height on the stack, where the procedure call standard puts a fifth argument.
 // The stack is the caller's own block, so a test that counts what the slot

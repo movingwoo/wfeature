@@ -776,6 +776,13 @@ supported older checkpoint or ordinary startup. Delivery and GC rules are in
 [Java WIPI listeners](audio.md#java-wipi-playback-listeners). Ordinary save
 contents do not change.
 
+A live encoded image source uses LGT runtime record version 8. It adds pairs
+of image handles and guest heap allocation addresses to the session and its
+optional Java state. Quick load checks each handle and allocation, then
+rebuilds the shared ownership. Images in earlier records carry no ownership
+information. Heap space already leaked in an old slot stays allocated until
+the next ordinary launch.
+
 **The guest clock needs no rebasing.** It is virtual: elapsed guest time plus the
 work since an instruction baseline, and the instruction count travels with the
 ARM state. Timer deadlines, thread wake-ups and sound origins are readings of

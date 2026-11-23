@@ -10914,3 +10914,48 @@ under key 0 and reads them back under the session's key,
 `TestSaveKeyCipherRoundTrips` and `TestSaveKeyFromNumber` pin the cipher and
 the key, and `TestLocalSaveSubscriberKeyArchive` starts the archive in the
 three modes and checks the status and whether the options record was rewritten.
+
+<a id="ktf-new-archives-2026-11-22"></a>
+
+## New archives of the 2026-11-22 QA — 2026-11-22
+
+Two patched KTF archives were added to the local corpus (`2ebad9128be4`, a
+decrypted WIPI 2.0 Clet, and `9bce2a709f41`, WIPI 1.2). Both were played from
+an empty save root with the implicit handset through a game save, a relaunch,
+quick load and park, and through the server and page. Nothing was changed for
+what follows.
+
+<a id="ktf-new-archives-2026-11-22-checkpoint"></a>
+
+### A quick save refused by the timing of Go's collector
+
+`checkpoint: KTF image ownership requires collection` refuses a first quick
+save of the second archive in 8 of 20 identical CLI runs to tick 600, and in
+20 of 20 with `GOMAXPROCS=2`. v0.6.0 gives 9 and 20, so it predates this
+release cycle. A retry succeeded every time and a refusal leaves the previous
+slot alone. The corpus original, whose packaged settings differ, was refused
+in none of those runs.
+
+`CaptureCheckpointWithSession` prunes dead image owners and then allocates
+while it captures. A Go collection between the two clears a weak owner, and
+`heap_roots.go` refuses what the prune was there to remove. With `GOGC=off` or
+`GOGC=2000` the refusals were 0 of 15. In the page 90 quick saves over three
+processor settings all succeeded, so a player's exposure was not shown.
+
+<a id="ktf-new-archives-2026-11-22-redial"></a>
+
+### A consent that redials without end
+
+The first archive, the corpus's other patch of the same client and the
+decrypted original all ask at the title whether to fetch a certificate. The
+default answer is no and the game plays. Yes waits on "connecting" for as long
+as the run lasts, with every key ignored: 1,210 `MC_netConnect` calls in about
+1,200 ticks, each failed through its callback, so the client dials again on
+the next frame and records no failure. The title's other server paths wait the
+same way. It is the parked-title class of [`network.md`](../network.md): the
+policy stays, and an answer would be a registry entry for this client.
+
+Against v0.6.0 this client's play frames differ in the translucent minimap and
+skill icon, which the built-in alpha operation of 2026-11-18 now draws. The
+other three archives of this QA gave identical frames on both builds over the
+routes compared.

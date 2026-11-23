@@ -518,7 +518,7 @@ func (client *Client) handleWIPICSVC(ctx context.Context, thread *armcore.Thread
 		if err != nil {
 			return err
 		}
-		client.heap.release(address)
+		client.freeHeapBlock(address)
 		return answerInt(wipiSuccess)
 
 	case slotTotalMemory:

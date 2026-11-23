@@ -9202,3 +9202,92 @@ An input filter that drops the key while the slot is null was verified as an
 alternative. It changes no mapping and leaves every other null read stopping
 the guest, at the price of a host-side rule that reads three of the title's
 words; the page follows the KTF precedent instead.
+
+<a id="lgt-new-archives-2026-11-22"></a>
+
+## New archives of the 2026-11-22 QA: an image source that is never released — 2026-11-22
+
+Two patched LGT Clets were added to the local corpus (archives `2753c99574a8`
+and `9d0b87f5a66d`). Each differs from the corpus original in `binary.mod`
+alone. Both were played from an empty save root with the implicit handset
+through a game save, a relaunch, quick load and park, and through the server
+and page. Nothing was changed for what follows.
+
+<a id="lgt-new-archives-2026-11-22-image-source"></a>
+
+### A title dies while one of its own prompts is open
+
+In the second archive, and in its original, the call key opens the title's
+"save?" prompt. Left open, the session ends about 104 seconds later with
+
+```
+LGT stdlib slot 0x414: write guest memory at 0x0 (356 bytes): guest memory is not mapped
+```
+
+From an empty root it is the same tick (13,570 on the route used) on the
+current build, on v0.6.0 and on the original archive, so it is neither the
+patch nor a regression since that release. The minimap and the title's other
+prompts end the same way, sooner or later. A quick save carries the filled
+heap with it. An ordinary relaunch starts from the last game save, so what is
+lost is the progress since that save.
+
+**Cause.** The title allocates a buffer for each picture, hands it to
+`MC_grpCreateImage` and never frees it. The specification gives that buffer to
+the platform: it is released once the first frame is complete, and for an
+animated image at `MC_grpDestroyImage`. LGT's `createImage` and `destroyImage`
+release neither, the guest heap fills, the next allocation answers null and
+the title writes through it. The WIPI-C engine already releases it, see
+[the graphics destroys](ktf.md#implementation-the-same-lie-one-table-over-the-graphics-destroys),
+whose note that the defect was KTF's alone does not hold for this buffer.
+
+A scratch build that releases the buffer after decoding ran the same route
+2,365 ticks past the failing tick, to its end, with the same last frame. One
+other Clet's 565 sampled frames were unchanged by it. That proves the cause
+and is not yet a safe fix: a title that frees the buffer itself would release
+a block the arena may have reissued, so a change needs the LGT corpus A/B.
+
+<a id="lgt-image-source-release"></a>
+
+### Returning the encoded source on image destruction — 2026-11-23
+
+The WIPI specification releases a still image's source after decoding its
+first frame. In a 156-archive LGT comparison, doing so changed the last two
+bytes of one 30-byte game save. Releasing at destruction preserved the sampled
+frames, flush counts, endings and save hashes for all 156. The failing Clet
+uses `MC_knlAlloc` for its sources. LGT accepts a live guest heap allocation
+containing the requested slice, including one from `MC_knlAlloc` or
+`MC_knlCalloc`. An interior pointer into a guest pool transfers no ownership.
+
+Images sharing an allocation keep it until the last is destroyed. An explicit
+guest `free` or `MC_knlFree` cancels ownership before the address can be
+reissued. A quick save records each live association. A slot from an older
+build resumes with its existing heap usage.
+
+On the original and patched revisions, the same route from an empty save
+root reached tick 15,935 with the save prompt open. A fresh process quick
+loaded the same frame, accepted the save and returned to play. In Chromium,
+the prompt stayed open for 155 seconds. Confirming it displayed the game's
+save confirmation and returned control to the player. Across four
+archives, ordinary saves and quick saves made by v0.6.0 and by the pre-fix
+build continued with the same sampled frames and save contents. A separate
+comparison of both builds on all 156 archives found the same first-launch
+and second-launch results using each archive's own save root. The two archives
+that failed to start on both builds produced no frame to compare.
+
+<a id="lgt-new-archives-2026-11-22-other"></a>
+
+### Seen on the same title and left open
+
+- `MC_GRP_CONTEXT_ALPHA_IDX` is stored and no draw path reads it. The title
+  sets alpha 100 and 120 before `fillRect`, so unlearned skill icons are solid
+  black and a slot highlight and the map-name band are solid blocks. This is
+  the local evidence the ALPHA question was waiting for.
+- The save slot's date is uninitialised words. The title reads it from a
+  `DateTimeComponent`; `uicGetClass` and `uicCreate` refuse, and the getter
+  then answers success without writing.
+- A full-screen sepia tutorial scene draws about 1.2 frames a second on the
+  development machine (59 in play). A guest profile puts the time in the
+  title's own per-pixel filter. Whether a handset was as slow is unknown.
+- `run -serve` accepts `quicksave` after a failed tick and replaces the slot
+  with one that loads without ever drawing again. The server ends the game on
+  a failed tick, so this is the command line's alone.

@@ -29,6 +29,7 @@ type framebuffer struct {
 	// is not a decoded image. RGB565 has no alpha channel to carry it. See
 	// wipic_image.go.
 	opaque []bool
+	source *imageSource
 	// A unique, noncolliding encoded color key follows guest pixel edits;
 	// ambiguous alpha masks retain their positional representation.
 	colorKeyed     bool
@@ -328,9 +329,16 @@ func (client *Client) mapSurface(buffer *framebuffer) error {
 
 // releaseSurface drops a surface and both of the blocks it holds: the record
 // its handle names and the pixels the record points at.
+// A decoded C image also keeps its source until the last image using it is destroyed.
 func (client *Client) releaseSurface(buffer *framebuffer) {
 	if buffer == nil || buffer.screen {
 		return
+	}
+	if source := buffer.source; source != nil && source.address != 0 {
+		source.images--
+		if source.images == 0 {
+			client.freeHeapBlock(source.address)
+		}
 	}
 	client.surfaces.release(buffer.address)
 	client.arena.release(buffer.handle)
