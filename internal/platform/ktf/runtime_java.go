@@ -1796,7 +1796,9 @@ func (runtime *initializationRuntime) invokeShowNotify(card *jvm.Object, shown b
 		value = 1
 	}
 	if _, err := runtime.client.vm.InvokeVirtual(card, "showNotify", "(Z)V", jvm.IntValue(value)); err != nil {
-		return fmt.Errorf("KTF card %s showNotify(%t): %w", card.ClassName, shown, err)
+		// Visibility is a display callback. One card uses a Graphics it
+		// first receives in paint, so its initial notification throws.
+		return runtime.client.absorbUncaughtCallback("showNotify", fmt.Errorf("KTF card %s showNotify(%t): %w", card.ClassName, shown, err))
 	}
 	return nil
 }

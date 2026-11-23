@@ -28,6 +28,9 @@ const KTFBREWPackagedCertificate = "ktf.brew_packaged_certificate"
 // KTFSaveSubscriberIdentity permits a recognized client's archived subscriber record.
 const KTFSaveSubscriberIdentity = "ktf.save_subscriber_identity"
 
+// KTFSaveOwnerHandset derives the implicit handset from two private save records.
+const KTFSaveOwnerHandset = "ktf.save_owner_handset"
+
 // KTFNullPageMemory gives a recognized client zero-filled memory at address
 // zero, for a title whose own code reads and stores through a null pointer on
 // a path a handset completes.
@@ -227,7 +230,7 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 				(fix == LGTCertificateMessage || fix == LGTPackagedCertificate || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTScreenStripConstant || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator || fix == LGTDataServiceLock || fix == LGTAuthenticationAllowance || fix == LGTNullPageMemory) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule ||
 				(fix == SKTNativeSaveIdentity || fix == SKTNativeCertSubscriber || fix == SKTNativePairedCertificate || fix == SKTNativeCertDataSubscriber || fix == SKTNativeDiscardOwnerState || fix == SKTNativeServiceAllowance) && entry.Platform == "skt" && entry.Match.Kind == NativeModule ||
 				fix == SKTScriptInstallIdentity && entry.Platform == "skt" && entry.Match.Kind == ScriptImage ||
-				(fix == KTFBREWPackagedCertificate || fix == KTFSaveSubscriberIdentity || fix == KTFNullPageMemory || fix == KTFDialFailureNotice || fix == KTFWithheldPrivateFile || fix == KTFSaveFileTime || fix == KTFSaveSubscriberKey) && entry.Platform == "ktf" && entry.Match.Kind == NativeModule
+				(fix == KTFBREWPackagedCertificate || fix == KTFSaveSubscriberIdentity || fix == KTFSaveOwnerHandset || fix == KTFNullPageMemory || fix == KTFDialFailureNotice || fix == KTFWithheldPrivateFile || fix == KTFSaveFileTime || fix == KTFSaveSubscriberKey) && entry.Platform == "ktf" && entry.Match.Kind == NativeModule
 			if !supported {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)
 			}

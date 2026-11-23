@@ -317,7 +317,9 @@ WFEATURE_SKT_ACCEPTANCE=1 go test -run TestLocalSKTArchivesBootAndPaint -v ./int
 The sound stage asks whether every SMAF resource decodes; it is not a rung, so
 a title whose sounds fail has not fallen down the ladder. The KTF construct
 and start rungs run the constructor and `startApp` under the Host service
-allowance, as `startSession` does. The SKT rungs drive an archive whose
+allowance. The start rung uses the same launcher setup as a session, with an
+empty save root per archive, so it exercises the handset selected for the
+saves visible on first launch. The SKT rungs drive an archive whose
 executable is a native `.daf` program through the session a Host starts it
 with (the SKT Clet engine), and a MIDlet as before. The interactive
 judgment (settle, hold, release, compare, and *unanswerable* when the screen
@@ -355,6 +357,17 @@ picked up; its schema is described in
 Both files name the games, so both stay under the ignored `var/`. When quoting a
 run, cite its date and record the corpus, archive identity, source revision,
 profile, save setup, stages attempted, outcomes and limits.
+
+On 2026-11-23, the focused KTF run compared `ac5055d` with its working-tree
+fixes for two descriptor archives (`06a9c63e8251`, `d5d1157c93c3`). Both
+advanced from construction to passing all eight rungs. Separate release runs
+used the implicit handset and a fresh save root for each archive. On both
+launches the Clet reached its running stage and responded to the action key.
+The Jlet played a complete deal, settled the score and dealt again. Its second
+launch offered the saved game and accepted a card at the table. It recorded
+one guest `showNotify` exception on each launch. The release Chromium client
+also reached both play screens. The reports and paired final frames are in
+`var/acceptance/ktf-launch-20261123/`.
 
 - **Exit status.** 0 when every stage ran, even if archives failed; 1 when a
   stage could not run; 2 when the run could not start or write its files.

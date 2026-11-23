@@ -250,6 +250,17 @@ func StartDiagnostics(err error) (wipicrt.Diagnostics, bool) {
 }
 
 func startSession(ctx context.Context, data []byte, options SessionOptions, startupHook func(context.Context) error) (*Session, error) {
+	session, err := loadSession(data, options)
+	if err != nil {
+		return nil, err
+	}
+	if err := session.start(ctx, startupHook); err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
+func loadSession(data []byte, options SessionOptions) (*Session, error) {
 	archive, err := Open(data)
 	if err != nil {
 		return nil, err
@@ -258,6 +269,13 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 	if err != nil {
 		return nil, err
 	}
+	return &Session{Archive: archive, Client: client, options: options, archiveIdentity: backend.SaveIdentity(data)}, nil
+}
+
+// start enters the guest on the loaded client, including the launcher's
+// handset and storage setup before the main class is constructed.
+func (session *Session) start(ctx context.Context, startupHook func(context.Context) error) error {
+	archive, client, options := session.Archive, session.Client, session.options
 	client.Log("KTF session loading",
 		"aid", archive.Descriptor.AID,
 		"main_class", archive.Descriptor.MainClass,
@@ -285,14 +303,14 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 		client.authentication = backend.AuthenticationUnsupported
 		if certificate, ok := authenticationCertificate(archive, client.SubscriberNumber); ok {
 			if err := client.selectCertificate(certificate, backend.AuthenticationKTFCertificate23); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
 	// Everything from here on has run guest code, so a failure carries the
 	// trace of what the game was doing when it stopped.
-	failed := func(err error) (*Session, error) {
-		return nil, &StartFailure{Err: err, Diagnostics: (&Session{Client: client}).Diagnostics()}
+	failed := func(err error) error {
+		return &StartFailure{Err: err, Diagnostics: session.Diagnostics()}
 	}
 	// The two generations reach the same runtime by different routes. An
 	// older module is handed the platform's callback table and publishes its
@@ -342,12 +360,18 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 		// A registered client compares a record its capture carries with the
 		// handset. The client has relocated itself by now, so the comparison
 		// is where it will execute.
-		if client.authentication == backend.AuthenticationUnsupported && hasSaveIdentityCompatibility(archive.JAR.Client.Data) {
-			status, err := applySaveSubscriberIdentity(client.Core().Memory(), clientDigest(archive.JAR.Client.Data), wipic.ConfiguredSubscriberNumber() != "")
-			if err != nil {
+		if client.authentication == backend.AuthenticationUnsupported {
+			digest := clientDigest(archive.JAR.Client.Data)
+			configured := wipic.ConfiguredSubscriberNumber() != ""
+			if hasSaveIdentityCompatibility(digest) {
+				status, err := applySaveSubscriberIdentity(client.Core().Memory(), digest, configured)
+				if err != nil {
+					return failed(err)
+				}
+				client.authentication = status
+			} else if err := client.selectSaveOwnerHandset(digest, configured); err != nil {
 				return failed(err)
 			}
-			client.authentication = status
 		}
 		// A registered client's saves are keyed by the handset; the session
 		// presented the capture's under its own key when it was built.
@@ -403,7 +427,7 @@ func startSession(ctx context.Context, data []byte, options SessionOptions, star
 		return failed(fmt.Errorf("start KTF main class %s: %w", archive.Descriptor.MainClass, err))
 	}
 	client.Log("KTF startApp returned", "class", archive.Descriptor.MainClass)
-	return &Session{Archive: archive, Client: client, options: options, archiveIdentity: backend.SaveIdentity(data)}, nil
+	return nil
 }
 
 // newStringArrayObject allocates the empty [Ljava/lang/String; guest array

@@ -2,6 +2,7 @@ package ktf
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/jvm"
@@ -55,6 +56,52 @@ func TestCardStackTellsCardsWhenTheyAreShownAndHidden(t *testing.T) {
 	want := []string{"first=1", "first=0", "second=1", "second=0", "first=1", "first=0"}
 	if fmt.Sprint(log) != fmt.Sprint(want) {
 		t.Fatalf("showNotify calls = %v, want %v", log, want)
+	}
+}
+
+func TestUncaughtShowNotifyStillPresentsTheCard(t *testing.T) {
+	client, runtime := newTestRuntime(t)
+	const class = "test/VisibilityCard"
+	first := &jvm.Object{ClassName: class}
+	second := &jvm.Object{ClassName: class}
+	var shownSecond bool
+	var painted *jvm.Object
+	if err := client.JVM().RegisterNative(class, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V",
+		func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+			painted, _ = arguments[0].Reference()
+			return jvm.VoidValue(), nil
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.JVM().RegisterNative(class, "showNotify", "(Z)V",
+		func(_ *jvm.VM, arguments []jvm.Value) (jvm.Value, error) {
+			card, _ := arguments[0].Reference()
+			if card == first {
+				return jvm.VoidValue(), &jvm.GuestException{Object: &jvm.Object{ClassName: "java/lang/NullPointerException"}}
+			}
+			shown, _ := arguments[1].Int32()
+			shownSecond = shown != 0
+			return jvm.VoidValue(), nil
+		}); err != nil {
+		t.Fatal(err)
+	}
+	for _, card := range []*jvm.Object{first, second} {
+		_, err := runtimeDisplayPushCard(runtime, client.JVM(), []jvm.Value{jvm.ReferenceValue(nil), jvm.ReferenceValue(card)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !runtime.RepaintPending {
+			t.Fatal("the newly shown card has no pending repaint")
+		}
+		if ok, err := client.ServicePaint(t.Context()); err != nil || !ok || painted != card {
+			t.Fatalf("paint: error=%v, painted=%t, expected card=%t", err, ok, painted == card)
+		}
+	}
+	if !shownSecond {
+		t.Fatal("the outgoing card's exception suppressed the incoming card's notification")
+	}
+	if count, first := client.UncaughtCallbacks(); count != 2 || !strings.Contains(first, "showNotify") || !strings.Contains(first, "NullPointerException") {
+		t.Fatalf("uncaught callbacks = %d, %q", count, first)
 	}
 }
 

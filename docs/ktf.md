@@ -165,9 +165,12 @@ and volume stay unmapped
 ([history](history/ktf.md#ktf-native-open-and-shapes-2026-10-21-keys)).
 WIPI Java receives Host pointer events, and the Host is told a title takes
 touch only when one of its classes declares its own `pointerNotify(III)Z` body;
-native packages have no pointer support. An uncaught guest exception in a key
-or pointer callback ends that call, as in a paint or timer task, rather than
-the session.
+native packages have no pointer support. An uncaught guest exception ends
+the current key, pointer, paint, timer or card visibility callback and is
+recorded in diagnostics. When a card's `showNotify` throws, the display
+finishes the stack transition and queues the incoming card's first paint.
+One KTF title first receives its Graphics in that paint and throws on its
+earlier visibility notification. Host faults still propagate.
 
 Host keyboard/IME entry supports a title's own `InputMethodHandler` field
 (append-only, identified by the keys reaching the handler the title built),
@@ -393,6 +396,30 @@ another one would delete every save of this one, the player's own among them.
 over any save written under another number.
 [Archived subscriber records](authentication.md#archived-subscriber-records),
 [history](history/ktf.md#ktf-first-launch-2026-11-21-save-owner)
+
+<a id="save-owner-handset"></a>
+
+### Save owner handset
+
+One registered Clet reads two private saves during startup, `vd.dat`
+(112 bytes) and `pd.dat` (1268 bytes). Both name the handset that wrote
+them. The wrong handset takes the guest to its invalid-data notice and an
+endless loop. On a clean launch that loop exhausted the Host's 500 million
+step allowance before the session could open.
+
+With the implicit handset, `ktf.save_owner_handset` reads the files visible
+to this client, including saved overrides and deletions. It checks each
+record's size, declared length and checksum using the registered client's own
+table. If the two records name the same subscriber, that number becomes the
+handset for this session. The guest then runs its own checks and writes
+ordinary progress under the same identity. An explicitly configured handset
+takes precedence. Missing, damaged or disagreeing records keep the implicit
+handset at its default number. Quick load uses the handset captured in the
+checkpoint.
+
+The local archive reached the running stage, accepted inputs there, and
+reached it again on the saves written by the first launch. It also resumed
+from a checkpoint in a new process. [Archived subscriber records](authentication.md#archived-subscriber-records)
 
 <a id="save-subscriber-key"></a>
 
