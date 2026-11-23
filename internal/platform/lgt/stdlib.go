@@ -465,7 +465,7 @@ func (client *Client) handleStdlibSVC(ctx context.Context, thread *armcore.Threa
 		// `free` answers nothing, so the return register is left alone: it is
 		// the caller's, and inventing a value for it is a decision this
 		// platform has no reason to make.
-		client.heap.release(address)
+		client.freeHeapBlock(address)
 		return nil
 
 	case stdlibVsprintf:

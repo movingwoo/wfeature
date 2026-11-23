@@ -168,6 +168,7 @@ type Client struct {
 	presented []uint16
 
 	framebuffers map[uint32]*framebuffer
+	imageSources map[uint32]*imageSource
 	timers       map[uint32]*timer
 	nextHandle   uint32
 
@@ -494,6 +495,7 @@ func Load(archive *Archive, options Options) (*Client, error) {
 		codeCurse:        platformCodeBase,
 		stubs:            make(map[uint64]uint32),
 		framebuffers:     make(map[uint32]*framebuffer),
+		imageSources:     make(map[uint32]*imageSource),
 		timers:           make(map[uint32]*timer),
 		nextHandle:       1,
 		clock:            newGuestClock(core.Steps),

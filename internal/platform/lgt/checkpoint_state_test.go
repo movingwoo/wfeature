@@ -832,7 +832,7 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 			"arena": recorded, "surfaces": recorded, "heap": recorded, "codeCurse": recorded, "stubs": recorded,
 			"clet": recorded, "exited": boundary, "exitedFrom": boundary,
 			"screen": recorded, "framePending": rebuilt, "frameRGBA": rebuilt, "flushes": recorded, "presented": recorded,
-			"framebuffers": recorded, "timers": recorded, "nextHandle": recorded,
+			"framebuffers": recorded, "imageSources": rebuilt, "timers": recorded, "nextHandle": recorded,
 			"pixelOps": recorded, "installedPixelOps": recorded, "uninstalledPixelOps": diagnostic,
 			"netConnects": recorded, "netGeneration": recorded, "clock": recorded, "events": recorded,
 			"uncaught": diagnostic, "vibrator": recorded,
@@ -967,7 +967,7 @@ func TestCheckpointAccountsForEveryRuntimeField(t *testing.T) {
 		"framebuffer": {
 			"handle": recorded, "width": recorded, "height": recorded, "address": recorded, "pixels": recorded,
 			"screen": recorded, "opaque": recorded, "colorKeyed": recorded, "transparentKey": recorded,
-			"drawnHere": recorded,
+			"drawnHere": recorded, "source": recorded,
 		},
 		"timer": {"structure": recorded, "callback": recorded, "param": recorded, "dueAt": recorded, "armed": recorded},
 		// A buffer with unstored writes is stored before a checkpoint is taken,

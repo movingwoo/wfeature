@@ -187,7 +187,10 @@ func (session *Session) CaptureCheckpointWithSession(
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
-	record, err := encodeLGTSchedulingRecord(saved, media, library, screen, scheduling)
+	record, err := (sessionImageCheckpointState{
+		Session: saved, Media: media, Library: library, Screen: screen, Scheduling: scheduling,
+		Sources: client.captureImageSources(saved.Client.Framebuffers),
+	}).encode()
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
@@ -244,10 +247,11 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 	if checkpoint.Variant != backend.CheckpointLGTClet && checkpoint.Variant != backend.CheckpointLGTJava {
 		return nil, backend.ErrCheckpointVersion
 	}
-	saved, media, library, screen, scheduling, err := decodeLGTSchedulingRecord(checkpoint.Runtime)
+	record, err := decodeLGTImageRecord(checkpoint.Runtime)
 	if err != nil {
 		return nil, err
 	}
+	saved := record.Session
 	if saved.Version != sessionCheckpointVersion {
 		return nil, fmt.Errorf("LGT checkpoint session record is version %d and this build reads %d: %w", saved.Version, sessionCheckpointVersion, backend.ErrCheckpointVersion)
 	}
@@ -285,18 +289,21 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 	if checkpoint.Variant != checkpointVariant(client) {
 		return nil, backend.ErrCheckpointVersion
 	}
-	if err := client.restoreJavaMediaState(media, saved.Client.Audio); err != nil {
+	if err := client.restoreImageSources(record.Sources); err != nil {
 		return nil, err
 	}
-	if err := client.restoreJavaLibraryState(library); err != nil {
+	if err := client.restoreJavaMediaState(record.Media, saved.Client.Audio); err != nil {
 		return nil, err
 	}
-	if err := client.restoreJavaScreenState(screen); err != nil {
+	if err := client.restoreJavaLibraryState(record.Library); err != nil {
+		return nil, err
+	}
+	if err := client.restoreJavaScreenState(record.Screen); err != nil {
 		return nil, err
 	}
 	// Before the threads start: a timer's run waiting for its first slice
 	// starts as the timer's (java_timer.go).
-	if err := client.restoreJavaSchedulingState(scheduling); err != nil {
+	if err := client.restoreJavaSchedulingState(record.Scheduling); err != nil {
 		return nil, err
 	}
 	if err := client.audio.RebasePlaybackClock(client.clock.now(), saved.Speed); err != nil {

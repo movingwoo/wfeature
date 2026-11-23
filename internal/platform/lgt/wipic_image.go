@@ -53,6 +53,31 @@ const (
 // corrupt length allocate the heap.
 const maxImageBytes = 8 << 20
 
+// Several images may use different slices of one guest allocation. An
+// explicit guest free clears their shared address before the heap can reuse it.
+type imageSource struct {
+	address uint32
+	images  int
+}
+
+func (client *Client) retainImageSource(image *framebuffer, address uint32) {
+	source := client.imageSources[address]
+	if source == nil {
+		source = &imageSource{address: address}
+		client.imageSources[address] = source
+	}
+	source.images++
+	image.source = source
+}
+
+func (client *Client) freeHeapBlock(address uint32) {
+	if source := client.imageSources[address]; source != nil {
+		source.address = 0
+		delete(client.imageSources, address)
+	}
+	client.heap.release(address)
+}
+
 // createImage serves MC_grpCreateImage.
 func (client *Client) createImage(thread *armcore.Thread) error {
 	out, err := thread.Register(0)
@@ -102,7 +127,13 @@ func (client *Client) createImage(thread *armcore.Thread) error {
 		return err
 	}
 	if err := client.writeWord(out, image.handle); err != nil {
+		client.releaseSurface(image)
 		return err
+	}
+	// A Clet may also pass a pointer into a resource or a larger memory pool.
+	// Only a live allocation ID containing the complete slice transfers.
+	if uint64(offset)+uint64(length) <= client.heap.sizes[buffer] {
+		client.retainImageSource(image, buffer)
 	}
 	return answerCode(thread, imageDone)
 }

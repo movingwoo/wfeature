@@ -294,9 +294,12 @@ decoder draws it ([history](history/ktf.md#ktf-new-archives-2026-11-03-png-end))
 The image slots follow the v2.x order: `MC_grpCreateImage` `0xe9`,
 `MC_grpCreateSubImage` `0xea`, `MC_grpDestroyImage` `0xeb`,
 `MC_grpDecodeNextImage` `0xec` (which answers that no frame follows: nothing
-here decodes an animation) and `MC_grpEncodeImage` `0xed`. A destroy gives the image's pixels and record back,
-and is the only release a Clet's images get: the collector runs for Java titles
-only. A sub image is a copy of the source's pixels with its mask or colour key;
+here decodes an animation) and `MC_grpEncodeImage` `0xed`. A destroy returns
+the pixels and the image record. When `bufID` names a live heap allocation
+containing the encoded slice, the last image using that allocation returns it. The
+guest can free the source explicitly before destroying the image.
+[Release timing and corpus comparison](history/lgt.md#lgt-image-source-release).
+A sub image is a copy of the source's pixels with its mask or colour key;
 a region outside the source or without pixels answers NULL, and a surface region
 too full for the copy stops the run as a create does. See the
 [slot correction](history/lgt.md#lgt-image-slots-2026-10-22).
