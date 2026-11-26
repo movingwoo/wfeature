@@ -7,8 +7,10 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt/wipicrttest"
+	"github.com/movingwoo/wfeature/internal/testfixture"
 )
 
 func TestSaveOwnerRecordChecksItsContent(t *testing.T) {
@@ -75,24 +77,24 @@ func TestSaveOwnerHandsetUsesMatchingLiveRecords(t *testing.T) {
 	}
 	vd := handsetRecord(112, player, 0x44353d2a)
 	pd := handsetRecord(1268, player, 0xc0313d2a)
-	const digest = saveOwnerHandsetClient
+	if !compatibility.HasFix("ktf", compatibility.NativeModule, saveOwnerHandsetClient, compatibility.KTFSaveOwnerHandset) {
+		t.Fatal("missing save owner handset revision")
+	}
 	for _, tc := range []struct {
 		name       string
 		saved      map[string][]byte
 		configured bool
-		digest     string
 		want       string
 		status     backend.AuthenticationStatus
 	}{
-		{"captured pair", nil, false, digest, capture, backend.AuthenticationKTFSaveSubscriber},
-		{"persisted pair", map[string][]byte{"db/vd.dat": vd, "db/pd.dat": pd}, false, digest, player, backend.AuthenticationKTFSaveSubscriber},
-		{"file overlay", map[string][]byte{"fs/vd.dat": vd, "db/pd.dat": pd}, false, digest, player, backend.AuthenticationKTFSaveSubscriber},
-		{"conflicting owners", map[string][]byte{"db/pd.dat": pd}, false, digest, handset, backend.AuthenticationGuestManaged},
-		{"invalid checksum", map[string][]byte{"db/vd.dat": handsetRecord(112, capture, 0)}, false, digest, handset, backend.AuthenticationGuestManaged},
-		{"oversized shadow", map[string][]byte{"db/vd.dat": append(bytes.Clone(captured["vd.dat"]), 0)}, false, digest, handset, backend.AuthenticationGuestManaged},
-		{"deleted record", map[string][]byte{wipicrt.DatabaseRemovedKey: []byte("vd.dat")}, false, digest, handset, backend.AuthenticationGuestManaged},
-		{"configured", nil, true, digest, handset, backend.AuthenticationGuestManaged},
-		{"other client", nil, false, "unknown", handset, backend.AuthenticationUnsupported},
+		{"captured pair", nil, false, capture, backend.AuthenticationKTFSaveSubscriber},
+		{"persisted pair", map[string][]byte{"db/vd.dat": vd, "db/pd.dat": pd}, false, player, backend.AuthenticationKTFSaveSubscriber},
+		{"file overlay", map[string][]byte{"fs/vd.dat": vd, "db/pd.dat": pd}, false, player, backend.AuthenticationKTFSaveSubscriber},
+		{"conflicting owners", map[string][]byte{"db/pd.dat": pd}, false, handset, backend.AuthenticationGuestManaged},
+		{"invalid checksum", map[string][]byte{"db/vd.dat": handsetRecord(112, capture, 0)}, false, handset, backend.AuthenticationGuestManaged},
+		{"oversized shadow", map[string][]byte{"db/vd.dat": append(bytes.Clone(captured["vd.dat"]), 0)}, false, handset, backend.AuthenticationGuestManaged},
+		{"deleted record", map[string][]byte{wipicrt.DatabaseRemovedKey: []byte("vd.dat")}, false, handset, backend.AuthenticationGuestManaged},
+		{"configured", nil, true, handset, backend.AuthenticationGuestManaged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client, _ := newTestRuntime(t)
@@ -101,7 +103,7 @@ func TestSaveOwnerHandsetUsesMatchingLiveRecords(t *testing.T) {
 			client.authentication = backend.AuthenticationUnsupported
 			client.AttachFilesystem(captured)
 			client.AttachSaveStore(testSaveStore(t, tc.saved))
-			if err := client.selectSaveOwnerHandset(tc.digest, tc.configured); err != nil {
+			if err := client.selectSaveOwnerHandset(tc.configured); err != nil {
 				t.Fatal(err)
 			}
 			if client.SubscriberNumber != tc.want || client.authentication != tc.status {
@@ -118,7 +120,22 @@ func TestSaveOwnerHandsetReportsUnreadableRecords(t *testing.T) {
 		DirectorySaveStore: wipicrt.NewDirectorySaveStore(t.TempDir()),
 		Keys:               map[string]bool{"db/vd.dat": true},
 	})
-	if err := client.selectSaveOwnerHandset(saveOwnerHandsetClient, false); err == nil {
+	if err := client.selectSaveOwnerHandset(false); err == nil {
 		t.Fatal("an unreadable save was treated as absent")
+	}
+}
+
+func TestUnregisteredClientSkipsSaveOwnerHandset(t *testing.T) {
+	data, err := testfixture.KTFSaveArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := StartSession(t.Context(), data, SessionOptions{SaveStore: testSaveStore(t, nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if session.Client.authentication != backend.AuthenticationUnsupported {
+		t.Fatalf("unregistered client selected %v", session.Client.authentication)
 	}
 }

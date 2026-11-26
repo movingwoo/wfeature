@@ -274,12 +274,12 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 	if err != nil {
 		return nil, err
 	}
-	opened, err := Open(archive)
+	load, err := openModule(archive)
 	if err != nil {
 		return nil, err
 	}
-	prepared := &PreparedSession{archive: opened, adapters: saved.Adapters, placeholder: backend.NewDetachedSaveStore(), vibration: saved.Client.Vibration}
-	client, err := restoreClientState(opened, saved.Client, Options{
+	prepared := &PreparedSession{archive: load.archive, adapters: saved.Adapters, placeholder: backend.NewDetachedSaveStore(), vibration: saved.Client.Vibration}
+	client, err := restoreClientState(load, saved.Client, Options{
 		Logger: options.Logger, SaveStore: prepared.placeholder, MaxSteps: checkpointMaxSteps(options),
 		TraceSVC: options.TraceSVC, TraceLive: options.TraceLive, TraceOut: options.TraceOut,
 	})
@@ -309,14 +309,14 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 	if err := client.audio.RebasePlaybackClock(client.clock.now(), saved.Speed); err != nil {
 		return nil, err
 	}
-	if err := client.checkAdapters(opened, saved.Adapters); err != nil {
+	if err := client.checkAdapters(load.archive, saved.Adapters); err != nil {
 		return nil, err
 	}
 	if err := client.startRestoredJavaWorkers(); err != nil {
 		return nil, err
 	}
 	prepared.session = &Session{
-		client: client, archive: opened, tick: saved.Tick, speed: saved.Speed, pad: pad,
+		client: client, archive: load.archive, tick: saved.Tick, speed: saved.Speed, pad: pad,
 		authentication: backend.AuthenticationStatus(saved.Authentication),
 		options:        options, archiveIdentity: identity,
 	}

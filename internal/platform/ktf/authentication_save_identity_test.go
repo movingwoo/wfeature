@@ -6,6 +6,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 const ownerRecordClient = "1d34e05b90527ef933fc96e1ca4ddf10857844490ed441bca578767e6a6a289a"
@@ -125,7 +126,7 @@ func TestOwnerRecordRejectsUnexpectedCode(t *testing.T) {
 	if _, err := applySaveSubscriberIdentity(ownerRecordFixture(t), "unknown", false); err == nil {
 		t.Fatal("client without recorded comparisons accepted")
 	}
-	if hasSaveIdentityCompatibility(clientDigest([]byte("unrecognized client"))) {
+	if compatibility.IdentifyNative("ktf", []byte("unrecognized client")).Has(compatibility.KTFSaveSubscriberIdentity) {
 		t.Fatal("unknown revision matched")
 	}
 }

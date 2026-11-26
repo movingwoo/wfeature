@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 const dialFailureClient = "a62730b07a2e540619dafd0395ef884f868a3e76446dbd604c8bc12bf3d71349"
@@ -151,7 +152,7 @@ func TestDialFailureRejectsUnexpectedCode(t *testing.T) {
 	if err := applyDialFailureNotice(dialFailureFixture(t), "unknown"); err == nil {
 		t.Fatal("client without recorded code accepted")
 	}
-	if hasDialFailureCompatibility([]byte("unrecognized client")) {
+	if compatibility.IdentifyNative("ktf", []byte("unrecognized client")).Has(compatibility.KTFDialFailureNotice) {
 		t.Fatal("unknown revision matched")
 	}
 }

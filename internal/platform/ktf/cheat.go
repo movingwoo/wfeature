@@ -33,10 +33,10 @@ func (client *Client) cheatLabel(base uint32) (string, bool) {
 // lower-case hex. It identifies what is running across the archives a title
 // arrives in: repackaging changes the file and leaves the image alone.
 func (session *Session) ImageHash() string {
-	if session == nil || session.Client == nil {
+	if session == nil || session.Client == nil || session.Client.mapped == 0 {
 		return ""
 	}
-	return armcheat.ImageHash(session.Client.image.Data)
+	return session.Client.revision.Digest()
 }
 
 // Cheat returns the session's attached cheat engine, creating it on first

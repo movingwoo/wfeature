@@ -2,8 +2,6 @@ package lgt
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
@@ -12,22 +10,16 @@ import (
 
 const framebufferOriginAddress uint32 = 0x1ef8c
 
-func hasFramebufferOriginCorrection(module []byte) bool {
-	digest := sha256.Sum256(module)
-	return compatibility.HasFix("lgt", compatibility.NativeModule, hex.EncodeToString(digest[:]), compatibility.LGTVisibleFramebufferOrigin)
-}
-
 func (client *Client) applyOriginCompatibility() error {
-	digest := sha256.Sum256(client.archive.Module)
-	if compatibility.HasFix("lgt", compatibility.NativeModule, hex.EncodeToString(digest[:]), compatibility.LGTScreenStripConstant) {
-		if err := clearScreenStripConstant(client.core.Memory(), hex.EncodeToString(digest[:])); err != nil {
+	if client.revision.Has(compatibility.LGTScreenStripConstant) {
+		if err := clearScreenStripConstant(client.core.Memory(), client.revision.Digest()); err != nil {
 			return err
 		}
 		if client.logger != nil {
 			client.logger.Debug("LGT compatibility applied", "fix", compatibility.LGTScreenStripConstant)
 		}
 	}
-	if compatibility.HasFix("lgt", compatibility.NativeModule, hex.EncodeToString(digest[:]), compatibility.LGTColorKeySampleOrigin) {
+	if client.revision.Has(compatibility.LGTColorKeySampleOrigin) {
 		if err := correctColorKeySampleOrigin(client.core.Memory()); err != nil {
 			return err
 		}
@@ -35,7 +27,7 @@ func (client *Client) applyOriginCompatibility() error {
 			client.logger.Debug("LGT compatibility applied", "fix", compatibility.LGTColorKeySampleOrigin)
 		}
 	}
-	if compatibility.HasFix("lgt", compatibility.NativeModule, hex.EncodeToString(digest[:]), compatibility.LGTImageFramebufferOrigin) {
+	if client.revision.Has(compatibility.LGTImageFramebufferOrigin) {
 		if err := correctImageFramebufferOrigin(client.core.Memory()); err != nil {
 			return err
 		}
@@ -43,7 +35,7 @@ func (client *Client) applyOriginCompatibility() error {
 			client.logger.Debug("LGT compatibility applied", "fix", compatibility.LGTImageFramebufferOrigin)
 		}
 	}
-	if compatibility.HasFix("lgt", compatibility.NativeModule, hex.EncodeToString(digest[:]), compatibility.LGTDirectFramebufferOrigin) {
+	if client.revision.Has(compatibility.LGTDirectFramebufferOrigin) {
 		if err := correctDirectFramebufferOrigin(client.core.Memory()); err != nil {
 			return err
 		}
@@ -51,7 +43,7 @@ func (client *Client) applyOriginCompatibility() error {
 			client.logger.Debug("LGT compatibility applied", "fix", compatibility.LGTDirectFramebufferOrigin)
 		}
 	}
-	if !hasFramebufferOriginCorrection(client.archive.Module) {
+	if !client.revision.Has(compatibility.LGTVisibleFramebufferOrigin) {
 		return nil
 	}
 	if err := correctFramebufferOrigin(client.core.Memory()); err != nil {

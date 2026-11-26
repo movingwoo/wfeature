@@ -3,9 +3,12 @@ package skt
 import (
 	"bytes"
 	"context"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/sgsvm"
 )
 
@@ -134,5 +137,13 @@ func TestScriptInstallIdentityRecognition(t *testing.T) {
 	}
 	if (*ScriptSession)(nil).Authentication() != backend.AuthenticationUnsupported {
 		t.Fatal("a session that never started reports a policy")
+	}
+}
+
+func TestScriptIdentitySitesMatchRegistry(t *testing.T) {
+	registered := compatibility.DigestsForFix(compatibility.SKTScriptInstallIdentity)
+	sites := slices.Sorted(maps.Keys(scriptIdentitySites))
+	if !slices.Equal(registered, sites) {
+		t.Errorf("script identity digests: registry %v, Go sites %v", registered, sites)
 	}
 }

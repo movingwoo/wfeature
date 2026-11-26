@@ -7,17 +7,13 @@ import (
 	"math/bits"
 
 	"github.com/movingwoo/wfeature/internal/backend"
-	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
 // This client loads both private records on startup. The same handset must
 // own both. Its record reader checks the length, owner and checksum before it
 // uses any saved progress. Select the handset before the guest reads it.
-func (client *Client) selectSaveOwnerHandset(digest string, configured bool) error {
-	if !compatibility.HasFix("ktf", compatibility.NativeModule, digest, compatibility.KTFSaveOwnerHandset) {
-		return nil
-	}
+func (client *Client) selectSaveOwnerHandset(configured bool) error {
 	client.authentication = backend.AuthenticationGuestManaged
 	if configured {
 		return nil

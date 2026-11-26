@@ -6,6 +6,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -258,7 +259,7 @@ func TestSaveSubscriberBranchRejectsUnexpectedCode(t *testing.T) {
 	if _, err := applySaveSubscriberIdentity(subscriberFixture(t, saveReaderModule), "unknown", false); err == nil {
 		t.Fatal("module without recorded comparisons accepted")
 	}
-	if hasSaveIdentityCompatibility([]byte("unrecognized module")) {
+	if compatibility.IdentifyNative("lgt", []byte("unrecognized module")).Has(compatibility.LGTSaveSubscriberIdentity) {
 		t.Fatal("unknown revision matched")
 	}
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -119,6 +120,7 @@ type CletFunctions struct {
 
 // Client is one loaded LGT game.
 type Client struct {
+	revision              compatibility.NativeRevision
 	wideGraphicsContexts  bool
 	wideExclusiveClip     bool
 	recordTableTerminator bool
@@ -409,6 +411,12 @@ const (
 // Load parses the module, maps it, and prepares the platform regions. It does
 // not run anything: Start does.
 func Load(archive *Archive, options Options) (*Client, error) {
+	load := moduleLoad{archive: archive}
+	return load.newClient(options)
+}
+
+func (load *moduleLoad) newClient(options Options) (*Client, error) {
+	archive := load.archive
 	if archive == nil {
 		return nil, fmt.Errorf("LGT archive is nil")
 	}
@@ -473,7 +481,8 @@ func Load(archive *Archive, options Options) (*Client, error) {
 			return nil, fmt.Errorf("map LGT %s: %w", region.what, err)
 		}
 	}
-	if hasNullPageMemory(archive.Module) {
+	revision := load.identify()
+	if revision.Has(compatibility.LGTNullPageMemory) {
 		if err := mapNullPage(memory); err != nil {
 			return nil, fmt.Errorf("map LGT null page: %w", err)
 		}
@@ -482,6 +491,7 @@ func Load(archive *Archive, options Options) (*Client, error) {
 	initial := armcore.NewContext()
 	initial.Registers[armcore.RegisterSP] = stackBase + uint32(stackSize)
 	client := &Client{
+		revision:         revision,
 		core:             core,
 		thread:           armcore.NewThread(initial),
 		archive:          archive,
@@ -508,9 +518,9 @@ func Load(archive *Archive, options Options) (*Client, error) {
 		volume: mediaMaxVolume,
 	}
 	client.audio.SetLogger(options.Logger)
-	client.wideGraphicsContexts = hasWideGraphicsContexts(client.archive.Module)
-	client.wideExclusiveClip = hasWideExclusiveClip(client.archive.Module)
-	client.recordTableTerminator = hasRecordTableTerminator(client.archive.Module)
+	client.wideGraphicsContexts = revision.Has(compatibility.LGTWideGraphicsContext)
+	client.wideExclusiveClip = revision.Has(compatibility.LGTWideExclusiveClip)
+	client.recordTableTerminator = revision.Has(compatibility.LGTRecordTableTerminator)
 	if err := client.applyOriginCompatibility(); err != nil {
 		return nil, err
 	}

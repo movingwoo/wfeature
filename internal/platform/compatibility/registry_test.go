@@ -179,3 +179,27 @@ func TestCompatibilityBindsIdentityFixes(t *testing.T) {
 		}
 	}
 }
+
+// The runtime reads each registered fix from one platform and fingerprint kind.
+// Exercise the parser with every combination, including the wrong native platform.
+func TestCompatibilityBindsRegisteredFixes(t *testing.T) {
+	for key, source := range embeddedRegistry {
+		for _, fix := range source.Fixes {
+			for _, platform := range []string{"skt", "ktf", "lgt"} {
+				for _, kind := range []string{JavaClassSet, NativeModule, ScriptImage} {
+					entry := source
+					entry.Platform, entry.Match.Kind, entry.Fixes = platform, kind, []string{fix}
+					data, err := json.Marshal(map[string]any{"version": 1, "entries": []compatibilityEntry{entry}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, err = parseCompatibility(data)
+					valid := platform == key.Platform && kind == key.Kind
+					if (err == nil) != valid {
+						t.Errorf("%s, %s, %s: error %v, want valid=%v", fix, platform, kind, err, valid)
+					}
+				}
+			}
+		}
+	}
+}

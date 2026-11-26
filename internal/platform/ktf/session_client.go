@@ -61,7 +61,7 @@ func newSessionClient(archive *Archive, options SessionOptions, keyNumber string
 	client.SetProgramName(ProgramNameForAID(archive.Descriptor.AID))
 	client.AttachAppProperties(archive.Descriptor.Properties)
 	client.AttachResources(archive.JAR.Entries)
-	files, err := sessionGuestFiles(archive, keyNumber)
+	files, err := sessionGuestFiles(archive, client.revision, keyNumber)
 	if err != nil {
 		client.StopThreads()
 		return nil, err

@@ -27,10 +27,10 @@ func TestCertificateMessageSequenceAndFragments(t *testing.T) {
 	if certificateMessageNetwork(revision, "invalid", "Fixture") != nil || certificateMessageNetwork(revision, "01012345678", "") != nil || certificateMessageNetwork(revision, "01012345678", strings.Repeat("x", 50)) != nil || certificateMessageNetwork(revision, "01012345678", "a\x00b") != nil {
 		t.Fatal("invalid session identity accepted")
 	}
-	if newCertificateMessageNetwork(&Archive{Descriptor: Descriptor{AID: "00028E76"}, Module: []byte("other revision")}, "01012345678", "Fixture") != nil {
+	if newCertificateMessageNetwork(compatibility.IdentifyNative("lgt", []byte("other revision")), "01012345678", "Fixture") != nil {
 		t.Fatal("unknown module matched")
 	}
-	if newCertificateMessageNetwork(nil, "01012345678", "Fixture") != nil {
+	if newCertificateMessageNetwork(compatibility.NativeRevision{}, "01012345678", "Fixture") != nil {
 		t.Fatal("unknown archive matched")
 	}
 	for module := range certificateMessageRevisions {

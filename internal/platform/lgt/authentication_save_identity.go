@@ -6,7 +6,6 @@ import (
 
 	"github.com/movingwoo/wfeature/internal/armcore"
 	"github.com/movingwoo/wfeature/internal/backend"
-	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 )
 
 // A subscriberSite is one conditional branch a recognized module takes when a
@@ -53,10 +52,6 @@ var subscriberSites = map[string][]subscriberSite{
 		{at: 0x70ea0, expect: []byte{0x07, 0x9b, 0x09, 0xaa, 0x18, 0x1c, 0x11, 0x1c, 0x17, 0x4b, 0x9d, 0xf0, 0xbb, 0xf9,
 			0x03, 0x1c, 0x00, 0x2b, 0x0b, 0xd1, 0x07, 0x9b, 0x01, 0x93}, branch: 18, accept: [2]byte{0xc0, 0x46}},
 	},
-}
-
-func hasSaveIdentityCompatibility(module []byte) bool {
-	return compatibility.HasFix("lgt", compatibility.NativeModule, moduleDigest(module), compatibility.LGTSaveSubscriberIdentity)
 }
 
 // applySaveSubscriberIdentity accepts the archived subscriber at each of the

@@ -2,9 +2,7 @@ package ktf
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
-	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
@@ -26,8 +24,8 @@ type subscriberReceiptStore struct {
 	lengths [5]uint32
 }
 
-func authenticationSubscriberReceipt(base wipicrt.SaveStore, archive *Archive, number string) wipicrt.SaveStore {
-	if archive == nil || archive.JAR == nil || fmt.Sprintf("%x", sha256.Sum256(archive.JAR.Client.Data)) != subscriberReceiptImage {
+func authenticationSubscriberReceipt(base wipicrt.SaveStore, archive *Archive, digest, number string) wipicrt.SaveStore {
+	if archive == nil || archive.JAR == nil || digest != subscriberReceiptImage {
 		return base
 	}
 	// The matched decoder reads this table from its packaged resource container.

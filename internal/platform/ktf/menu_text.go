@@ -34,7 +34,7 @@ const (
 var menuTextStores = [...]uint32{menuTextTitle, menuTextBody, menuTextSettingsTitle, menuTextToggleOn, menuTextVolume, menuTextSpeed, menuTextToggleOff}
 
 func (runtime *initializationRuntime) installMenuTextCompatibility() error {
-	if fmt.Sprintf("%x", sha256.Sum256(runtime.client.image.Data)) != menuTextImage {
+	if runtime.client.revision.Digest() != menuTextImage {
 		return nil
 	}
 	// Validate both layouts before installing any store. A changed submenu

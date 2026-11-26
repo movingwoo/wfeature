@@ -1,6 +1,10 @@
 package lgt
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
+)
 
 // The setting is "1" only for a client whose module was selected, and every
 // other property keeps the answer every title gets.
@@ -9,7 +13,7 @@ func TestDataServiceLockAnswersOnlyTheSelectedModule(t *testing.T) {
 	if client.dataServiceLock {
 		t.Fatal("the fixture module was selected")
 	}
-	if hasDataServiceLock([]byte("unrecognized module")) {
+	if compatibility.IdentifyNative("lgt", []byte("unrecognized module")).Has(compatibility.LGTDataServiceLock) {
 		t.Fatal("an unknown revision was selected")
 	}
 	if value, ok := client.systemProperty(dataServiceLockProperty); !ok || value != "0" {

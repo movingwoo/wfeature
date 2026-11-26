@@ -1,26 +1,9 @@
 package lgt
 
-import (
-	"crypto/sha256"
-	"encoding/hex"
-
-	"github.com/movingwoo/wfeature/internal/platform/compatibility"
-)
-
 // The wide ABI has four signed clip words and independent signed translations.
 // Select it by verified code revision, never by treating a coordinate as a code
 // pointer. Compact contexts remain unchanged. See docs/history/lgt.md#lgt-qa-2026-09-20.
 const wideContextSize = 56
-
-func hasWideGraphicsContexts(module []byte) bool {
-	digest := sha256.Sum256(module)
-	return compatibility.HasFix("lgt", compatibility.NativeModule, hex.EncodeToString(digest[:]), compatibility.LGTWideGraphicsContext)
-}
-
-func hasWideExclusiveClip(module []byte) bool {
-	digest := sha256.Sum256(module)
-	return compatibility.HasFix("lgt", compatibility.NativeModule, hex.EncodeToString(digest[:]), compatibility.LGTWideExclusiveClip)
-}
 
 func (client *Client) initWideContext(pointer uint32) int32 {
 	if pointer == 0 {

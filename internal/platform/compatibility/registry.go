@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -151,6 +152,47 @@ const SKTNativeDiscardOwnerState = "skt.native_discard_owner_state"
 // runs past the default ceiling. The raised figure is in the skt package.
 const SKTNativeServiceAllowance = "skt.native_service_allowance"
 
+type fixScope struct {
+	platform string
+	kind     string
+}
+
+var fixScopes = map[string]fixScope{
+	KTFBREWPackagedCertificate:  {"ktf", NativeModule},
+	KTFDialFailureNotice:        {"ktf", NativeModule},
+	KTFNullPageMemory:           {"ktf", NativeModule},
+	KTFSaveFileTime:             {"ktf", NativeModule},
+	KTFSaveOwnerHandset:         {"ktf", NativeModule},
+	KTFSaveSubscriberIdentity:   {"ktf", NativeModule},
+	KTFSaveSubscriberKey:        {"ktf", NativeModule},
+	KTFWithheldPrivateFile:      {"ktf", NativeModule},
+	LGTAuthenticationAllowance:  {"lgt", NativeModule},
+	LGTCertificateMessage:       {"lgt", NativeModule},
+	LGTColorKeySampleOrigin:     {"lgt", NativeModule},
+	LGTDataServiceLock:          {"lgt", NativeModule},
+	LGTDirectFramebufferOrigin:  {"lgt", NativeModule},
+	LGTImageFramebufferOrigin:   {"lgt", NativeModule},
+	LGTNullPageMemory:           {"lgt", NativeModule},
+	LGTPackagedCertificate:      {"lgt", NativeModule},
+	LGTRecordTableTerminator:    {"lgt", NativeModule},
+	LGTSaveSubscriberIdentity:   {"lgt", NativeModule},
+	LGTScreenStripConstant:      {"lgt", NativeModule},
+	LGTVisibleFramebufferOrigin: {"lgt", NativeModule},
+	LGTWideExclusiveClip:        {"lgt", NativeModule},
+	LGTWideGraphicsContext:      {"lgt", NativeModule},
+	SKTInclusiveSetClip:         {"skt", JavaClassSet},
+	SKTResumeThroughStart:       {"skt", JavaClassSet},
+	SKTResumeWithoutStart:       {"skt", JavaClassSet},
+	SKTTutorialNameCache:        {"skt", JavaClassSet},
+	SKTNativeCertDataSubscriber: {"skt", NativeModule},
+	SKTNativeCertSubscriber:     {"skt", NativeModule},
+	SKTNativeDiscardOwnerState:  {"skt", NativeModule},
+	SKTNativePairedCertificate:  {"skt", NativeModule},
+	SKTNativeSaveIdentity:       {"skt", NativeModule},
+	SKTNativeServiceAllowance:   {"skt", NativeModule},
+	SKTScriptInstallIdentity:    {"skt", ScriptImage},
+}
+
 type target struct {
 	Platform string
 	Kind     string
@@ -226,12 +268,8 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 		}
 		seen := make(map[string]bool)
 		for _, fix := range entry.Fixes {
-			supported := (fix == SKTInclusiveSetClip || fix == SKTTutorialNameCache || fix == SKTResumeWithoutStart || fix == SKTResumeThroughStart) && entry.Platform == "skt" && entry.Match.Kind == JavaClassSet ||
-				(fix == LGTCertificateMessage || fix == LGTPackagedCertificate || fix == LGTSaveSubscriberIdentity || fix == LGTColorKeySampleOrigin || fix == LGTScreenStripConstant || fix == LGTVisibleFramebufferOrigin || fix == LGTDirectFramebufferOrigin || fix == LGTImageFramebufferOrigin || fix == LGTWideGraphicsContext || fix == LGTWideExclusiveClip || fix == LGTRecordTableTerminator || fix == LGTDataServiceLock || fix == LGTAuthenticationAllowance || fix == LGTNullPageMemory) && entry.Platform == "lgt" && entry.Match.Kind == NativeModule ||
-				(fix == SKTNativeSaveIdentity || fix == SKTNativeCertSubscriber || fix == SKTNativePairedCertificate || fix == SKTNativeCertDataSubscriber || fix == SKTNativeDiscardOwnerState || fix == SKTNativeServiceAllowance) && entry.Platform == "skt" && entry.Match.Kind == NativeModule ||
-				fix == SKTScriptInstallIdentity && entry.Platform == "skt" && entry.Match.Kind == ScriptImage ||
-				(fix == KTFBREWPackagedCertificate || fix == KTFSaveSubscriberIdentity || fix == KTFSaveOwnerHandset || fix == KTFNullPageMemory || fix == KTFDialFailureNotice || fix == KTFWithheldPrivateFile || fix == KTFSaveFileTime || fix == KTFSaveSubscriberKey) && entry.Platform == "ktf" && entry.Match.Kind == NativeModule
-			if !supported {
+			scope, known := fixScopes[fix]
+			if !known || scope.platform != entry.Platform || scope.kind != entry.Match.Kind {
 				return nil, fmt.Errorf("entry %q has unknown fix %q", entry.ID, fix)
 			}
 			if seen[fix] {
@@ -252,16 +290,24 @@ func parseCompatibility(data []byte) (compatibilityRegistry, error) {
 }
 
 // HasFix reports whether the exact platform and code fingerprint select a fix.
-// Platform runtimes compute their fingerprints and implement the selected fixes.
+// Platforms with an existing fingerprint use this lookup directly.
 func HasFix(platform, kind, digest, fix string) bool {
 	return embeddedRegistry.hasFix(target{platform, kind, digest}, fix)
 }
 
 func (registry compatibilityRegistry) hasFix(key target, fix string) bool {
-	for _, candidate := range registry[key].Fixes {
-		if candidate == fix {
-			return true
+	return slices.Contains(registry[key].Fixes, fix)
+}
+
+// DigestsForFix returns the sorted code digests registered for a fix.
+// Each fix belongs to one platform and fingerprint kind.
+func DigestsForFix(fix string) []string {
+	var digests []string
+	for key, entry := range embeddedRegistry {
+		if slices.Contains(entry.Fixes, fix) {
+			digests = append(digests, key.Digest)
 		}
 	}
-	return false
+	slices.Sort(digests)
+	return digests
 }

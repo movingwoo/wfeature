@@ -47,9 +47,8 @@ func nativeCertificateBinding(archive *NativeArchive) (nativeCertificatePackage,
 	if !ok {
 		return nativeCertificatePackage{}, false
 	}
-	module := sha256.Sum256(archive.Module)
-	digest := hex.EncodeToString(module[:])
-	return binding, digest == binding.moduleSHA256 && compatibility.HasFix("ktf", compatibility.NativeModule, digest, compatibility.KTFBREWPackagedCertificate)
+	revision := compatibility.IdentifyNative("ktf", archive.Module)
+	return binding, revision.Digest() == binding.moduleSHA256 && revision.Has(compatibility.KTFBREWPackagedCertificate)
 }
 
 func (options NativeSessionOptions) disablesPackagedCertificate(archive *NativeArchive) bool {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 	"github.com/movingwoo/wfeature/internal/testlocal"
 	"github.com/movingwoo/wfeature/internal/wipic"
@@ -28,7 +29,7 @@ func TestLocalSubscriberReceiptRecognition(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := wipicrt.NewDirectorySaveStore(t.TempDir())
-	if _, ok := authenticationSubscriberReceipt(base, archive, "01012349876").(*subscriberReceiptStore); !ok {
+	if _, ok := authenticationSubscriberReceipt(base, archive, compatibility.IdentifyNative("ktf", archive.JAR.Client.Data).Digest(), "01012349876").(*subscriberReceiptStore); !ok {
 		t.Fatal("local receipt revision not recognized")
 	}
 }

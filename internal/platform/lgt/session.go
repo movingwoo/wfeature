@@ -11,6 +11,7 @@ import (
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
 	"github.com/movingwoo/wfeature/internal/keypad"
+	"github.com/movingwoo/wfeature/internal/platform/compatibility"
 	"github.com/movingwoo/wfeature/internal/wipic"
 )
 
@@ -119,10 +120,11 @@ const sessionDefaultMaxSteps uint64 = 3_000_000_000
 
 // StartSession loads an archive, runs its initializer, and starts the Clet.
 func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Session, error) {
-	archive, err := Open(data)
+	load, err := openModule(data)
 	if err != nil {
 		return nil, err
 	}
+	archive := load.archive
 	store := options.SaveStore
 	if store == nil && options.SaveRoot != "" {
 		store = backend.NewDirectorySaveStore(options.SaveRoot)
@@ -131,7 +133,7 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 	if maxSteps == 0 {
 		maxSteps = sessionDefaultMaxSteps
 	}
-	client, err := Load(archive, Options{
+	client, err := load.newClient(Options{
 		Logger:    options.Logger,
 		SaveStore: store,
 		AudioSink: options.AudioSink,
@@ -175,8 +177,8 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 		if options.Logger != nil {
 			options.Logger.Debug("authentication compatibility", "status", authentication)
 		}
-		if hasSaveIdentityCompatibility(archive.Module) {
-			authentication, err = applySaveSubscriberIdentity(client.core.Memory(), moduleDigest(archive.Module), wipic.ConfiguredSubscriberNumber() != "")
+		if client.revision.Has(compatibility.LGTSaveSubscriberIdentity) {
+			authentication, err = applySaveSubscriberIdentity(client.core.Memory(), client.revision.Digest(), wipic.ConfiguredSubscriberNumber() != "")
 			if err != nil {
 				return nil, err
 			}
@@ -186,8 +188,8 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 		}
 		// A registered title gives its one-time network authentication up
 		// after five failures; the first is made the one it lets through.
-		if authentication == backend.AuthenticationUnsupported && hasAuthenticationAllowance(archive.Module) {
-			if err := applyAuthenticationAllowance(client.core.Memory(), moduleDigest(archive.Module)); err != nil {
+		if authentication == backend.AuthenticationUnsupported && client.revision.Has(compatibility.LGTAuthenticationAllowance) {
+			if err := applyAuthenticationAllowance(client.core.Memory(), client.revision.Digest()); err != nil {
 				return nil, err
 			}
 			authentication = backend.AuthenticationLGTAuthenticationAllowance
@@ -235,7 +237,7 @@ func StartSession(ctx context.Context, data []byte, options SessionOptions) (*Se
 func (client *Client) recognizedNetwork(archive *Archive, message bool) (*notificationNetwork, backend.AuthenticationStatus) {
 	model, _ := client.systemProperty("PHONEMODEL")
 	if message {
-		if network := newCertificateMessageNetwork(archive, client.subscriberNumber, model); network != nil {
+		if network := newCertificateMessageNetwork(client.revision, client.subscriberNumber, model); network != nil {
 			client.omitUnassignedCertificate(network.unassignedCertificate)
 			return network, backend.AuthenticationLGTCertificateMessage
 		}

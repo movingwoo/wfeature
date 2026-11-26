@@ -2,7 +2,6 @@ package ktf
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"fmt"
 	"math"
 	"slices"
@@ -70,7 +69,7 @@ func (client *Client) captureClientStateAt(now time.Time) (clientState, error) {
 	}
 	// Every guest-clock offset, including editor cycles and worker waits, uses
 	// this instant. Copying a large heap must not shorten the saved waits.
-	saved := clientState{Version: clientStateVersion, ImageHash: sha256.Sum256(client.image.Data), ImageName: []byte(client.image.Name), ImageBSS: client.image.BSSSize,
+	saved := clientState{Version: clientStateVersion, ImageHash: client.revision.Hash(), ImageName: []byte(client.image.Name), ImageBSS: client.image.BSSSize,
 		WorkerStackCount: client.workerStackCount, FreeWorkerStacks: slices.Clone(client.freeWorkerStacks),
 		Initialized: client.initializationStarted, Prepared: client.prepared != nil, InitParameters: slices.Clone(client.initParameters),
 		Argument: client.argument, Executable: client.executable, Subscriber: client.SubscriberNumber, Authentication: client.authentication,
@@ -119,7 +118,7 @@ func (client *Client) captureClientStateAt(now time.Time) (clientState, error) {
 }
 
 func (client *Client) validateClientState(saved clientState) error {
-	if saved.Version != clientStateVersion || !bytes.Equal(saved.ImageName, []byte(client.image.Name)) || saved.ImageBSS != client.image.BSSSize || saved.ImageHash != sha256.Sum256(client.image.Data) {
+	if saved.Version != clientStateVersion || !bytes.Equal(saved.ImageName, []byte(client.image.Name)) || saved.ImageBSS != client.image.BSSSize || saved.ImageHash != client.revision.Hash() {
 		return fmt.Errorf("KTF client checkpoint belongs to another image or version")
 	}
 	if len(saved.Workers) > maxGuestWorkers || saved.WorkerStackCount < 0 || saved.WorkerStackCount > maxGuestWorkers || len(saved.FreeWorkerStacks) > maxGuestWorkers || len(saved.InitParameters) != 0 && len(saved.InitParameters) != 5 || !saved.Prepared && len(saved.InitParameters) != 0 {
