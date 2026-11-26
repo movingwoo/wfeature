@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/movingwoo/wfeature/internal/armcore"
+	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
 // A graphics context can carry a pixel operation, which is the game telling the
@@ -69,6 +70,9 @@ func (op pixelOp) active() bool { return op.function != 0 }
 // record, so a context that has never been given an operation has none, which
 // is what makes the absence meaningful rather than a guess.
 func (client *Client) readContextPixelOp(function, param uint32) pixelOp {
+	if function == lgtBuiltinAlphaOp {
+		return pixelOp{function: function, param: param}
+	}
 	if function&1 == 0 {
 		return pixelOp{}
 	}
@@ -92,7 +96,7 @@ func (client *Client) readContextPixelOp(function, param uint32) pixelOp {
 // frame must not grow this without limit. Reaching the bound stops recording
 // rather than forgetting, so a title that installs a handful keeps them.
 func (client *Client) installPixelOp(function uint32) {
-	if function&1 == 0 {
+	if function&1 == 0 || function == lgtBuiltinAlphaOp {
 		return
 	}
 	if client.installedPixelOps == nil {
@@ -159,6 +163,9 @@ func (client *Client) applyPixelOp(
 ) (uint16, error) {
 	if !op.active() {
 		return incoming, nil
+	}
+	if op.function == lgtBuiltinAlphaOp {
+		return wipicrt.Blend565(existing, incoming, uint8(min(op.param, 255))), nil
 	}
 	key := uint32(existing)<<16 | uint32(incoming)
 	identity := uint64(op.function)<<32 | uint64(op.param)

@@ -268,6 +268,12 @@ selects that convention, and earlier wide contexts retain inclusive stored
 ends. Arbitrary mixed compact/direct contexts and the previously proposed
 alternate 52-byte layout remain unverified.
 
+In both layouts, setting `MC_GRP_CONTEXT_ALPHA_IDX` also selects the built-in
+RGB565 blend and sets `PIXEL_PARAM1` to the supplied alpha. A later write to
+`PIXEL_PARAM1` changes the blend strength. Installing a guest pixel operation
+replaces the blend, and clearing the operation restores plain drawing.
+[Skill icons and map overlay](history/lgt.md#lgt-overlay-date-cli-2026-11-26).
+
 The panel image follows the supported flush path. A revision-specific
 initialization correction removes verified 24-row strip offsets for exact
 native-module fingerprints, including direct-pixel and image-path revisions.

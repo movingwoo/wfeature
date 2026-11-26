@@ -2,6 +2,83 @@ package lgt
 
 import "testing"
 
+func TestSettingAlphaInstallsThePixelBlend(t *testing.T) {
+	const existing, incoming uint16 = 0x07ff, 0xf800
+	for _, layout := range []string{"compact", "wide"} {
+		t.Run(layout, func(t *testing.T) {
+			client := fixtureClient(t)
+			client.wideGraphicsContexts = layout == "wide"
+			pointer := writeGuest(t, client, make([]byte, wideContextSize))
+			answer := writeGuest(t, client, make([]byte, 4))
+			if code := client.initContext(pointer); code != wipiSuccess {
+				t.Fatal(code)
+			}
+			target, err := client.newFramebuffer(2, 2, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			set := func(field, value uint32) {
+				t.Helper()
+				if code := client.transferContextFieldFor(t, pointer, field, value); code != wipiSuccess {
+					t.Fatalf("set field %d = %#x: %d", field, value, code)
+				}
+			}
+			get := func(field uint32) uint32 {
+				t.Helper()
+				if code := int32(callSlot(t, client, slotGetContext, pointer, field, answer)); code != wipiSuccess {
+					t.Fatalf("get field %d: %d", field, code)
+				}
+				value, err := client.readWord(answer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return value
+			}
+			fill := func(want uint16) {
+				t.Helper()
+				target.pixels[0] = existing
+				if err := client.syncToGuest(target); err != nil {
+					t.Fatal(err)
+				}
+				callDrawSlot(t, client, slotFillRect, target.handle, 0, 0, 1, 1, pointer)
+				if got := target.pixels[0]; got != want {
+					t.Fatalf("filled pixel = %#04x, want %#04x", got, want)
+				}
+			}
+			set(grpFieldForeground, uint32(incoming))
+			for _, sample := range []struct {
+				alpha uint32
+				pixel uint16
+			}{{0, existing}, {100, 0x64d3}, {120, 0x7c30}, {255, incoming}} {
+				set(grpFieldAlpha, sample.alpha)
+				fill(sample.pixel)
+				if get(grpFieldAlpha) != sample.alpha || get(grpFieldParam1) != sample.alpha {
+					t.Fatalf("alpha and parameter must both read back as %d", sample.alpha)
+				}
+			}
+
+			blend := get(grpFieldPixelOp)
+			if blend != 0x330fffff {
+				t.Fatalf("blend address = %#x, want the value stored in quick saves, 0x330fffff", blend)
+			}
+			set(grpFieldParam1, 100)
+			fill(0x64d3)
+			guest := installThumb(t, client, 0x1c10, 0x4770) // adds r0,r2,#0; bx lr
+			set(grpFieldPixelOp, guest)
+			fill(100)
+			set(grpFieldAlpha, 120)
+			fill(0x7c30)
+			set(grpFieldPixelOp, 0)
+			fill(incoming)
+			set(grpFieldPixelOp, blend)
+			fill(0x7c30)
+			if client.installedPixelOps[blend] {
+				t.Fatal("the blend occupied a guest callback slot")
+			}
+		})
+	}
+}
+
 // The clip is handed over as an array of four M_Int32 — the corner inside the
 // rectangle and the corner past it — not as two packed words. A title that
 // sets one and a title that reads one back have to see the same four numbers,
