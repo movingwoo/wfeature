@@ -292,6 +292,7 @@ const (
 	wipiNoEntry     int32 = -12
 	wipiNoSpace     int32 = -13
 	wipiNotEmpty    int32 = -15
+	wipiNoMemory    int32 = -17
 	wipiShortBuffer int32 = -18
 )
 

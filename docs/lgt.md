@@ -321,6 +321,13 @@ reached no widget until the next key or input-method call; it does not infer
 arbitrary game-owned fields. Host text must be encodable in KSC5601; other characters
 are refused. See [native text input](native-text-input.md).
 
+The WIPI-C `DateTimeComponent` starts with the guest clock's local date and
+time at creation. `MC_uicGetTime` writes its nine-field C `struct tm`.
+`MC_uicSetTime` replaces that record and `MC_uicSetTimeLong` accepts signed
+epoch seconds. Each live component retains its value through quick load. The
+supported calls cover date storage and retrieval. On-screen date editing is
+unimplemented. [WIPI component contract](https://mirusu400.github.io/wipi-wiki/v20/c-api/ui-components/).
+
 ## Storage, audio, and offline services
 
 File/record services use the common save boundary. Storage read errors remain

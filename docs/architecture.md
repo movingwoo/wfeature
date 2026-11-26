@@ -783,6 +783,12 @@ rebuilds the shared ownership. Images in earlier records carry no ownership
 information. Heap space already leaked in an old slot stays allocated until
 the next ordinary launch.
 
+A live WIPI-C `DateTimeComponent` uses LGT runtime record version 9. It wraps
+the image record and stores each component's handle position and 36-byte
+`struct tm`. A load restores the saved time and preserves vacant handle
+positions. Destroying the last component makes the next save use the earliest
+record version the remaining session state requires.
+
 **The guest clock needs no rebasing.** It is virtual: elapsed guest time plus the
 work since an instruction baseline, and the instruction count travels with the
 ARM state. Timer deadlines, thread wake-ups and sound origins are readings of
