@@ -520,17 +520,28 @@ func (client *Client) CollectGuestObjects(extraRoots []uint32) (CollectionStats,
 	return stats, nil
 }
 
-// collectHostResources follows Go liveness without rooting guest objects in
+// collectHostObjects follows Go liveness without rooting guest objects in
 // bookkeeping maps. Playing orphan clips keep their mixer handle until done.
 func (runtime *initializationRuntime) collectHostObjects() {
+	runtime.collectHostObjectsKeeping(nil)
+}
+
+// A checkpoint keeps the owners it sees in this pass until it has copied
+// both the native resources and the Java heap.
+func (runtime *initializationRuntime) collectHostObjectsKeeping(keep func(*jvm.Object)) {
 	for owner, handle := range runtime.imageSurfaces {
-		if owner.Value() == nil {
+		if object := owner.Value(); object == nil {
 			runtime.DestroyWIPICFramebufferRecord(handle)
 			delete(runtime.imageSurfaces, owner)
+		} else if keep != nil {
+			keep(object)
 		}
 	}
 	for owner, state := range runtime.clips {
-		if owner.Value() != nil {
+		if object := owner.Value(); object != nil {
+			if keep != nil {
+				keep(object)
+			}
 			continue
 		}
 		if state.Loaded && runtime.client.Audio != nil {

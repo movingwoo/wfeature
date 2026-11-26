@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 
 	"github.com/movingwoo/wfeature/internal/backend"
+	"github.com/movingwoo/wfeature/internal/jvm"
 	"github.com/movingwoo/wfeature/internal/platform/wipicrt"
 )
 
@@ -160,15 +162,20 @@ func (session *Session) CaptureCheckpointWithSession(ctx context.Context, captur
 			return backend.Checkpoint{}, err
 		}
 	}
-	// An Image or Clip the title dropped keeps its entry until a round prunes
-	// it, and an owner Go has collected cannot be named in the record. The
-	// capture prunes what the next round would, rather than refusing.
+	// Framebuffer allocation metadata is copied before the heap names its
+	// owners. Retain each live weak owner from the same pass that prunes the
+	// dead ones so a collection between the copies sees one set of resources.
+	owners := heapRootCapture{ids: make(map[*jvm.Object]uint32)}
 	if client.runtime != nil {
-		client.runtime.collectHostObjects()
+		client.runtime.collectHostObjectsKeeping(func(object *jvm.Object) { owners.add(object) })
+		if owners.err != nil {
+			return backend.Checkpoint{}, owners.err
+		}
 		// A File's position and the store have to agree in the record.
 		client.runtime.storeHeldGuestFiles()
 	}
 	saved, err := client.captureClientStateAt(now)
+	runtime.KeepAlive(owners.objects)
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}

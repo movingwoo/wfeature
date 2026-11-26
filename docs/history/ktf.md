@@ -10942,6 +10942,14 @@ while it captures. A Go collection between the two clears a weak owner, and
 `GOGC=2000` the refusals were 0 of 15. In the page 90 quick saves over three
 processor settings all succeeded, so a player's exposure was not shown.
 
+On 2026-11-26, capture began retaining each surviving Image and Clip from
+the pruning pass until their native resources and Java heap had been copied.
+A regression test forces a Go collection between those two copies. At tick
+600 on the affected archive, with `GOMAXPROCS=2` and `GOGC=100`, the old CLI
+refused 4 of 20 first saves. The corrected CLI saved and restored 20 of 20 in
+fresh processes. All 20 interactive restores matched uninterrupted play after
+Fire and 100 further ticks. Both builds loaded a slot written by the other.
+
 <a id="ktf-new-archives-2026-11-22-redial"></a>
 
 ### A consent that redials without end
