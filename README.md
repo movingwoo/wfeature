@@ -47,6 +47,8 @@ KTF · LGT · SKT 피쳐폰 게임 지원
 웹 환경에서 이용 시 사설 인증서를 이용한 https 접속을 권장합니다. `https://<PC IP>:11641` 
 운영체제 별 자세한 안내는 각 압축 파일 내 `README.txt`를 확인해주세요.
 
+여러 사람이 같은 게임 목록을 쓰려면 HTTPS 접근 제어 뒤에서 `wfeature-server -multi`로 실행하세요. 플레이어마다 계정과 세이브가 생기며, 한 계정에서 게임 하나를 실행하거나 30분간 이어할 수 있습니다. [공유 서버 운영 안내](docs/running.md#shared-hosting)
+
 소스코드를 다운받아 구동하려면 Go 1.26 이상이 필요하며 자세한 내용은 [`docs/running.md`](docs/running.md)에 있습니다.
 
 ## 사용법
@@ -167,7 +169,11 @@ KTF · LGT · SKT 피쳐폰 게임 지원
 | 구성 요소 | 쓰임 | 라이선스 |
 |---|---|---|
 | `golang.org/x/text`, `golang.org/x/image` | Go 모듈, 정적 링크 | BSD-3-Clause |
-| `golang.org/x/sys` | Go 모듈, macOS·Windows·linux/amd64 대상에 정적 링크 | BSD-3-Clause |
+| `github.com/ncruces/go-sqlite3`, `github.com/ncruces/julianday` | 계정 데이터베이스 드라이버와 날짜 변환 | MIT |
+| `github.com/ncruces/go-sqlite3-wasm/v6` | SQLite 엔진의 Go 변환본 | MIT-0 |
+| SQLite | 계정 데이터베이스 엔진 | 퍼블릭 도메인 |
+| `github.com/ncruces/wasm2go` | 변환본의 런타임과 메모리 할당기 | MIT |
+| `golang.org/x/sys` | Go 모듈, 데스크톱 서버에 정적 링크 | BSD-3-Clause |
 | NeoDGM (Neo둥근모) | 임베드 폰트 | SIL OFL 1.1 (Reserved Font Name) |
 | Galmuri9 | 임베드 폰트 | SIL OFL 1.1 (Reserved Font Name) |
 | hqx | `internal/filter/hqx`와 `web/hqx-patterns.js`의 결정 테이블 번역본 | MIT OR Apache-2.0 |

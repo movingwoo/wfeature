@@ -149,7 +149,7 @@ func TestThePageIsFilledFromTheText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := renderPage([]byte(`<p title="{{a.b}}">{{c}}</p><script>{{@table}}</script>`), table)
+	page, err := renderPage([]byte(`<p title="{{a.b}}">{{c}}</p><script>{{@table}}</script>`), table, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestThePageIsFilledFromTheText(t *testing.T) {
 		t.Fatalf("renderPage =\n%s\nwant\n%s", page, want)
 	}
 	for _, broken := range []string{"{{missing}}", "{{ c }}", "{{c}", "{{"} {
-		if _, err := renderPage([]byte(broken), table); err == nil {
+		if _, err := renderPage([]byte(broken), table, false); err == nil {
 			t.Errorf("renderPage(%q) was sent", broken)
 		}
 	}

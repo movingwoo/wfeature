@@ -71,12 +71,12 @@ const maxSavePackUpload = 64 << 20
 //
 //	GET  /api/savepack?game=<path>   -> the container for that game's saves
 //	POST /api/savepack?game=<path>   <- a container restores them
-func (s *Server) serveSavePack(writer http.ResponseWriter, request *http.Request) {
+func (s *Server) serveSavePack(writer http.ResponseWriter, request *http.Request, paths savePaths) {
 	switch request.Method {
 	case http.MethodGet, http.MethodHead:
-		s.exportSavePack(writer, request)
+		s.exportSavePack(writer, request, paths)
 	case http.MethodPost:
-		s.importSavePack(writer, request)
+		s.importSavePack(writer, request, paths)
 	default:
 		writeError(writer, http.StatusMethodNotAllowed, "Method Not Allowed")
 	}
@@ -85,7 +85,7 @@ func (s *Server) serveSavePack(writer http.ResponseWriter, request *http.Request
 // savePackTarget resolves the query into everything both directions need: the
 // archive's identity, the directory its saves live in, and a name for the file.
 // Every refusal it answers is written for the page to show; see explain.
-func (s *Server) savePackTarget(request *http.Request) (identity [32]byte, directory, label string, err error) {
+func (s *Server) savePackTarget(request *http.Request, paths savePaths) (identity [32]byte, directory, label string, err error) {
 	game := request.URL.Query().Get(savePackQuery)
 	if strings.TrimSpace(game) == "" {
 		return identity, "", "", refuse("savepack.no-game")
@@ -101,8 +101,8 @@ func (s *Server) savePackTarget(request *http.Request) (identity [32]byte, direc
 		// here.
 		return identity, "", "", refuse("savepack.unreadable-game")
 	}
-	s.migrateSaveOwner(summary)
-	directory = s.saveDirectory(summary.Platform, summary.SaveOwner)
+	s.migrateSaveOwner(summary, paths)
+	directory = paths.saveDirectory(summary.Platform, summary.SaveOwner)
 	// An owner the save tree cannot name is a different answer from a game
 	// with no saves: the game has them and this server will not start it
 	// for that reason, so saying it keeps none would be untrue.
@@ -115,8 +115,8 @@ func (s *Server) savePackTarget(request *http.Request) (identity [32]byte, direc
 	return backend.SaveIdentity(archive), directory, label, nil
 }
 
-func (s *Server) exportSavePack(writer http.ResponseWriter, request *http.Request) {
-	identity, directory, label, err := s.savePackTarget(request)
+func (s *Server) exportSavePack(writer http.ResponseWriter, request *http.Request, paths savePaths) {
+	identity, directory, label, err := s.savePackTarget(request, paths)
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, s.explain(err))
 		return
@@ -170,8 +170,8 @@ type savePackResult struct {
 	Removed int `json:"removed"`
 }
 
-func (s *Server) importSavePack(writer http.ResponseWriter, request *http.Request) {
-	identity, directory, label, err := s.savePackTarget(request)
+func (s *Server) importSavePack(writer http.ResponseWriter, request *http.Request, paths savePaths) {
+	identity, directory, label, err := s.savePackTarget(request, paths)
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, s.explain(err))
 		return

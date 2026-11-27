@@ -26,11 +26,13 @@ import (
 	"net/netip"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/accounts"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/licenses"
 	"github.com/movingwoo/wfeature/internal/platform/ktf"
@@ -69,6 +71,9 @@ type Options struct {
 	// released binary passes its embedded copy and a development run passes
 	// os.DirFS over web/.
 	Client fs.FS
+
+	// Accounts enables shared hosting. The calling process owns the store.
+	Accounts *accounts.Store
 
 	// GameRoot holds the archives, grouped by platform directory.
 	GameRoot string
@@ -110,9 +115,11 @@ type Server struct {
 	text      *pageText
 	gameRoot  string
 	addedRoot string
-	saveRoot  string
-	logRoot   string
-	logger    *slog.Logger
+	savePaths
+	accounts *accounts.Store
+	logins   loginSockets
+	logRoot  string
+	logger   *slog.Logger
 	// profile is this binary's build profile. There is no flag for it: the
 	// server is built per profile like every other binary here, so a flag
 	// would only be a way to disagree with the binary that is running.
@@ -168,12 +175,27 @@ func New(options Options) (*Server, error) {
 	if logger == nil {
 		logger = backend.NewLogger(io.Discard)
 	}
+	if options.Accounts != nil {
+		options.AddedRoot = ""
+		if options.SaveRoot == "" {
+			options.SaveRoot = SaveRootIn("var")
+		}
+		root, err := filepath.Abs(options.SaveRoot)
+		if err != nil {
+			return nil, err
+		}
+		if filepath.Dir(root) == root {
+			return nil, errors.New("shared save trees need a directory below the volume root")
+		}
+		options.SaveRoot = root
+	}
 	server := &Server{
 		client:          options.Client,
 		text:            &pageText{files: options.Client},
 		gameRoot:        options.GameRoot,
 		addedRoot:       options.AddedRoot,
-		saveRoot:        options.SaveRoot,
+		savePaths:       savePaths(options.SaveRoot),
+		accounts:        options.Accounts,
 		logRoot:         options.LogRoot,
 		logger:          logger,
 		profile:         backend.BuildProfile(),
@@ -224,13 +246,47 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusForbidden, "Forbidden")
 		return
 	}
+	switch requestPath {
+	case "/api/status":
+		s.serveStatus(writer, request)
+		return
+	case "/api/shutdown":
+		s.serveShutdown(writer, request)
+		return
+	case "/licenses":
+		s.serveLicenses(writer, request)
+		return
+	case "/api/account", "/api/register", "/api/login", "/api/logout":
+		s.serveAccount(writer, request)
+		return
+	}
+	if !strings.HasPrefix(requestPath, "/api/") && requestPath != "/games.json" &&
+		!strings.HasPrefix(requestPath, "/games/") && !strings.HasPrefix(requestPath, "/ext/") {
+		s.serveClient(writer, request)
+		return
+	}
+
+	var login accounts.Login
+	if s.accounts != nil {
+		var err error
+		login, err = s.accounts.Lookup(request.Context(), loginToken(request))
+		if err != nil {
+			s.accountError(writer, err)
+			return
+		}
+		if requestPath == "/api/games" || strings.HasPrefix(requestPath, "/ext/") {
+			writeError(writer, http.StatusNotFound, "Not Found")
+			return
+		}
+	}
+	paths := s.pathsFor(login.User)
 	switch {
 	case requestPath == "/api/session":
-		s.serveSession(writer, request)
+		s.serveSession(writer, request, login)
 	case requestPath == "/api/debug-log":
 		s.serveDebugLog(writer, request)
 	case strings.HasPrefix(requestPath, "/api/saves/"):
-		s.serveSaves(writer, request)
+		s.serveSaves(writer, request, paths)
 	case requestPath == "/games.json":
 		s.serveGameList(writer, request)
 	case strings.HasPrefix(requestPath, "/games/"), strings.HasPrefix(requestPath, "/ext/"):
@@ -238,15 +294,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case requestPath == "/api/games":
 		s.serveGames(writer, request)
 	case requestPath == "/api/savepack":
-		s.serveSavePack(writer, request)
-	case requestPath == "/api/status":
-		s.serveStatus(writer, request)
-	case requestPath == "/api/shutdown":
-		s.serveShutdown(writer, request)
-	case requestPath == "/licenses":
-		s.serveLicenses(writer, request)
+		s.serveSavePack(writer, request, paths)
 	default:
-		s.serveClient(writer, request)
+		writeError(writer, http.StatusNotFound, "Not Found")
 	}
 }
 
@@ -331,11 +381,15 @@ func (s *Server) serveShutdown(writer http.ResponseWriter, request *http.Request
 // as good as the proxy that sets it, which is why docs/running.md has the
 // nginx block set one; a visitor can add one but gains nothing by it.
 func isLoopbackRequest(request *http.Request) bool {
-	for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Real-IP"} {
+	for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Proto", "X-Real-IP"} {
 		if len(request.Header.Values(header)) > 0 {
 			return false
 		}
 	}
+	return localPeer(request)
+}
+
+func localPeer(request *http.Request) bool {
 	host, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err != nil {
 		host = request.RemoteAddr

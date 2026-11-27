@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" data-mode="{{@mode}}">
   <head>
     <meta charset="utf-8" />
     <meta
@@ -30,6 +30,21 @@
     <script src="app.js" type="module"></script>
   </head>
   <body>
+    <main class="account-entry">
+      <form id="account-form" method="post" novalidate>
+        <h1>{{account.title}}</h1>
+        <label for="account-id">{{account.id}}</label>
+        <input id="account-id" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="account-rules account-message" required disabled />
+        <label for="account-password">{{account.password}}</label>
+        <input id="account-password" type="password" autocomplete="current-password" aria-describedby="account-rules account-message" required disabled />
+        <small id="account-rules">{{account.signup-rules}}</small>
+        <div class="account-actions">
+          <button class="game-start" type="submit" value="login" disabled>{{account.login}}</button>
+          <button class="game-add" type="submit" value="register" disabled>{{account.register}}</button>
+        </div>
+        <p id="account-message" role="status" aria-live="polite"></p>
+      </form>
+    </main>
     <!-- Three columns on a wide screen, one on a narrow one. The rails hold the
          panels in both cases: on a narrow screen they carry no layout of their
          own (display: contents) and their panels become centred modals, so the
@@ -75,7 +90,7 @@
                  the archive comes in through the page. The input is hidden
                  because a bare file input says "파일 선택" and nothing about
                  games; the button beside it is what a person reads. -->
-            <div class="prestart-row">
+            <div class="prestart-row personal-uploads">
               <input type="file" id="game-file" class="game-file" accept=".zip,.jar,application/zip,application/java-archive" multiple />
               <button id="game-add" class="game-add">{{add.button}}</button>
               <!-- Only what this page added can go, so the button greys out on
@@ -117,6 +132,7 @@
           <div class="prestart hidden" id="session-return" inert>
             <p>{{resume.elsewhere}}</p>
             <button id="session-takeover" class="game-start">{{resume.takeover}}</button>
+            <button id="session-choose" class="game-add shared-only">{{resume.choose}}</button>
           </div>
 
           <!-- The editor covers the game screen and keeps the keypad visible.
@@ -358,6 +374,10 @@
           <button id="debug-log" class="panel-button hidden">{{settings.debug-log}}</button>
           <button id="text-input-toggle" class="panel-button hidden">{{settings.text-input}}</button>
           <button id="restart" class="panel-button hidden">{{settings.restart}}</button>
+          <div class="shared-only account-controls">
+            <span id="account-name"></span>
+            <button type="button" id="account-logout" class="panel-button">{{account.logout}}</button>
+          </div>
         </div>
 
         <div id="cheat-panel" class="cheat-panel">

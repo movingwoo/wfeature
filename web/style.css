@@ -1572,3 +1572,34 @@ body:has(.confirm-dialog.visible) .modal-backdrop {
 .button-container button[data-key="SOFT2"] {
   font-size: 11px;
 }
+
+
+.account-entry,
+:root:not([data-mode="shared"]) .shared-only,
+:root[data-mode="shared"] .personal-uploads,
+:root[data-mode="shared"]:not([data-auth="player"]) body > :not(.account-entry) {
+  display: none;
+}
+:root[data-mode="shared"]:not([data-auth="player"]) .account-entry {
+  display: grid;
+  min-height: var(--viewport-height);
+  place-items: center;
+  padding: 16px;
+  box-sizing: border-box;
+}
+#account-form {
+  width: min(100%, 300px);
+  display: grid;
+  gap: 8px;
+  font-family: system-ui, sans-serif;
+}
+#account-form h1 { margin: 0 0 12px; font-size: 1.4rem; }
+#account-form input { min-width: 0; padding: 8px; font: inherit; }
+.account-actions, .account-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-block: 6px;
+}
+#account-name { overflow-wrap: anywhere; }
+#account-message { min-height: 1.4em; }

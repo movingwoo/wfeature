@@ -17,7 +17,7 @@ export const browserToken = (storage, legacy, random = globalThis.crypto) => {
 };
 
 export const createSessionLink = ({
-  token, connect, visible = () => true, onState = () => {},
+  token, connect, shared = false, visible = () => true, onState = () => {},
   confirmStart = async () => false,
   onConnection = () => {}, onStarted = () => {}, onExited = () => {},
   schedule = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id),
@@ -28,8 +28,14 @@ export const createSessionLink = ({
   let retry = null;
   let delay = 1000;
   let heartbeat = null;
+  // A page can return before work from its previous visit settles. Only the
+  // current visit can attach a socket, publish game state, or schedule retries.
   let generation = 0;
   let blocked = false;
+  const later = (callback, ms) => {
+    const turn = generation;
+    return schedule(() => { if (turn === generation) callback(); }, ms);
+  };
   const change = next => {
     if (heartbeat !== null) cancel(heartbeat);
     heartbeat = null;
@@ -38,12 +44,12 @@ export const createSessionLink = ({
   };
   const watch = () => {
     if (heartbeat !== null || state !== "playing" || !visible()) return;
-    heartbeat = schedule(() => { heartbeat = null; void wake(); }, 15000);
+    heartbeat = later(() => { heartbeat = null; void wake(); }, 15000);
   };
   const clearRetry = () => { if (retry !== null) cancel(retry); retry = null; };
   const again = () => {
     if (retry !== null || blocked || !visible() || state !== "offline") return;
-    retry = schedule(() => { retry = null; void wake(); }, delay);
+    retry = later(() => { retry = null; void wake(); }, delay);
     delay = Math.min(delay * 2, 15000);
   };
   const lost = current => {
@@ -58,6 +64,40 @@ export const createSessionLink = ({
     socket = null;
     onConnection(null);
     old?.close();
+  };
+  const disconnected = turn => {
+    if (turn !== generation) return;
+    discard();
+    change(blocked ? "occupied" : "offline");
+  };
+  const connection = async turn => {
+    if (socket && !socket.closed) return socket;
+    let current;
+    current = await connect({
+      onClosed: () => { if (turn === generation) lost(current); },
+      onDetached: () => {
+        if (turn !== generation || socket !== current) return;
+        blocked = true;
+        clearRetry();
+        change("occupied");
+      },
+      onExited: reason => {
+        if (turn !== generation || socket !== current) return;
+        change("ready");
+        onExited(reason);
+      },
+    });
+    if (turn !== generation) {
+      current?.close();
+      throw new Error(phrase("session.disconnected"));
+    }
+    if (!current || current.closed) throw new Error("session connection unavailable");
+    socket = current;
+    onConnection(current);
+    return current;
+  };
+  const checkConnection = (turn, current) => {
+    if (turn !== generation || current !== socket || current.closed) throw new Error(phrase("session.disconnected"));
   };
   const answer = response => {
     // Any answer is a server that is back, so the next outage starts its
@@ -77,7 +117,11 @@ export const createSessionLink = ({
   };
   const run = operation => {
     if (task) return task;
-    task = Promise.resolve().then(operation).finally(() => {
+    const turn = generation;
+    task = Promise.resolve().then(() => {
+      if (turn === generation) return operation(turn);
+    }).finally(() => {
+      if (turn !== generation) return;
       task = null;
       if (!visible() && state === "playing") void suspend();
       again();
@@ -88,91 +132,88 @@ export const createSessionLink = ({
   const wake = (takeover = false) => {
     if (!visible() || (blocked && !takeover)) return Promise.resolve();
     if (state === "starting") return task ?? Promise.resolve();
-    if (state === "playing") return run(async () => {
+    if (state === "playing") return run(async turn => {
       try { await socket.ping(); }
-      catch { discard(); change(blocked ? "occupied" : "offline"); }
+      catch { disconnected(turn); }
     });
     clearRetry();
-    return run(async () => {
+    return run(async turn => {
       change("connecting");
       try {
-        if (!socket || socket.closed) {
-          let current;
-          const openingGeneration = generation;
-          current = await connect({
-            onClosed: () => lost(current),
-            onDetached: () => {
-              if (socket !== current) return;
-              blocked = true;
-              clearRetry();
-              change("occupied");
-            },
-            onExited: reason => {
-              if (socket !== current) return;
-              change("ready");
-              onExited(reason);
-            },
-          });
-          if (openingGeneration !== generation) { current?.close(); return; }
-          if (!current || current.closed) throw new Error("session connection unavailable");
-          socket = current;
-          onConnection(current);
-        }
-        answer(await socket.resume(token, takeover));
+        const current = await connection(turn);
+        checkConnection(turn, current);
+        const response = await current.resume(token, takeover);
+        checkConnection(turn, current);
+        answer(response);
       } catch {
-        discard();
         // A failed explicit takeover may be retried by the player. Automatic
         // retries must never turn into an implicit takeover.
-        change(blocked ? "occupied" : "offline");
+        disconnected(turn);
       }
     });
   };
   const suspend = () => {
     clearRetry();
     if (state !== "playing" || task) return task ?? Promise.resolve();
+    const turn = generation;
     return run(async () => {
       change("parked");
       try { await socket.park(); }
-      catch { discard(); change(blocked ? "occupied" : "offline"); }
+      catch { disconnected(turn); }
       // A quick app switch can return before the parking answer arrives.
-    }).then(() => { if (visible() && state === "parked") return wake(); });
+    }).then(() => { if (turn === generation && visible() && state === "parked") return wake(); });
   };
   return {
     state: () => state,
     wake, suspend,
     leave: () => {
       generation++;
+      task = null;
       clearRetry();
       discard();
       change(blocked ? "occupied" : "offline");
     },
     start: (path, scale, screen, quickLoad = false) => {
-      if (task || !socket || state !== "ready") return Promise.reject(new Error(phrase("session.wait-server")));
-      return run(async () => {
+      const canStart = (state === "ready" && socket) || (shared && state === "occupied");
+      if (task || !canStart) return Promise.reject(new Error(phrase("session.wait-server")));
+      return run(async turn => {
         change("starting");
         try {
-          const current = socket;
-          let response = await current.start(path, scale, screen, token, "", quickLoad);
-          while (response.confirmation) {
+          const current = await connection(turn);
+          checkConnection(turn, current);
+          let confirmation = "";
+          for (;;) {
+            const response = await current.start(path, scale, screen, token, confirmation, quickLoad);
+            checkConnection(turn, current);
+            if (!response.confirmation) { answer(response); return; }
             const accepted = await confirmStart(response.message);
-            if (socket !== current || current.closed) throw new Error(phrase("session.disconnected"));
-            if (!accepted) { change("ready"); return; }
-            response = await current.start(path, scale, screen, token, response.confirmation, quickLoad);
+            checkConnection(turn, current);
+            if (!accepted) { change(blocked ? "occupied" : "ready"); return; }
+            confirmation = response.confirmation;
           }
-          answer(response);
         }
         catch (error) {
-          change(socket && !socket.closed ? "ready" : "offline");
+          if (turn === generation) {
+            const fallback = socket && !socket.closed ? "ready" : "offline";
+            change(blocked ? "occupied" : fallback);
+          }
           throw error;
         }
       });
     },
     stop: () => {
       if (task || !socket || state !== "playing") return Promise.reject(new Error(phrase("session.wait-game")));
-      return run(async () => {
+      return run(async turn => {
         change("stopping");
-        try { await socket.stop(); change(blocked ? "occupied" : "ready"); }
-        catch (error) { discard(); change("offline"); throw error; }
+        try {
+          const current = socket;
+          await current.stop();
+          checkConnection(turn, current);
+          change(blocked ? "occupied" : "ready");
+        } catch (error) {
+          disconnected(turn);
+          throw error;
+        }
       });
     },
   };

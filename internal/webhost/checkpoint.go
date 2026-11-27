@@ -90,7 +90,7 @@ func (r *sessionRunner) checkpointRefusal(step checkpointStep, game string, err 
 // is left to the start itself, which words those as it always has; and the
 // start reads the slot again once it holds the save directory, because this
 // answer was taken without the claim.
-func (s *Server) quickLoadRefusal(game string) error {
+func (s *Server) quickLoadRefusal(game string, paths savePaths) error {
 	archive, _, err := s.readGameArchive(game)
 	if err != nil {
 		return nil
@@ -103,8 +103,8 @@ func (s *Server) quickLoadRefusal(game string) error {
 	// The saves an earlier build kept under another owner name are moved by
 	// the start, with the claim; until then the slot is read where it is.
 	directory := ""
-	if s.saveDirectory(summary.Platform, summary.SaveOwner) != "" {
-		directory = session.SaveDirectory(summary, s.platformSaveRoot(summary.Platform))
+	if paths.saveDirectory(summary.Platform, summary.SaveOwner) != "" {
+		directory = session.SaveDirectory(summary, paths.platformSaveRoot(summary.Platform))
 	}
 	data, err := loadCheckpointSlot(directory, identity)
 	if err != nil {

@@ -161,7 +161,7 @@ const placeholders = [...markup.matchAll(/\{\{([^{}]*)\}\}/g)].map(match => matc
 
 test("every sentence the page asks for is written", () => {
   for (const name of placeholders) {
-    if (name === "@table") continue;
+    if (name === "@table" || name === "@mode") continue;
     assert.ok(Object.hasOwn(pageText, name), `index.html names {{${name}}}, which text.properties does not have`);
   }
   assert.equal(placeholders.filter(name => name === "@table").length, 1, "index.html carries the table once");

@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/accounts"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/launcher"
 	"github.com/movingwoo/wfeature/internal/webhost"
@@ -128,12 +129,18 @@ func run(arguments []string, answer, output *os.File) error {
 		`the HTTPS listener: a port, host:port, or "off"; "auto" is 100 ports above -addr when that is reachable from the network`)
 	certificateRoot := flags.String("tls", environmentOr("WFEATURE_TLS_ROOT", filepath.Join(root, "tls")),
 		"directory keeping the HTTPS listener's self-signed certificate")
+	multi := flags.Bool("multi", false, "serve the read-only library with player accounts and private saves")
+	bindOwner := flags.String("bind-personal-saves", "", "with -multi, bind the personal save tree to this login ID and exit")
 	showVersion := flags.Bool("version", false, "print the version and exit")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	numberChosen := os.Getenv("WFEATURE_PHONE_NUMBER") != ""
-	flags.Visit(func(f *flag.Flag) { numberChosen = numberChosen || f.Name == "number" })
+	bindRequested := false
+	flags.Visit(func(f *flag.Flag) {
+		numberChosen = numberChosen || f.Name == "number"
+		bindRequested = bindRequested || f.Name == "bind-personal-saves"
+	})
 	if numberChosen {
 		if err := wipic.SetSubscriberNumber(*number); err != nil {
 			return err
@@ -146,13 +153,37 @@ func run(arguments []string, answer, output *os.File) error {
 		return nil
 	}
 
+	if bindRequested && (!*multi || *bindOwner == "") {
+		return errors.New("-bind-personal-saves requires -multi and a login ID")
+	}
 	logger := backend.NewLogger(output)
 	// The one move an upgrade makes: games added from the page before there
 	// was an added root are in the game root, where the page cannot reach them
 	// to remove them. See internal/webhost/adopt.go — it runs once.
-	webhost.AdoptLooseGames(*gameRoot, *addedRoot, logger)
+	var store *accounts.Store
+	if *multi {
+		database, err := accountDatabasePath(root, *gameRoot, *webRoot)
+		if err != nil {
+			return err
+		}
+		store, err = accounts.Open(database)
+		if err != nil {
+			return fmt.Errorf("open shared account store: %w", err)
+		}
+		defer store.Close()
+		if bindRequested {
+			if err := store.BindLegacy(context.Background(), *bindOwner); err != nil {
+				return err
+			}
+			fmt.Fprintln(answer, "Personal saves bound to the selected account.")
+			return nil
+		}
+	} else {
+		webhost.AdoptLooseGames(*gameRoot, *addedRoot, logger)
+	}
 	options := webhost.Options{
 		Client:    web.Client(),
+		Accounts:  store,
 		GameRoot:  *gameRoot,
 		AddedRoot: *addedRoot,
 		SaveRoot:  *saveRoot,
@@ -165,7 +196,16 @@ func run(arguments []string, answer, output *os.File) error {
 	// carries.
 	source := "embedded"
 	if info, err := os.Stat(*webRoot); err == nil && info.IsDir() {
-		options.Client = os.DirFS(*webRoot)
+		if *multi {
+			files, err := os.OpenRoot(*webRoot)
+			if err != nil {
+				return err
+			}
+			defer files.Close()
+			options.Client = files.FS()
+		} else {
+			options.Client = os.DirFS(*webRoot)
+		}
 		source = *webRoot
 	}
 
@@ -208,6 +248,7 @@ func run(arguments []string, answer, output *os.File) error {
 		"profile", server.Profile(),
 		"client", source,
 		"data", layout,
+		"multi", *multi,
 		"games", *gameRoot,
 		"added", *addedRoot,
 		"saves", *saveRoot)
@@ -221,7 +262,7 @@ func run(arguments []string, answer, output *os.File) error {
 	}
 
 	if *openPage {
-		openWhenServing(listener)
+		openWhenServing(listener, *multi)
 	}
 	return serve(listener, secure, server, logger, requestShutdown)
 }
@@ -324,7 +365,7 @@ func listenSecurely(value, address, dir string, logger *slog.Logger) (net.Listen
 // openWhenServing shows the page once the port answers. A launcher used to
 // sleep a second and hope; this waits for the listener to be answering as this
 // server, which is the condition that was being guessed at.
-func openWhenServing(listener net.Listener) {
+func openWhenServing(listener net.Listener, shared bool) {
 	address, ok := listener.Addr().(*net.TCPAddr)
 	if !ok {
 		return
@@ -334,7 +375,11 @@ func openWhenServing(listener net.Listener) {
 		if !serving {
 			return
 		}
-		_ = launcher.OpenBrowser(report.URL())
+		url := report.URL()
+		if shared && report.SecureURL() != "" {
+			url = report.SecureURL()
+		}
+		_ = launcher.OpenBrowser(url)
 	}()
 }
 

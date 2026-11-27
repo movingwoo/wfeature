@@ -769,7 +769,7 @@ func TestShutdownIsLocalOnlyAndAsksTheHost(t *testing.T) {
 	// exists for one — makes every visitor's request arrive from here. The
 	// header the proxy adds is what says the request came from elsewhere.
 	for _, remote := range []string{"127.0.0.1:5000", "[::1]:5000", "", "@"} {
-		for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Real-IP"} {
+		for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Proto", "X-Real-IP"} {
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/api/shutdown", nil)
 			request.RemoteAddr = remote

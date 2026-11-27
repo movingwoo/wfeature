@@ -1,7 +1,7 @@
 // Increment the version when the shell changes. Legacy workers delete every
 // other wfeature-shell-* cache on a late navigation, even after replacement.
 // A separate prefix protects this shell from that already-installed code.
-const cacheName = "wfeature-pwa-v76";
+const cacheName = "wfeature-pwa-v78";
 const cacheVersion = Number(cacheName.match(/-v(\d+)$/)[1]);
 
 // The shell is what the page needs to come up, which is now only the page: a
@@ -11,6 +11,7 @@ const shell = [
   "./index.html",
   "./style.css",
   "./app.js",
+  "./account.js",
   "./keybindings.js",
   "./gamepad.js",
   "./fullscreen.js",
@@ -54,10 +55,21 @@ const shell = [
   "./apple-touch-icon.png",
 ];
 
+const shellURLs = new Set(shell.map(path => new URL(path, self.registration.scope).href));
+const fetchShell = (request, url) => fetch(request, {
+  // The same listener can restart in another mode between navigations.
+  cache: url.endsWith("/") || url.endsWith("/index.html") ? "no-store" : "no-cache",
+});
+const cacheable = response => response.status === 200 && !response.redirected
+  && !/\b(?:no-store|private)\b/i.test(response.headers.get("Cache-Control") ?? "")
+  && !/\b(?:Cookie|Authorization)\b/i.test(response.headers.get("Vary") ?? "");
+
 // One missing entry must not fail the whole installation.
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(cacheName).then(cache => Promise.all(
-    shell.map(url => cache.add(url).catch(() => undefined)),
+    Array.from(shellURLs, url => fetchShell(url, url).then(response => {
+      if (cacheable(response)) return cache.put(url, response);
+    }).catch(() => undefined)),
   )));
   self.skipWaiting();
 });
@@ -78,21 +90,15 @@ self.addEventListener("activate", event => {
 });
 
 self.addEventListener("fetch", event => {
-  const url = new URL(event.request.url);
   // Save API responses must always reflect the server's current state, and the
   // game archives are far too large to keep a copy of in the shell cache.
-  if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
-  if (
-    url.pathname.startsWith("/api/") ||
-    url.pathname.startsWith("/games/") ||
-    // The same, for the archives that came in through the page: a game that
-    // was deleted must not still be served out of a cache.
-    url.pathname.startsWith("/ext/")
-  ) {
-    return;
-  }
-  event.respondWith(fetch(event.request).then(response => {
-    if (response.ok) {
+  // The same, for the archives that came in through the page: a game that
+  // was deleted must not still be served out of a cache.
+  // An explicit shell list also keeps game listings and account data online-only.
+  const url = event.request.url;
+  if (event.request.method !== "GET" || !shellURLs.has(url)) return;
+  event.respondWith(fetchShell(event.request, url).then(response => {
+    if (cacheable(response)) {
       const copy = response.clone();
       event.waitUntil(caches.open(cacheName).then(async cache => {
         await cache.put(event.request, copy);

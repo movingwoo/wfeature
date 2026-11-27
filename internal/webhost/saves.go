@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/movingwoo/wfeature/internal/accounts"
 	"github.com/movingwoo/wfeature/internal/backend"
 )
 
@@ -27,6 +28,23 @@ func ownerRejected(owner string) bool {
 	return backend.SaveOwnerRefused(owner)
 }
 
+// savePaths names the configured KTF directory. Other platforms use its siblings.
+type savePaths string
+
+func (s *Server) pathsFor(user accounts.User) savePaths {
+	if user.ID == "" || user.Legacy {
+		return s.savePaths
+	}
+	base := filepath.Clean(string(s.savePaths))
+	users := "users"
+	// A custom KTF directory can itself be called users. Keep the account
+	// trees beside it so binding that personal directory never exposes them.
+	if strings.EqualFold(filepath.Base(base), users) {
+		users = ".wfeature-users"
+	}
+	return savePaths(filepath.Join(filepath.Dir(base), users, user.ID, filepath.Base(base)))
+}
+
 // saveResponse is the shape the page reads: every entry of one owner, keyed by
 // the same slash-separated save keys the DirectorySaveStore stores them under.
 // A key is not the name on disk, which spells its case out (see
@@ -42,18 +60,18 @@ type saveResponse struct {
 //	PUT /api/saves/<owner>/<key>            <- the raw body persists one entry
 //	GET /api/saves/<platform>/<owner>       -> the same, on another platform
 //	PUT /api/saves/<platform>/<owner>/<key>
-func (s *Server) serveSaves(writer http.ResponseWriter, request *http.Request) {
+func (s *Server) serveSaves(writer http.ResponseWriter, request *http.Request, paths savePaths) {
 	segments, err := pathComponents(strings.TrimPrefix(request.URL.Path, "/api/saves"))
 	if err != nil || len(segments) == 0 {
 		writeError(writer, http.StatusBadRequest, "Bad Request")
 		return
 	}
 
-	root := s.saveRoot
+	platform := "ktf"
 	if len(segments) > 1 && platforms[segments[0]] {
 		// A platform segment reroots the request; the tree keeps its profile
 		// and swaps only the platform directory.
-		root = filepath.Join(filepath.Dir(root), segments[0])
+		platform = segments[0]
 		segments = segments[1:]
 	}
 	owner := segments[0]
@@ -61,7 +79,7 @@ func (s *Server) serveSaves(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, "Bad Request")
 		return
 	}
-	ownerRoot := filepath.Join(root, owner)
+	ownerRoot := paths.saveDirectory(platform, owner)
 
 	switch {
 	case request.Method == http.MethodGet && len(segments) == 1:

@@ -52,6 +52,17 @@ exists in an archive. Its `stop.sh` and `status.sh` are the same one line,
 pointed at whichever binary the checkout has built, with `go run ./cmd/server`
 as the fallback.
 
+The same desktop executable opens the personal picker by default and serves
+registered players with `-multi`. The packaged launchers pass this flag
+through. The account store uses `github.com/ncruces/go-sqlite3` with its
+Go translation of SQLite on all five desktop targets. On darwin/arm64
+with Go 1.27.4, the personal-only release binary
+measured 27,181,970 bytes. The combined executable, including the pure-Go
+SQLite driver and shared web client, measured 32,283,234 bytes, an increase
+of 5,101,264 bytes (18.8%). Both builds used `CGO_ENABLED=0`, `-trimpath`
+and `-ldflags="-s -w -X main.version=0.6.1"`. Sizes are for the extracted
+executables. [Shared server setup](../docs/running.md#shared-hosting)
+
 **The archive ships an empty `games/` tree, and that is load-bearing.**
 `dataRoot` in `cmd/server/main.go` treats the executable's own directory as the
 data root only when a `games/` directory sits beside it, and otherwise falls

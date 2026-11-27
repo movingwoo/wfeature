@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"image/png"
+	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/movingwoo/wfeature/internal/accounts"
 	"github.com/movingwoo/wfeature/internal/audio/smaf"
 	"github.com/movingwoo/wfeature/internal/backend"
 	"github.com/movingwoo/wfeature/internal/cheat"
@@ -105,7 +106,17 @@ type outboundMessage struct {
 }
 
 // serveSession upgrades the connection and runs one game on it.
-func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request) {
+func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request, login accounts.Login) {
+	ctx := request.Context()
+	if s.accounts != nil {
+		live, release, err := s.watchLogin(ctx, login)
+		if err != nil {
+			s.accountError(writer, err)
+			return
+		}
+		defer release()
+		ctx = live
+	}
 	upgrader := wsproto.Upgrader{MaxMessageSize: maxSessionMessage}
 	connection, err := upgrader.Accept(writer, request)
 	if err != nil {
@@ -114,9 +125,20 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	defer connection.Close()
+	if s.accounts != nil {
+		// Revoke the transport even if the guest is still finishing a round.
+		// The runner parks on its own goroutine at the next guest boundary.
+		stop := context.AfterFunc(ctx, func() {
+			connection.SetWriteDeadline(time.Now())
+			connection.SetReadDeadline(time.Now())
+			connection.Close()
+		})
+		defer stop()
+	}
 
 	runner := &sessionRunner{
 		server:       s,
+		login:        login,
 		connection:   connection,
 		commands:     make(chan clientMessage, commandBuffer),
 		handoffs:     make(chan sessionHandoff),
@@ -139,7 +161,7 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 	runner.soundWavePhase = negotiatedWavePhase(request.URL.Query().Get("phase"), runner.soundOwnership)
 	runner.soundVoice = negotiatedStreamFeature(request.URL.Query().Get("voice"), runner.soundOwnership, runner.protocol)
 	runner.soundWaveVelocity = negotiatedStreamFeature(request.URL.Query().Get("wavevelocity"), runner.soundOwnership, runner.protocol)
-	runner.run(request.Context())
+	runner.run(ctx)
 }
 
 // pendingFrame is one finished picture on its way to the page. It carries its
@@ -148,6 +170,8 @@ func (s *Server) serveSession(writer http.ResponseWriter, request *http.Request)
 type pendingFrame = backend.FrameUpdate
 
 type sessionRunner struct {
+	login         accounts.Login
+	instance      *gameInstance // guarded by parkedMu
 	startApproval *startApproval
 	admitted      bool // Protected by Server.parkedMu.
 	// admittedAs is the label of the game this runner was admitted with. The
@@ -610,6 +634,9 @@ func (r *sessionRunner) drainCommands(ctx context.Context, wait time.Duration) {
 }
 
 func (r *sessionRunner) handle(ctx context.Context, message clientMessage) {
+	if ctx.Err() != nil {
+		return
+	}
 	if timelineCommand(message.Kind) && message.Epoch != r.outputEpoch.Load() {
 		if message.ID != 0 {
 			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "request belongs to a previous timeline"})
@@ -725,13 +752,23 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 	}
 	// A start from the quick save that is certain to be refused is refused
 	// here, while the game this page is running is still running.
+	if r.login.Token != "" {
+		// Local setup can bind personal saves while a signed-in picker is
+		// open. Resolve the account again at the start of a new game.
+		login, err := r.server.accounts.Lookup(ctx, r.login.Token)
+		if err != nil {
+			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: r.server.phrase("account.unavailable")})
+			return
+		}
+		r.login = login
+	}
+	paths := r.server.pathsFor(r.login.User)
 	if message.QuickLoad {
-		if err := r.server.quickLoadRefusal(message.Game); err != nil {
+		if err := r.server.quickLoadRefusal(message.Game, paths); err != nil {
 			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: r.checkpointRefusal(checkpointStarting, message.Game, err)})
 			return
 		}
 	}
-	r.stopGame()
 	token := message.Token
 	if token == "" {
 		var err error
@@ -741,9 +778,16 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 			return
 		}
 	}
-	if !r.server.reserveSession(token, r) {
-		r.send(serverMessage{Kind: serverResumed, ID: message.ID, Occupied: true})
-		return
+	if r.login.User.ID != "" {
+		if !r.reserveAccountStart(ctx, message) {
+			return
+		}
+	} else {
+		r.stopGame()
+		if !r.server.reserveSession(token, r) {
+			r.send(serverMessage{Kind: serverResumed, ID: message.ID, Occupied: true})
+			return
+		}
 	}
 	r.token = token
 	defer func() {
@@ -783,8 +827,8 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "invalid screen size"})
 		return
 	}
-	r.server.migrateSaveOwner(summary)
-	directory := r.server.saveDirectory(summary.Platform, summary.SaveOwner)
+	r.server.migrateSaveOwner(summary, paths)
+	directory := paths.saveDirectory(summary.Platform, summary.SaveOwner)
 	// **A game that has saves of its own is not started without a place to
 	// keep them.** An owner saveDirectory refuses would give it no store: it
 	// would save as usual, nothing would look wrong, and closing it would lose
@@ -871,6 +915,11 @@ func (r *sessionRunner) startGame(ctx context.Context, message clientMessage) {
 		return
 	}
 	r.game = started
+	if r.login.User.ID != "" {
+		r.server.parkedMu.Lock()
+		r.instance = &gameInstance{label: label}
+		r.server.parkedMu.Unlock()
+	}
 	r.label = label
 	r.platform = summary.Platform
 	r.presented = 0
@@ -973,7 +1022,7 @@ func (r *sessionRunner) park() {
 	}
 	// The game keeps its save directory while it waits, and a start that finds
 	// the claim parked may take it; see saveclaim.go.
-	r.server.parkSession(r.token, &parkedSession{
+	r.server.parkSession(r.ownerKey(r.token), &parkedSession{
 		game:          game,
 		context:       r.gameCtx,
 		cancel:        r.gameCancel,
@@ -995,8 +1044,9 @@ func (r *sessionRunner) park() {
 // already knows what it was playing, so the answer is the same `started` it
 // got the first time, followed by the picture the game had when its page left.
 func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
+	key := r.ownerKey(message.Token)
 	if r.game != nil {
-		if r.token == message.Token {
+		if r.ownerKey(r.token) == key {
 			r.started.Speed = r.game.Speed()
 			identity := r.started
 			r.send(serverMessage{Kind: serverStarted, ID: message.ID, Started: &identity})
@@ -1007,36 +1057,23 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 		}
 		return
 	}
-	if owner := r.server.attachedSession(message.Token); owner != nil {
+	if owner := r.server.attachedSession(key); owner != nil {
 		if !message.Takeover && (owner.connectionCtx == nil || owner.connectionCtx.Err() == nil) {
 			r.send(serverMessage{Kind: serverResumed, ID: message.ID, Occupied: true})
 			return
 		}
-		transferCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		request := sessionHandoff{token: message.Token, ctx: transferCtx, reply: make(chan struct{})}
-		select {
-		case owner.handoffs <- request:
-			select {
-			case <-request.reply:
-			case <-owner.done:
-			case <-transferCtx.Done():
-				r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "session handoff timed out; try again"})
-				return
-			}
-		case <-owner.done:
-		case <-transferCtx.Done():
-			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: "session handoff timed out; try again"})
+		if err := owner.askHandoff(ctx, key, nil); err != nil {
+			r.send(serverMessage{Kind: serverError, ID: message.ID, Message: err.Error()})
 			return
 		}
 	}
-	parked, ok := r.server.resumeSession(message.Token, r)
+	parked, ok := r.server.resumeSession(key, r)
 	if !ok {
 		// An evicted or unknown token is not an error the page can act on
 		// beyond forgetting it, and it is the ordinary case after a long
 		// absence, so it answers rather than fails.
 		r.send(serverMessage{Kind: serverResumed, ID: message.ID, Resumed: false,
-			Occupied: r.server.attachedSession(message.Token) != nil, Message: r.server.phrase("resume.none")})
+			Occupied: r.server.attachedSession(key) != nil, Message: r.server.phrase("resume.none")})
 		return
 	}
 
@@ -1070,6 +1107,10 @@ func (r *sessionRunner) resumeGame(ctx context.Context, message clientMessage) {
 		r.vibrationRequest = 0
 	}
 	r.token = message.Token
+	if r.token == "" {
+		r.token = parked.started.Token
+	}
+	r.started.Token = r.token
 
 	// The other half of the pause above, and the half that matters most: the
 	// clock moved while the game was parked, the same way it moves for a
@@ -1116,7 +1157,6 @@ func (r *sessionRunner) stopGame() {
 // page that has stopped reading no longer empties.
 func (r *sessionRunner) closeGame() {
 	r.clearTextInput()
-	r.server.releaseSession(r.token, r)
 	clear(r.heldKeys)
 	r.heldPointer = nil
 	if r.game != nil {
@@ -1127,6 +1167,7 @@ func (r *sessionRunner) closeGame() {
 	r.server.releaseSaveDirectory(r.saveDirectory)
 	r.saveDirectory = ""
 	r.endGameContext()
+	r.server.releaseSession(r.ownerKey(r.token), r)
 	// The token named this game; a page that reconnects after stopping one is
 	// starting something new rather than resuming.
 	r.token = ""
@@ -1863,7 +1904,22 @@ func (s *Server) readGameArchive(gamePath string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", errors.New("game path is not inside a game directory")
 	}
-	archive, err := os.ReadFile(file)
+	reader, err := s.openArchive(file)
+	if err != nil {
+		return nil, "", fmt.Errorf("open the game archive: %w", err)
+	}
+	defer reader.Close()
+	info, err := reader.Stat()
+	if err != nil {
+		return nil, "", fmt.Errorf("inspect the game archive: %w", err)
+	}
+	// All three platform loaders bound the input archive to 128 MiB. Apply
+	// that bound before allocating bytes on behalf of a player.
+	if !info.Mode().IsRegular() || info.Size() > 128<<20 {
+		return nil, "", errors.New("game archive must be a regular file of at most 128 MiB")
+	}
+	archive := make([]byte, info.Size())
+	_, err = io.ReadFull(reader, archive)
 	if err != nil {
 		return nil, "", fmt.Errorf("read the game archive: %w", err)
 	}
@@ -1877,27 +1933,27 @@ func (s *Server) readGameArchive(gamePath string) ([]byte, string, error) {
 // set of saves and nothing crosses the network. It is also this game's
 // identity for the claim a session takes on it; see saveclaim.go. Empty for a
 // game with no saves of its own.
-func (s *Server) saveDirectory(platform, owner string) string {
+func (paths savePaths) saveDirectory(platform, owner string) string {
 	if owner == "" || ownerRejected(owner) {
 		return ""
 	}
-	return filepath.Join(s.platformSaveRoot(platform), owner)
+	return filepath.Join(paths.platformSaveRoot(platform), owner)
 }
 
 // platformSaveRoot is the directory a platform's owner directories are in.
-func (s *Server) platformSaveRoot(platform string) string {
+func (paths savePaths) platformSaveRoot(platform string) string {
 	if platform != "" && platform != "ktf" && platforms[platform] {
-		return filepath.Join(filepath.Dir(s.saveRoot), platform)
+		return filepath.Join(filepath.Dir(string(paths)), platform)
 	}
-	return s.saveRoot
+	return string(paths)
 }
 
 // migrateSaveOwner moves saves an earlier build kept under an owner name this
 // build no longer uses to the one saveDirectory now names, before anything
 // claims the directory. A failure leaves the old saves where they were and is
 // logged; the start goes on with the current owner.
-func (s *Server) migrateSaveOwner(summary session.Summary) {
-	if err := session.MigrateSaveOwner(summary, s.platformSaveRoot(summary.Platform)); err != nil {
+func (s *Server) migrateSaveOwner(summary session.Summary, paths savePaths) {
+	if err := session.MigrateSaveOwner(summary, paths.platformSaveRoot(summary.Platform)); err != nil {
 		s.logger.Warn("saves kept under an earlier owner name were not moved", "platform", summary.Platform, "error", err)
 	}
 }
@@ -2050,14 +2106,35 @@ func audioAgeMilliseconds(age time.Duration) uint32 {
 
 // Handoffs run between guest calls, never concurrently with a tick or input.
 type sessionHandoff struct {
-	token string
-	ctx   context.Context
-	reply chan struct{}
+	key      string
+	instance *gameInstance
+	ctx      context.Context
+	reply    chan struct{}
+}
+
+func (r *sessionRunner) askHandoff(ctx context.Context, key string, instance *gameInstance) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req := sessionHandoff{key: key, instance: instance, ctx: ctx, reply: make(chan struct{})}
+	select {
+	case r.handoffs <- req:
+		select {
+		case <-req.reply:
+			return nil
+		case <-r.done:
+			return nil
+		case <-ctx.Done():
+		}
+	case <-r.done:
+		return nil
+	case <-ctx.Done():
+	}
+	return errors.New("session handoff timed out; try again")
 }
 
 func (r *sessionRunner) handoff(request sessionHandoff) {
 	defer close(request.reply)
-	if request.ctx.Err() != nil || r.game == nil || r.token != request.token {
+	if request.ctx.Err() != nil || r.game == nil || r.ownerKey(r.token) != request.key || (request.instance != nil && r.instance != request.instance) {
 		return
 	}
 	r.park()

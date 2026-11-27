@@ -39,7 +39,8 @@ func TestNoticesCarryEveryBundledComponent(t *testing.T) {
 		{"hqx's copyright", "Christopher Serr"},
 		{"the page's copy of hqx's tables", "web/hqx-patterns.js"},
 		// The Go modules carry one licence text between them, so what proves
-		// a component is still named is its own heading. x/sys is linked
+		// a component is still named is its own heading. Before the shared
+		// account store added x/sys on linux/arm64, x/sys was linked
 		// into four of the five release archives, all but linux/arm64: the
 		// launcher asks macOS about a process through it, the launcher and
 		// the save lock use it on Windows, and x/image's rasteriser reaches
@@ -47,6 +48,11 @@ func TestNoticesCarryEveryBundledComponent(t *testing.T) {
 		{"the text module's notice", "## golang.org/x/text"},
 		{"the image module's notice", "## golang.org/x/image"},
 		{"the system module's notice", "## golang.org/x/sys"},
+		{"the SQLite driver's licence", "MIT License\n\nCopyright (c) 2023 Nuno Cruces"},
+		{"the SQLite translation's licence", "MIT No Attribution License\n\nCopyright (c) 2026 Nuno Cruces"},
+		{"the Julian day module's licence", "MIT License\n\nCopyright (c) 2022 Nuno Cruces"},
+		{"the translated libc support's licence", "MIT License\n\nCopyright (c) 2026 Nuno Cruces"},
+		{"SQLite's dedication", "The author disclaims copyright to this source code."},
 	} {
 		if !strings.Contains(ThirdParty, required.text) {
 			t.Errorf("the notices do not carry %s (looked for %q)", required.component, required.text)
