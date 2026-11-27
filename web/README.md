@@ -11,7 +11,7 @@ the emulator itself in WebAssembly; a phone could not run it fast enough to
 play, and that engine is gone.
 
 **A game survives the page going away.** Switching to another app suspends the
-page and the browser drops the socket; the server keeps the game, with no time
+page and the browser drops the socket; the personal server keeps the game, with no time
 limit, under a browser token the page keeps in `localStorage`
 (`wfeature.browser-token`, which replaced the per-tab `sessionStorage`
 `wfeature.resume-token`), until it is stopped, replaced, pushed out by the
@@ -23,6 +23,15 @@ page that finds its game controlled by another page shows
 takeover. **🔄 재시작** asks first ("게임을 처음부터 다시 시작할까요? 저장하지 않은
 데이터는 사라집니다.", **다시 시작**), then stops the game and returns to the
 picker.
+
+On a shared server the page checks the login before opening the picker or
+reconnecting. The account can resume its parked game on any signed-in device
+for 30 minutes. Account changes clear the displayed game, picker and resume
+token. [Shared hosting](../docs/running.md#shared-hosting)
+
+The `account.*` entries in `text.properties` supply the signup hint and each
+account warning. The server fills their length limits from the registration
+rules before serving the page or answering an account request.
 
 ## Page
 
@@ -547,6 +556,14 @@ on a reload. The page itself is sent with its words filled in from
 `text.properties` (see [Text](#text)). The profile served is the binary that is
 running, not a flag.
 
+The routes below describe a personal host. With `-multi`, the game list,
+archive reads, play socket, saves, backups and enabled debug report require
+a login. The picker reads the operator's game directory. Account saves and
+quick slots are private. The game list and archive responses carry
+`Cache-Control: no-store`. The additional account routes are
+`GET /api/account` and `POST /api/register`, `/api/login`, `/api/logout`.
+[Account API and deployment](../docs/running.md#shared-hosting)
+
 - `GET /games.json` — `[{ group, name, path, added? }]` read from `-games`
   (`var/games`) and `-ext` (`var/ext`) on every request, listing the `.zip` and
   `.jar` files. Like the page's own files it carries a validator and is
@@ -590,8 +607,10 @@ The emulator and the save tree are on the same machine, so nothing is preloaded
 and no save crosses the network. The save API remains for the CLI's layout,
 which both Hosts read.
 
-The service worker caches the app shell for offline launches. It does not cache
-the save API or the game archives. The shell list is hand written, and nothing
+The service worker caches the common app shell for offline launches. The
+picker list, game archives and account and save APIs always use the network.
+An online navigation fetches the entry page for the current server mode.
+The shell list is hand written, and nothing
 at runtime complains when it falls behind: a module missing from it is fetched
 over the network like any other file, so the page works everywhere except
 offline, where it comes up and then fails on an import. `service-worker.test.mjs`

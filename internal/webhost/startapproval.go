@@ -11,6 +11,7 @@ type startApproval struct {
 	id, path, token string
 	victim          *parkedSession
 	parkedAt        time.Time
+	instance        *gameInstance
 }
 
 func (r *sessionRunner) admitStart(message clientMessage, directory, label string) bool {
@@ -35,7 +36,7 @@ func (r *sessionRunner) admitStart(message clientMessage, directory, label strin
 	victimToken := ""
 	sameGame := false
 	if held := s.claims[directory]; directory != "" && held != nil {
-		if !held.parked {
+		if !held.parked || s.accounts != nil {
 			return fail(s.phrase("start.running-elsewhere", "holder", held.label))
 		}
 		for token, parked := range s.parked {
@@ -49,7 +50,7 @@ func (r *sessionRunner) admitStart(message clientMessage, directory, label strin
 		}
 	}
 	// Only admitted games consume capacity; pending dialogs reserve no room.
-	if victim == nil && s.retainedCountLocked() >= maxRetainedSessions {
+	if s.accounts == nil && victim == nil && s.retainedCountLocked() >= maxRetainedSessions {
 		for token, parked := range s.parked {
 			if victim == nil || parked.parkedAt.Before(victim.parkedAt) {
 				victim, victimToken = parked, token

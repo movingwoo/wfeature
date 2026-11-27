@@ -17,10 +17,18 @@ import (
 // Admission reserves room for active games too: losing a socket never evicts another game.
 const maxRetainedSessions = 4
 
+const sharedParkLifetime = 30 * time.Minute
+
+// gameInstance follows one launch through every controller and park.
+type gameInstance struct{ label string }
+
 // parkedSession is a game waiting for its page to come back. Everything here
 // is what the runner would have lost when its socket closed.
 type parkedSession struct {
-	game *session.Session
+	instance *gameInstance
+	timer    *time.Timer
+	closing  chan struct{} // keeps the account slot and claim until Close returns
+	game     *session.Session
 	// context and cancel are the game's own lifetime, which outlived the
 	// socket that started it; see sessionRunner.gameCtx for why a game cannot
 	// be ticked under its page's context.
@@ -42,7 +50,6 @@ type parkedSession struct {
 // the save claim move together under parkedMu.
 func (s *Server) parkSession(token string, parked *parkedSession) {
 	s.parkedMu.Lock()
-	defer s.parkedMu.Unlock()
 	if s.parked == nil {
 		s.parked = make(map[string]*parkedSession)
 	}
@@ -51,16 +58,10 @@ func (s *Server) parkSession(token string, parked *parkedSession) {
 	if previous, ok := s.parked[token]; ok {
 		s.dropLocked(token, previous, "replaced")
 	}
-	if s.sessionsClosed {
-		if owner := s.attached[token]; owner != nil {
-			owner.admitted = false
-		}
-		delete(s.attached, token)
-		s.dropLocked(token, parked, "server stopping")
-		return
-	}
 	parked.parkedAt = time.Now()
 	if owner := s.attached[token]; owner != nil {
+		parked.instance = owner.instance
+		owner.instance = nil
 		owner.admitted = false
 	}
 	delete(s.attached, token)
@@ -68,7 +69,18 @@ func (s *Server) parkSession(token string, parked *parkedSession) {
 		claim.parked = true
 	}
 	s.parked[token] = parked
+	if s.sessionsClosed {
+		done := s.closeParkedLocked(token, parked, "server stopping")
+		s.parkedMu.Unlock()
+		<-done
+		return
+	}
+	if s.accounts != nil {
+		at := parked.parkedAt
+		parked.timer = time.AfterFunc(sharedParkLifetime, func() { s.expireParked(token, parked, at) })
+	}
 	s.logger.Info("session parked", "game", parked.label, "retained", len(s.parked))
+	s.parkedMu.Unlock()
 }
 
 // resumeSession hands a parked game back, or reports that there is none under
@@ -78,14 +90,22 @@ func (s *Server) resumeSession(token string, owner *sessionRunner) (*parkedSessi
 	s.parkedMu.Lock()
 	defer s.parkedMu.Unlock()
 	parked, ok := s.parked[token]
-	if !ok {
+	if !ok || parked.closing != nil || s.sessionsClosed {
 		return nil, false
+	}
+	if parked.timer != nil {
+		if !time.Now().Before(parked.parkedAt.Add(sharedParkLifetime)) {
+			s.closeParkedLocked(token, parked, "park deadline")
+			return nil, false
+		}
+		parked.timer.Stop()
 	}
 	delete(s.parked, token)
 	if s.attached == nil {
 		s.attached = make(map[string]*sessionRunner)
 	}
 	s.attached[token] = owner
+	owner.instance = parked.instance
 	owner.admitted = true
 	owner.admittedAs = parked.label
 	if claim := s.claims[parked.saveDirectory]; claim != nil {
@@ -137,16 +157,8 @@ func (s *Server) CloseSessions(ctx context.Context) {
 	s.sessionsClosed = true
 	var holders []holder
 	for token, parked := range s.parked {
-		delete(s.parked, token)
-		closed := make(chan struct{})
-		holders = append(holders, holder{released: closed, label: parked.label})
-		go func() {
-			defer close(closed)
-			parked.game.Close()
-			s.parkedMu.Lock()
-			s.releaseParkedLocked(parked, "server stopping")
-			s.parkedMu.Unlock()
-		}()
+		done := s.closeParkedLocked(token, parked, "server stopping")
+		holders = append(holders, holder{released: done, label: parked.label})
 	}
 	// Only an admitted runner has a game or is starting one, and the flag
 	// above admits no more: a start that has reserved its token and nothing
@@ -186,6 +198,40 @@ func (s *Server) CloseSessions(ctx context.Context) {
 	}
 }
 
+// expireParked checks both the instance and this particular park under the
+// ownership lock. A timer already running when Stop was called is harmless.
+func (s *Server) expireParked(key string, p *parkedSession, at time.Time) {
+	s.parkedMu.Lock()
+	defer s.parkedMu.Unlock()
+	if s.parked[key] == p && p.parkedAt.Equal(at) && !time.Now().Before(at.Add(sharedParkLifetime)) {
+		s.closeParkedLocked(key, p, "park deadline")
+	}
+}
+
+// The closing entry remains visible to admission and save writers. Guest
+// shutdown can wait on a title and must leave other accounts free to play.
+func (s *Server) closeParkedLocked(key string, p *parkedSession, reason string) <-chan struct{} {
+	if p.closing != nil {
+		return p.closing
+	}
+	p.closing = make(chan struct{})
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	if claim := s.claims[p.saveDirectory]; claim != nil {
+		claim.parked = false
+	}
+	go func() {
+		p.game.Close()
+		s.parkedMu.Lock()
+		defer s.parkedMu.Unlock()
+		delete(s.parked, key)
+		s.releaseParkedLocked(p, reason)
+		close(p.closing)
+	}()
+	return p.closing
+}
+
 // dropLocked closes one parked game. The caller holds the mutex; a close is
 // bounded (see session.Session.Close).
 func (s *Server) dropLocked(token string, parked *parkedSession, reason string) {
@@ -210,7 +256,13 @@ func (s *Server) releaseParkedLocked(parked *parkedSession, reason string) {
 func (s *Server) parkedCount() int {
 	s.parkedMu.Lock()
 	defer s.parkedMu.Unlock()
-	return len(s.parked)
+	count := 0
+	for _, parked := range s.parked {
+		if parked.closing == nil {
+			count++
+		}
+	}
+	return count
 }
 
 // parkedGame answers the game waiting under a token, for a test that needs to
@@ -218,7 +270,7 @@ func (s *Server) parkedCount() int {
 func (s *Server) parkedGame(token string) *session.Session {
 	s.parkedMu.Lock()
 	defer s.parkedMu.Unlock()
-	if parked, ok := s.parked[token]; ok {
+	if parked, ok := s.parked[token]; ok && parked.closing == nil {
 		return parked.game
 	}
 	return nil
@@ -261,6 +313,7 @@ func (s *Server) releaseSession(token string, owner *sessionRunner) {
 	defer s.parkedMu.Unlock()
 	if s.attached[token] == owner {
 		delete(s.attached, token)
+		owner.instance = nil
 		owner.admitted = false
 	}
 }

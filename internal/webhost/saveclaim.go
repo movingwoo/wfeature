@@ -149,7 +149,22 @@ func (s *Server) holdSaveDirectory(directory, label string, takeParked bool) (bo
 		if !held.parked || !takeParked {
 			return false, held.label
 		}
-		s.takeParkedHolderLocked(directory, "a save was restored into this game")
+		if s.accounts != nil {
+			for key, p := range s.parked {
+				if p.saveDirectory == directory {
+					done := s.closeParkedLocked(key, p, "a save was restored into this game")
+					s.parkedMu.Unlock()
+					<-done
+					s.parkedMu.Lock()
+					break
+				}
+			}
+			if current := s.claims[directory]; current != nil {
+				return false, current.label
+			}
+		} else {
+			s.takeParkedHolderLocked(directory, "a save was restored into this game")
+		}
 	}
 	if err := s.takeSaveClaimLocked(directory, label); err != nil {
 		return false, err.Error()

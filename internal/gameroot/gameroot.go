@@ -9,7 +9,9 @@
 package gameroot
 
 import (
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 )
@@ -34,59 +36,64 @@ type Entry struct {
 // where to put them. A group that cannot be read is skipped for the same
 // reason: one unreadable directory is not a reason to report nothing.
 func Entries(root string) []Entry {
-	// ReadDir sorts by name, so the groups come out in a stable order without
-	// a second pass over them.
-	top, err := os.ReadDir(root)
+	return entries(root, os.DirFS(root), false)
+}
+
+// ConfinedEntries lists a shared library. An operator may link to archives
+// within the library, while links leading out of it grant no access.
+func ConfinedEntries(root string) []Entry {
+	library, err := os.OpenRoot(root)
 	if err != nil {
 		return []Entry{}
 	}
-	entries := []Entry{}
+	defer library.Close()
+	return entries(root, library.FS(), true)
+}
+
+func entries(root string, files fs.FS, confined bool) []Entry {
+	// ReadDir sorts by name, so the groups come out in a stable order without
+	// a second pass over them.
+	top, err := fs.ReadDir(files, ".")
+	if err != nil {
+		return []Entry{}
+	}
+	grouped, loose := []Entry{}, []Entry{}
 	for _, item := range top {
-		if !isDirectory(root, item) {
+		group := item.Name()
+		mode := entryMode(files, group, item)
+		if !mode.IsDir() {
+			if !confined || mode.IsRegular() {
+				loose = append(loose, Entry{Name: group, Path: filepath.Join(root, group)})
+			}
 			continue
 		}
-		group := item.Name()
-		inside, err := os.ReadDir(filepath.Join(root, group))
+		inside, err := fs.ReadDir(files, group)
 		if err != nil {
 			continue
 		}
 		for _, file := range inside {
-			if isDirectory(filepath.Join(root, group), file) {
+			mode := entryMode(files, path.Join(group, file.Name()), file)
+			if mode.IsDir() || (confined && !mode.IsRegular()) {
 				continue
 			}
-			entries = append(entries, Entry{
-				Group: group,
-				Name:  file.Name(),
-				Path:  filepath.Join(root, group, file.Name()),
-			})
+			grouped = append(grouped, Entry{Group: group, Name: file.Name(), Path: filepath.Join(root, group, file.Name())})
 		}
 	}
 	// A file dropped straight into the root is a game the user meant to play
 	// rather than a mistake to hide. It comes last: an ungrouped archive is
 	// the exception.
-	for _, item := range top {
-		if isDirectory(root, item) {
-			continue
-		}
-		entries = append(entries, Entry{Name: item.Name(), Path: filepath.Join(root, item.Name())})
-	}
-	return entries
+	return append(grouped, loose...)
 }
 
-// isDirectory reports whether an entry of directory is one, following a
-// symbolic link. A group kept on another disk and linked in is a group like
-// any other — the Host opens the archives inside it through the same link —
-// while ReadDir reports the link itself, which is never a directory. A link
-// that leads nowhere is left as the file it looks like.
-func isDirectory(directory string, entry os.DirEntry) bool {
-	if entry.IsDir() {
-		return true
+// A personal library can follow group links to another disk. A shared root's
+// FS enforces the same symlink boundary for this listing and archive opens.
+func entryMode(files fs.FS, name string, entry fs.DirEntry) fs.FileMode {
+	if entry.Type()&fs.ModeSymlink != 0 {
+		if info, err := fs.Stat(files, name); err == nil {
+			return info.Mode()
+		}
 	}
-	if entry.Type()&os.ModeSymlink == 0 {
-		return false
-	}
-	info, err := os.Stat(filepath.Join(directory, entry.Name()))
-	return err == nil && info.IsDir()
+	return entry.Type()
 }
 
 // Paths is Entries reduced to the paths of the files whose extension is one

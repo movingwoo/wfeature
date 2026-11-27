@@ -64,7 +64,7 @@ func TestAStartMovesSavesKeptUnderTheEarlierOwnerName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server.migrateSaveOwner(summary)
+	server.migrateSaveOwner(summary, server.savePaths)
 
 	directory := server.saveDirectory(summary.Platform, summary.SaveOwner)
 	if directory == "" {
@@ -178,7 +178,7 @@ func TestAGameWhoseSaveOwnerIsRefusedStartsUnderAMappedOwner(t *testing.T) {
 		SaveRoot: filepath.Join(root, "savedata", "ktf"),
 		LogRoot:  filepath.Join(root, "logs"),
 	})
-	if err := server.quickLoadRefusal("games/lgt/colon.zip"); err == nil {
+	if err := server.quickLoadRefusal("games/lgt/colon.zip", server.savePaths); err == nil {
 		t.Fatal("a quick load with no slot was not refused")
 	}
 	if runtime.GOOS != "windows" {

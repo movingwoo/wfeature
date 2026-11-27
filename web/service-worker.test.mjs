@@ -67,7 +67,7 @@ const cacheFixture = () => {
       const entries = stores.get(name);
       return {
         async add(url) { entries.set(new URL(url, "https://example.test/").href, new Response("installed shell")); },
-        async put(request, response) { entries.set(request.url, response); },
+        async put(request, response) { entries.set(request.url ?? request, response); },
         async match(request) { return entries.get(request.url)?.clone(); },
       };
     },
@@ -76,18 +76,20 @@ const cacheFixture = () => {
     },
   };
 };
-const workerFixture = async ({ source = worker, caches = cacheFixture(), fetchResponse } = {}) => {
+const workerFixture = async ({ source = worker, caches = cacheFixture(), fetchResponse,
+  installResponse = () => new Response("installed shell") } = {}) => {
   const { runInNewContext } = await import("node:vm");
   const handlers = new Map();
   let offline = false;
   runInNewContext(source, {
     URL, caches,
-    self: { location: { origin: "https://example.test" }, clients: { claim: async () => {} },
+    self: { location: { origin: "https://example.test" }, registration: { scope: "https://example.test/" }, clients: { claim: async () => {} },
       skipWaiting: () => {},
       addEventListener: (name, callback) => handlers.set(name, callback) },
-    fetch: async () => {
+    fetch: async (request, options) => {
       if (offline) throw new Error("offline");
-      return fetchResponse ? fetchResponse() : new Response("current shell");
+      if (typeof request === "string") return installResponse(request);
+      return fetchResponse ? fetchResponse(request, options) : new Response("current shell");
     },
   });
   const dispatch = async (name, request) => {
@@ -100,6 +102,53 @@ const workerFixture = async ({ source = worker, caches = cacheFixture(), fetchRe
   };
   return { caches, dispatch, goOffline: () => { offline = true; } };
 };
+
+test("game lists and player routes bypass the worker online and offline", async () => {
+  const f = await workerFixture();
+  const requests = [
+    "/games.json", "/games.json?device=other", "/%67ames.json", "/api/account", "/api/saves/player",
+    "/games/ktf/archive.zip", "/ext/extra.jar", "/future-player-route",
+  ].map(path => new Request(new URL(path, "https://example.test/")));
+  const previous = await f.caches.open("wfeature-pwa-v76");
+  for (const request of requests) await previous.put(request, new Response("previous player"));
+  await f.dispatch("install");
+  await f.dispatch("activate");
+  for (const request of requests) {
+    assert.equal(await f.dispatch("fetch", request), undefined, request.url);
+    assert.equal(await f.caches.match(request), undefined, request.url);
+  }
+  f.goOffline();
+  for (const request of requests) assert.equal(await f.dispatch("fetch", request), undefined, request.url);
+});
+
+test("online navigation checks the running mode before using the cached entry page", async () => {
+  let mode = "personal";
+  const f = await workerFixture({ fetchResponse: (_request, options) => {
+    assert.equal(options?.cache, "no-store");
+    return new Response(mode);
+  } });
+  for (const path of ["/", "/index.html"]) {
+    const request = { method: "GET", url: "https://example.test" + path, mode: "navigate" };
+    mode = "personal";
+    assert.equal(await (await f.dispatch("fetch", request)).text(), "personal");
+    mode = "shared";
+    assert.equal(await (await f.dispatch("fetch", request)).text(), "shared");
+  }
+  f.goOffline();
+  const offline = await f.dispatch("fetch", { method: "GET", url: "https://example.test/", mode: "navigate" });
+  assert.equal(await offline.text(), "shared");
+});
+
+test("an upstream private response to a shell URL stays out of the offline shell", async () => {
+  const privatePage = () => new Response("login required", { headers: { "Cache-Control": "private, no-store" } });
+  const f = await workerFixture({ installResponse: privatePage, fetchResponse: privatePage });
+  const request = { method: "GET", url: "https://example.test/", mode: "navigate" };
+  await f.dispatch("install");
+  assert.equal(await f.caches.match(request), undefined);
+  assert.equal(await (await f.dispatch("fetch", request)).text(), "login required");
+  f.goOffline();
+  assert.equal(await f.dispatch("fetch", request), undefined);
+});
 
 test("a controlled navigation retires an old shell recreated after activation", async () => {
   const f = await workerFixture();

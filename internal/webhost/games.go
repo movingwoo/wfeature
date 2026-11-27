@@ -62,19 +62,19 @@ type Game struct {
 // root is an empty list rather than an error — a fresh install has no games
 // yet, and the page has to load anyway so the user can see where to put them.
 func ListGames(gameRoot, addedRoot string) []Game {
-	games := listRoot(gameRoot, libraryPrefix, false)
+	games := listRoot(gameroot.Entries(gameRoot), libraryPrefix, false)
 	// A host with no added root, and one pointed at the library itself, both
 	// list once: a second pass over the same directory would offer every game
 	// twice, and offer the library as the page's to delete.
 	if addedRoot != "" && addedRoot != gameRoot {
-		games = append(games, listRoot(addedRoot, addedPrefix, true)...)
+		games = append(games, listRoot(gameroot.Entries(addedRoot), addedPrefix, true)...)
 	}
 	return games
 }
 
 // listRoot is one root's worth of that listing, under the prefix its paths
 // carry.
-func listRoot(gameRoot, prefix string, added bool) []Game {
+func listRoot(entries []gameroot.Entry, prefix string, added bool) []Game {
 	// The depth this reads to is the boundary every tool that reasons about
 	// the library shares; gameroot.Entries holds it, one group at a time and
 	// with the ungrouped archives last.
@@ -95,7 +95,7 @@ func listRoot(gameRoot, prefix string, added bool) []Game {
 			return korean.CompareString(run[left].Name, run[right].Name) < 0
 		})
 	}
-	for _, entry := range gameroot.Entries(gameRoot) {
+	for _, entry := range entries {
 		if !gameExtensions[strings.ToLower(filepath.Ext(entry.Name))] {
 			continue
 		}
@@ -124,9 +124,19 @@ func (s *Server) serveGameList(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusMethodNotAllowed, "Method Not Allowed")
 		return
 	}
-	body, err := json.Marshal(ListGames(s.gameRoot, s.addedRoot))
+	var games []Game
+	if s.accounts != nil {
+		games = listRoot(gameroot.ConfinedEntries(s.gameRoot), libraryPrefix, false)
+	} else {
+		games = ListGames(s.gameRoot, s.addedRoot)
+	}
+	body, err := json.Marshal(games)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "Internal Server Error")
+		return
+	}
+	if s.accounts != nil {
+		writeJSON(writer, http.StatusOK, body)
 		return
 	}
 	// The list is read every time the picker opens and rarely changes.
@@ -148,6 +158,10 @@ var errNotAGame = errors.New("the path does not name a game")
 func (s *Server) gameFile(gamePath string) (file string, added bool, err error) {
 	components, err := pathComponents(gamePath)
 	if err != nil || len(components) < 2 {
+		return "", false, errNotAGame
+	}
+	// Shared players can open the same root and group entries the picker lists.
+	if s.accounts != nil && len(components) > 3 {
 		return "", false, errNotAGame
 	}
 	root := ""
@@ -179,6 +193,30 @@ func (s *Server) gameFileInQuery(raw string) (file string, added bool, err error
 	return s.gameFile(decoded)
 }
 
+// A shared library also checks symlinks at open time, including a group link.
+func (s *Server) openArchive(file string) (*os.File, error) {
+	if s.accounts == nil {
+		return os.Open(file)
+	}
+	if !gameExtensions[strings.ToLower(filepath.Ext(file))] {
+		return nil, errNotAGame
+	}
+	rel, err := filepath.Rel(s.gameRoot, file)
+	if err != nil {
+		return nil, err
+	}
+	library, err := os.OpenRoot(s.gameRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer library.Close()
+	info, err := library.Stat(rel)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, errNotAGame
+	}
+	return library.Open(rel)
+}
+
 // serveGameArchive serves `/games/<group>/<archive>` and `/ext/<archive>` out
 // of the root each names. The archives are tens of megabytes and never change
 // in place, so they are the one response worth revalidating instead of
@@ -193,20 +231,24 @@ func (s *Server) serveGameArchive(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusForbidden, "Forbidden")
 		return
 	}
-	info, err := os.Stat(file)
-	if err != nil || !info.Mode().IsRegular() {
-		writeError(writer, http.StatusNotFound, "Not Found")
-		return
-	}
-	archive, err := os.Open(file)
+	archive, err := s.openArchive(file)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, "Not Found")
 		return
 	}
 	defer archive.Close()
+	info, err := archive.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		writeError(writer, http.StatusNotFound, "Not Found")
+		return
+	}
 
 	securityHeaders(writer.Header())
-	writer.Header().Set("Cache-Control", "no-cache")
+	if s.accounts != nil {
+		writer.Header().Set("Cache-Control", "no-store")
+	} else {
+		writer.Header().Set("Cache-Control", "no-cache")
+	}
 	writer.Header().Set("Content-Type", contentType(file))
 	// Size and modification time identify a build of an archive well enough
 	// for revalidation, and cost nothing to compute.

@@ -33,7 +33,7 @@ var (
 	// pagePlaceholder is a {{key}} in the page. {{@table}} is the whole table,
 	// which the page's scripts read; "@" is not a key's character, so no
 	// sentence can be named that.
-	pagePlaceholder = regexp.MustCompile(`\{\{(@table|[A-Za-z0-9][A-Za-z0-9._-]*)\}\}`)
+	pagePlaceholder = regexp.MustCompile(`\{\{(@table|@mode|[A-Za-z0-9][A-Za-z0-9._-]*)\}\}`)
 )
 
 // lineSpace is what is trimmed from a line and from each side of its `=`:
@@ -123,6 +123,11 @@ func (text *pageText) load() (textTable, error) {
 	if err != nil {
 		return nil, err
 	}
+	for key := range table {
+		if strings.HasPrefix(key, "account.") {
+			table[key] = table.phrase(key, registrationLimits...)
+		}
+	}
 	text.raw, text.table = raw, table
 	return table, nil
 }
@@ -132,7 +137,7 @@ func (text *pageText) load() (textTable, error) {
 // table does not have, and a "{{" that is not a placeholder at all, are
 // refused rather than sent, because either would put the placeholder itself in
 // front of a player.
-func renderPage(page []byte, table textTable) ([]byte, error) {
+func renderPage(page []byte, table textTable, shared bool) ([]byte, error) {
 	if found, placeholders := bytes.Count(page, []byte("{{")), len(pagePlaceholder.FindAllIndex(page, -1)); found != placeholders {
 		return nil, fmt.Errorf("%s has %d {{ but %d placeholders", pageFile, found, placeholders)
 	}
@@ -146,8 +151,14 @@ func renderPage(page []byte, table textTable) ([]byte, error) {
 	var missing []string
 	rendered := pagePlaceholder.ReplaceAllFunc(page, func(match []byte) []byte {
 		name := string(match[2 : len(match)-2])
-		if name == "@table" {
+		switch name {
+		case "@table":
 			return encoded
+		case "@mode":
+			if shared {
+				return []byte("shared")
+			}
+			return []byte("personal")
 		}
 		sentence, ok := table[name]
 		if !ok {
@@ -173,7 +184,7 @@ func (s *Server) renderClientPage() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return renderPage(page, table)
+	return renderPage(page, table, s.accounts != nil)
 }
 
 // phrase is the sentence the page is shown for key, from textFile; see

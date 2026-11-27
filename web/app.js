@@ -10,7 +10,8 @@ import { initKeypadEditor, fitKeypadLabel } from "./keypad-editor.js";
 import { SETTINGS } from "./keypad-layout.js";
 import { GameSession, playAudioEvents, sessionAvailable } from "./session.js";
 import { Magnifier, unionRect } from "./magnify.js";
-import { browserToken, createSessionLink } from "./session-link.js";
+import { initAccounts, accountOwnerKey } from "./account.js";
+import { browserToken, browserTokenKey, createSessionLink } from "./session-link.js";
 import { local as localStore, session as sessionStore } from "./storage.js";
 import { createTouchStream, guestPoint } from "./touch.js";
 import { groupLabel, initAddGame, initRemoveGame, syncRemoveButton } from "./add-game.js";
@@ -217,6 +218,11 @@ const reportEndingOrError = error => {
 };
 
 // The last selection survives returning to the picker.
+const shared = document.documentElement.dataset.mode === "shared";
+let accountGate = null;
+let accountGeneration = 0;
+const signedIn = () => !shared || document.documentElement.dataset.auth === "player";
+const canChooseGame = () => sessionLink?.state() === "ready" || (shared && sessionLink?.state() === "occupied");
 const LAST_GAME_KEY = "wfeature:lastGame";
 const FRAME_SCALE_KEY = "wfeature:frameScale";
 // The screen is remembered per game rather than once for the page: it is a
@@ -806,8 +812,9 @@ const drawFrame = (picture, { scale = 1, dirty = null } = {}) => {
 
 // The transport decodes messages; session-link owns reconnection and control.
 const openSession = async handlers => {
+  if (accountGate && !await accountGate.check()) throw new Error(phrase("account.login-required"));
   if (!sessionAvailable()) throw new Error("session transport unavailable");
-  const playing = () => ["playing", "starting"].includes(sessionLink?.state());
+  const playing = () => signedIn() && ["playing", "starting"].includes(sessionLink?.state());
   const opening = new GameSession({
     ...handlers,
     onFrame: (picture, presentation) => { if (playing()) drawFrame(picture, presentation); },
@@ -871,16 +878,29 @@ const sessionStateChanged = state => {
 };
 
 const initResumeOnReturn = () => {
+  const wake = async (takeover = false) => {
+    if (accountGate && !await accountGate.check()) return;
+    await sessionLink.wake(takeover);
+  };
+  document.getElementById("session-choose")?.addEventListener("click", () => {
+    if (!shared || sessionLink.state() !== "occupied") return;
+    document.getElementById("session-return").classList.add("hidden");
+    document.getElementById("session-return").inert = true;
+    const picker = document.getElementById("prestart");
+    picker.classList.remove("hidden");
+    picker.inert = false;
+    void initGameSelect();
+  });
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) { releaseInput(); void sessionLink.suspend(); }
-    else { pageAudio?.foreground(); void sessionLink.wake(); }
+    else { pageAudio?.foreground(); void wake(); }
   });
-  window.addEventListener("online", () => { void sessionLink.wake(); });
-  window.addEventListener("pageshow", () => { pageAudio?.foreground(); void sessionLink.wake(); });
+  window.addEventListener("online", () => { void wake(); });
+  window.addEventListener("pageshow", () => { pageAudio?.foreground(); void wake(); });
   window.addEventListener("pagehide", () => { releaseInput(); sessionLink.leave(); });
   document.getElementById("session-takeover")?.addEventListener("click", () => {
     pageAudio?.activate();
-    void sessionLink.wake(true);
+    void wake(true);
   });
 };
 
@@ -969,7 +989,7 @@ const startChosenGame = async path => {
   } catch (error) {
     reportEndingOrError(error);
     select.disabled = false;
-    startButton.disabled = sessionLink?.state() !== "ready";
+    startButton.disabled = !canChooseGame();
     startButton.textContent = phrase("picker.start");
   }
 };
@@ -1031,12 +1051,15 @@ const initGameSelect = async () => {
 // restart is about, or else the last one played. A list that cannot be read
 // is reported here and leaves the picker saying so.
 const listGames = async (select, startButton, restarting) => {
+  const generation = accountGeneration;
   try {
     // Always asked for, never trusted from a cache: an unchanged list costs a
     // revalidation and an added game shows at once.
-    const response = await reach(fetch, "games.json", { cache: "no-cache" });
+    const response = await reach(fetch, "games.json", { cache: shared ? "no-store" : "no-cache" });
+    if (shared && response.status === 401) { await accountGate.check(); return; }
     if (!response.ok) throw new Error(phrase("picker.list-failed", { status: response.status }));
     const games = await response.json();
+    if (generation !== accountGeneration || !signedIn()) return;
     select.replaceChildren();
 
     for (const label of [...new Set(games.map(groupLabel))]) {
@@ -1068,7 +1091,7 @@ const listGames = async (select, startButton, restarting) => {
     select.dispatchEvent(new Event("change"));
 
     select.disabled = false;
-    startButton.disabled = sessionLink?.state() !== "ready";
+    startButton.disabled = !canChooseGame();
     startButton.textContent = phrase("picker.start");
     syncRemoveButton(document);
     checkpointControls?.refresh();
@@ -1077,6 +1100,7 @@ const listGames = async (select, startButton, restarting) => {
       startButton.addEventListener("click", () => startChosenGame(select.value));
     }
   } catch (error) {
+    if (generation !== accountGeneration || !signedIn()) return;
     reportError(error);
     select.replaceChildren(new Option(phrase("picker.unavailable"), ""));
     syncRemoveButton(document);
@@ -2030,7 +2054,32 @@ const initCheat = () => {
   }, REFRESH_INTERVAL);
 };
 
+const lockAccount = () => {
+  ++accountGeneration;
+  sessionLink?.leave();
+  releaseInput();
+  pageAudio?.stopAll();
+  for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+  currentGamePath = currentGameLabel = currentPlatform = "";
+  gameRunning = false;
+  pendingPicture = pendingDirty = null;
+  heldPictures.reset();
+  magnifier.reset();
+  canvasContext.clearRect(0, 0, canvas.width, canvas.height);
+  document.getElementById("game-select").replaceChildren();
+  document.getElementById("game-start").disabled = true;
+};
+
 const main = async () => {
+  if (shared) {
+    accountGate = initAccounts({ document, window, localStore, sessionStore, fetch, onLocked: lockAccount });
+    if (!await accountGate.check()) return;
+  } else if (localStore.getItem(accountOwnerKey) !== null) {
+    localStore.removeItem(accountOwnerKey);
+    localStore.removeItem(LAST_GAME_KEY);
+    localStore.removeItem(browserTokenKey);
+    sessionStore.removeItem("wfeature.resume-token");
+  }
   // A page whose settings never stick is otherwise invisible: every control
   // works, nothing is remembered, and the reason is a browser setting rather
   // than this page. The report is where that has to be readable.
@@ -2055,6 +2104,7 @@ const main = async () => {
 
   let profileWired = false;
   sessionLink = createSessionLink({
+    shared,
     confirmStart: message => askToConfirm({ document, message, confirmLabel: phrase("start.replace-confirm") }),
     token: browserToken(localStore, sessionStore),
     connect: openSession,

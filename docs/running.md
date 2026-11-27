@@ -132,6 +132,73 @@ debug save tree. One process cannot serve the other profile, which keeps a
 debug session from moving a release session's progress. Every HTTP route the
 server answers is listed in [`web/README.md`](../web/README.md#server).
 
+### Shared hosting
+
+The desktop executable selects its mode at startup. Its normal launch and the
+mobile apps open the personal picker directly. To host registered players, run
+the same executable behind an HTTPS access gate. For example, bind the shared
+listener to loopback and forward the gate to that address.
+
+```sh
+./wfeature-server -multi -addr 127.0.0.1:12541 -https off
+```
+
+Pass `-multi` on each hosted restart, including through the packaged start
+launcher. Give a personal server running beside it another listener. Apply
+the upstream access check to the entire site, including registration and the
+WebSocket upgrade. Forward the original Host, set `X-Forwarded-Proto: https`
+on a local proxy that terminates TLS, and set `X-Forwarded-For` so forwarded
+traffic cannot use local shutdown. The built-in HTTPS listener can also
+terminate TLS. Keep `/api/status` available to local launchers.
+[Reverse proxy configuration](#behind-a-reverse-proxy-on-a-unix-socket)
+
+New login IDs use 3–20 Unicode letters, decimal digits, underscores or
+hyphens and are case-sensitive. New passwords use 8–32 Unicode characters
+and must contain a non-whitespace character. Spaces count and are preserved.
+The limits count Unicode code points. Existing players can sign in with their
+original credentials and use their original ID for save binding. Each device receives
+a separate 30-day login.
+Logging out or reaching that login's expiry disconnects its sockets. Another
+device signed in to the same account can resume the game. Each account has one
+game slot. A parked game keeps its ordinary saves claimed for 30 minutes, then
+closes even if the server receives no requests. Shared hosting serves the
+operator's archives in the library root and its immediate groups read-only.
+Page uploads and removals belong to the personal
+host. [Session control](session.md#retention-and-control)
+
+| Shared route | Behavior |
+| --- | --- |
+| `GET /api/account` | Returns `{"user":null}` when signed out, or a user with immutable `id` and chosen `login`. |
+| `POST /api/register`, `POST /api/login` | Accept a JSON object with `id` and `password`, then set a Secure, HttpOnly, SameSite=Lax login cookie. |
+| `POST /api/logout` | Revokes the current login and clears its cookie. |
+| `/games.json`, `/games/`, `/api/session`, `/api/saves/`, `/api/savepack`, enabled `/api/debug-log` | Require a valid login. Save and checkpoint operations use the authenticated account's tree. |
+
+Shared startup opens `accounts.sqlite` in the installation data root. An
+unreadable database stops startup. The personal host never opens this file.
+With the default paths, each account starts with empty ordinary saves and
+quick slots under `savedata/<profile>/users/<user_id>/<platform>/`. A custom
+`-saves` supplies the KTF directory name within that account tree and its
+parent supplies the base. If that directory is itself named `users`, the
+private trees occupy the sibling `.wfeature-users`. The configured directory
+must have a parent for these sibling trees. Keep the database and
+save trees outside served directories. Back up SQLite and the complete save
+and added-games trees together while the servers are stopped.
+
+To share existing personal progress with **one** account, register that login,
+stop the games in both modes and back up the entire personal save tree,
+including quick slots. From that installation, run the local setup once.
+
+```sh
+./wfeature-server -multi -bind-personal-saves 'player'
+```
+
+Use the same `-saves` value in both modes. The chosen
+immutable account ID uses those personal files directly. Repeating setup for
+the same account is safe. The other accounts keep independent trees. On a
+filesystem with only process-local save claims, use the bound tree in one
+server at a time. To copy ordinary progress into an independent account,
+export a `.wfs` backup and import it after logging in as that account.
+
 ### From a phone over HTTPS
 
 A phone or another computer on the same network can open
@@ -417,6 +484,7 @@ never starts a game. nginx needs it spelled out; Caddy does it by default.
 location / {
     proxy_pass http://unix:/run/wfeature/wfeature.sock;
     proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;  # keeps /api/shutdown local
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;      # the session is a WebSocket

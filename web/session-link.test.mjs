@@ -277,6 +277,137 @@ test("changed victims ask again and a disconnected dialog never restarts", async
   assert.equal(calls, 2);
 });
 
+test("only a shared occupied picker can request a confirmed replacement", async () => {
+  for (const choice of ["personal", "cancel", "fail", "accept"]) {
+    let socket;
+    let probes = 0;
+    const confirmations = [];
+    const starts = [];
+    const timers = new Set();
+    const link = createSessionLink({
+      shared: choice !== "personal", token: "this-device",
+      connect: async handlers => {
+        socket = {
+          closed: false,
+          close() { this.closed = true; handlers.onClosed(); },
+          resume: async (_token, takeover) => {
+            assert.equal(takeover, false);
+            probes++;
+            return { occupied: true };
+          },
+          start: async (path, _scale, _screen, _token, confirmation) => {
+            confirmations.push(confirmation);
+            if (!confirmation) return { confirmation: "current-instance", message: "Replace this game?" };
+            if (choice === "fail") throw new Error("busy");
+            return { started: { game: path } };
+          },
+        };
+        return socket;
+      },
+      confirmStart: async () => choice !== "cancel",
+      onStarted: info => starts.push(info.game),
+      schedule: callback => { timers.add(callback); return callback; },
+      cancel: callback => timers.delete(callback),
+    });
+    await link.wake();
+    assert.equal(link.state(), "occupied");
+    if (choice === "personal") {
+      await assert.rejects(link.start("other", 1));
+      assert.deepEqual(confirmations, []);
+    } else if (choice === "fail") {
+      await assert.rejects(link.start("other", 1), /busy/);
+    } else {
+      if (choice === "accept") socket.close();
+      await link.start("other", 1);
+      assert.deepEqual(confirmations, choice === "accept" ? ["", "current-instance"] : [""]);
+    }
+    assert.equal(probes, 1);
+    if (choice === "accept") {
+      assert.equal(link.state(), "playing");
+      assert.deepEqual(starts, ["other"]);
+    } else {
+      await link.wake();
+      assert.equal(link.state(), "occupied");
+      assert.equal(timers.size, 0);
+      assert.deepEqual(starts, []);
+    }
+    link.leave();
+  }
+});
+
+test("a late resume cannot overwrite a session opened after leaving", async () => {
+  const pending = deferred();
+  const starts = [];
+  let connections = 0;
+  const link = createSessionLink({
+    token: "device",
+    connect: async () => ({
+      resume: ++connections === 1 ? () => pending.promise : async () => ({ started: { game: "new" } }),
+      close() { this.closed = true; },
+    }),
+    onStarted: info => starts.push(info.game), schedule: () => 1, cancel: () => {},
+  });
+  const old = link.wake();
+  await settled();
+  link.leave();
+  const next = link.wake();
+  await settled();
+  pending.resolve({ started: { game: "old" } });
+  await Promise.all([old, next]);
+  assert.equal(connections, 2);
+  assert.deepEqual(starts, ["new"]);
+  assert.equal(link.state(), "playing");
+  link.leave();
+});
+
+test("leaving invalidates starts before either a confirmation or a game arrives", async () => {
+  for (const reply of [{ confirmation: "old", message: "Replace?" }, { started: { game: "old" } }]) {
+    const pending = deferred();
+    const events = [];
+    const link = createSessionLink({
+      shared: true, token: "device", connect: async () => ({
+        resume: async () => ({}), start: () => pending.promise, close() { this.closed = true; },
+      }),
+      confirmStart: async () => { events.push("confirmation"); return false; },
+      onStarted: () => events.push("game"), schedule: () => { events.push("timer"); return 1; }, cancel: () => {},
+    });
+    await link.wake();
+    const starting = link.start("old", 1);
+    await settled();
+    link.leave();
+    pending.resolve(reply);
+    await assert.rejects(starting, { message: phrase("session.disconnected") });
+    assert.deepEqual(events, []);
+    assert.equal(link.state(), "offline");
+  }
+});
+
+test("leaving invalidates queued reconnects, including an opening connection's failure", async () => {
+  let attempts = 0;
+  let retry;
+  const pending = deferred();
+  const link = createSessionLink({
+    token: "device", connect: async () => {
+      if (++attempts === 1) throw new Error("offline");
+      await pending.promise;
+      throw new Error("offline");
+    },
+    schedule: callback => { retry = callback; return callback; }, cancel: () => {},
+  });
+  await link.wake();
+  const queued = retry;
+  const opening = link.wake();
+  await settled();
+  link.leave();
+  retry = null;
+  queued();
+  pending.resolve();
+  await opening;
+  await settled();
+  assert.equal(retry, null);
+  assert.equal(attempts, 2);
+});
+
 // An outage at the picker ends with an answer that carries no game. The
 // server was back within a second, so the next drop has to start the backoff
 // from the beginning rather than from where the last outage left it.

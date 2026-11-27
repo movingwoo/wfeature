@@ -42,7 +42,7 @@ the page can match it to its request:
 | Page message | Fields | Purpose |
 | --- | --- | --- |
 | `start` | `game`, `token`, `quick_load`, `value` (initial scale 1–4), `width`, `height` (32–1024), `confirmation` | Start an archive from its `games.json` path. Without a screen size the archive decides: a KTF descriptor's `DisplaySize`, an SKT archive's resource names, and otherwise 240×320. The page leaves it out only for `자동`; a chosen size is always sent. |
-| `resume` | `token`, `takeover` | Find the browser token's retained game; `takeover: true` transfers control from another connected page. |
+| `resume` | `token`, `takeover` | Find the personal browser token's or shared account's retained game. `takeover: true` transfers control from another connected page. |
 | `park` / `stop` | — | Retain the game without control, or end it. |
 | `key` | `action` (`press`, `release`), `code` | One key event with the MIDP-style code the keypad sends. A `repeat` from an older page is dropped; the session makes the handset's repeat itself. |
 | `pointer` | `action` (`press`, `drag`, `release`), `x`, `y` | One touch in the guest's own screen coordinates; the page removes its own magnification and letterboxing first. |
@@ -87,7 +87,7 @@ running is not cut short.
 
 ## Retention and control
 
-The server retains up to four active and parked games together. A game can
+The personal server retains up to four active and parked games together. A game can
 outlive its controlling socket with no elapsed-time eviction. Returning with the
 same browser token resumes it; moving control from another connected page
 requires explicit takeover, which the server completes within ten seconds or
@@ -100,6 +100,20 @@ the start with it to end the oldest parked game (or that game) and begin. A star
 whose saves a game attached to another page is using is refused. Active games
 cannot be evicted to make room. The four-game limit is not a
 resident-memory budget or a limit on sockets or archive-inspection requests.
+
+With `-multi`, the login cookie on the upgrade identifies the account. All its
+browsers find the same slot even with a new browser token. A start reserves
+that slot before loading the emulator. Another connected page receives
+`occupied` and can request takeover or choose a different game. A replacement
+confirmation belongs to one proposed archive and one specific running or
+parked instance. The old game closes and releases its claim before the new
+game starts. There is no global game-count limit.
+
+A lost connection, logout or login expiry parks the controlling game. A timer
+closes a game still parked after 30 minutes and releases its slot and save
+claim. Resuming cancels that park's deadline. A later park gets a full new
+window. Guest memory can be lost when a park expires or the process stops.
+[Shared server setup and save ownership](running.md#shared-hosting)
 
 Parking releases held input, detaches presentation and drives the platform's
 pause boundary. Resuming reattaches presentation and drives resume, then sends

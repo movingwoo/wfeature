@@ -409,6 +409,7 @@ engines, and pass a debug server where a route asks for the other profile.
 
 | Runner | Arguments | Section |
 | --- | --- | --- |
+| `multi.mjs` | `SERVER [chromium\|webkit]` | Same executable in both modes, separate browser accounts, ordinary saves, quick slots, backups, owner binding and offline access. |
 | `pwa.mjs` | `BASELINE_SERVER CANDIDATE_SERVER` | [PWA release acceptance](pwa-acceptance.md) |
 | `keypad-grid.mjs` | `SERVER` | [Grid keypad](#grid-keypad) |
 | `rapid-fire.mjs`; `rapid-fire-load.mjs` (no browser) | `SERVER`; `SERVER [SECONDS_PER_PHASE]` | [Rapid-fire input](#rapid-fire-input) |
@@ -444,6 +445,16 @@ and recurred during the 2026-09-30 SKT retained-session reload route
 ([resume investigation](history/skt.md#skt-resume-2026-09-30-validation)). Its cause is
 unresolved. On recurrence, preserve the lifecycle phase, browser version, Blob
 properties, origin/navigation and server frame evidence.
+
+On 2026-11-27, Chromium and WebKit each ran `multi.mjs` against the extracted
+darwin/arm64 release executable. Both recovered personal progress after a
+mode switch and kept two players' ordinary saves, quick slots and restores
+separate. The host tests started five accounts on one archive, raced starts
+for one account and advanced a test clock through a parked game's deadline.
+Two fresh accounts also ran a local SKT archive with the implicit handset,
+changed an in-game setting, restarted from their own saves and exported
+their records. Android WebView and the iOS simulator exercised the personal
+picker and save paths. [Server operation](running.md#shared-hosting)
 
 [PWA release acceptance](pwa-acceptance.md) defines the two-version upgrade
 check and the physical-device steps. No automated route establishes
