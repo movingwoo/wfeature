@@ -316,9 +316,16 @@ func (state *session) run(ctx context.Context, request Request) Response {
 	case "route":
 		return state.route(ctx, request)
 	case "quicksave":
+		if state.ended != nil && state.driver.QuickSave != nil {
+			return failure("cannot save a stopped game: %v", state.ended)
+		}
 		return state.checkpoint(ctx, state.driver.QuickSave)
 	case "quickload":
-		return state.checkpoint(ctx, state.driver.QuickLoad)
+		response := state.checkpoint(ctx, state.driver.QuickLoad)
+		if response.OK {
+			state.ended = nil
+		}
+		return response
 	}
 	return failure("unknown command %q; the commands are step, key, touch, park, screen, pixel, diag, shot, route, quicksave, quickload and quit", request.Cmd)
 }

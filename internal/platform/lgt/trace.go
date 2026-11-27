@@ -470,6 +470,10 @@ var wipicSlotNames = map[uint32]string{
 	slotUicCreateApplicationContext: "uicCreateApplicationContext",
 	slotUicGetClass:                 "uicGetClass",
 	slotUicCreate:                   "uicCreate",
+	slotUicDestroy:                  "uicDestroy",
+	slotUicSetTime:                  "uicSetTime",
+	slotUicSetTimeLong:              "uicSetTimeLong",
+	slotUicGetTime:                  "uicGetTime",
 }
 
 // stdlibSlotNames names the C library slots. **It is also what says a slot is

@@ -349,6 +349,74 @@ func TestCheckpointPrunesADroppedImageSurface(t *testing.T) {
 	}
 }
 
+// A collection can run after the capture has pruned dead owners and before it
+// records the frames and heap. An Image and Clip live at that boundary both
+// belong in the slot, and ordinary rounds must still reclaim them afterwards.
+func TestCheckpointRetainsWeakOwnersWhileCopyingTheClient(t *testing.T) {
+	archive, err := testfixture.KTFCheckpointArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := SessionOptions{SaveRoot: t.TempDir()}
+	session, err := StartSession(t.Context(), archive, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	rt := session.Client.runtime
+	value, err := runtimeImageCreateSized(rt, session.Client.vm, []jvm.Value{jvm.IntValue(2), jvm.IntValue(2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, _ := value.Reference()
+	handle := rt.imageSurfaces[weak.Make(image)]
+	clip := &jvm.Object{ClassName: "org/kwis/msp/media/Clip"}
+	rt.clip(clip).Data = []byte("test sound")
+
+	// Capturing a timed vibration reads its clock between pruning and heap
+	// capture. Drop the fixture's last references and collect at that instant.
+	now := time.Unix(1_700_000_000, 0)
+	vibrator := &session.Client.Vibrator
+	vibrator.SetClock(func() time.Time { return now })
+	vibrator.Vibrate(50, 100)
+	vibrator.SetClock(func() time.Time {
+		goruntime.KeepAlive(image)
+		goruntime.KeepAlive(clip)
+		image, clip = nil, nil
+		goruntime.GC()
+		return now
+	})
+	slot, err := session.CaptureCheckpoint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if image != nil || clip != nil {
+		t.Fatal("capture missed the forced collection")
+	}
+	prepared, err := PrepareSessionCheckpoint(archive, slot, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Discard()
+	restored := prepared.session.Client.runtime
+	if _, ok := restored.WIPICAllocations[handle]; !ok || len(restored.imageSurfaces) != 1 {
+		t.Fatal("restored image lost its framebuffer or owner")
+	}
+	if len(restored.clips) != 1 {
+		t.Fatal("restored clip lost its owner")
+	}
+	for _, state := range restored.clips {
+		if string(state.Data) != "test sound" {
+			t.Fatalf("restored clip holds %q", state.Data)
+		}
+	}
+	goruntime.GC()
+	rt.collectHostObjects()
+	if _, retained := rt.WIPICAllocations[handle]; retained || len(rt.clips) != 0 {
+		t.Fatal("capture kept the dropped resources alive")
+	}
+}
+
 // A version 2 record, taken before the engine followed the handset's graphics
 // context, restores a session that keeps the earlier record, because the
 // contexts in its memory were written that way; the record is otherwise the

@@ -189,6 +189,11 @@ every platform. On an SKT title (a MIDlet or an SGS script) `soft3`, `ez` and
 `hangup` are refused, as `runskt` refuses them: a MIDlet would be handed the
 raw code, and an SGS script reads the hang-up code as up.
 
+After a tick fails, `quicksave` reports the error and keeps the previous slot.
+A successful `quickload` allows stepping and input again. A refused load
+keeps the session stopped. If the guest exits and closes its session, reopen
+the slot with `wfeature run <archive> -quickload -serve` and the same save root.
+
 The slot is tied to the full archive digest. Loading brings the game back and
 leaves its ordinary saves as they are: the restored game reads the saves on
 disk and writes on top of them, and a write the running game had issued and the

@@ -292,6 +292,7 @@ const (
 	wipiNoEntry     int32 = -12
 	wipiNoSpace     int32 = -13
 	wipiNotEmpty    int32 = -15
+	wipiNoMemory    int32 = -17
 	wipiShortBuffer int32 = -18
 )
 
@@ -1151,6 +1152,28 @@ func (client *Client) initContext(pointer uint32) int32 {
 	return wipiSuccess
 }
 
+// The last byte of the stub region identifies the handset's built-in blend.
+// No import stub starts there. A copied context carries the same operation.
+const lgtBuiltinAlphaOp = platformCodeBase + uint32(platformCodeSize) - 1
+
+func (client *Client) setContextAlpha(pointer, value uint32) int32 {
+	opOffset := uint32(grpContextPixelOp)
+	if client.wideGraphicsContexts {
+		opOffset = 28
+	}
+	// Validate all three writes first. In the compact ABI the translation
+	// word between the alpha and the operation belongs to the title.
+	if client.core.Memory().ValidateRange(pointer, uint64(opOffset+8), armcore.PermissionWrite) != nil {
+		return wipiError
+	}
+	if client.writeWord(pointer+grpContextAlpha, value) != nil ||
+		client.writeWord(pointer+opOffset, lgtBuiltinAlphaOp) != nil ||
+		client.writeWord(pointer+opOffset+4, value) != nil {
+		return wipiError
+	}
+	return wipiSuccess
+}
+
 // transferContextField services MC_grpSetContext and MC_grpGetContext, which
 // are `void f(MC_GrpContext *pgc, M_Int32 index, void *pv)`: one named field at
 // a time. Clip and offset are rectangles behind a pointer; everything else is
@@ -1170,6 +1193,9 @@ func (client *Client) transferContextField(thread *armcore.Thread, slot uint32) 
 	}
 	if pointer == 0 {
 		return wipiError
+	}
+	if slot == slotSetContext && field == grpFieldAlpha {
+		return client.setContextAlpha(pointer, value)
 	}
 	if client.wideGraphicsContexts {
 		return client.transferWideContext(pointer, field, value, slot)

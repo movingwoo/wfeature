@@ -268,7 +268,9 @@ on its first masked, XOR or `Image.drawImage` draw, and the copy
 ownership. Graphics keeps its Image reachable. Collection releases orphan
 surfaces and stopped audio; playing orphans remain until playback finishes,
 including repeating playback. A quick save prunes the orphans a round would
-prune before it records the surfaces.
+prune and keeps each surviving Image and Clip reachable until it has copied
+both the native resources and their owners in the Java heap.
+[First-save and restore checks](history/ktf.md#ktf-new-archives-2026-11-22-checkpoint).
 Shared audio timing and borrowed-buffer rules are in
 [architecture.md](architecture.md#shared-runtime-services). Java and WIPI-C clip
 pause/resume, device and clip volume, and Java `PlayListener` events are applied

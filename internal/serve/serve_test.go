@@ -290,6 +290,50 @@ func TestAGuestThatEndsLeavesTheSessionReadable(t *testing.T) {
 	}
 }
 
+// A failed tick used to leave quicksave able to replace the last playable slot.
+func TestAFailedTickKeepsThePlayableCheckpoint(t *testing.T) {
+	guest := newFakeGuest()
+	guest.failAt = 4
+	driver := guest.driver()
+	savedTick := 0
+	driver.QuickSave = func(context.Context) error {
+		savedTick = guest.ticks
+		return nil
+	}
+	refuseLoad := true
+	driver.QuickLoad = func(context.Context) error {
+		if refuseLoad {
+			refuseLoad = false
+			return fmt.Errorf("slot unreadable")
+		}
+		guest.ticks = savedTick
+		return nil
+	}
+
+	answers := exchange(t, driver,
+		`{"cmd":"step"}`,
+		`{"cmd":"quicksave"}`,
+		`{"cmd":"step","ticks":5}`,
+		`{"cmd":"quicksave"}`,
+		`{"cmd":"quickload"}`,
+		`{"cmd":"step"}`,
+		`{"cmd":"quickload"}`,
+		`{"cmd":"step"}`,
+	)
+	if !answers[1].OK || !answers[2].Ended || answers[2].EndReason == "" {
+		t.Fatalf("save before the failed tick: %+v, tick: %+v", answers[1], answers[2])
+	}
+	if answers[3].OK || !strings.Contains(answers[3].Error, answers[2].EndReason) || savedTick != 1 {
+		t.Errorf("save after the failed tick: %+v, slot at tick %d", answers[3], savedTick)
+	}
+	if answers[4].OK || !strings.Contains(answers[4].Error, "slot unreadable") || !answers[5].Ended || answers[5].Ticks != 0 {
+		t.Errorf("refused load: %+v, next step: %+v", answers[4], answers[5])
+	}
+	if !answers[6].OK || answers[6].Digest != answers[1].Digest || !answers[7].Progressed || guest.ticks != 2 || answers[7].Total != 5 {
+		t.Errorf("restored load: %+v, next step: %+v, guest at tick %d", answers[6], answers[7], guest.ticks)
+	}
+}
+
 func TestStepStopsWhenNothingIsLeftToRun(t *testing.T) {
 	guest := newFakeGuest()
 	guest.stalledAt = 4

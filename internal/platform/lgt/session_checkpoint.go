@@ -187,10 +187,10 @@ func (session *Session) CaptureCheckpointWithSession(
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
-	record, err := (sessionImageCheckpointState{
+	record, err := encodeLGTDateRecord(sessionImageCheckpointState{
 		Session: saved, Media: media, Library: library, Screen: screen, Scheduling: scheduling,
 		Sources: client.captureImageSources(saved.Client.Framebuffers),
-	}).encode()
+	}, client.dateComponents)
 	if err != nil {
 		return backend.Checkpoint{}, err
 	}
@@ -247,7 +247,7 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 	if checkpoint.Variant != backend.CheckpointLGTClet && checkpoint.Variant != backend.CheckpointLGTJava {
 		return nil, backend.ErrCheckpointVersion
 	}
-	record, err := decodeLGTImageRecord(checkpoint.Runtime)
+	record, dates, err := decodeLGTDateRecord(checkpoint.Runtime)
 	if err != nil {
 		return nil, err
 	}
@@ -292,6 +292,7 @@ func PrepareSessionCheckpoint(archive []byte, checkpoint backend.Checkpoint, opt
 	if err := client.restoreImageSources(record.Sources); err != nil {
 		return nil, err
 	}
+	client.dateComponents = dates
 	if err := client.restoreJavaMediaState(record.Media, saved.Client.Audio); err != nil {
 		return nil, err
 	}

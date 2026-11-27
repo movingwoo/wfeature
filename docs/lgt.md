@@ -268,6 +268,12 @@ selects that convention, and earlier wide contexts retain inclusive stored
 ends. Arbitrary mixed compact/direct contexts and the previously proposed
 alternate 52-byte layout remain unverified.
 
+In both layouts, setting `MC_GRP_CONTEXT_ALPHA_IDX` also selects the built-in
+RGB565 blend and sets `PIXEL_PARAM1` to the supplied alpha. A later write to
+`PIXEL_PARAM1` changes the blend strength. Installing a guest pixel operation
+replaces the blend, and clearing the operation restores plain drawing.
+[Skill icons and map overlay](history/lgt.md#lgt-overlay-date-cli-2026-11-26).
+
 The panel image follows the supported flush path. A revision-specific
 initialization correction removes verified 24-row strip offsets for exact
 native-module fingerprints, including direct-pixel and image-path revisions.
@@ -314,6 +320,13 @@ every screen once a title has used its input method, except after a commit that
 reached no widget until the next key or input-method call; it does not infer
 arbitrary game-owned fields. Host text must be encodable in KSC5601; other characters
 are refused. See [native text input](native-text-input.md).
+
+The WIPI-C `DateTimeComponent` starts with the guest clock's local date and
+time at creation. `MC_uicGetTime` writes its nine-field C `struct tm`.
+`MC_uicSetTime` replaces that record and `MC_uicSetTimeLong` accepts signed
+epoch seconds. Each live component retains its value through quick load. The
+supported calls cover date storage and retrieval. On-screen date editing is
+unimplemented. [WIPI component contract](https://mirusu400.github.io/wipi-wiki/v20/c-api/ui-components/).
 
 ## Storage, audio, and offline services
 

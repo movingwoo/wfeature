@@ -66,6 +66,7 @@ This consolidation adds no execution or acceptance evidence.
 - [A consent that waits on a failed dial — 2026-11-21](#lgt-dial-failure-2026-11-21-data-service-lock)
 - [A one-time authentication the title gives up after five failures — 2026-11-21](#lgt-authentication-allowance-2026-11-21)
 - [A weapon key that reads an empty equipment slot — 2026-11-21](#lgt-null-read-2026-11-21)
+- [Translucent overlays, save dates and CLI checkpoint recovery — 2026-11-26](#lgt-overlay-date-cli-2026-11-26)
 
 <a id="implementation-the-lgt-platform"></a>
 
@@ -474,16 +475,16 @@ first three functions of the specification's component section, and
 `MC_UIC_TEXT_COMPONENT` is defined as exactly that string. The arithmetic agrees
 (every identified block starts at a hundred times its number, and eight hundred
 is `0x320`), as does the neighbour: block nine is the utility block at nine
-hundred. Nothing rested on the old reading; only this title reaches `0x320`.
+hundred. This was the only title observed using `0x320` at the time.
 
-**A component cannot be created here, and that is the answer rather than a
-gap.** These widgets are drawn by the handset over the game's screen and typed
+**The character-naming screen needs an explicit refusal.** These widgets are
+drawn by the handset over the game's screen and typed
 into with the handset's editor; answering a handle and drawing nothing would
 leave a title waiting for text from something invisible, which is worse than a
-readable refusal. `MC_uicGetClass` and `MC_uicCreate` answer `M_E_ERROR`, the
-context call answers a token, and the other thirty-eight slots of the block are
-accepted no-ops, the same shape and reason as the other WIPI platform's
-component table.
+readable refusal. For this text widget, `MC_uicGetClass` and `MC_uicCreate`
+answer `M_E_ERROR`. The context call returns a token. The remaining slots were
+accepted no-ops at the time. A later Clet used the same context for a
+[date component](#lgt-overlay-date-cli-2026-11-26).
 
 The title takes the refusal and draws its own naming screen: a bordered field
 holding the default name, with `OK:완료` and `CLR:삭제` under it, on the
@@ -1060,10 +1061,9 @@ exactly that range. Disassembly settles it without a run:
 
 **A title can do its own alpha, so the unread `ALPHA` index was not the gap.**
 This one never sets index 4; it installs the blend as a function.
-`MC_GRP_CONTEXT_ALPHA_IDX` is still stored and not read, and per the
-specification setting it implicitly sets `PIXELOP` and `PIXEL_PARAM1`, so a
-title using it instead of installing a function remains a separate case; no
-local title has been seen to.
+At the time, setting `MC_GRP_CONTEXT_ALPHA_IDX` stored only the alpha value.
+A later Clet used the implicit `PIXELOP` and `PIXEL_PARAM1` that the
+specification assigns to this call. [Overlay reproduction and fix](#lgt-overlay-date-cli-2026-11-26).
 
 **Each of these takes its key and weight from a global, not `param1`.** A run
 logs `param=0` throughout, consistent with the disassembly.
@@ -9276,7 +9276,7 @@ that failed to start on both builds produced no frame to compare.
 
 <a id="lgt-new-archives-2026-11-22-other"></a>
 
-### Seen on the same title and left open
+### Other findings from the same title on 2026-11-22
 
 - `MC_GRP_CONTEXT_ALPHA_IDX` is stored and no draw path reads it. The title
   sets alpha 100 and 120 before `fillRect`, so unlearned skill icons are solid
@@ -9291,3 +9291,58 @@ that failed to start on both builds produced no frame to compare.
 - `run -serve` accepts `quicksave` after a failed tick and replaces the slot
   with one that loads without ever drawing again. The server ends the game on
   a failed tick, so this is the command line's alone.
+
+The overlay, date and CLI findings have since been reproduced and fixed. The
+tutorial's sepia filter still awaits handset timing.
+[Follow-up checks](#lgt-overlay-date-cli-2026-11-26).
+
+<a id="lgt-overlay-date-cli-2026-11-26"></a>
+
+## Translucent overlays, save dates and CLI checkpoint recovery — 2026-11-26
+
+On an LGT Clet, setting `ALPHA` had left the previous pixel operation in the
+graphics context. With the built-in RGB565 blend installed, all 2,980 changed
+pixels of the map-name band matched black blended over the underlying field
+at alpha 120. Six previously black 16×16 skill icons showed 62 colours. A
+pre-fix quick save restored its original screen and matched the corrected
+screen pixel for pixel after ten ticks.
+
+In the Chromium PWA, all 2,980 map-band pixels and all 1,536 skill-icon
+pixels matched the corrected CLI. The keypad moved to the adjacent tab and
+quick load restored the full 240×320 skill screen.
+
+A second Clet's nine-row menu became faint outside the selection. On both
+builds the guest drew the selected row with alpha 250 and the other eight
+with alpha 60. Two down presses moved the 250 to each newly selected row,
+and confirming opened the same screen on both builds. The older build had
+drawn all rows opaque. The handset's original appearance remains unverified.
+
+The Clet with the skill icons reads its save timestamp from a newly created
+`DateTimeComponent`. Previously, the class lookup failed and the getter left
+the guest buffer untouched. After an in-game save and a fresh process launch,
+the slot showed `2008/1/1 9:0`, the local guest time. The five saved integers
+matched the screen. Only the 415 date pixels changed in the slot comparison.
+Continuing restored the saved location and accepted movement into the next scene.
+Opening a copy of an older ordinary save preserved its malformed timestamp.
+Saving over that slot in the game corrected the date and preserved the level
+and location on the next launch.
+The PWA showed the same date, and two presses of its OK key continued to
+the same level 1 room as the CLI.
+
+The CLI fault was also reproduced on a KTF archive. A database read failed
+at tick 370 with a valid checkpoint from tick 250. The old CLI overwrote the
+slot after the fault. The corrected CLI refused the save, preserved the
+slot's SHA-256 and restored its original frame. Replaying a three-tick key
+hold and 110 further ticks reproduced the pre-fault route's frame exactly.
+
+The CLI comparison covered 611 archives on both builds. Each archive used
+the default handset, started with an empty save root and launched a second
+time with the saves it wrote. Ten LGT archives showed reproducible changes
+to translucent graphics. Two wrote corrected dates, including one of those
+ten. Repeating the KTF and SKT cases with differing frames or saves reproduced
+the same variation within one build or matched the other build's output.
+Three archives failed before producing a frame on both builds. One slow LGT
+second launch completed all 17 input checkpoints in about 305 seconds on each
+build, with identical frames. The separate acceptance sweep covered 3,675
+archive-stage results. Three KTF input probes reached the same 90-second limit
+seen on the preceding builds.

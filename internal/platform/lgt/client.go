@@ -169,10 +169,11 @@ type Client struct {
 	// it black again, it showed nothing at all for three thousand ticks.
 	presented []uint16
 
-	framebuffers map[uint32]*framebuffer
-	imageSources map[uint32]*imageSource
-	timers       map[uint32]*timer
-	nextHandle   uint32
+	framebuffers   map[uint32]*framebuffer
+	imageSources   map[uint32]*imageSource
+	timers         map[uint32]*timer
+	nextHandle     uint32
+	dateComponents []*uicDate
 
 	// pixelOps caches what each pixel operation has answered, keyed by the
 	// operation and its parameter, so a draw asks the guest once per pair of
